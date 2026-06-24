@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "search-runtime": {
+      "type": "local",
+      "command": [
+        "python",
+        "-m",
+        "agentic_any_search_mcp.server",
+        "--root",
+        ".search"
+      ],
+      "cwd": ".",
+      "environment": {
+        "PYTHONPATH": "src"
+      },
+      "timeout": 300000
+    }
+  },
+  "permission": {
+    "skill": {
+      "search": "allow"
+    }
+  }
+}
+

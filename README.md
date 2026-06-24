@@ -1,39 +1,91 @@
 # Agentic Any Search MCP
 
-`agentic-any-search-mcp` is a small MCP-first Search Runtime prototype.
+`agentic-any-search-mcp` is a small MCP-first Search Runtime prototype for verifiable agentic search.
 
-V0 focuses on the control plane:
+The goal of V0 is not to control one specific coding agent. The runtime exposes a generic MCP control plane, while the host agent uses a `/search` skill to follow a disciplined workflow: freeze the spec, create isolated candidate workspaces, verify candidates through runtime-owned checks, select the best candidate, and export a promotion patch.
 
-- freeze a `SearchSpec` and verifier hashes
-- create isolated candidate workspaces under `.search/runs/<run_id>/workspace/<candidate_id>/`
-- let a main agent or test harness submit candidate artifacts
-- run frozen verifiers from the runtime
-- select best-seen candidate and export a patch/report
+## Quick Start With OpenCode
 
-It does not try to control a specific agent implementation. Real host adapters can be added later.
-
-## Run Tests
+Assumption: OpenCode is already installed and has model credentials configured.
 
 ```bash
-python -m pytest
+cd agentic-any-search-mcp
+python -m pip install -e ".[dev]"
+python -m pytest -q
+opencode mcp list
 ```
 
-## Start MCP Server
+`opencode mcp list` should show:
+
+```text
+search-runtime connected
+python -m agentic_any_search_mcp.server --root .search
+```
+
+Then run the toy search from the OpenCode TUI:
 
 ```bash
-agentic-any-search-mcp --root .search
+opencode
 ```
 
-The MCP tool surface mirrors the runtime methods:
+Inside OpenCode:
 
-- `search_freeze_spec`
-- `search_create`
-- `search_status`
-- `search_next_batch`
-- `search_submit_candidate`
-- `search_run_verifier`
-- `search_select`
-- `search_report`
-- `search_promote`
-- `search_abort`
+```text
+/search run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py.
+```
 
+For a headless command-line run:
+
+```bash
+opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+```
+
+See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
+
+## Repository Layout
+
+```text
+.opencode/
+  opencode.json                       # local MCP server config
+  skills/search/SKILL.md              # /search workflow guide for the host agent
+  agents/search-orchestrator.md       # optional host-agent prompt
+docs/
+  design.md                           # architecture and control-plane design
+  toy-example.md                      # step-by-step k_module walkthrough
+  opencode.md                         # OpenCode-specific reference
+examples/
+  k_module_search_spec.json           # toy SearchSpec used by the walkthrough
+src/agentic_any_search_mcp/
+  models.py                           # Pydantic API models
+  runtime.py                          # file-backed runtime state machine
+  tools.py                            # JSON-friendly tool facade
+  server.py                           # FastMCP stdio server
+tests/
+  fixtures/k_module_problem/          # toy project
+```
+
+## Runtime Surface
+
+OpenCode registers the MCP server as `search-runtime`, so tools appear with that prefix:
+
+- `search-runtime_search_freeze_spec`
+- `search-runtime_search_create`
+- `search-runtime_search_status`
+- `search-runtime_search_next_batch`
+- `search-runtime_search_submit_candidate`
+- `search-runtime_search_run_verifier`
+- `search-runtime_search_select`
+- `search-runtime_search_report`
+- `search-runtime_search_promote`
+- `search-runtime_search_abort`
+
+The same methods are available through the Python `SearchTools` facade for unit tests and non-OpenCode hosts.
+
+## Development Checks
+
+```bash
+python -m pytest -q
+python -m compileall src tests
+```
+
+Runtime state is written under `.search/`, which is ignored by git.

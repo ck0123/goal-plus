@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_opencode_config_registers_search_runtime_mcp() -> None:
+    config = json.loads((ROOT / ".opencode" / "opencode.json").read_text(encoding="utf-8"))
+
+    server = config["mcp"]["search-runtime"]
+    assert server["type"] == "local"
+    assert server["command"] == [
+        "python",
+        "-m",
+        "agentic_any_search_mcp.server",
+        "--root",
+        ".search",
+    ]
+    assert server["environment"]["PYTHONPATH"] == "src"
+    assert server["timeout"] >= 300000
+
+
+def test_search_skill_is_slash_command_ready() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "name: search" in skill
+    assert "search-runtime_search_freeze_spec" in skill
+    assert "Do not start candidate execution before" in skill
+    assert "k_module" in skill
+
+
+def test_k_module_example_spec_is_valid_json() -> None:
+    spec_path = ROOT / "examples" / "k_module_search_spec.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+
+    assert spec["source_path"] == "tests/fixtures/k_module_problem"
+    assert spec["metric_name"] == "combined_score"
+    assert spec["edit_surface"]["deny"] == ["evaluator.py", "config.yaml"]
+
+
+def test_search_skill_does_not_store_case_specific_references() -> None:
+    assert not (ROOT / ".opencode" / "skills" / "search" / "references").exists()

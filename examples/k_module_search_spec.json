@@ -1,0 +1,48 @@
+{
+  "objective": "maximize k-module pipeline configuration score",
+  "metric_name": "combined_score",
+  "metric_direction": "maximize",
+  "source_path": "tests/fixtures/k_module_problem",
+  "edit_surface": {
+    "allow": [
+      "initial_program.py"
+    ],
+    "deny": [
+      "evaluator.py",
+      "config.yaml"
+    ]
+  },
+  "process_verifiers": [
+    {
+      "name": "k_module_score",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "-c",
+        "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+      ],
+      "timeout_seconds": 30
+    }
+  ],
+  "promotion_verifiers": [
+    {
+      "name": "evaluator_hash_check",
+      "role": "anti_cheat_gate",
+      "command": [
+        "search-runtime-internal",
+        "check-frozen-hashes"
+      ]
+    }
+  ],
+  "budget": {
+    "max_candidates": 4,
+    "max_parallel": 4,
+    "wall_clock_seconds": 300
+  },
+  "root_hypotheses": [
+    "baseline",
+    "fix loader",
+    "fix loader and preprocess",
+    "full target"
+  ]
+}

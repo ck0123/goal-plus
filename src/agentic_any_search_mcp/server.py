@@ -66,9 +66,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".search", help="Search runtime storage directory")
     args = parser.parse_args()
-    create_mcp(args.root).run()
+    create_mcp(args.root).run(transport="stdio")
 
 
 if __name__ == "__main__":
     main()
-
