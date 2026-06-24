@@ -42,6 +42,8 @@ opencode run --command search "Run the k_module smoke test with 4 candidates. Us
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 
+Additional bundled specs are listed in [examples/README.md](examples/README.md), including multi-batch `circle_packing` and `signal_processing` scenarios that use `max_candidates=8` and `max_parallel=4`.
+
 ## Repository Layout
 
 ```text
@@ -54,7 +56,10 @@ docs/
   toy-example.md                      # step-by-step k_module walkthrough
   opencode.md                         # OpenCode-specific reference
 examples/
-  k_module_search_spec.json           # toy SearchSpec used by the walkthrough
+  README.md                           # bundled example index
+  k_module_search_spec.json           # single-round toy SearchSpec
+  circle_packing_search_spec.json     # multi-batch geometric optimization SearchSpec
+  signal_processing_search_spec.json  # multi-batch filtering algorithm SearchSpec
 src/agentic_any_search_mcp/
   models.py                           # Pydantic API models
   runtime.py                          # file-backed runtime state machine
@@ -62,6 +67,8 @@ src/agentic_any_search_mcp/
   server.py                           # FastMCP stdio server
 tests/
   fixtures/k_module_problem/          # toy project
+  fixtures/circle_packing/            # circle packing example project
+  fixtures/signal_processing/         # signal filtering example project
 ```
 
 ## Runtime Surface

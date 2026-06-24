@@ -45,7 +45,7 @@ python -m compileall src tests
 Expected:
 
 ```text
-25 passed
+all tests pass
 ```
 
 Warnings from transitive packages are okay as long as tests pass.
@@ -145,7 +145,8 @@ After candidate creation:
 .search/runs/<run_id>/workspace/c002/
 .search/runs/<run_id>/workspace/c003/
 .search/runs/<run_id>/workspace/c004/
-.search/runs/<run_id>/candidates/c001/record.json
+.search/runs/<run_id>/candidates/c001/candidate.json
+.search/runs/<run_id>/candidates/c001/task.json
 ```
 
 After verification and reporting:

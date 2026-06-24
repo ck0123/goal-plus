@@ -1,0 +1,3 @@
+name: circle_packing
+metric: combined_score
+target_sum_radii: 2.635

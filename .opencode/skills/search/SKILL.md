@@ -58,7 +58,7 @@ Read enough files to identify:
 - promotion verifier command, if any
 - budget: `max_candidates`, `max_parallel`, `wall_clock_seconds`
 
-For V0, prefer small deterministic verifiers. The k_module toy fixture is the default smoke project; its concrete example spec lives at `examples/k_module_search_spec.json`.
+For V0, prefer small deterministic verifiers. Bundled concrete specs live in `examples/`: `k_module_search_spec.json` is the shortest smoke test, while `circle_packing_search_spec.json` and `signal_processing_search_spec.json` are larger multi-batch examples.
 
 ### Step 2: Draft SearchSpec
 
@@ -97,7 +97,9 @@ Create a JSON-compatible spec. Minimum shape:
 }
 ```
 
-For the bundled toy project, load `examples/k_module_search_spec.json` instead of embedding the case-specific spec in this skill.
+For bundled examples, load the matching JSON file from `examples/` instead of embedding case-specific specs in this skill.
+
+Budget is explicit and required; the runtime does not invent defaults. In V0, `max_candidates` is enforced by the runtime, while `max_parallel`, `wall_clock_seconds`, `max_worker_seconds`, and `max_tokens` are used as host/worker scheduling limits and recorded intent.
 
 ### Step 3: Confirm With User
 
@@ -200,6 +202,25 @@ For a quick runtime smoke test:
 6. Select should choose the full target candidate with score `1.0`.
 
 This is a toy control-plane test, not a proof of search quality.
+
+## Multi-Batch Example Pattern
+
+The bundled `circle_packing` and `signal_processing` specs use `max_candidates=8` and `max_parallel=4`. This is not a runtime-enforced round protocol. It means the run can create at most 8 candidates total, and the host should request at most 4 candidates at once.
+
+For these examples:
+
+1. Load the selected spec from `examples/`.
+2. Freeze the matching evaluator:
+   - `tests/fixtures/circle_packing/evaluator.py`
+   - `tests/fixtures/signal_processing/evaluator.py`
+3. Create the run.
+4. Call `search-runtime_search_next_batch(run_id, 4)` for the first batch.
+5. Submit and verify those candidates.
+6. Inspect verifier results and candidate artifact summaries.
+7. If more exploration is useful, call `search-runtime_search_next_batch(run_id, 4)` again.
+8. Submit and verify the later candidates, then select and report.
+
+The runtime records candidates, workspaces, verifier logs, and best-seen state. The host agent decides what follow-up request to give later workers based on earlier evidence.
 
 ## Failure Handling
 
