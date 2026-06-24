@@ -16,6 +16,38 @@ This skill guides the host agent through Search Mode while the Search MCP Runtim
 
 The host agent controls progress by calling MCP tools. Workers are just candidate executors; in V0 the main agent can act as the worker by editing each candidate workspace directly.
 
+## Code Agent Intake
+
+In an interactive coding session, `/search` usually starts from an unstructured user request, not from a prewritten example spec. The host agent should first translate the request into a SearchSpec-shaped job:
+
+- clarify the measurable objective
+- identify the source path and editable surface
+- identify files that must be frozen or denied, especially tests, benchmarks, evaluators, and configs
+- choose or propose a verifier command that can score candidates
+- choose an explicit budget
+
+If the objective, verifier, or edit surface is ambiguous or risky, summarize the proposed SearchSpec and ask before freezing. If the user points to a bundled example spec, load it directly.
+
+Good `/search` triggers:
+
+- performance optimization with a benchmark or profiler signal
+- algorithmic tasks with several plausible implementations
+- bug fixes where multiple hypotheses can be tested against the same failing test
+- parser, scraper, prompt, ranking, or heuristic improvements with measurable fixtures
+- configuration or hyperparameter search with a bounded edit surface
+- "try a few approaches", "explore variants", "find a better implementation", or similar user language
+- local benchmark improvement for kernels, inference paths, planners, schedulers, or search procedures
+
+Poor `/search` triggers:
+
+- a small deterministic edit where one direct patch is enough
+- broad refactors without a crisp verifier
+- tasks where candidates would need to edit unrelated files freely
+- tasks whose verifier depends mainly on private external services or manual judgment
+- requests where the correct answer is analysis or documentation rather than candidate execution
+
+Candidate artifacts should help the host decide follow-up work. A useful artifact summary names the approach, changed files, observed verifier result, tradeoffs, and concrete next ideas. Do not treat the summary as a trusted score; runtime verifier results remain authoritative.
+
 ## Tool Names In OpenCode
 
 The local MCP server is configured as `search-runtime`, so OpenCode exposes runtime tools with this prefix:
@@ -25,6 +57,7 @@ The local MCP server is configured as `search-runtime`, so OpenCode exposes runt
 | `search_freeze_spec` | `search-runtime_search_freeze_spec` |
 | `search_create` | `search-runtime_search_create` |
 | `search_status` | `search-runtime_search_status` |
+| `search_list_history` | `search-runtime_search_list_history` |
 | `search_next_batch` | `search-runtime_search_next_batch` |
 | `search_submit_candidate` | `search-runtime_search_submit_candidate` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
@@ -170,9 +203,12 @@ search-runtime_search_run_verifier(run_id, candidate_id, "process")
 Then call:
 
 ```text
+search-runtime_search_list_history(run_id, top_n=5, sort_by="score")
 search-runtime_search_select(run_id, "independent_branches")
 search-runtime_search_report(run_id)
 ```
+
+Use `search-runtime_search_list_history` before follow-up batches or final selection when the active chat context is incomplete. It returns a compact JSON summary of top candidates, including candidate summaries, scores, key metrics, changed files, failures, and verifier logs.
 
 Show the user the selected candidate, score table summary, and report path.
 
@@ -216,7 +252,7 @@ For these examples:
 3. Create the run.
 4. Call `search-runtime_search_next_batch(run_id, 4)` for the first batch.
 5. Submit and verify those candidates.
-6. Inspect verifier results and candidate artifact summaries.
+6. Inspect verifier results and candidate artifact summaries. If needed, call `search-runtime_search_list_history(run_id, top_n=5, sort_by="score")` to recover compact durable history across all earlier candidates.
 7. If more exploration is useful, call `search-runtime_search_next_batch(run_id, 4)` again.
 8. Submit and verify the later candidates, then select and report.
 

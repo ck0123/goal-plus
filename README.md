@@ -78,6 +78,7 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_freeze_spec`
 - `search-runtime_search_create`
 - `search-runtime_search_status`
+- `search-runtime_search_list_history`
 - `search-runtime_search_next_batch`
 - `search-runtime_search_submit_candidate`
 - `search-runtime_search_run_verifier`

@@ -89,6 +89,17 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         assert report["aggregate_score"] > 0.0
         assert report["verifier_results"][0]["metrics"][metric_name] == report["aggregate_score"]
 
+    history = tools.search_list_history(run_id)
+    assert history["total_candidates"] == 8
+    assert history["returned_candidates"] == 5
+    assert history["sort_by"] == "score"
+    assert history["candidates"][0]["score"] >= history["candidates"][1]["score"]
+    assert history["candidates"][0]["summary"] == "baseline candidate"
+    assert metric_name in history["candidates"][0]["key_metrics"]
+
+    created_history = tools.search_list_history(run_id, top_n=2, sort_by="created")
+    assert [item["candidate_id"] for item in created_history["candidates"]] == ["c001", "c002"]
+
     status = tools.search_status(run_id)
     assert status["candidates_total"] == 8
     assert status["candidates_evaluated"] == 2

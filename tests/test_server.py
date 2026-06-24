@@ -24,6 +24,7 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_freeze_spec",
         "search_create",
         "search_status",
+        "search_list_history",
         "search_next_batch",
         "search_submit_candidate",
         "search_run_verifier",
@@ -55,6 +56,9 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return {}
 
         def search_status(self, *args, **kwargs):
+            return {}
+
+        def search_list_history(self, *args, **kwargs):
             return {}
 
         def search_next_batch(self, *args, **kwargs):

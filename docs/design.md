@@ -10,6 +10,7 @@ V0 intentionally focuses on the control plane:
 - create isolated candidate workspaces under `.search/runs/<run_id>/workspace/<candidate_id>/`
 - accept candidate artifacts from a host agent or future worker adapter
 - run verifier commands from the runtime
+- summarize candidate history for follow-up planning
 - select the best verified candidate
 - export a report and promotion patch
 
@@ -41,7 +42,8 @@ FileSearchRuntime
   specs/<frozen_spec_id>/
   runs/<run_id>/
     run.json
-    candidates/<candidate_id>/record.json
+    candidates/<candidate_id>/candidate.json
+    candidates/<candidate_id>/task.json
     workspace/<candidate_id>/
     report.md
     promotion/<candidate_id>.patch
@@ -76,6 +78,8 @@ The worker is deliberately thin in V0. The main agent can edit candidate workspa
 `ArtifactBundle` is submitted by the host after editing a candidate workspace. The runtime independently detects changed files and verifier results; the bundle summary is not trusted as a score.
 
 `ScoreReport` is produced by `search_run_verifier`. It records pass/fail state, aggregate score, raw metrics, changed-file violations, and failure class.
+
+`search_list_history` returns a compact JSON view of the current run. It is intended for host agents planning follow-up batches: candidates are sorted by score by default, limited by `top_n`, and include artifact summaries, scores, key metrics, changed files, failures, and log paths.
 
 ## State Flow
 
@@ -156,6 +160,7 @@ Implemented:
 - edit surface checks
 - verifier command execution
 - metric extraction from JSON stdout
+- compact candidate history API
 - best-candidate selection for independent branches
 - markdown report and promotion patch
 - unit tests, mock tests, and a k_module control-plane fixture
@@ -168,4 +173,4 @@ Not implemented yet:
 - distributed worker queue
 - adaptive search algorithms beyond independent branches
 - rich verifier artifact archive
-- real-world benchmark suite beyond the toy example
+- benchmark suite beyond the bundled local examples

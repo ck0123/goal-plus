@@ -28,6 +28,14 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_status(run_id)
 
     @mcp.tool()
+    def search_list_history(
+        run_id: str,
+        top_n: int = 5,
+        sort_by: str = "score",
+    ) -> dict[str, Any]:
+        return tools.search_list_history(run_id, top_n, sort_by)
+
+    @mcp.tool()
     def search_next_batch(run_id: str, k: int = 4) -> list[dict[str, Any]]:
         return tools.search_next_batch(run_id, k)
 

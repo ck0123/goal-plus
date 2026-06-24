@@ -78,6 +78,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         candidates_running=0,
         candidates_evaluated=0,
     )
+    runtime.list_history.return_value = {
+        "run_id": "run_1",
+        "candidates": [],
+    }
     runtime.next_batch.return_value = [
         CandidateTask(
             run_id="run_1",
@@ -110,6 +114,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
 
     assert tools.search_create("spec_123") == {"run_id": "run_1"}
     assert tools.search_status("run_1")["state"] == "running"
+    assert tools.search_list_history("run_1", top_n=3, sort_by="created") == {
+        "run_id": "run_1",
+        "candidates": [],
+    }
     assert tools.search_next_batch("run_1", 1)[0]["candidate_id"] == "c001"
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
@@ -126,4 +134,4 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert submit_result == {"accepted": True}
     assert isinstance(artifact, ArtifactBundle)
     runtime.abort.assert_called_once_with("run_1", "stop")
-
+    runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")

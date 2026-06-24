@@ -26,6 +26,14 @@ class SearchTools:
     def search_status(self, run_id: str) -> dict[str, Any]:
         return self.runtime.status(run_id).model_dump(mode="json")
 
+    def search_list_history(
+        self,
+        run_id: str,
+        top_n: int = 5,
+        sort_by: str = "score",
+    ) -> dict[str, Any]:
+        return self.runtime.list_history(run_id, top_n=top_n, sort_by=sort_by)
+
     def search_next_batch(self, run_id: str, k: int = 4) -> list[dict[str, Any]]:
         return [task.model_dump(mode="json") for task in self.runtime.next_batch(run_id, k)]
 
@@ -63,4 +71,3 @@ class SearchTools:
     def search_abort(self, run_id: str, reason: str = "") -> dict[str, bool]:
         self.runtime.abort(run_id, reason)
         return {"aborted": True}
-

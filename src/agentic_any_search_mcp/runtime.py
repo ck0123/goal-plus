@@ -200,6 +200,62 @@ class FileSearchRuntime:
             budget_used=run.budget_used,
         )
 
+    def list_history(self, run_id: str, top_n: int = 5, sort_by: str = "score") -> dict[str, Any]:
+        if top_n <= 0:
+            raise ValueError("top_n must be > 0")
+        if sort_by not in {"score", "created"}:
+            raise ValueError("sort_by must be 'score' or 'created'")
+
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        records = self._load_candidate_records(run_id)
+
+        def score_value(record: CandidateRecord) -> float | None:
+            if record.score_report is None:
+                return None
+            return record.score_report.aggregate_score
+
+        def created_index(record: CandidateRecord) -> int:
+            try:
+                return int(record.candidate_id.removeprefix("c"))
+            except ValueError:
+                return 0
+
+        if sort_by == "score":
+            reverse = frozen.spec.metric_direction == "maximize"
+
+            def score_key(record: CandidateRecord) -> tuple[int, float, int]:
+                score = score_value(record)
+                if score is None:
+                    return (1, 0.0, created_index(record))
+                sortable_score = score if reverse else -score
+                return (0, -sortable_score, created_index(record))
+
+            ordered = sorted(records, key=score_key)
+        else:
+            ordered = sorted(records, key=created_index)
+
+        selected = ordered[:top_n]
+        candidates = [
+            self._history_candidate_payload(record, frozen.spec.metric_name) for record in selected
+        ]
+
+        return {
+            "run_id": run.run_id,
+            "state": run.state,
+            "frozen_spec_id": run.frozen_spec_id,
+            "objective": frozen.spec.objective,
+            "metric_name": frozen.spec.metric_name,
+            "metric_direction": frozen.spec.metric_direction,
+            "best_candidate_id": run.best_candidate_id,
+            "best_score": run.best_score,
+            "total_candidates": len(records),
+            "returned_candidates": len(candidates),
+            "top_n": top_n,
+            "sort_by": sort_by,
+            "candidates": candidates,
+        }
+
     def next_batch(self, run_id: str, k: int) -> list[CandidateTask]:
         if k <= 0:
             raise ValueError("k must be > 0")
@@ -658,6 +714,65 @@ class FileSearchRuntime:
             run.best_score = report.aggregate_score
             run.best_candidate_id = report.candidate_id
 
+    def _history_candidate_payload(self, record: CandidateRecord, metric_name: str) -> dict[str, Any]:
+        score_report = record.score_report
+        artifact = record.artifact
+        metrics: dict[str, Any] = {}
+        verifier_summaries: list[dict[str, Any]] = []
+        failure_classes: list[str] = []
+        log_paths: list[str] = []
+
+        if score_report:
+            for result in score_report.verifier_results:
+                if not metrics and result.metrics:
+                    metrics = result.metrics
+                if result.failure_class:
+                    failure_classes.append(result.failure_class)
+                if result.log_path:
+                    log_paths.append(str(result.log_path))
+                verifier_summaries.append(
+                    {
+                        "name": result.name,
+                        "role": result.role,
+                        "passed": result.passed,
+                        "score": result.score,
+                        "failure_class": result.failure_class,
+                        "log_path": str(result.log_path) if result.log_path else None,
+                    }
+                )
+
+        key_metrics = {
+            key: value
+            for key, value in metrics.items()
+            if key
+            not in {
+                "returncode",
+                "elapsed_seconds",
+            }
+            and isinstance(value, int | float | bool | str)
+        }
+
+        return {
+            "candidate_id": record.candidate_id,
+            "parent_id": record.task.parent_id,
+            "status": record.status,
+            "hypothesis": record.task.hypothesis,
+            "workspace": str(record.task.workspace),
+            "summary": artifact.summary if artifact else "",
+            "risk_notes": artifact.risk_notes if artifact else [],
+            "artifact_status": artifact.status if artifact else None,
+            "changed_files": record.detected_changed_files,
+            "touched_denied_files": record.touched_denied_files,
+            "changed_outside_allowed": record.changed_outside_allowed,
+            "process_passed": score_report.process_passed if score_report else None,
+            "score": score_report.aggregate_score if score_report else None,
+            "metric_name": metric_name,
+            "key_metrics": key_metrics,
+            "failure_classes": failure_classes,
+            "verifiers": verifier_summaries,
+            "log_paths": log_paths,
+        }
+
     def _frozen_hash_failures(self, frozen: FrozenSpec, workspace: Path) -> dict[str, dict[str, str | None]]:
         failures: dict[str, dict[str, str | None]] = {}
         for rel_path, expected_hash in frozen.verifier_hashes.items():
@@ -742,4 +857,3 @@ class FileSearchRuntime:
         for path in sorted(candidates_dir.glob("*/candidate.json")):
             records.append(CandidateRecord.model_validate(load_json(path)))
         return records
-

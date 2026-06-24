@@ -10,6 +10,8 @@ The example specs are small local scenarios for exercising the Search MCP runtim
 
 For the multi-batch examples, create the run, call `search_next_batch(run_id, 4)`, submit and verify those candidates, inspect their artifacts and verifier results, then optionally call `search_next_batch(run_id, 4)` again. The runtime enforces isolated workspaces and verifier-owned scoring; the host agent decides what follow-up work to request from later candidates.
 
+Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far. This avoids relying on chat context alone.
+
 ## Budget Semantics
 
 Each `SearchSpec` must include an explicit `budget`; there are no runtime defaults.
