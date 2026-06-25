@@ -58,6 +58,8 @@ The local MCP server is configured as `search-runtime`, so OpenCode exposes runt
 | `search_create` | `search-runtime_search_create` |
 | `search_status` | `search-runtime_search_status` |
 | `search_list_history` | `search-runtime_search_list_history` |
+| `search_plan_next` | `search-runtime_search_plan_next` |
+| `search_start_batch` | `search-runtime_search_start_batch` |
 | `search_next_batch` | `search-runtime_search_next_batch` |
 | `search_submit_candidate` | `search-runtime_search_submit_candidate` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
@@ -126,6 +128,14 @@ Create a JSON-compatible spec. Minimum shape:
     "max_candidates": 4,
     "max_parallel": 4,
     "wall_clock_seconds": 300
+  },
+  "strategy": {
+    "name": "independent_branches",
+    "driver": "builtin",
+    "history_policy": {
+      "scope": "top_n",
+      "top_n": 5
+    }
   }
 }
 ```
@@ -133,6 +143,15 @@ Create a JSON-compatible spec. Minimum shape:
 For bundled examples, load the matching JSON file from `examples/` instead of embedding case-specific specs in this skill.
 
 Budget is explicit and required; the runtime does not invent defaults. In V0, `max_candidates` is enforced by the runtime, while `max_parallel`, `wall_clock_seconds`, `max_worker_seconds`, and `max_tokens` are used as host/worker scheduling limits and recorded intent.
+
+Strategy is a run-level MCP setting. The main agent may remember more chat history, but candidate generation should follow the official strategy plan returned by `search_plan_next`.
+
+Common strategy names:
+
+- `independent_branches`: each candidate starts from source.
+- `agent_guided`: runtime returns official history and asks the main agent to submit proposals.
+- `evolve`: runtime chooses a best parent and inspirations; candidates derive from that parent.
+- `mcts`: runtime returns a frontier expansion contract.
 
 ### Step 3: Confirm With User
 
@@ -158,15 +177,39 @@ Call:
 
 Record the returned `run_id` in the chat.
 
-### Step 5: Create Candidate Workspaces
+### Step 5: Plan And Create Candidate Workspaces
 
-Call `search-runtime_search_next_batch(run_id, k)`.
+Preferred strategy-aware flow:
+
+1. Call `search-runtime_search_plan_next(run_id, requested_k)`.
+2. Read the returned `strategy`, `official_history`, `derivation_policy`, `strategy_trace`, and either:
+   - if `requires_agent_proposals` is `false`, call `search-runtime_search_start_batch(run_id, plan_id)`;
+   - if `requires_agent_proposals` is `true`, submit proposals to `search-runtime_search_start_batch(run_id, plan_id, proposals)`.
+
+Each proposal should include:
+
+```json
+{
+  "parent_candidate_ids": ["c003"],
+  "base_candidate_id": "c003",
+  "intent": "concrete candidate idea",
+  "expected_tradeoff": "what should improve and what might regress",
+  "instructions": ["worker-facing instruction"],
+  "history_refs": ["c005"]
+}
+```
+
+Compatibility shortcut:
+
+- `search-runtime_search_next_batch(run_id, k)` calls plan/start automatically for fixed work-order strategies such as `independent_branches` and `evolve`.
+- Do not use `search_next_batch` for `agent_guided`; it requires explicit proposals.
 
 For each returned `CandidateTask`:
 
 - Work only in `workspace`.
 - Modify only `allowed_files`.
 - Do not edit `denied_files`.
+- Respect `plan_id`, `base_candidate_id`, `parent_candidate_ids`, and `proposal` metadata. If a plan says a candidate must derive from a parent, the runtime-created workspace already starts from that parent.
 - Write candidate notes if useful, but runtime does not require them.
 
 V0 worker mode:
@@ -204,11 +247,13 @@ Then call:
 
 ```text
 search-runtime_search_list_history(run_id, top_n=5, sort_by="score")
-search-runtime_search_select(run_id, "independent_branches")
+search-runtime_search_select(run_id)
 search-runtime_search_report(run_id)
 ```
 
 Use `search-runtime_search_list_history` before follow-up batches or final selection when the active chat context is incomplete. It returns a compact JSON summary of top candidates, including candidate summaries, scores, key metrics, changed files, failures, and verifier logs.
+
+For follow-up batches, call `search-runtime_search_plan_next` again. Treat the returned plan as the official next-step search contract.
 
 Show the user the selected candidate, score table summary, and report path.
 
@@ -250,10 +295,10 @@ For these examples:
    - `tests/fixtures/circle_packing/evaluator.py`
    - `tests/fixtures/signal_processing/evaluator.py`
 3. Create the run.
-4. Call `search-runtime_search_next_batch(run_id, 4)` for the first batch.
+4. Call `search-runtime_search_plan_next(run_id, 4)`, then `search-runtime_search_start_batch(run_id, plan_id)` for the first batch. `search-runtime_search_next_batch(run_id, 4)` is acceptable for these default independent specs.
 5. Submit and verify those candidates.
 6. Inspect verifier results and candidate artifact summaries. If needed, call `search-runtime_search_list_history(run_id, top_n=5, sort_by="score")` to recover compact durable history across all earlier candidates.
-7. If more exploration is useful, call `search-runtime_search_next_batch(run_id, 4)` again.
+7. If more exploration is useful, call `search-runtime_search_plan_next(run_id, 4)` again and start the returned plan. For `agent_guided`, submit explicit proposals; for fixed strategies, start the returned work orders.
 8. Submit and verify the later candidates, then select and report.
 
 The runtime records candidates, workspaces, verifier logs, and best-seen state. The host agent decides what follow-up request to give later workers based on earlier evidence.

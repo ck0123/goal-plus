@@ -5,12 +5,15 @@ from unittest.mock import Mock
 
 from agentic_any_search_mcp.models import (
     ArtifactBundle,
+    CandidateProposal,
     CandidateTask,
     FrozenSpec,
     RunState,
     RunSummary,
     ScoreReport,
+    SearchPlan,
     SearchSpec,
+    StrategySpec,
     VerifierResult,
 )
 from agentic_any_search_mcp.tools import SearchTools
@@ -82,6 +85,25 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "run_id": "run_1",
         "candidates": [],
     }
+    runtime.plan_next.return_value = SearchPlan(
+        run_id="run_1",
+        plan_id="plan_001",
+        strategy=StrategySpec(),
+        requested_k=1,
+        planned_k=1,
+        remaining_budget=4,
+        created_at="2026-06-24T00:00:00Z",
+    )
+    runtime.start_batch.return_value = [
+        CandidateTask(
+            run_id="run_1",
+            candidate_id="c001",
+            hypothesis="try",
+            workspace=Path("/tmp/c001"),
+            allowed_files=["initial_program.py"],
+            denied_files=["evaluator.py"],
+        )
+    ]
     runtime.next_batch.return_value = [
         CandidateTask(
             run_id="run_1",
@@ -118,6 +140,12 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "run_id": "run_1",
         "candidates": [],
     }
+    assert tools.search_plan_next("run_1", requested_k=1)["plan_id"] == "plan_001"
+    assert tools.search_start_batch(
+        "run_1",
+        "plan_001",
+        [{"intent": "derive from official history", "parent_candidate_ids": ["c001"]}],
+    )[0]["candidate_id"] == "c001"
     assert tools.search_next_batch("run_1", 1)[0]["candidate_id"] == "c001"
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
@@ -133,5 +161,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     artifact = runtime.submit_candidate.call_args.kwargs["artifact"]
     assert submit_result == {"accepted": True}
     assert isinstance(artifact, ArtifactBundle)
+    proposal_arg = runtime.start_batch.call_args.args[2][0]
+    assert isinstance(proposal_arg, CandidateProposal)
     runtime.abort.assert_called_once_with("run_1", "stop")
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
+    runtime.plan_next.assert_called_once_with("run_1", requested_k=1)

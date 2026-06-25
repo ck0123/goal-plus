@@ -9,9 +9,12 @@ from agentic_any_search_mcp.models import (
     ArtifactBundle,
     Budget,
     CandidateRecord,
+    CandidateProposal,
     CandidateTask,
     EditSurface,
+    SearchPlan,
     SearchSpec,
+    StrategySpec,
     VerifierCommand,
 )
 
@@ -47,10 +50,50 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert isinstance(spec.budget, Budget)
     assert isinstance(spec.edit_surface, EditSurface)
     assert isinstance(spec.process_verifiers[0], VerifierCommand)
+    assert isinstance(spec.strategy, StrategySpec)
 
     dumped = spec.model_dump(mode="json")
     assert dumped["process_verifiers"][0]["role"] == "ranking_signal"
     assert dumped["metric_direction"] == "maximize"
+    assert dumped["strategy"]["name"] == "independent_branches"
+
+
+def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
+    data = valid_spec_dict()
+    data["strategy"] = "evolve"
+    spec = SearchSpec.model_validate(data)
+    assert spec.strategy.name == "evolve"
+
+    data = valid_spec_dict()
+    data["strategy"] = {
+        "name": "agent_guided",
+        "history_policy": {"scope": "top_n", "top_n": 3},
+    }
+    spec = SearchSpec.model_validate(data)
+    assert spec.strategy.name == "agent_guided"
+    assert spec.strategy.history_policy.top_n == 3
+
+
+def test_strategy_plan_models_capture_proposal_contract() -> None:
+    plan = SearchPlan(
+        run_id="run_1",
+        plan_id="plan_001",
+        strategy=StrategySpec(name="agent_guided"),
+        requested_k=4,
+        planned_k=2,
+        remaining_budget=2,
+        requires_agent_proposals=True,
+        proposal_contract={"count": 2, "must_reference_one_of": ["c001"]},
+        created_at="2026-06-24T00:00:00Z",
+    )
+    proposal = CandidateProposal(
+        parent_candidate_ids=["c001"],
+        intent="mutate c001",
+        expected_tradeoff="higher score with more risk",
+    )
+
+    assert plan.proposal_contract.count == 2
+    assert proposal.parent_candidate_ids == ["c001"]
 
 
 def test_search_spec_rejects_invalid_budget_and_blank_source_path() -> None:
@@ -91,4 +134,3 @@ def test_candidate_record_requires_artifact_candidate_match() -> None:
             task=task,
             artifact=artifact,
         )
-

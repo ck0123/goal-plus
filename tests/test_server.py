@@ -25,6 +25,8 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_create",
         "search_status",
         "search_list_history",
+        "search_plan_next",
+        "search_start_batch",
         "search_next_batch",
         "search_submit_candidate",
         "search_run_verifier",
@@ -60,6 +62,12 @@ def test_create_mcp_constructs_runtime_with_configured_root(
 
         def search_list_history(self, *args, **kwargs):
             return {}
+
+        def search_plan_next(self, *args, **kwargs):
+            return {}
+
+        def search_start_batch(self, *args, **kwargs):
+            return []
 
         def search_next_batch(self, *args, **kwargs):
             return []

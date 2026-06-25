@@ -36,6 +36,18 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_list_history(run_id, top_n, sort_by)
 
     @mcp.tool()
+    def search_plan_next(run_id: str, requested_k: int = 4) -> dict[str, Any]:
+        return tools.search_plan_next(run_id, requested_k)
+
+    @mcp.tool()
+    def search_start_batch(
+        run_id: str,
+        plan_id: str,
+        proposals: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        return tools.search_start_batch(run_id, plan_id, proposals)
+
+    @mcp.tool()
     def search_next_batch(run_id: str, k: int = 4) -> list[dict[str, Any]]:
         return tools.search_next_batch(run_id, k)
 

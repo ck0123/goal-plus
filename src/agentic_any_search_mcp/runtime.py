@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -16,13 +17,19 @@ from typing import Any, Literal
 from agentic_any_search_mcp.models import (
     ArtifactBundle,
     CandidateRecord,
+    CandidateProposal,
     CandidateTask,
+    CandidateWorkOrder,
     FrozenSpec,
+    HistoryPolicy,
+    ProposalContract,
     RunRecord,
     RunState,
     RunSummary,
     ScoreReport,
+    SearchPlan,
     SearchSpec,
+    StrategySpec,
     VerifierCommand,
     VerifierResult,
     VerifierRole,
@@ -181,6 +188,7 @@ class FileSearchRuntime:
         self._write_run(run)
         (self._run_dir(run_id) / "candidates").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
+        (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
         return run_id
 
     def status(self, run_id: str) -> RunSummary:
@@ -247,6 +255,7 @@ class FileSearchRuntime:
             "objective": frozen.spec.objective,
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
+            "strategy": frozen.spec.strategy.model_dump(mode="json"),
             "best_candidate_id": run.best_candidate_id,
             "best_score": run.best_score,
             "total_candidates": len(records),
@@ -256,49 +265,80 @@ class FileSearchRuntime:
             "candidates": candidates,
         }
 
-    def next_batch(self, run_id: str, k: int) -> list[CandidateTask]:
-        if k <= 0:
-            raise ValueError("k must be > 0")
+    def plan_next(self, run_id: str, requested_k: int = 4) -> SearchPlan:
+        if requested_k <= 0:
+            raise ValueError("requested_k must be > 0")
 
+        run = self._load_run(run_id)
+        if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
+            raise RuntimeError(f"cannot plan next batch from state {run.state}")
+
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        spec = frozen.spec
+        remaining = max(0, spec.budget.max_candidates - run.candidates_total)
+        planned_k = min(requested_k, remaining)
+        strategy = spec.strategy
+        mode = self._strategy_mode(strategy)
+
+        if strategy.driver != "builtin":
+            plan = self._plan_custom_strategy(run, frozen, requested_k, planned_k, remaining)
+        elif mode in {"agent", "agent_guided"}:
+            plan = self._plan_agent_guided(run, frozen, requested_k, planned_k, remaining)
+        elif mode in {"evolve", "evolve_mode", "openevolve"}:
+            plan = self._plan_evolve(run, frozen, requested_k, planned_k, remaining)
+        elif mode in {"mcts", "mcts_mode"}:
+            plan = self._plan_mcts(run, frozen, requested_k, planned_k, remaining)
+        elif mode in {"independent", "independent_branches"}:
+            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
+        else:
+            raise ValueError(f"unknown builtin strategy: {strategy.name}")
+
+        self._write_plan(plan)
+        run.budget_used["last_plan_id"] = plan.plan_id
+        self._write_run(run)
+        return plan
+
+    def start_batch(
+        self,
+        run_id: str,
+        plan_id: str,
+        proposals: list[CandidateProposal] | None = None,
+    ) -> list[CandidateTask]:
         run = self._load_run(run_id)
         if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
             raise RuntimeError(f"cannot create candidates from state {run.state}")
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
-        spec = frozen.spec
-        source = Path(run.source_path)
-        remaining = spec.budget.max_candidates - run.candidates_total
-        count = min(k, remaining)
+        plan = self._load_plan(run_id, plan_id)
+        if plan.status != "planned":
+            raise RuntimeError(f"plan {plan_id} has already been started")
+
+        remaining = max(0, frozen.spec.budget.max_candidates - run.candidates_total)
+        if remaining <= 0 or plan.planned_k <= 0:
+            return []
+
+        if plan.requires_agent_proposals:
+            if not proposals:
+                raise ValueError("this strategy plan requires candidate proposals")
+            self._validate_agent_proposals(plan, proposals)
+            candidate_proposals = proposals[: min(plan.planned_k, remaining)]
+        else:
+            if proposals:
+                raise ValueError("this strategy plan already contains fixed work orders")
+            candidate_proposals = [
+                self._proposal_from_work_order(work_order) for work_order in plan.work_orders
+            ][: min(plan.planned_k, remaining)]
+
         tasks: list[CandidateTask] = []
-
-        for _ in range(count):
+        for index, proposal in enumerate(candidate_proposals, start=1):
             candidate_id = f"c{run.next_candidate_index:03d}"
-            workspace = self._run_dir(run_id) / "workspace" / candidate_id
-            copy_source_tree(source, workspace)
-            hypothesis_index = run.next_candidate_index - 1
-            if hypothesis_index < len(spec.root_hypotheses):
-                hypothesis = spec.root_hypotheses[hypothesis_index]
-            else:
-                hypothesis = f"Independent candidate {candidate_id}"
-
-            task = CandidateTask(
-                run_id=run.run_id,
+            task = self._create_candidate_task(
+                run=run,
+                frozen=frozen,
                 candidate_id=candidate_id,
-                parent_id=None,
-                hypothesis=hypothesis,
-                workspace=workspace,
-                allowed_files=spec.edit_surface.allow,
-                denied_files=spec.edit_surface.deny,
-                instructions=[
-                    "Work only inside this candidate workspace.",
-                    "Modify only allowed files.",
-                    "Do not modify frozen verifier files.",
-                    "Submit artifacts to the runtime; do not change the main workspace.",
-                ],
-                expected_artifacts=["patch", "notes", "logs"],
-                stop_conditions={
-                    "max_worker_seconds": spec.budget.max_worker_seconds,
-                },
+                plan=plan,
+                proposal=proposal,
+                slot=index,
             )
             record = CandidateRecord(candidate_id=candidate_id, status="created", task=task)
             self._write_candidate_record(run_id, record)
@@ -308,8 +348,23 @@ class FileSearchRuntime:
 
         if tasks:
             run.state = RunState.WAITING_FOR_WORKERS
+            plan.status = "started"
+            plan.started_candidate_ids = [task.candidate_id for task in tasks]
+            self._write_plan(plan)
             self._write_run(run)
+
         return tasks
+
+    def next_batch(self, run_id: str, k: int) -> list[CandidateTask]:
+        if k <= 0:
+            raise ValueError("k must be > 0")
+
+        plan = self.plan_next(run_id, k)
+        if plan.requires_agent_proposals:
+            raise RuntimeError(
+                "current strategy requires proposals; call search_plan_next and search_start_batch"
+            )
+        return self.start_batch(run_id, plan.plan_id)
 
     def submit_candidate(
         self,
@@ -390,9 +445,6 @@ class FileSearchRuntime:
             raise
 
     def select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
-        if strategy != "independent_branches":
-            raise ValueError("only independent_branches is implemented in V0")
-
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
@@ -425,6 +477,7 @@ class FileSearchRuntime:
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
+        plans = self._load_plans(run_id)
         report_path = self._run_dir(run_id) / "report.md"
 
         lines = [
@@ -434,24 +487,56 @@ class FileSearchRuntime:
             f"- Spec hash: `{frozen.spec_hash}`",
             f"- Objective: {frozen.spec.objective}",
             f"- Metric: `{frozen.spec.metric_name}` ({frozen.spec.metric_direction})",
+            f"- Strategy: `{frozen.spec.strategy.name}` ({frozen.spec.strategy.driver})",
             f"- Best candidate: `{run.best_candidate_id}`",
             f"- Best score: `{run.best_score}`",
             "",
-            "## Candidates",
+            "## Strategy Plans",
             "",
-            "| Candidate | Status | Score | Process | Denied Files | Changed Files |",
-            "|---|---|---:|---|---|---|",
+            "| Plan | Status | Strategy | Requested | Planned | Started Candidates | Trace |",
+            "|---|---|---|---:|---:|---|---|",
         ]
+        for plan in plans:
+            trace = plan.strategy_trace.get("reason") or plan.strategy_trace.get("selection_rule") or ""
+            lines.append(
+                f"| `{plan.plan_id}` | {plan.status} | `{plan.strategy.name}` | "
+                f"{plan.requested_k} | {plan.planned_k} | "
+                f"{self._markdown_cell(', '.join(plan.started_candidate_ids))} | "
+                f"{self._markdown_cell(str(trace))} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Candidates",
+                "",
+                "| Candidate | Plan | Parent/Base | Status | Score | Process | Summary | Key Metrics | Changed Files |",
+                "|---|---|---|---|---:|---|---|---|---|",
+            ]
+        )
         for record in records:
             score = ""
             passed = ""
             if record.score_report:
                 score = "" if record.score_report.aggregate_score is None else str(record.score_report.aggregate_score)
                 passed = str(record.score_report.process_passed)
+            payload = self._history_candidate_payload(record, frozen.spec.metric_name)
+            key_metrics = ", ".join(
+                f"{key}={value}" for key, value in payload["key_metrics"].items()
+            )
             changed = ", ".join(record.detected_changed_files)
+            parent_base = ", ".join(
+                part
+                for part in [
+                    f"parent={record.task.parent_id}" if record.task.parent_id else "",
+                    f"base={record.task.base_candidate_id}" if record.task.base_candidate_id else "",
+                ]
+                if part
+            )
             lines.append(
-                f"| `{record.candidate_id}` | {record.status} | {score} | {passed} | "
-                f"{record.touched_denied_files} | {changed} |"
+                f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
+                f"{self._markdown_cell(parent_base)} | {record.status} | {score} | {passed} | "
+                f"{self._markdown_cell(payload['summary'])} | "
+                f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} |"
             )
         lines.append("")
 
@@ -480,6 +565,517 @@ class FileSearchRuntime:
         run.state = RunState.ABORTED
         run.budget_used["abort_reason"] = reason
         self._write_run(run)
+
+    def _strategy_mode(self, strategy: StrategySpec) -> str:
+        return strategy.name.strip().lower().replace("-", "_")
+
+    def _next_plan_id(self, run: RunRecord) -> str:
+        plan_id = f"plan_{run.next_plan_index:03d}"
+        run.next_plan_index += 1
+        return plan_id
+
+    def _plan_independent(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        work_orders = []
+        for slot in range(1, planned_k + 1):
+            hypothesis_index = run.candidates_total + slot - 1
+            planned_candidate_id = f"c{run.next_candidate_index + slot - 1:03d}"
+            hypothesis = (
+                frozen.spec.root_hypotheses[hypothesis_index]
+                if hypothesis_index < len(frozen.spec.root_hypotheses)
+                else f"Independent candidate {planned_candidate_id}"
+            )
+            work_orders.append(
+                CandidateWorkOrder(
+                    slot=slot,
+                    intent=hypothesis,
+                    hypothesis=hypothesis,
+                    metadata={"strategy": "independent_branches"},
+                )
+            )
+
+        return SearchPlan(
+            run_id=run.run_id,
+            plan_id=self._next_plan_id(run),
+            strategy=frozen.spec.strategy,
+            requested_k=requested_k,
+            planned_k=planned_k,
+            remaining_budget=remaining,
+            requires_agent_proposals=False,
+            official_history=self._history_view(run, frozen, frozen.spec.strategy.history_policy),
+            derivation_policy={
+                "base_workspace_source": "source",
+                "may_derive_from_source": True,
+            },
+            work_orders=work_orders,
+            strategy_trace={
+                "selection_rule": "independent source branches",
+                "reason": "Each candidate starts from the frozen source workspace.",
+            },
+            created_at=utc_timestamp(),
+        )
+
+    def _plan_agent_guided(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        history = self._history_view(run, frozen, frozen.spec.strategy.history_policy)
+        candidate_ids = [candidate["candidate_id"] for candidate in history.get("candidates", [])]
+        notes = [
+            "The main agent may remember more chat history, but this is the official runtime view for the next batch.",
+            "Submitted proposals must cite at least one official candidate when candidate references are available.",
+        ]
+        return SearchPlan(
+            run_id=run.run_id,
+            plan_id=self._next_plan_id(run),
+            strategy=frozen.spec.strategy,
+            requested_k=requested_k,
+            planned_k=planned_k,
+            remaining_budget=remaining,
+            requires_agent_proposals=True,
+            official_history=history,
+            derivation_policy={
+                "base_workspace_source": "proposal.base_candidate_id or source",
+                "must_reference_one_of": candidate_ids,
+            },
+            proposal_contract=ProposalContract(
+                count=planned_k,
+                must_reference_one_of=candidate_ids,
+                notes=notes,
+            ),
+            strategy_trace={
+                "selection_rule": f"agent-guided history policy: {frozen.spec.strategy.history_policy.scope}",
+                "reason": "The runtime provides the official history view; the main agent proposes the next candidates.",
+            },
+            created_at=utc_timestamp(),
+        )
+
+    def _plan_evolve(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        records = self._load_candidate_records(run.run_id)
+        scored = self._scored_records(records)
+
+        if not scored:
+            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
+            plan.strategy_trace = {
+                "selection_rule": "evolve bootstrap",
+                "reason": "No verified parent exists yet, so the first generation starts from source.",
+            }
+            return plan
+
+        parent = self._best_record(scored, frozen.spec)
+        top_records = self._top_records(scored, frozen.spec, frozen.spec.strategy.history_policy.top_n)
+        inspirations = [record for record in top_records if record.candidate_id != parent.candidate_id]
+        inspiration_ids = [record.candidate_id for record in inspirations]
+
+        work_orders = []
+        for slot in range(1, planned_k + 1):
+            work_orders.append(
+                CandidateWorkOrder(
+                    slot=slot,
+                    base_candidate_id=parent.candidate_id,
+                    parent_candidate_ids=[parent.candidate_id],
+                    inspiration_candidate_ids=inspiration_ids,
+                    intent=(
+                        f"Mutate `{parent.candidate_id}` using the selected inspirations; "
+                        "preserve the parent's strongest metrics and explore one concrete tradeoff."
+                    ),
+                    hypothesis=f"Evolve mutation from {parent.candidate_id} slot {slot}",
+                    must_derive_from=[parent.candidate_id],
+                    metadata={
+                        "strategy": "evolve",
+                        "parent_score": parent.score_report.aggregate_score if parent.score_report else None,
+                    },
+                )
+            )
+
+        visible_ids = [parent.candidate_id, *inspiration_ids]
+        return SearchPlan(
+            run_id=run.run_id,
+            plan_id=self._next_plan_id(run),
+            strategy=frozen.spec.strategy,
+            requested_k=requested_k,
+            planned_k=planned_k,
+            remaining_budget=remaining,
+            requires_agent_proposals=False,
+            official_history=self._history_view(
+                run,
+                frozen,
+                frozen.spec.strategy.history_policy,
+                forced_candidate_ids=visible_ids,
+            ),
+            derivation_policy={
+                "base_workspace_source": f"candidate:{parent.candidate_id}",
+                "must_derive_from": [parent.candidate_id],
+                "may_reference": inspiration_ids,
+            },
+            work_orders=work_orders,
+            strategy_trace={
+                "selection_rule": "best verified parent plus top inspirations",
+                "parent_candidate_id": parent.candidate_id,
+                "inspiration_candidate_ids": inspiration_ids,
+                "reason": "Builtin evolve-mode approximates OpenEvolve-style fixed parent selection.",
+            },
+            created_at=utc_timestamp(),
+        )
+
+    def _plan_mcts(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        records = self._load_candidate_records(run.run_id)
+        scored = self._scored_records(records)
+        if not scored:
+            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
+            plan.strategy_trace = {
+                "selection_rule": "mcts bootstrap",
+                "reason": "No verified node exists yet, so the first expansion starts from source.",
+            }
+            return plan
+
+        frontier = self._best_record(scored, frozen.spec)
+        work_orders = [
+            CandidateWorkOrder(
+                slot=slot,
+                base_candidate_id=frontier.candidate_id,
+                parent_candidate_ids=[frontier.candidate_id],
+                intent=(
+                    f"Expand frontier candidate `{frontier.candidate_id}` with a distinct action."
+                ),
+                hypothesis=f"MCTS-style expansion from {frontier.candidate_id} slot {slot}",
+                must_derive_from=[frontier.candidate_id],
+                metadata={"strategy": "mcts", "frontier_node": frontier.candidate_id},
+            )
+            for slot in range(1, planned_k + 1)
+        ]
+        return SearchPlan(
+            run_id=run.run_id,
+            plan_id=self._next_plan_id(run),
+            strategy=frozen.spec.strategy,
+            requested_k=requested_k,
+            planned_k=planned_k,
+            remaining_budget=remaining,
+            requires_agent_proposals=False,
+            official_history=self._history_view(
+                run,
+                frozen,
+                frozen.spec.strategy.history_policy,
+                forced_candidate_ids=[frontier.candidate_id],
+            ),
+            derivation_policy={
+                "base_workspace_source": f"candidate:{frontier.candidate_id}",
+                "must_expand_node": frontier.candidate_id,
+                "must_derive_from": [frontier.candidate_id],
+            },
+            work_orders=work_orders,
+            strategy_trace={
+                "selection_rule": "best-score frontier placeholder",
+                "frontier_node": frontier.candidate_id,
+                "reason": "Builtin mcts-mode exposes the same plan contract; a full UCB tree policy can replace this planner.",
+            },
+            created_at=utc_timestamp(),
+        )
+
+    def _plan_custom_strategy(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        strategy = frozen.spec.strategy
+        if strategy.driver == "python":
+            if not strategy.ref:
+                raise ValueError("python strategy requires strategy.ref")
+            return self._plan_python_strategy(run, frozen, requested_k, planned_k, remaining)
+
+        if strategy.driver == "external_mcp":
+            history_policy = strategy.history_policy
+            history = self._history_view(run, frozen, history_policy)
+            candidate_ids = [candidate["candidate_id"] for candidate in history.get("candidates", [])]
+            return SearchPlan(
+                run_id=run.run_id,
+                plan_id=self._next_plan_id(run),
+                strategy=strategy,
+                requested_k=requested_k,
+                planned_k=planned_k,
+                remaining_budget=remaining,
+                requires_agent_proposals=True,
+                official_history=history,
+                derivation_policy={
+                    "base_workspace_source": "external strategy proposal",
+                    "must_reference_one_of": candidate_ids,
+                },
+                proposal_contract=ProposalContract(
+                    count=planned_k,
+                    must_reference_one_of=candidate_ids,
+                    notes=[
+                        "external_mcp strategy is represented through the standard proposal contract in this runtime",
+                        "call the external strategy separately, then pass its proposals to search_start_batch",
+                    ],
+                ),
+                strategy_trace={
+                    "selection_rule": "external strategy proposal contract",
+                    "external_ref": strategy.ref,
+                    "reason": "External MCP strategy integration is modeled as proposals submitted back to this runtime.",
+                },
+                created_at=utc_timestamp(),
+            )
+
+        raise ValueError(f"unsupported strategy driver: {strategy.driver}")
+
+    def _plan_python_strategy(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        strategy = frozen.spec.strategy
+        module_name, sep, attr_name = (strategy.ref or "").partition(":")
+        if not sep:
+            raise ValueError("python strategy ref must use 'module:object'")
+        module = importlib.import_module(module_name)
+        strategy_factory = getattr(module, attr_name)
+        strategy_object = strategy_factory(strategy.config)
+        if not hasattr(strategy_object, "plan_next"):
+            raise TypeError("python strategy object must define plan_next(payload)")
+
+        full_history = self.list_history(
+            run.run_id,
+            top_n=max(1, len(self._load_candidate_records(run.run_id))),
+            sort_by="created",
+        )
+        payload = {
+            "run": run.model_dump(mode="json"),
+            "spec": frozen.spec.model_dump(mode="json"),
+            "history": full_history,
+            "requested_k": requested_k,
+            "planned_k": planned_k,
+            "remaining_budget": remaining,
+        }
+        planned = strategy_object.plan_next(payload)
+        if not isinstance(planned, dict):
+            raise TypeError("python strategy plan_next must return a dict")
+
+        plan_data = {
+            **planned,
+            "run_id": run.run_id,
+            "plan_id": self._next_plan_id(run),
+            "strategy": strategy.model_dump(mode="json"),
+            "requested_k": requested_k,
+            "planned_k": planned_k,
+            "remaining_budget": remaining,
+            "created_at": utc_timestamp(),
+        }
+        return SearchPlan.model_validate(plan_data)
+
+    def _proposal_from_work_order(self, work_order: CandidateWorkOrder) -> CandidateProposal:
+        return CandidateProposal(
+            parent_candidate_ids=work_order.parent_candidate_ids,
+            base_candidate_id=work_order.base_candidate_id,
+            hypothesis=work_order.hypothesis,
+            intent=work_order.intent,
+            instructions=work_order.instructions,
+            history_refs=work_order.inspiration_candidate_ids,
+            metadata={
+                **work_order.metadata,
+                "slot": work_order.slot,
+                "must_derive_from": work_order.must_derive_from,
+            },
+        )
+
+    def _validate_agent_proposals(
+        self,
+        plan: SearchPlan,
+        proposals: list[CandidateProposal],
+    ) -> None:
+        contract = plan.proposal_contract
+        if contract is None:
+            return
+        if len(proposals) > contract.count:
+            raise ValueError("too many proposals for this plan")
+        required_refs = set(contract.must_reference_one_of)
+        if not required_refs:
+            return
+        for proposal in proposals:
+            refs = set(proposal.parent_candidate_ids)
+            refs.update(proposal.history_refs)
+            if proposal.base_candidate_id:
+                refs.add(proposal.base_candidate_id)
+            if not refs.intersection(required_refs):
+                raise ValueError(
+                    "proposal must reference at least one official candidate from the plan"
+                )
+
+    def _create_candidate_task(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        candidate_id: str,
+        plan: SearchPlan,
+        proposal: CandidateProposal,
+        slot: int,
+    ) -> CandidateTask:
+        workspace = self._run_dir(run.run_id) / "workspace" / candidate_id
+        base_candidate_id = proposal.base_candidate_id
+        parent_candidate_ids = list(proposal.parent_candidate_ids)
+        if base_candidate_id is None and parent_candidate_ids:
+            base_candidate_id = parent_candidate_ids[0]
+        if base_candidate_id and base_candidate_id not in parent_candidate_ids:
+            parent_candidate_ids.insert(0, base_candidate_id)
+
+        if base_candidate_id:
+            base_record = self._load_candidate_record(run.run_id, base_candidate_id)
+            copy_source_tree(base_record.task.workspace, workspace)
+        else:
+            copy_source_tree(Path(run.source_path), workspace)
+
+        instructions = [
+            "Work only inside this candidate workspace.",
+            "Modify only allowed files.",
+            "Do not modify frozen verifier files.",
+            "Submit artifacts to the runtime; do not change the main workspace.",
+        ]
+        instructions.extend(proposal.instructions)
+
+        parent_id = parent_candidate_ids[0] if parent_candidate_ids else None
+        hypothesis = proposal.hypothesis or proposal.intent or f"Candidate {candidate_id}"
+        return CandidateTask(
+            run_id=run.run_id,
+            candidate_id=candidate_id,
+            parent_id=parent_id,
+            parent_candidate_ids=parent_candidate_ids,
+            base_candidate_id=base_candidate_id,
+            plan_id=plan.plan_id,
+            hypothesis=hypothesis,
+            workspace=workspace,
+            allowed_files=frozen.spec.edit_surface.allow,
+            denied_files=frozen.spec.edit_surface.deny,
+            instructions=instructions,
+            expected_artifacts=["patch", "notes", "logs"],
+            stop_conditions={
+                "max_worker_seconds": frozen.spec.budget.max_worker_seconds,
+            },
+            proposal=proposal,
+            strategy_metadata={
+                "strategy": plan.strategy.name,
+                "strategy_driver": plan.strategy.driver,
+                "plan_id": plan.plan_id,
+                "slot": slot,
+            },
+        )
+
+    def _history_view(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        policy: HistoryPolicy,
+        forced_candidate_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        records = self._load_candidate_records(run.run_id)
+        selected_records: list[CandidateRecord]
+        scope = policy.scope
+
+        if forced_candidate_ids is not None:
+            by_id = {record.candidate_id: record for record in records}
+            selected_records = [
+                by_id[candidate_id]
+                for candidate_id in forced_candidate_ids
+                if candidate_id in by_id
+            ]
+            scope = "selected_parent_and_inspirations"
+        elif policy.scope == "all":
+            selected_records = self._records_by_created(records)
+        elif policy.scope == "last_batch":
+            selected_records = self._last_batch_records(records)
+        else:
+            selected_records = self._top_records(records, frozen.spec, policy.top_n)
+
+        if policy.scope != "all" and forced_candidate_ids is None:
+            selected_records = selected_records[: policy.top_n]
+
+        return {
+            "policy": scope,
+            "top_n": policy.top_n,
+            "include": policy.include,
+            "visible_candidate_ids": [record.candidate_id for record in selected_records],
+            "candidates": [
+                self._history_candidate_payload(record, frozen.spec.metric_name)
+                for record in selected_records
+            ],
+            "description": (
+                "Official runtime-selected history view for the current strategy plan."
+            ),
+        }
+
+    def _scored_records(self, records: list[CandidateRecord]) -> list[CandidateRecord]:
+        return [
+            record
+            for record in records
+            if record.score_report
+            and record.score_report.process_passed
+            and record.score_report.aggregate_score is not None
+        ]
+
+    def _best_record(self, records: list[CandidateRecord], spec: SearchSpec) -> CandidateRecord:
+        reverse = spec.metric_direction == "maximize"
+        return sorted(records, key=lambda record: record.score_report.aggregate_score, reverse=reverse)[0]  # type: ignore[union-attr]
+
+    def _top_records(
+        self,
+        records: list[CandidateRecord],
+        spec: SearchSpec,
+        top_n: int,
+    ) -> list[CandidateRecord]:
+        scored = self._scored_records(records)
+        if not scored:
+            return self._records_by_created(records)[:top_n]
+        reverse = spec.metric_direction == "maximize"
+        return sorted(scored, key=lambda record: record.score_report.aggregate_score, reverse=reverse)[:top_n]  # type: ignore[union-attr]
+
+    def _records_by_created(self, records: list[CandidateRecord]) -> list[CandidateRecord]:
+        def created_index(record: CandidateRecord) -> int:
+            try:
+                return int(record.candidate_id.removeprefix("c"))
+            except ValueError:
+                return 0
+
+        return sorted(records, key=created_index)
+
+    def _last_batch_records(self, records: list[CandidateRecord]) -> list[CandidateRecord]:
+        plan_ids = [record.task.plan_id for record in records if record.task.plan_id]
+        if not plan_ids:
+            return self._records_by_created(records)
+        last_plan_id = sorted(plan_ids)[-1]
+        return self._records_by_created(
+            [record for record in records if record.task.plan_id == last_plan_id]
+        )
+
+    def _markdown_cell(self, value: str) -> str:
+        return value.replace("\n", " ").replace("|", "\\|")
 
     def _precheck_candidate(
         self,
@@ -755,8 +1351,17 @@ class FileSearchRuntime:
         return {
             "candidate_id": record.candidate_id,
             "parent_id": record.task.parent_id,
+            "parent_candidate_ids": record.task.parent_candidate_ids,
+            "base_candidate_id": record.task.base_candidate_id,
+            "plan_id": record.task.plan_id,
             "status": record.status,
             "hypothesis": record.task.hypothesis,
+            "intent": record.task.proposal.intent if record.task.proposal else record.task.hypothesis,
+            "expected_tradeoff": (
+                record.task.proposal.expected_tradeoff if record.task.proposal else ""
+            ),
+            "history_refs": record.task.proposal.history_refs if record.task.proposal else [],
+            "strategy_metadata": record.task.strategy_metadata,
             "workspace": str(record.task.workspace),
             "summary": artifact.summary if artifact else "",
             "risk_notes": artifact.risk_notes if artifact else [],
@@ -830,6 +1435,9 @@ class FileSearchRuntime:
     def _candidate_dir(self, run_id: str, candidate_id: str) -> Path:
         return self._run_dir(run_id) / "candidates" / candidate_id
 
+    def _plan_dir(self, run_id: str) -> Path:
+        return self._run_dir(run_id) / "plans"
+
     def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
         return FrozenSpec.model_validate(load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json"))
 
@@ -838,6 +1446,24 @@ class FileSearchRuntime:
 
     def _write_run(self, run: RunRecord) -> None:
         write_json(self._run_dir(run.run_id) / "run.json", run.model_dump(mode="json"))
+
+    def _load_plan(self, run_id: str, plan_id: str) -> SearchPlan:
+        return SearchPlan.model_validate(load_json(self._plan_dir(run_id) / f"{plan_id}.json"))
+
+    def _write_plan(self, plan: SearchPlan) -> None:
+        write_json(
+            self._plan_dir(plan.run_id) / f"{plan.plan_id}.json",
+            plan.model_dump(mode="json"),
+        )
+
+    def _load_plans(self, run_id: str) -> list[SearchPlan]:
+        plan_dir = self._plan_dir(run_id)
+        if not plan_dir.exists():
+            return []
+        return [
+            SearchPlan.model_validate(load_json(path))
+            for path in sorted(plan_dir.glob("plan_*.json"))
+        ]
 
     def _load_candidate_record(self, run_id: str, candidate_id: str) -> CandidateRecord:
         return CandidateRecord.model_validate(

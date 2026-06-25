@@ -52,6 +52,43 @@ class EditSurface(SearchModel):
     max_file_changes: int | None = Field(default=None, gt=0)
 
 
+class HistoryPolicy(SearchModel):
+    scope: Literal[
+        "top_n",
+        "last_batch",
+        "all",
+        "selected_parent_and_inspirations",
+        "frontier",
+    ] = "top_n"
+    top_n: int = Field(default=5, gt=0)
+    include: list[str] = Field(
+        default_factory=lambda: [
+            "summary",
+            "score",
+            "key_metrics",
+            "parent_id",
+            "changed_files",
+        ]
+    )
+
+
+class StrategySpec(SearchModel):
+    name: str = "independent_branches"
+    driver: Literal["builtin", "python", "external_mcp"] = "builtin"
+    ref: str | None = None
+    agent_role: str = "planner_and_mutator"
+    history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
+    parent_policy: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("strategy name must be non-empty")
+        return value
+
+
 class VerifierCommand(SearchModel):
     name: str = Field(min_length=1)
     role: VerifierRole
@@ -73,13 +110,22 @@ class SearchSpec(SearchModel):
     promotion_verifiers: list[VerifierCommand] = Field(default_factory=list)
     constraints: dict[str, Any] = Field(default_factory=dict)
     root_hypotheses: list[str] = Field(default_factory=list)
-    strategy: str = "independent_branches"
+    strategy: StrategySpec = Field(default_factory=StrategySpec)
 
     @field_validator("source_path")
     @classmethod
     def source_path_must_be_nonempty(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("source_path must be non-empty")
+        return value
+
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def strategy_accepts_legacy_string(cls, value: Any) -> Any:
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            return {"name": value}
         return value
 
 
@@ -96,6 +142,9 @@ class CandidateTask(SearchModel):
     run_id: str
     candidate_id: str
     parent_id: str | None = None
+    parent_candidate_ids: list[str] = Field(default_factory=list)
+    base_candidate_id: str | None = None
+    plan_id: str | None = None
     hypothesis: str
     workspace: Path
     allowed_files: list[str]
@@ -103,6 +152,58 @@ class CandidateTask(SearchModel):
     instructions: list[str] = Field(default_factory=list)
     expected_artifacts: list[str] = Field(default_factory=list)
     stop_conditions: dict[str, Any] = Field(default_factory=dict)
+    proposal: "CandidateProposal | None" = None
+    strategy_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateProposal(SearchModel):
+    parent_candidate_ids: list[str] = Field(default_factory=list)
+    base_candidate_id: str | None = None
+    hypothesis: str | None = None
+    intent: str = Field(min_length=1)
+    expected_tradeoff: str = ""
+    instructions: list[str] = Field(default_factory=list)
+    history_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateWorkOrder(SearchModel):
+    slot: int = Field(gt=0)
+    base_candidate_id: str | None = None
+    parent_candidate_ids: list[str] = Field(default_factory=list)
+    inspiration_candidate_ids: list[str] = Field(default_factory=list)
+    intent: str = Field(min_length=1)
+    hypothesis: str | None = None
+    instructions: list[str] = Field(default_factory=list)
+    must_derive_from: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProposalContract(SearchModel):
+    count: int = Field(ge=0)
+    must_reference_one_of: list[str] = Field(default_factory=list)
+    required_fields: list[str] = Field(
+        default_factory=lambda: ["parent_candidate_ids", "intent", "expected_tradeoff"]
+    )
+    notes: list[str] = Field(default_factory=list)
+
+
+class SearchPlan(SearchModel):
+    run_id: str
+    plan_id: str
+    status: Literal["planned", "started"] = "planned"
+    strategy: StrategySpec
+    requested_k: int = Field(gt=0)
+    planned_k: int = Field(ge=0)
+    remaining_budget: int = Field(ge=0)
+    requires_agent_proposals: bool = False
+    official_history: dict[str, Any] = Field(default_factory=dict)
+    derivation_policy: dict[str, Any] = Field(default_factory=dict)
+    proposal_contract: ProposalContract | None = None
+    work_orders: list[CandidateWorkOrder] = Field(default_factory=list)
+    strategy_trace: dict[str, Any] = Field(default_factory=dict)
+    started_candidate_ids: list[str] = Field(default_factory=list)
+    created_at: str
 
 
 class ArtifactBundle(SearchModel):
@@ -160,6 +261,7 @@ class RunRecord(SearchModel):
     source_path: str
     created_at: str
     next_candidate_index: int = 1
+    next_plan_index: int = 1
     candidates_total: int = 0
     candidates_evaluated: int = 0
     best_candidate_id: str | None = None

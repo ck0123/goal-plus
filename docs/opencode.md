@@ -64,10 +64,10 @@ Expected behavior:
 
 1. The `search` skill loads `examples/k_module_search_spec.json` or drafts an equivalent SearchSpec.
 2. Runtime freezes `tests/fixtures/k_module_problem/evaluator.py`.
-3. Runtime creates candidate workspaces under `.search/runs/<run_id>/workspace/`.
+3. Runtime plans the next strategy step and creates candidate workspaces under `.search/runs/<run_id>/workspace/`.
 4. The host edits each candidate workspace.
 5. Runtime verifies candidates and selects the score `1.0` candidate.
-6. Runtime writes `report.md` and exports a promotion patch.
+6. Runtime writes `report.md` with strategy/candidate details and exports a promotion patch.
 
 ## Tool Prefix
 
@@ -78,6 +78,8 @@ search-runtime_search_freeze_spec
 search-runtime_search_create
 search-runtime_search_status
 search-runtime_search_list_history
+search-runtime_search_plan_next
+search-runtime_search_start_batch
 search-runtime_search_next_batch
 search-runtime_search_submit_candidate
 search-runtime_search_run_verifier

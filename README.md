@@ -2,7 +2,9 @@
 
 `agentic-any-search-mcp` is a small MCP-first Search Runtime prototype for verifiable agentic search.
 
-The goal of V0 is not to control one specific coding agent. The runtime exposes a generic MCP control plane, while the host agent uses a `/search` skill to follow a disciplined workflow: freeze the spec, create isolated candidate workspaces, verify candidates through runtime-owned checks, select the best candidate, and export a promotion patch.
+The goal of V0 is not to control one specific coding agent. The runtime exposes a generic MCP control plane, while the host agent uses a `/search` skill to follow a disciplined workflow: freeze the spec, ask the active strategy to plan the next batch, create isolated candidate workspaces, verify candidates through runtime-owned checks, select the best candidate, and export a promotion patch.
+
+Strategies are run-level settings. The built-in modes include independent branches, agent-guided proposal mode, evolve-style parent selection, and an MCTS-style expansion placeholder. Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract.
 
 ## Quick Start With OpenCode
 
@@ -79,6 +81,8 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_create`
 - `search-runtime_search_status`
 - `search-runtime_search_list_history`
+- `search-runtime_search_plan_next`
+- `search-runtime_search_start_batch`
 - `search-runtime_search_next_batch`
 - `search-runtime_search_submit_candidate`
 - `search-runtime_search_run_verifier`

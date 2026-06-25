@@ -172,6 +172,9 @@ def test_k_module_end_to_end_selects_best_without_changing_main_workspace(
     report_text = report_path.read_text(encoding="utf-8")
     assert "c004" in report_text
     assert "1.0" in report_text
+    assert "## Strategy Plans" in report_text
+    assert "c004 ready" in report_text
+    assert "correct_modules=4" in report_text
 
     promoted = tools.search_promote(run_id, "c004")
     patch_path = Path(promoted["artifact_path"])
@@ -228,4 +231,3 @@ def test_frozen_verifier_hash_catches_source_mutation_after_freeze(
     assert report["hardcoding_suspected"] is True
     failure_classes = {result["failure_class"] for result in report["verifier_results"]}
     assert "FrozenVerifierModified" in failure_classes
-

@@ -8,9 +8,9 @@ The example specs are small local scenarios for exercising the Search MCP runtim
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | Multi-batch geometric optimization for circle packing. |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | Multi-batch algorithm search for causal signal filtering. |
 
-For the multi-batch examples, create the run, call `search_next_batch(run_id, 4)`, submit and verify those candidates, inspect their artifacts and verifier results, then optionally call `search_next_batch(run_id, 4)` again. The runtime enforces isolated workspaces and verifier-owned scoring; the host agent decides what follow-up work to request from later candidates.
+For the multi-batch examples, create the run, call `search_plan_next(run_id, 4)`, then start the returned plan with `search_start_batch(run_id, plan_id)`. Submit and verify those candidates, inspect their artifacts and verifier results, then optionally plan another batch. The compatibility helper `search_next_batch(run_id, 4)` still works for the default fixed-work-order examples. The runtime enforces isolated workspaces and verifier-owned scoring; the active strategy defines how later candidates should derive from history.
 
-Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far. This avoids relying on chat context alone.
+Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far. To advance the search, call `search_plan_next`; the returned plan states the current strategy mode, official history view, derivation policy, and whether the host must submit proposals.
 
 ## Budget Semantics
 
@@ -26,7 +26,7 @@ Each `SearchSpec` must include an explicit `budget`; there are no runtime defaul
 }
 ```
 
-- `max_candidates`: total candidate workspaces allowed for the run. The runtime enforces this when `search_next_batch` is called.
+- `max_candidates`: total candidate workspaces allowed for the run. The runtime enforces this when `search_plan_next`, `search_start_batch`, or `search_next_batch` is called.
 - `max_parallel`: intended host-side concurrency. In these examples, the host should request candidates in batches of up to 4.
 - `wall_clock_seconds`: run-level time budget recorded in the spec. V0 does not yet stop a run automatically when this expires.
 - `max_worker_seconds` and `max_tokens`: optional worker-level hints. V0 includes `max_worker_seconds` in candidate task stop conditions but does not independently enforce host token usage.
@@ -39,6 +39,22 @@ tests/fixtures/signal_processing/evaluator.py
 ```
 
 The fixtures are dependency-light and run with the default development install. The specs intentionally do not prescribe what each worker must try; workers should submit their result and a useful summary of what they actually changed.
+
+## Strategy Modes
+
+Example specs currently use the default `independent_branches` strategy. To test strategy-aware follow-up behavior, add a structured strategy block to a copied spec:
+
+```json
+{
+  "strategy": {
+    "name": "agent_guided",
+    "driver": "builtin",
+    "history_policy": {"scope": "top_n", "top_n": 5}
+  }
+}
+```
+
+In `agent_guided`, `search_plan_next` returns a proposal contract and `search_start_batch` must receive explicit proposals. In `evolve`, the runtime selects a parent and inspirations, then starts candidate workspaces from the selected parent.
 
 ## OpenCode Commands
 

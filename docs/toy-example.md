@@ -106,13 +106,16 @@ The skill should guide the host agent through this sequence:
 1. Read `examples/k_module_search_spec.json`.
 2. Call `search-runtime_search_freeze_spec`.
 3. Call `search-runtime_search_create`.
-4. Call `search-runtime_search_next_batch` with `k=4`.
-5. Edit only `initial_program.py` inside each candidate workspace.
-6. Call `search-runtime_search_submit_candidate` for each candidate.
-7. Call `search-runtime_search_run_verifier` for each candidate.
-8. Call `search-runtime_search_select`.
-9. Call `search-runtime_search_report`.
-10. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+4. Call `search-runtime_search_plan_next` with `requested_k=4`.
+5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
+6. Edit only `initial_program.py` inside each candidate workspace.
+7. Call `search-runtime_search_submit_candidate` for each candidate.
+8. Call `search-runtime_search_run_verifier` for each candidate.
+9. Call `search-runtime_search_select`.
+10. Call `search-runtime_search_report`.
+11. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+
+`search-runtime_search_next_batch(run_id, 4)` is still available as a compatibility shortcut for this default independent strategy; it performs the plan/start sequence internally.
 
 ## 6. Run Headless
 
@@ -136,6 +139,7 @@ After freeze and run creation:
 .search/specs/<frozen_spec_id>/frozen_spec.json
 .search/specs/<frozen_spec_id>/frozen_verifiers/evaluator.py
 .search/runs/<run_id>/run.json
+.search/runs/<run_id>/plans/<plan_id>.json
 ```
 
 After candidate creation:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.models import ArtifactBundle, SearchSpec
+from agentic_any_search_mcp.models import ArtifactBundle, CandidateProposal, SearchSpec
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
@@ -33,6 +33,25 @@ class SearchTools:
         sort_by: str = "score",
     ) -> dict[str, Any]:
         return self.runtime.list_history(run_id, top_n=top_n, sort_by=sort_by)
+
+    def search_plan_next(self, run_id: str, requested_k: int = 4) -> dict[str, Any]:
+        return self.runtime.plan_next(run_id, requested_k=requested_k).model_dump(mode="json")
+
+    def search_start_batch(
+        self,
+        run_id: str,
+        plan_id: str,
+        proposals: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        parsed_proposals = (
+            [CandidateProposal.model_validate(proposal) for proposal in proposals]
+            if proposals is not None
+            else None
+        )
+        return [
+            task.model_dump(mode="json")
+            for task in self.runtime.start_batch(run_id, plan_id, parsed_proposals)
+        ]
 
     def search_next_batch(self, run_id: str, k: int = 4) -> list[dict[str, Any]]:
         return [task.model_dump(mode="json") for task in self.runtime.next_batch(run_id, k)]

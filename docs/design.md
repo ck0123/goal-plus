@@ -8,6 +8,7 @@ V0 intentionally focuses on the control plane:
 
 - freeze a `SearchSpec` and verifier artifacts before exploration
 - create isolated candidate workspaces under `.search/runs/<run_id>/workspace/<candidate_id>/`
+- express the active search strategy through a durable next-step plan
 - accept candidate artifacts from a host agent or future worker adapter
 - run verifier commands from the runtime
 - summarize candidate history for follow-up planning
@@ -42,6 +43,7 @@ FileSearchRuntime
   specs/<frozen_spec_id>/
   runs/<run_id>/
     run.json
+    plans/<plan_id>.json
     candidates/<candidate_id>/candidate.json
     candidates/<candidate_id>/task.json
     workspace/<candidate_id>/
@@ -73,13 +75,46 @@ The worker is deliberately thin in V0. The main agent can edit candidate workspa
 
 `FrozenSpec` is produced by `search_freeze_spec`. It stores the canonical spec hash and hashes of verifier artifacts. The runtime also copies verifier artifacts into `.search/specs/<id>/frozen_verifiers/` for auditability.
 
-`CandidateTask` is produced by `search_next_batch`. It contains the candidate workspace path, allowed files, denied files, and local instructions.
+`StrategySpec` describes the run-level search mode. It can be a legacy string such as `independent_branches`, or a structured object with:
+
+- `name`: strategy mode, for example `agent_guided`, `evolve`, `mcts`, or a custom name
+- `driver`: `builtin`, `python`, or `external_mcp`
+- `history_policy`: the official history view returned to the host agent
+- `parent_policy` and `config`: strategy-specific settings
+
+The runtime does not pretend to erase the main agent's chat memory. Instead, it returns an official strategy plan that says which candidates the current mode selected as parents, inspirations, or frontier nodes. Candidate lineage is then recorded and validated through plan/proposal metadata.
+
+`SearchPlan` is produced by `search_plan_next`. It is the strategy step API. It contains the active strategy, requested/planned batch size, official history view, derivation policy, optional proposal contract, fixed work orders, and strategy trace. Plans are written to `.search/runs/<run_id>/plans/<plan_id>.json`.
+
+`CandidateProposal` is submitted to `search_start_batch` when the strategy requires the host agent to propose candidates. Agent-guided strategies use this path: the runtime returns a proposal contract, and the host submits parent IDs, intent, expected tradeoff, and instructions.
+
+`CandidateTask` is produced by `search_start_batch` or the compatibility helper `search_next_batch`. It contains the candidate workspace path, allowed files, denied files, parent/base candidate IDs, plan ID, proposal metadata, and local instructions.
 
 `ArtifactBundle` is submitted by the host after editing a candidate workspace. The runtime independently detects changed files and verifier results; the bundle summary is not trusted as a score.
 
 `ScoreReport` is produced by `search_run_verifier`. It records pass/fail state, aggregate score, raw metrics, changed-file violations, and failure class.
 
-`search_list_history` returns a compact JSON view of the current run. It is intended for host agents planning follow-up batches: candidates are sorted by score by default, limited by `top_n`, and include artifact summaries, scores, key metrics, changed files, failures, and log paths.
+`search_list_history` returns a compact JSON view of the current run. It is intended for review, debugging, and reporting: candidates are sorted by score by default, limited by `top_n`, and include artifact summaries, scores, key metrics, changed files, failures, lineage, strategy metadata, and log paths.
+
+## Strategy Modes
+
+Every run has a strategy contract owned by the runtime. The current built-in modes are:
+
+- `independent_branches`: each candidate starts from the frozen source workspace. This preserves the original V0 behavior.
+- `agent_guided`: the runtime returns an official history view and a proposal contract. The main agent decides the next candidate proposals, then calls `search_start_batch`.
+- `evolve`: the runtime selects the best verified parent and top inspirations, then creates follow-up work orders derived from that parent. This approximates the fixed parent/inspiration selection used by OpenEvolve.
+- `mcts`: a placeholder tree-search mode that exposes the same frontier-expansion contract. In V0 it expands the best verified candidate; a fuller UCB/tree policy can replace the planner.
+
+Custom strategy entry points:
+
+- `driver: "python"` with `ref: "module:Class"` loads a local Python strategy object. The object is constructed with `strategy.config` and must implement `plan_next(payload) -> dict`. The payload includes the run record, full spec, full created-order history, requested batch size, planned batch size, and remaining budget.
+- `driver: "external_mcp"` is represented through the standard proposal contract. Call the external strategy separately, then pass its proposals to `search_start_batch`.
+
+The important split is:
+
+- Strategy internal access can use full runtime state.
+- The host agent receives the official strategy plan for this step.
+- Candidate creation must satisfy that plan's derivation/proposal policy.
 
 ## State Flow
 
@@ -93,7 +128,10 @@ search_freeze_spec
 search_create
   |
   v
-search_next_batch
+search_plan_next
+  |
+  v
+search_start_batch
   |
   v
 candidate workspace edits
@@ -103,6 +141,9 @@ search_submit_candidate
   |
   v
 search_run_verifier
+  |
+  v
+search_plan_next  (optional follow-up batch)
   |
   v
 search_select
@@ -115,6 +156,8 @@ search_promote
 ```
 
 Promotion writes a patch. It does not mutate the original source workspace.
+
+`search_next_batch(run_id, k)` remains as a compatibility helper. It calls `search_plan_next` and immediately starts the batch for strategies that produce fixed work orders. For `agent_guided`, use `search_plan_next` followed by `search_start_batch` with explicit proposals.
 
 ## Verification Model
 
@@ -161,8 +204,9 @@ Implemented:
 - verifier command execution
 - metric extraction from JSON stdout
 - compact candidate history API
-- best-candidate selection for independent branches
-- markdown report and promotion patch
+- strategy planning API and candidate lineage records
+- best-candidate selection across verified candidates
+- markdown report with plan, summary, metrics, and promotion patch
 - unit tests, mock tests, and a k_module control-plane fixture
 - OpenCode config and `/search` skill
 
@@ -171,6 +215,6 @@ Not implemented yet:
 - automatic native OpenCode subagent spawning
 - external sandbox orchestration
 - distributed worker queue
-- adaptive search algorithms beyond independent branches
+- full adaptive search algorithms beyond the built-in plan contracts
 - rich verifier artifact archive
 - benchmark suite beyond the bundled local examples
