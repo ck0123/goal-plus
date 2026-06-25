@@ -61,6 +61,8 @@ The local MCP server is configured as `search-runtime`, so OpenCode exposes runt
 | `search_plan_next` | `search-runtime_search_plan_next` |
 | `search_start_batch` | `search-runtime_search_start_batch` |
 | `search_next_batch` | `search-runtime_search_next_batch` |
+| `search_prepare_worker` | `search-runtime_search_prepare_worker` |
+| `search_get_worker_context` | `search-runtime_search_get_worker_context` |
 | `search_submit_candidate` | `search-runtime_search_submit_candidate` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
 | `search_select` | `search-runtime_search_select` |
@@ -94,6 +96,8 @@ Read enough files to identify:
 - budget: `max_candidates`, `max_parallel`, `wall_clock_seconds`
 
 For V0, prefer small deterministic verifiers. Bundled concrete specs live in `examples/`: `k_module_search_spec.json` is the shortest smoke test, while `circle_packing_search_spec.json` and `signal_processing_search_spec.json` are larger multi-batch examples.
+
+Candidate dependencies are part of the verifier environment contract. If a candidate imports a package that is unavailable in the verifier environment, submit and verify it anyway so the runtime records the failure; do not silently switch the task framing unless the user asks for a dependency-constrained search.
 
 ### Step 2: Draft SearchSpec
 
@@ -132,6 +136,10 @@ Create a JSON-compatible spec. Minimum shape:
   "strategy": {
     "name": "independent_branches",
     "driver": "builtin",
+    "worker_mode": "main-agent-search-direct",
+    "worker_agent_type": null,
+    "worker_timeout_seconds": 600,
+    "worker_local_verifier_max_runs": 0,
     "history_policy": {
       "scope": "top_n",
       "top_n": 5
@@ -145,6 +153,16 @@ For bundled examples, load the matching JSON file from `examples/` instead of em
 Budget is explicit and required; the runtime does not invent defaults. In V0, `max_candidates` is enforced by the runtime, while `max_parallel`, `wall_clock_seconds`, `max_worker_seconds`, and `max_tokens` are used as host/worker scheduling limits and recorded intent.
 
 Strategy is a run-level MCP setting. The main agent may remember more chat history, but candidate generation should follow the official strategy plan returned by `search_plan_next`.
+
+`strategy.worker_mode` controls who performs candidate execution:
+
+- `main-agent-search-direct`: the main agent edits candidate workspaces directly.
+- `sub-agent-search-dispatch`: the main agent must call `search_prepare_worker` for each candidate and dispatch work to a subagent/worker. If `worker_agent_type` is set, use it as the OpenCode `subagent_type`. Candidate artifacts must include `dispatch_id` and `context_hash`.
+- `auto`: runtime resolves the effective mode and returns it in `worker_policy`.
+
+`strategy.worker_timeout_seconds` controls the default candidate worker timebox. Default is 600 seconds. The main agent may set a smaller or larger value in the spec, or pass `timeout_seconds` to `search_prepare_worker` for a per-dispatch override. When dispatching subagents, treat this as the maximum time to wait before collecting best-so-far artifacts and moving on.
+
+`strategy.worker_local_verifier_max_runs` controls whether a worker may run the process verifier command, or an equivalent local scorer, while exploring one candidate. Default is 0, which means worker-local scoring is disabled. In the default dispatch mode, workers analyze and write candidate code, may run non-scoring static checks such as `py_compile`, and leave all actual verification to the main agent/runtime-owned `search_run_verifier` calls after submission.
 
 Common strategy names:
 
@@ -182,9 +200,11 @@ Record the returned `run_id` in the chat.
 Preferred strategy-aware flow:
 
 1. Call `search-runtime_search_plan_next(run_id, requested_k)`.
-2. Read the returned `strategy`, `official_history`, `derivation_policy`, `strategy_trace`, and either:
+2. Read the returned `strategy`, `worker_policy`, `official_history`, `derivation_policy`, `strategy_trace`, and either:
    - if `requires_agent_proposals` is `false`, call `search-runtime_search_start_batch(run_id, plan_id)`;
    - if `requires_agent_proposals` is `true`, submit proposals to `search-runtime_search_start_batch(run_id, plan_id, proposals)`.
+
+Before dispatching workers, explicitly note `worker_policy.timeout_seconds` and `worker_policy.local_validation_rule`. These are MCP-provided execution limits for the batch.
 
 Each proposal should include:
 
@@ -207,15 +227,62 @@ Compatibility shortcut:
 For each returned `CandidateTask`:
 
 - Work only in `workspace`.
+- Use `workspace/.tmp/` only for notes, static drafts, and non-scoring helper material.
+- Do not create or run scratch experiment scripts, scorer clones, validation harnesses, parameter sweeps, or benchmark scripts in worker mode.
+- Do not use `/tmp`, user home directories, or other external scratch locations during candidate work.
+- Do not delete, move, reset, restore, or clean files. Forbidden destructive commands include `rm`, `mv`, `rmdir`, `unlink`, `trash`, `find -delete`, `git clean`, `git reset`, `git restore`, and `git checkout`.
 - Modify only `allowed_files`.
 - Do not edit `denied_files`.
 - Respect `plan_id`, `base_candidate_id`, `parent_candidate_ids`, and `proposal` metadata. If a plan says a candidate must derive from a parent, the runtime-created workspace already starts from that parent.
 - Write candidate notes if useful, but runtime does not require them.
 
-V0 worker mode:
+### Step 5.5: Prepare Worker Dispatches
 
-- The main agent may edit candidate workspaces directly.
-- Native subagents/headless workers are optional and not required.
+Follow the `worker_policy` returned by `search_plan_next`:
+
+- If `worker_policy.mode` is `main-agent-search-direct`, the main agent may edit candidate workspaces directly and skip this step.
+- If `worker_policy.mode` is `sub-agent-search-dispatch`, this step is required before candidate execution.
+
+For `sub-agent-search-dispatch`, use the two-channel dispatch protocol:
+
+1. For each `CandidateTask`, call `search-runtime_search_prepare_worker`. Optionally pass `timeout_seconds` if this worker should use a different timebox from `strategy.worker_timeout_seconds`.
+   - `run_id`: current run
+   - `candidate_id`: target candidate
+   - `main_directive`: the main agent's explicit worker-facing intent. It may be either a plain string or a structured object with fields such as goal, why this candidate exists, suggested direction, expected output, and notes. Do not include score targets, baseline scores, local verification requests, or instructions to beat a numeric score in a worker directive.
+2. Dispatch to `worker_policy.subagent_type` if present. In this project, bundled dispatch specs use `AnySearchAgent`.
+3. Pass the returned `worker_brief` or at least `dispatch_id`, `run_id`, and `candidate_id` to the worker.
+4. Instruct the worker to call `search-runtime_search_get_worker_context(dispatch_id)` as its first step.
+
+The main agent's directive is useful guidance. The MCP worker context is authoritative for workspace path, allowed/denied files, strategy mode, lineage, official visible history, verifier commands, scratch directory, and artifact requirements. If they conflict, the worker must report the conflict and follow the MCP context.
+
+The main agent is responsible for collection discipline. The timeout is a host-side deadline, not a guarantee that OpenCode will kill a worker process. If a worker times out or returns without submitting, submit a failure/timeout artifact or explicitly salvage the candidate workspace and mark the summary honestly. Do not leave the run half-collected.
+
+The main agent must include the worker execution limits in the subagent prompt: timeout/deadline, no worker-local scoring by default, no score-target directive, and the requirement that final candidate code be bounded and fast.
+
+Worker prompt skeleton:
+
+```text
+You are working on search candidate <candidate_id>.
+
+Dispatch ID: <dispatch_id>
+Run ID: <run_id>
+Candidate ID: <candidate_id>
+
+First call:
+search-runtime_search_get_worker_context(dispatch_id="<dispatch_id>")
+
+Treat MCP context as authoritative. Work only in the workspace returned by MCP.
+Use workspace/.tmp only for notes/static drafts/non-scoring helper material. Do not create or run scratch experiment scripts, scorer clones, validation harnesses, parameter sweeps, or benchmark scripts.
+Do not use /tmp or external scratch directories.
+Do not delete, move, reset, restore, or clean files. Do not use rm, mv, rmdir, unlink, trash, find -delete, git clean, git reset, git restore, or git checkout.
+Respect the timeout/deadline in MCP context.
+Do not run the process verifier or any equivalent local scorer. You may run non-scoring static checks such as py_compile.
+If the main directive includes score targets or baseline scores, treat them as main-agent context only; do not run local scoring to satisfy them.
+Keep the final allowed-file change bounded and fast; do not embed long searches or parameter sweeps in the final implementation.
+Return or submit the best-so-far artifact containing candidate_id, dispatch_id, context_hash, status, summary, and any next ideas.
+```
+
+`search_prepare_worker` writes durable audit files under `.search/runs/<run_id>/dispatches/`. This lets the main agent later inspect exactly what was sent to a worker, even if chat context is lost.
 
 ### Step 6: Submit Candidates
 
@@ -227,13 +294,16 @@ After each candidate workspace is ready, call `search-runtime_search_submit_cand
   "candidate_id": "<candidate_id>",
   "artifact": {
     "candidate_id": "<candidate_id>",
+    "dispatch_id": "<dispatch_id if worker dispatch was used>",
+    "context_hash": "<context_hash returned by search_get_worker_context>",
     "status": "patch_ready",
-    "summary": "short description of the hypothesis/result"
+    "summary": "short description of what was tried, why, result/tradeoff if known",
+    "next_ideas": ["follow-up idea if useful"]
   }
 }
 ```
 
-Do not include unverifiable score claims in the summary.
+Do not include score claims in the summary unless they come from a main-agent/runtime `search_run_verifier` result. If the worker could not call MCP directly, the main agent may submit this artifact on its behalf, but should preserve the worker's dispatch id, context hash, and summary. The main agent must ensure `search_run_verifier` is called for every submitted candidate before selection.
 
 ### Step 7: Verify And Select
 

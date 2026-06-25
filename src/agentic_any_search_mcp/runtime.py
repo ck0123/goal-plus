@@ -33,15 +33,20 @@ from agentic_any_search_mcp.models import (
     VerifierCommand,
     VerifierResult,
     VerifierRole,
+    WorkerDispatch,
 )
 
 
-IGNORED_NAMES = {".git", ".search", ".pytest_cache", "__pycache__"}
+IGNORED_NAMES = {".git", ".search", ".tmp", ".pytest_cache", "__pycache__"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
 
 
 def utc_timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def utc_timestamp_after(seconds: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + seconds))
 
 
 def sha256_file(path: Path) -> str:
@@ -189,6 +194,7 @@ class FileSearchRuntime:
         (self._run_dir(run_id) / "candidates").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
+        (self._run_dir(run_id) / "dispatches").mkdir(parents=True, exist_ok=True)
         return run_id
 
     def status(self, run_id: str) -> RunSummary:
@@ -256,6 +262,7 @@ class FileSearchRuntime:
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
             "strategy": frozen.spec.strategy.model_dump(mode="json"),
+            "worker_policy": self._worker_policy(frozen.spec.strategy),
             "best_candidate_id": run.best_candidate_id,
             "best_score": run.best_score,
             "total_candidates": len(records),
@@ -293,6 +300,8 @@ class FileSearchRuntime:
         else:
             raise ValueError(f"unknown builtin strategy: {strategy.name}")
 
+        plan.worker_policy = self._worker_policy(plan.strategy)
+        plan.strategy_trace.setdefault("worker_policy", plan.worker_policy)
         self._write_plan(plan)
         run.budget_used["last_plan_id"] = plan.plan_id
         self._write_run(run)
@@ -366,6 +375,61 @@ class FileSearchRuntime:
             )
         return self.start_batch(run_id, plan.plan_id)
 
+    def prepare_worker(
+        self,
+        run_id: str,
+        candidate_id: str,
+        main_directive: dict[str, Any] | str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> WorkerDispatch:
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be > 0")
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        record = self._load_candidate_record(run_id, candidate_id)
+        directive = self._normalize_main_directive(main_directive)
+
+        dispatch_id = f"dispatch_{run.run_id.removeprefix('run_')}_{run.next_dispatch_index:03d}"
+        run.next_dispatch_index += 1
+        created_at = utc_timestamp()
+
+        context_without_hash = self._build_worker_context(
+            run=run,
+            frozen=frozen,
+            record=record,
+            dispatch_id=dispatch_id,
+            main_directive=directive,
+            created_at=created_at,
+            timeout_seconds_override=timeout_seconds,
+        )
+        context_hash = sha256_text(canonical_json(context_without_hash))
+        context = {**context_without_hash, "context_hash": context_hash}
+        worker_brief = self._render_worker_brief(context)
+        dispatch_dir = self._dispatch_dir(run_id)
+        dispatch_path = dispatch_dir / f"{dispatch_id}.json"
+        brief_path = dispatch_dir / f"{dispatch_id}.md"
+
+        dispatch = WorkerDispatch(
+            dispatch_id=dispatch_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            plan_id=record.task.plan_id,
+            created_at=created_at,
+            main_directive=directive,
+            context_hash=context_hash,
+            worker_brief=worker_brief,
+            dispatch_path=dispatch_path,
+            brief_path=brief_path,
+            context=context,
+        )
+        self._write_worker_dispatch(dispatch)
+        self._write_run(run)
+        return dispatch
+
+    def get_worker_context(self, dispatch_id: str) -> dict[str, Any]:
+        dispatch = self._load_worker_dispatch_by_id(dispatch_id)
+        return dispatch.context
+
     def submit_candidate(
         self,
         run_id: str,
@@ -377,6 +441,19 @@ class FileSearchRuntime:
         record = self._load_candidate_record(run_id, candidate_id)
         if artifact.candidate_id != candidate_id:
             raise ValueError("artifact candidate_id does not match candidate_id")
+        worker_policy = self._worker_policy(frozen.spec.strategy)
+        if worker_policy["requires_dispatch"] and not artifact.dispatch_id:
+            raise ValueError(
+                "candidate artifact must include dispatch_id for worker_mode=sub-agent-search-dispatch"
+            )
+        if artifact.dispatch_id:
+            if not artifact.context_hash:
+                raise ValueError("artifact context_hash is required when dispatch_id is provided")
+            dispatch = self._load_worker_dispatch_by_id(artifact.dispatch_id)
+            if dispatch.run_id != run_id or dispatch.candidate_id != candidate_id:
+                raise ValueError("artifact dispatch_id does not belong to this candidate")
+            if artifact.context_hash and artifact.context_hash != dispatch.context_hash:
+                raise ValueError("artifact context_hash does not match worker dispatch")
 
         detected_changed = self._detect_changed_files(Path(run.source_path), record.task.workspace)
         touched_denied = any(
@@ -493,13 +570,14 @@ class FileSearchRuntime:
             "",
             "## Strategy Plans",
             "",
-            "| Plan | Status | Strategy | Requested | Planned | Started Candidates | Trace |",
-            "|---|---|---|---:|---:|---|---|",
+            "| Plan | Status | Strategy | Worker Mode | Requested | Planned | Started Candidates | Trace |",
+            "|---|---|---|---|---:|---:|---|---|",
         ]
         for plan in plans:
             trace = plan.strategy_trace.get("reason") or plan.strategy_trace.get("selection_rule") or ""
             lines.append(
                 f"| `{plan.plan_id}` | {plan.status} | `{plan.strategy.name}` | "
+                f"`{plan.worker_policy.get('mode', plan.strategy.worker_mode)}` | "
                 f"{plan.requested_k} | {plan.planned_k} | "
                 f"{self._markdown_cell(', '.join(plan.started_candidate_ids))} | "
                 f"{self._markdown_cell(str(trace))} |"
@@ -509,8 +587,8 @@ class FileSearchRuntime:
                 "",
                 "## Candidates",
                 "",
-                "| Candidate | Plan | Parent/Base | Status | Score | Process | Summary | Key Metrics | Changed Files |",
-                "|---|---|---|---|---:|---|---|---|---|",
+                "| Candidate | Plan | Dispatches | Parent/Base | Status | Score | Process | Summary | Key Metrics | Changed Files |",
+                "|---|---|---|---|---|---:|---|---|---|---|",
             ]
         )
         for record in records:
@@ -524,6 +602,7 @@ class FileSearchRuntime:
                 f"{key}={value}" for key, value in payload["key_metrics"].items()
             )
             changed = ", ".join(record.detected_changed_files)
+            dispatches = ", ".join(dispatch["dispatch_id"] for dispatch in payload["dispatches"])
             parent_base = ", ".join(
                 part
                 for part in [
@@ -534,10 +613,31 @@ class FileSearchRuntime:
             )
             lines.append(
                 f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
+                f"{self._markdown_cell(dispatches)} | "
                 f"{self._markdown_cell(parent_base)} | {record.status} | {score} | {passed} | "
                 f"{self._markdown_cell(payload['summary'])} | "
                 f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} |"
             )
+        dispatches = self._load_worker_dispatches(run_id)
+        if dispatches:
+            lines.extend(
+                [
+                    "",
+                    "## Worker Dispatches",
+                    "",
+                    "| Dispatch | Candidate | Plan | Context Hash | Main Directive | Brief |",
+                    "|---|---|---|---|---|---|",
+                ]
+            )
+            for dispatch in dispatches:
+                directive = "; ".join(
+                    f"{key}={value}" for key, value in dispatch.main_directive.items()
+                )
+                lines.append(
+                    f"| `{dispatch.dispatch_id}` | `{dispatch.candidate_id}` | "
+                    f"`{dispatch.plan_id or ''}` | `{dispatch.context_hash}` | "
+                    f"{self._markdown_cell(directive)} | `{dispatch.brief_path}` |"
+                )
         lines.append("")
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -569,10 +669,285 @@ class FileSearchRuntime:
     def _strategy_mode(self, strategy: StrategySpec) -> str:
         return strategy.name.strip().lower().replace("-", "_")
 
+    def _worker_policy(self, strategy: StrategySpec) -> dict[str, Any]:
+        mode = strategy.worker_mode
+        if mode == "auto":
+            mode = (
+                "sub-agent-search-dispatch"
+                if self._strategy_mode(strategy) not in {"independent", "independent_branches"}
+                else "main-agent-search-direct"
+            )
+        requires_dispatch = mode == "sub-agent-search-dispatch"
+        local_verifier_max_runs = strategy.worker_local_verifier_max_runs
+        if local_verifier_max_runs == 0:
+            local_validation_rule = (
+                "Workers must not run the process verifier or any equivalent scoring/evaluation "
+                "command. Workers may run non-scoring static checks such as py_compile. "
+                "The main agent/runtime owns all actual verification after submission."
+            )
+        else:
+            local_validation_rule = (
+                f"Workers may run local verifier sanity checks at most {local_verifier_max_runs} "
+                "times; runtime-owned verification after submission does not count against this "
+                "local limit."
+            )
+        return {
+            "mode": mode,
+            "configured_mode": strategy.worker_mode,
+            "worker_agent_type": strategy.worker_agent_type,
+            "subagent_type": strategy.worker_agent_type,
+            "timeout_seconds": strategy.worker_timeout_seconds,
+            "local_verifier_max_runs": local_verifier_max_runs,
+            "collection_rule": (
+                "Collect or salvage a best-so-far artifact by the worker deadline; "
+                "do not leave dispatched candidates unsubmitted."
+            ),
+            "directive_rule": (
+                "Worker directives should describe the candidate idea and deliverable, not score "
+                "targets or baseline scores. Workers must treat any score target in a directive as "
+                "main-agent context only and must not run local scoring to satisfy it."
+            ),
+            "local_validation_rule": local_validation_rule,
+            "requires_dispatch": requires_dispatch,
+            "direct_edit_allowed": mode == "main-agent-search-direct",
+            "dispatch_tools": [
+                "search_prepare_worker",
+                "search_get_worker_context",
+            ],
+            "reason": (
+                "worker_mode=sub-agent-search-dispatch requires durable worker dispatch before candidate submission"
+                if requires_dispatch
+                else "worker_mode=main-agent-search-direct allows the host agent to edit candidate workspaces directly"
+            ),
+        }
+
     def _next_plan_id(self, run: RunRecord) -> str:
         plan_id = f"plan_{run.next_plan_index:03d}"
         run.next_plan_index += 1
         return plan_id
+
+    def _normalize_main_directive(
+        self,
+        main_directive: dict[str, Any] | str | None,
+    ) -> dict[str, Any]:
+        if main_directive is None:
+            return {}
+        if isinstance(main_directive, str):
+            return {"goal": main_directive}
+        if isinstance(main_directive, dict):
+            return main_directive
+        raise TypeError("main_directive must be a dict, string, or null")
+
+    def _build_worker_context(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        record: CandidateRecord,
+        dispatch_id: str,
+        main_directive: dict[str, Any],
+        created_at: str,
+        timeout_seconds_override: int | None = None,
+    ) -> dict[str, Any]:
+        plan = self._load_plan(run.run_id, record.task.plan_id) if record.task.plan_id else None
+        scratch_dir = record.task.workspace / ".tmp"
+        verifier_commands = [
+            command.model_dump(mode="json") for command in frozen.spec.process_verifiers
+        ]
+        promotion_verifiers = [
+            command.model_dump(mode="json") for command in frozen.spec.promotion_verifiers
+        ]
+        worker_policy = plan.worker_policy if plan else self._worker_policy(frozen.spec.strategy)
+        timeout_seconds = int(
+            timeout_seconds_override
+            or worker_policy.get("timeout_seconds")
+            or frozen.spec.strategy.worker_timeout_seconds
+        )
+        local_verifier_max_runs = int(
+            worker_policy.get(
+                "local_verifier_max_runs",
+                frozen.spec.strategy.worker_local_verifier_max_runs,
+            )
+        )
+        actual_verifier_allowed = local_verifier_max_runs > 0
+        if actual_verifier_allowed:
+            local_validation_rule = (
+                f"Run local verifier sanity checks at most {local_verifier_max_runs} times. "
+                "Runtime-owned verification after submission is authoritative and does not count "
+                "against this worker-local limit."
+            )
+        else:
+            local_validation_rule = (
+                "Do not run the process verifier command or any equivalent local scorer. "
+                "You may run non-scoring static checks such as py_compile. Runtime-owned "
+                "verification after submission is authoritative."
+            )
+        destructive_command_patterns = [
+            "rm",
+            "mv",
+            "rmdir",
+            "unlink",
+            "trash",
+            "find -delete",
+            "git clean",
+            "git reset",
+            "git restore",
+            "git checkout",
+        ]
+        destructive_command_rule = (
+            "Do not delete, move, reset, restore, or clean files. Do not run destructive "
+            "filesystem commands such as rm, mv, rmdir, unlink, trash, find -delete, git clean, "
+            "git reset, git restore, or git checkout. Do not bypass this with Python, Node, "
+            "shell scripts, or helper programs."
+        )
+        return {
+            "protocol": {
+                "name": "search-worker-context",
+                "version": 1,
+                "authority": "MCP context is authoritative over chat instructions when they conflict.",
+                "required_first_step": f"call search_get_worker_context(dispatch_id='{dispatch_id}')",
+                "submit_rule": (
+                    "Submit an artifact containing dispatch_id and context_hash, or return it "
+                    "to the main agent if the worker cannot call MCP tools."
+                ),
+                "timeout_rule": (
+                    "Treat deadline_at as a hard delivery deadline. Submit or return the best-so-far "
+                    "artifact before the deadline instead of continuing exploration."
+                ),
+                "directive_rule": (
+                    "If the main directive includes score targets, baseline scores, or requests to "
+                    "beat a score, treat them as main-agent evaluation context only. Do not run local "
+                    "scoring, evaluator APIs, or parameter sweeps to satisfy them."
+                ),
+                "local_validation_rule": local_validation_rule,
+                "destructive_command_rule": destructive_command_rule,
+            },
+            "dispatch_id": dispatch_id,
+            "run_id": run.run_id,
+            "candidate_id": record.candidate_id,
+            "created_at": created_at,
+            "timeout_seconds": timeout_seconds,
+            "deadline_at": utc_timestamp_after(timeout_seconds),
+            "local_verifier_max_runs": local_verifier_max_runs,
+            "main_directive": main_directive,
+            "objective": frozen.spec.objective,
+            "metric_name": frozen.spec.metric_name,
+            "metric_direction": frozen.spec.metric_direction,
+            "source_path": run.source_path,
+            "budget": frozen.spec.budget.model_dump(mode="json"),
+            "strategy": frozen.spec.strategy.model_dump(mode="json"),
+            "worker_policy": worker_policy,
+            "plan": plan.model_dump(mode="json") if plan else None,
+            "official_history": plan.official_history if plan else {},
+            "derivation_policy": plan.derivation_policy if plan else {},
+            "strategy_trace": plan.strategy_trace if plan else {},
+            "candidate_task": record.task.model_dump(mode="json"),
+            "workspace": str(record.task.workspace),
+            "scratch_dir": str(scratch_dir),
+            "allowed_files": record.task.allowed_files,
+            "denied_files": record.task.denied_files,
+            "base_candidate_id": record.task.base_candidate_id,
+            "parent_candidate_ids": record.task.parent_candidate_ids,
+            "hypothesis": record.task.hypothesis,
+            "proposal": record.task.proposal.model_dump(mode="json") if record.task.proposal else None,
+            "strategy_metadata": record.task.strategy_metadata,
+            "instructions": record.task.instructions,
+            "expected_artifacts": record.task.expected_artifacts,
+            "stop_conditions": record.task.stop_conditions,
+            "process_verifiers": verifier_commands,
+            "promotion_verifiers": promotion_verifiers,
+            "local_validation_policy": {
+                "max_verifier_runs": local_verifier_max_runs,
+                "actual_verifier_allowed": actual_verifier_allowed,
+                "verifier_run_definition": (
+                    "One execution of any command intended to evaluate the candidate with the "
+                    "provided process verifier or an equivalent local scorer."
+                ),
+                "forbidden_when_max_runs_is_zero": [
+                    "running process_verifiers",
+                    "calling evaluator.evaluate(...)",
+                    "running benchmark/scoring scripts that execute the candidate for a score",
+                    "parameter sweeps driven by candidate scores",
+                ],
+                "allowed_static_checks": [
+                    "python -m py_compile on edited Python files",
+                    "syntax-only or formatting checks that do not execute candidate scoring logic",
+                ],
+                "scratch_rule": (
+                    "Scratch files are for notes, static drafts, and non-scoring helper material only. "
+                    "Do not create or run experiment scripts, parameter sweeps, scorer clones, or "
+                    "validation harnesses in scratch."
+                ),
+                "destructive_command_rule": destructive_command_rule,
+                "forbidden_destructive_commands": destructive_command_patterns,
+                "final_candidate_rule": (
+                    "Keep the final allowed-file change bounded and fast. Do not put long parameter "
+                    "sweeps, random restarts, or "
+                    "open-ended optimization loops in the final candidate implementation."
+                ),
+            },
+            "artifact_requirements": {
+                "candidate_id": record.candidate_id,
+                "dispatch_id": dispatch_id,
+                "status": "patch_ready | answer_ready | abandoned | failed",
+                "summary": (
+                    "Describe what was tried, the logic behind it, observed result if known, "
+                    "tradeoffs, and concrete next ideas."
+                ),
+                "context_hash": "fill with the context_hash returned by search_get_worker_context",
+            },
+        }
+
+    def _render_worker_brief(self, context: dict[str, Any]) -> str:
+        directive = context.get("main_directive") or {}
+        lines = [
+            f"# Search Worker Dispatch: {context['dispatch_id']}",
+            "",
+            f"- Run: `{context['run_id']}`",
+            f"- Candidate: `{context['candidate_id']}`",
+            f"- Plan: `{(context.get('plan') or {}).get('plan_id', '')}`",
+            f"- Strategy: `{context['strategy']['name']}` ({context['strategy']['driver']})",
+            f"- Context hash: `{context['context_hash']}`",
+            f"- Timeout: `{context['timeout_seconds']}s`; deadline: `{context['deadline_at']}`",
+            f"- Local verifier limit: `{context['local_verifier_max_runs']}` runs",
+            "",
+            "## Required First Step",
+            "",
+            "Call the MCP tool:",
+            "",
+            f"`search_get_worker_context(dispatch_id=\"{context['dispatch_id']}\")`",
+            "",
+            "Treat the MCP context as authoritative. If this brief conflicts with MCP context, report the conflict and follow MCP context.",
+            "",
+            "## Main Agent Directive",
+            "",
+        ]
+        if directive:
+            for key, value in directive.items():
+                lines.append(f"- {key}: {value}")
+        else:
+            lines.append("- No additional directive provided.")
+        lines.extend(
+            [
+                "",
+                "## Non-Negotiable Environment Rules",
+                "",
+                f"- Work only in `{context['workspace']}`.",
+                f"- Use `{context['scratch_dir']}` only for notes, static drafts, and non-scoring helper material.",
+                "- Do not create or run scratch experiment scripts, scorer clones, validation harnesses, parameter sweeps, or benchmark scripts.",
+                "- Do not use `/tmp`, home directories, or other external scratch locations for candidate work.",
+                f"- Modify only: `{', '.join(context['allowed_files'])}`.",
+                f"- Do not modify: `{', '.join(context['denied_files'])}`.",
+                f"- Stop exploration before `{context['deadline_at']}` and return the best-so-far artifact.",
+                "- Do not run the process verifier or any equivalent local scorer unless MCP context explicitly allows nonzero local verifier runs.",
+                "- Do not delete, move, reset, restore, or clean files. Do not use `rm`, `mv`, `rmdir`, `unlink`, `trash`, `find -delete`, `git clean`, `git reset`, `git restore`, or `git checkout`.",
+                "- Do not bypass destructive-command restrictions with Python, Node, shell scripts, or helper programs.",
+                "- Treat score targets or baseline scores in the main directive as main-agent context only; do not run local scoring to satisfy them.",
+                "- You may run non-scoring static checks such as `python -m py_compile`.",
+                "- Keep final candidate code bounded and fast; do not embed long searches or parameter sweeps in the final allowed file.",
+                "- Return or submit an artifact with `dispatch_id`, `context_hash`, `summary`, and any next ideas.",
+            ]
+        )
+        return "\n".join(lines) + "\n"
 
     def _plan_independent(
         self,
@@ -952,13 +1327,44 @@ class FileSearchRuntime:
             copy_source_tree(base_record.task.workspace, workspace)
         else:
             copy_source_tree(Path(run.source_path), workspace)
+        scratch_dir = workspace / ".tmp"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
 
         instructions = [
             "Work only inside this candidate workspace.",
+            "Use this workspace's .tmp/ directory only for notes, static drafts, and non-scoring helper material.",
+            "Do not create or run scratch experiment scripts, scorer clones, validation harnesses, parameter sweeps, or benchmark scripts.",
+            "Do not use /tmp or other directories outside the candidate workspace for scratch work.",
+            "Do not delete, move, reset, restore, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, find -delete, git clean, git reset, git restore, and git checkout are forbidden.",
             "Modify only allowed files.",
             "Do not modify frozen verifier files.",
             "Submit artifacts to the runtime; do not change the main workspace.",
         ]
+        if plan.worker_policy.get("requires_dispatch"):
+            instructions.append(
+                "This run is configured with worker_mode=sub-agent-search-dispatch; candidate artifacts must include dispatch_id and context_hash."
+            )
+            instructions.append(
+                f"Worker timeout is {plan.worker_policy['timeout_seconds']} seconds; collect a best-so-far artifact by the deadline."
+            )
+            if plan.worker_policy["local_verifier_max_runs"] == 0:
+                instructions.append(
+                    "Worker must not run the process verifier or any equivalent local scorer; only non-scoring static checks such as py_compile are allowed."
+                )
+            else:
+                instructions.append(
+                    f"Worker may run local verifier sanity checks at most {plan.worker_policy['local_verifier_max_runs']} times before submitting."
+                )
+            instructions.append(
+                "Final candidate code must be bounded and fast; do not embed long searches, random restarts, or parameter sweeps in the final allowed file."
+            )
+            instructions.append(
+                "If the worker directive mentions score targets or baseline scores, treat them as context only and do not run local scoring to satisfy them."
+            )
+            if plan.worker_policy.get("subagent_type"):
+                instructions.append(
+                    f"Dispatch this candidate with subagent_type={plan.worker_policy['subagent_type']!r}."
+                )
         instructions.extend(proposal.instructions)
 
         parent_id = parent_candidate_ids[0] if parent_candidate_ids else None
@@ -983,6 +1389,8 @@ class FileSearchRuntime:
             strategy_metadata={
                 "strategy": plan.strategy.name,
                 "strategy_driver": plan.strategy.driver,
+                "worker_mode": plan.worker_policy.get("mode"),
+                "worker_policy": plan.worker_policy,
                 "plan_id": plan.plan_id,
                 "slot": slot,
             },
@@ -1363,7 +1771,14 @@ class FileSearchRuntime:
             "history_refs": record.task.proposal.history_refs if record.task.proposal else [],
             "strategy_metadata": record.task.strategy_metadata,
             "workspace": str(record.task.workspace),
+            "dispatches": self._dispatch_payloads_for_candidate(
+                record.task.run_id,
+                record.candidate_id,
+            ),
+            "artifact_dispatch_id": artifact.dispatch_id if artifact else None,
+            "artifact_context_hash": artifact.context_hash if artifact else None,
             "summary": artifact.summary if artifact else "",
+            "next_ideas": artifact.next_ideas if artifact else [],
             "risk_notes": artifact.risk_notes if artifact else [],
             "artifact_status": artifact.status if artifact else None,
             "changed_files": record.detected_changed_files,
@@ -1377,6 +1792,26 @@ class FileSearchRuntime:
             "verifiers": verifier_summaries,
             "log_paths": log_paths,
         }
+
+    def _dispatch_payloads_for_candidate(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "dispatch_id": dispatch.dispatch_id,
+                "candidate_id": dispatch.candidate_id,
+                "plan_id": dispatch.plan_id,
+                "created_at": dispatch.created_at,
+                "context_hash": dispatch.context_hash,
+                "main_directive": dispatch.main_directive,
+                "brief_path": str(dispatch.brief_path),
+                "dispatch_path": str(dispatch.dispatch_path),
+            }
+            for dispatch in self._load_worker_dispatches(run_id)
+            if dispatch.candidate_id == candidate_id
+        ]
 
     def _frozen_hash_failures(self, frozen: FrozenSpec, workspace: Path) -> dict[str, dict[str, str | None]]:
         failures: dict[str, dict[str, str | None]] = {}
@@ -1438,6 +1873,9 @@ class FileSearchRuntime:
     def _plan_dir(self, run_id: str) -> Path:
         return self._run_dir(run_id) / "plans"
 
+    def _dispatch_dir(self, run_id: str) -> Path:
+        return self._run_dir(run_id) / "dispatches"
+
     def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
         return FrozenSpec.model_validate(load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json"))
 
@@ -1463,6 +1901,25 @@ class FileSearchRuntime:
         return [
             SearchPlan.model_validate(load_json(path))
             for path in sorted(plan_dir.glob("plan_*.json"))
+        ]
+
+    def _write_worker_dispatch(self, dispatch: WorkerDispatch) -> None:
+        dispatch.brief_path.parent.mkdir(parents=True, exist_ok=True)
+        dispatch.brief_path.write_text(dispatch.worker_brief, encoding="utf-8")
+        write_json(dispatch.dispatch_path, dispatch.model_dump(mode="json"))
+
+    def _load_worker_dispatch_by_id(self, dispatch_id: str) -> WorkerDispatch:
+        for path in sorted(self.runs_dir.glob(f"*/dispatches/{dispatch_id}.json")):
+            return WorkerDispatch.model_validate(load_json(path))
+        raise FileNotFoundError(f"worker dispatch not found: {dispatch_id}")
+
+    def _load_worker_dispatches(self, run_id: str) -> list[WorkerDispatch]:
+        dispatch_dir = self._dispatch_dir(run_id)
+        if not dispatch_dir.exists():
+            return []
+        return [
+            WorkerDispatch.model_validate(load_json(path))
+            for path in sorted(dispatch_dir.glob("dispatch_*.json"))
         ]
 
     def _load_candidate_record(self, run_id: str, candidate_id: str) -> CandidateRecord:

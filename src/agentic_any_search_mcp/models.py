@@ -77,6 +77,14 @@ class StrategySpec(SearchModel):
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
     ref: str | None = None
     agent_role: str = "planner_and_mutator"
+    worker_mode: Literal[
+        "main-agent-search-direct",
+        "sub-agent-search-dispatch",
+        "auto",
+    ] = "main-agent-search-direct"
+    worker_agent_type: str | None = None
+    worker_timeout_seconds: int = Field(default=600, gt=0)
+    worker_local_verifier_max_runs: int = Field(default=0, ge=0)
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -86,6 +94,13 @@ class StrategySpec(SearchModel):
     def name_must_be_nonempty(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("strategy name must be non-empty")
+        return value
+
+    @field_validator("worker_agent_type")
+    @classmethod
+    def worker_agent_type_must_be_nonempty(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("worker_agent_type must be non-empty when provided")
         return value
 
 
@@ -199,6 +214,7 @@ class SearchPlan(SearchModel):
     requires_agent_proposals: bool = False
     official_history: dict[str, Any] = Field(default_factory=dict)
     derivation_policy: dict[str, Any] = Field(default_factory=dict)
+    worker_policy: dict[str, Any] = Field(default_factory=dict)
     proposal_contract: ProposalContract | None = None
     work_orders: list[CandidateWorkOrder] = Field(default_factory=list)
     strategy_trace: dict[str, Any] = Field(default_factory=dict)
@@ -209,12 +225,15 @@ class SearchPlan(SearchModel):
 class ArtifactBundle(SearchModel):
     candidate_id: str
     status: Literal["patch_ready", "answer_ready", "abandoned", "failed"]
+    dispatch_id: str | None = None
+    context_hash: str | None = None
     changed_files: list[str] = Field(default_factory=list)
     patch_path: Path | None = None
     result_path: Path | None = None
     notes_path: Path | None = None
     logs: list[Path] = Field(default_factory=list)
     summary: str = ""
+    next_ideas: list[str] = Field(default_factory=list)
     risk_notes: list[str] = Field(default_factory=list)
 
 
@@ -262,6 +281,7 @@ class RunRecord(SearchModel):
     created_at: str
     next_candidate_index: int = 1
     next_plan_index: int = 1
+    next_dispatch_index: int = 1
     candidates_total: int = 0
     candidates_evaluated: int = 0
     best_candidate_id: str | None = None
@@ -285,3 +305,17 @@ class CandidateRecord(SearchModel):
         if self.artifact and self.artifact.candidate_id != self.candidate_id:
             raise ValueError("artifact candidate_id does not match candidate record")
         return self
+
+
+class WorkerDispatch(SearchModel):
+    dispatch_id: str
+    run_id: str
+    candidate_id: str
+    plan_id: str | None = None
+    created_at: str
+    main_directive: dict[str, Any] = Field(default_factory=dict)
+    context_hash: str
+    worker_brief: str
+    dispatch_path: Path
+    brief_path: Path
+    context: dict[str, Any] = Field(default_factory=dict)

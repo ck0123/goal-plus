@@ -28,6 +28,8 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_plan_next",
         "search_start_batch",
         "search_next_batch",
+        "search_prepare_worker",
+        "search_get_worker_context",
         "search_submit_candidate",
         "search_run_verifier",
         "search_select",
@@ -35,6 +37,18 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_promote",
         "search_abort",
     }
+
+
+def test_search_prepare_worker_accepts_string_main_directive(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    schema = tools["search_prepare_worker"].parameters
+    main_directive = schema["properties"]["main_directive"]
+    timeout_seconds = schema["properties"]["timeout_seconds"]
+
+    assert {"type": "string"} in main_directive["anyOf"]
+    assert {"type": "integer"} in timeout_seconds["anyOf"]
 
 
 def test_create_mcp_constructs_runtime_with_configured_root(
@@ -71,6 +85,12 @@ def test_create_mcp_constructs_runtime_with_configured_root(
 
         def search_next_batch(self, *args, **kwargs):
             return []
+
+        def search_prepare_worker(self, *args, **kwargs):
+            return {}
+
+        def search_get_worker_context(self, *args, **kwargs):
+            return {}
 
         def search_submit_candidate(self, *args, **kwargs):
             return {}

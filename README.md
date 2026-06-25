@@ -6,6 +6,8 @@ The goal of V0 is not to control one specific coding agent. The runtime exposes 
 
 Strategies are run-level settings. The built-in modes include independent branches, agent-guided proposal mode, evolve-style parent selection, and an MCTS-style expansion placeholder. Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract.
 
+Candidate execution is controlled by `strategy.worker_mode`. `main-agent-search-direct` lets the host edit candidate workspaces directly. `sub-agent-search-dispatch` requires the two-channel worker protocol: the main agent records an explicit worker directive with `search_prepare_worker`, while the worker retrieves authoritative environment context with `search_get_worker_context(dispatch_id)`. `strategy.worker_agent_type` can tell OpenCode which `subagent_type` to launch; bundled dispatch examples use `AnySearchAgent`. `strategy.worker_timeout_seconds` defaults to 600 seconds and is returned in worker context as a delivery deadline; `search_prepare_worker(..., timeout_seconds=...)` can override it for one dispatch. `strategy.worker_local_verifier_max_runs` defaults to 0, so dispatch workers do not run scoring/evaluator commands; the main agent/runtime owns actual verification after submission. Dispatch files are persisted under `.search/runs/<run_id>/dispatches/` for debugging and report review.
+
 ## Quick Start With OpenCode
 
 Assumption: OpenCode is already installed and has model credentials configured.
@@ -53,6 +55,7 @@ Additional bundled specs are listed in [examples/README.md](examples/README.md),
   opencode.json                       # local MCP server config
   skills/search/SKILL.md              # /search workflow guide for the host agent
   agents/search-orchestrator.md       # optional host-agent prompt
+  agents/AnySearchAgent.md            # candidate worker subagent prompt
 docs/
   design.md                           # architecture and control-plane design
   toy-example.md                      # step-by-step k_module walkthrough
@@ -84,6 +87,8 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_plan_next`
 - `search-runtime_search_start_batch`
 - `search-runtime_search_next_batch`
+- `search-runtime_search_prepare_worker`
+- `search-runtime_search_get_worker_context`
 - `search-runtime_search_submit_candidate`
 - `search-runtime_search_run_verifier`
 - `search-runtime_search_select`

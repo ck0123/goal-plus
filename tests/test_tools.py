@@ -15,6 +15,7 @@ from agentic_any_search_mcp.models import (
     SearchSpec,
     StrategySpec,
     VerifierResult,
+    WorkerDispatch,
 )
 from agentic_any_search_mcp.tools import SearchTools
 
@@ -114,6 +115,23 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             denied_files=["evaluator.py"],
         )
     ]
+    runtime.prepare_worker.return_value = WorkerDispatch(
+        dispatch_id="dispatch_001",
+        run_id="run_1",
+        candidate_id="c001",
+        plan_id="plan_001",
+        created_at="2026-06-24T00:00:00Z",
+        main_directive={"goal": "try variant"},
+        context_hash="abc123",
+        worker_brief="call search_get_worker_context",
+        dispatch_path=Path("/tmp/dispatch_001.json"),
+        brief_path=Path("/tmp/dispatch_001.md"),
+        context={"dispatch_id": "dispatch_001", "context_hash": "abc123"},
+    )
+    runtime.get_worker_context.return_value = {
+        "dispatch_id": "dispatch_001",
+        "context_hash": "abc123",
+    }
     runtime.run_verifier.return_value = ScoreReport(
         run_id="run_1",
         candidate_id="c001",
@@ -147,6 +165,17 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         [{"intent": "derive from official history", "parent_candidate_ids": ["c001"]}],
     )[0]["candidate_id"] == "c001"
     assert tools.search_next_batch("run_1", 1)[0]["candidate_id"] == "c001"
+    assert tools.search_prepare_worker(
+        "run_1",
+        "c001",
+        {"goal": "try variant"},
+        timeout_seconds=45,
+    )["dispatch_id"] == "dispatch_001"
+    assert runtime.prepare_worker.call_args.kwargs["timeout_seconds"] == 45
+    assert tools.search_get_worker_context("dispatch_001") == {
+        "dispatch_id": "dispatch_001",
+        "context_hash": "abc123",
+    }
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
@@ -166,3 +195,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.abort.assert_called_once_with("run_1", "stop")
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
     runtime.plan_next.assert_called_once_with("run_1", requested_k=1)
+    runtime.prepare_worker.assert_called_once_with(
+        run_id="run_1",
+        candidate_id="c001",
+        main_directive={"goal": "try variant"},
+        timeout_seconds=45,
+    )
+    runtime.get_worker_context.assert_called_once_with("dispatch_001")

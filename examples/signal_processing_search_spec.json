@@ -39,7 +39,13 @@
     "max_parallel": 4,
     "wall_clock_seconds": 600
   },
-  "strategy": "independent_branches",
+  "strategy": {
+    "name": "independent_branches",
+    "worker_mode": "sub-agent-search-dispatch",
+    "worker_agent_type": "AnySearchAgent",
+    "worker_timeout_seconds": 600,
+    "worker_local_verifier_max_runs": 0
+  },
   "constraints": {
     "suggested_batch_size": 4,
     "task_summary": "Implement process_signal(input_signal, window_size) as a causal filter that returns len(input_signal)-window_size+1 values."

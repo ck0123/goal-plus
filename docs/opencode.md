@@ -81,6 +81,8 @@ search-runtime_search_list_history
 search-runtime_search_plan_next
 search-runtime_search_start_batch
 search-runtime_search_next_batch
+search-runtime_search_prepare_worker
+search-runtime_search_get_worker_context
 search-runtime_search_submit_candidate
 search-runtime_search_run_verifier
 search-runtime_search_select
@@ -92,5 +94,22 @@ search-runtime_search_abort
 ## Current Limit
 
 This is a V0 host-guided flow. It does not yet spawn native OpenCode subagents or headless workers automatically. The main agent can act as the worker by editing candidate workspaces directly.
+
+If `strategy.worker_mode` is `sub-agent-search-dispatch`, use the worker dispatch protocol:
+
+1. Main agent calls `search-runtime_search_prepare_worker(run_id, candidate_id, main_directive)`.
+   `main_directive` may be a plain string or a structured object.
+2. Main agent launches the worker with `worker_policy.subagent_type` when present. Bundled dispatch examples use `subagent_type="AnySearchAgent"`.
+3. Main agent passes the returned `dispatch_id` or `worker_brief` to the subagent.
+4. Subagent first calls `search-runtime_search_get_worker_context(dispatch_id)`.
+5. Subagent works only in the returned `workspace`, uses the returned `scratch_dir`, and returns/submits an artifact with `dispatch_id` and `context_hash`.
+6. Main agent treats `worker_policy.timeout_seconds` and worker context `deadline_at` as the collection deadline. Default timeout is 600 seconds; pass `timeout_seconds` to `search_prepare_worker` to override one dispatch.
+7. By default `worker_policy.local_verifier_max_runs` is 0: subagents must not run the process verifier command, evaluator APIs, equivalent local scorers, score-driven sweeps, or custom scratch scripts that execute the candidate to estimate quality. They may run non-scoring static checks such as `py_compile`. Runtime-owned `search_run_verifier` after submission is the actual verification path.
+
+Dispatch audit files are written under `.search/runs/<run_id>/dispatches/`.
+
+The main agent must call `search-runtime_search_run_verifier` for every submitted candidate before selection. Worker-reported scores are not authoritative. Worker directives should not contain numeric score targets or baseline scores; those encourage local scoring loops. The timeout is a host-side collection rule; V0 does not rely on MCP to terminate the OpenCode subagent process. Final candidate code should be bounded and fast; workers should not put long parameter sweeps or open-ended optimization loops in the final allowed file.
+
+If `strategy.worker_mode` is `main-agent-search-direct`, the host agent can edit the candidate workspace directly.
 
 For the full walkthrough, see [toy-example.md](toy-example.md).

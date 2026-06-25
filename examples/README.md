@@ -10,7 +10,16 @@ The example specs are small local scenarios for exercising the Search MCP runtim
 
 For the multi-batch examples, create the run, call `search_plan_next(run_id, 4)`, then start the returned plan with `search_start_batch(run_id, plan_id)`. Submit and verify those candidates, inspect their artifacts and verifier results, then optionally plan another batch. The compatibility helper `search_next_batch(run_id, 4)` still works for the default fixed-work-order examples. The runtime enforces isolated workspaces and verifier-owned scoring; the active strategy defines how later candidates should derive from history.
 
-Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far. To advance the search, call `search_plan_next`; the returned plan states the current strategy mode, official history view, derivation policy, and whether the host must submit proposals.
+Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far. To advance the search, call `search_plan_next`; the returned plan states the current strategy mode, worker policy, official history view, derivation policy, and whether the host must submit proposals.
+
+`strategy.worker_mode` controls candidate execution:
+
+- `main-agent-search-direct`: the main agent edits candidate workspaces directly.
+- `sub-agent-search-dispatch`: call `search_prepare_worker(run_id, candidate_id, main_directive, timeout_seconds?)` first. `main_directive` may be a plain string or a structured object. If `worker_agent_type` is set, use it as the OpenCode `subagent_type`; bundled dispatch examples use `AnySearchAgent`. Pass the returned `dispatch_id` to the worker and have the worker call `search_get_worker_context(dispatch_id)` before editing. Candidate submission must include `dispatch_id` and `context_hash`.
+
+`strategy.worker_timeout_seconds` is the default per-candidate worker timebox. It defaults to 600 seconds, and `search_prepare_worker(..., timeout_seconds=...)` may override one dispatch. Hosts should collect best-so-far artifacts by the timeout and then run runtime-owned verification.
+
+`strategy.worker_local_verifier_max_runs` limits worker-local verifier/scorer calls during candidate exploration. It defaults to 0, so workers do not run actual scoring/evaluator commands; runtime-owned verification after submission is required. Workers may run non-scoring static checks such as `py_compile`.
 
 ## Budget Semantics
 
@@ -38,7 +47,7 @@ tests/fixtures/circle_packing/evaluator.py
 tests/fixtures/signal_processing/evaluator.py
 ```
 
-The fixtures are dependency-light and run with the default development install. The specs intentionally do not prescribe what each worker must try; workers should submit their result and a useful summary of what they actually changed.
+The specs intentionally do not prescribe what each worker must try; workers should submit their result and a useful summary of what they actually changed. Candidate dependencies are part of the verifier environment contract: if a candidate uses a package that is unavailable, the runtime verifier should record that failure instead of changing the task framing.
 
 ## Strategy Modes
 
@@ -49,6 +58,10 @@ Example specs currently use the default `independent_branches` strategy. To test
   "strategy": {
     "name": "agent_guided",
     "driver": "builtin",
+    "worker_mode": "sub-agent-search-dispatch",
+    "worker_agent_type": "AnySearchAgent",
+    "worker_timeout_seconds": 600,
+    "worker_local_verifier_max_runs": 0,
     "history_policy": {"scope": "top_n", "top_n": 5}
   }
 }

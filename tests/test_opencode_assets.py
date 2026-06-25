@@ -43,3 +43,22 @@ def test_k_module_example_spec_is_valid_json() -> None:
 
 def test_search_skill_does_not_store_case_specific_references() -> None:
     assert not (ROOT / ".opencode" / "skills" / "search" / "references").exists()
+
+
+def test_any_search_agent_denies_destructive_shell_commands() -> None:
+    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "bash:" in agent
+    for pattern in [
+        '"rm*": deny',
+        '"mv*": deny',
+        '"rmdir*": deny',
+        '"find*delete*": deny',
+        '"git clean*": deny',
+        '"git reset*": deny',
+        '"git restore*": deny',
+        '"git checkout*": deny',
+    ]:
+        assert pattern in agent

@@ -56,6 +56,23 @@ class SearchTools:
     def search_next_batch(self, run_id: str, k: int = 4) -> list[dict[str, Any]]:
         return [task.model_dump(mode="json") for task in self.runtime.next_batch(run_id, k)]
 
+    def search_prepare_worker(
+        self,
+        run_id: str,
+        candidate_id: str,
+        main_directive: dict[str, Any] | str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.prepare_worker(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            main_directive=main_directive,
+            timeout_seconds=timeout_seconds,
+        ).model_dump(mode="json")
+
+    def search_get_worker_context(self, dispatch_id: str) -> dict[str, Any]:
+        return self.runtime.get_worker_context(dispatch_id)
+
     def search_submit_candidate(
         self,
         run_id: str,

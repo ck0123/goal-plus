@@ -106,6 +106,8 @@ def test_copy_source_tree_and_list_files_ignore_runtime_noise(tmp_path: Path) ->
     (source / "keep.py").write_text("x = 1\n", encoding="utf-8")
     (source / ".search").mkdir()
     (source / ".search" / "run.json").write_text("{}", encoding="utf-8")
+    (source / ".tmp").mkdir()
+    (source / ".tmp" / "scratch.py").write_text("print('scratch')\n", encoding="utf-8")
     (source / "__pycache__").mkdir()
     (source / "__pycache__" / "keep.pyc").write_text("compiled", encoding="utf-8")
 
@@ -159,14 +161,249 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     tasks = runtime.start_batch(run_id, plan.plan_id)
 
     assert plan.strategy.name == "independent_branches"
+    assert plan.worker_policy["mode"] == "main-agent-search-direct"
+    assert plan.worker_policy["requires_dispatch"] is False
     assert plan.planned_k == 2
     assert [task.candidate_id for task in tasks] == ["c001", "c002"]
     assert tasks[0].plan_id == "plan_001"
     assert tasks[0].proposal.intent == "Independent candidate c001"
+    assert (tasks[0].workspace / ".tmp").is_dir()
+    assert any(".tmp" in instruction for instruction in tasks[0].instructions)
 
     saved_plan = runtime._load_plan(run_id, "plan_001")
     assert saved_plan.status == "started"
     assert saved_plan.started_candidate_ids == ["c001", "c002"]
+
+
+def test_dispatch_worker_mode_is_planned_and_required_for_submission(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "sub-agent-search-dispatch",
+            "worker_agent_type": "AnySearchAgent",
+            "worker_timeout_seconds": 120,
+            "worker_local_verifier_max_runs": 3,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    assert plan.worker_policy["mode"] == "sub-agent-search-dispatch"
+    assert plan.worker_policy["subagent_type"] == "AnySearchAgent"
+    assert plan.worker_policy["timeout_seconds"] == 120
+    assert plan.worker_policy["local_verifier_max_runs"] == 3
+    assert plan.worker_policy["requires_dispatch"] is True
+    assert tasks[0].strategy_metadata["worker_mode"] == "sub-agent-search-dispatch"
+    assert any(
+        "worker_mode=sub-agent-search-dispatch" in instruction
+        for instruction in tasks[0].instructions
+    )
+    assert any("subagent_type='AnySearchAgent'" in instruction for instruction in tasks[0].instructions)
+    assert any("Worker timeout is 120 seconds" in instruction for instruction in tasks[0].instructions)
+    assert any("at most 3 times" in instruction for instruction in tasks[0].instructions)
+    assert any("bounded and fast" in instruction for instruction in tasks[0].instructions)
+    assert any("score targets" in instruction for instruction in tasks[0].instructions)
+
+    with pytest.raises(ValueError, match="dispatch_id"):
+        runtime.submit_candidate(
+            run_id,
+            tasks[0].candidate_id,
+            ArtifactBundle(candidate_id=tasks[0].candidate_id, status="patch_ready"),
+        )
+
+    dispatch = runtime.prepare_worker(run_id, tasks[0].candidate_id, {"goal": "try worker"})
+    context = runtime.get_worker_context(dispatch.dispatch_id)
+    assert context["timeout_seconds"] == 120
+    assert context["local_verifier_max_runs"] == 3
+    assert context["local_validation_policy"]["max_verifier_runs"] == 3
+    assert context["deadline_at"].endswith("Z")
+    assert "120s" in dispatch.worker_brief
+    assert "Local verifier limit: `3` runs" in dispatch.worker_brief
+    assert "best-so-far" in dispatch.worker_brief
+    runtime.submit_candidate(
+        run_id,
+        tasks[0].candidate_id,
+        ArtifactBundle(
+            candidate_id=tasks[0].candidate_id,
+            status="patch_ready",
+            dispatch_id=dispatch.dispatch_id,
+            context_hash=dispatch.context_hash,
+        ),
+    )
+    record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
+    assert record.status == "submitted"
+
+
+def test_prepare_worker_persists_dispatch_and_context(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    task = runtime.next_batch(run_id, 1)[0]
+
+    dispatch = runtime.prepare_worker(
+        run_id,
+        task.candidate_id,
+        {
+            "goal": "try a weighted local search",
+            "expected_output": "edit initial_program.py and summarize the result",
+        },
+    )
+    context = runtime.get_worker_context(dispatch.dispatch_id)
+
+    assert dispatch.dispatch_id.startswith(f"dispatch_{run_id.removeprefix('run_')}_")
+    assert dispatch.candidate_id == task.candidate_id
+    assert dispatch.brief_path.exists()
+    assert dispatch.dispatch_path.exists()
+    assert "search_get_worker_context" in dispatch.worker_brief
+    assert context["dispatch_id"] == dispatch.dispatch_id
+    assert context["context_hash"] == dispatch.context_hash
+    assert context["main_directive"]["goal"] == "try a weighted local search"
+    assert context["workspace"] == str(task.workspace)
+    assert context["scratch_dir"] == str(task.workspace / ".tmp")
+    assert context["allowed_files"] == ["initial_program.py"]
+    assert context["denied_files"] == ["evaluator.py", "config.yaml"]
+    assert context["process_verifiers"][0]["name"] == "score"
+    assert context["protocol"]["authority"].startswith("MCP context is authoritative")
+    assert context["timeout_seconds"] == 600
+    assert context["local_verifier_max_runs"] == 0
+    assert context["local_validation_policy"]["max_verifier_runs"] == 0
+    assert context["local_validation_policy"]["actual_verifier_allowed"] is False
+    assert "Scratch files are for notes" in context["local_validation_policy"]["scratch_rule"]
+    assert "rm" in context["local_validation_policy"]["forbidden_destructive_commands"]
+    assert "git clean" in context["local_validation_policy"]["forbidden_destructive_commands"]
+    assert "score targets" in context["protocol"]["directive_rule"]
+    assert context["deadline_at"].endswith("Z")
+    assert "deadline_at" in context["protocol"]["timeout_rule"]
+    assert "Do not run the process verifier" in context["protocol"]["local_validation_rule"]
+    assert "Do not delete" in context["protocol"]["destructive_command_rule"]
+    assert "Timeout: `600s`" in dispatch.worker_brief
+    assert "Local verifier limit: `0` runs" in dispatch.worker_brief
+    assert "Do not run the process verifier" in dispatch.worker_brief
+    assert "Do not create or run scratch experiment scripts" in dispatch.worker_brief
+    assert "Do not delete" in dispatch.worker_brief
+    assert "score targets" in dispatch.worker_brief
+
+
+def test_prepare_worker_allows_per_dispatch_timeout_override(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    task = runtime.next_batch(run_id, 1)[0]
+
+    dispatch = runtime.prepare_worker(
+        run_id,
+        task.candidate_id,
+        "short exploratory attempt",
+        timeout_seconds=30,
+    )
+    context = runtime.get_worker_context(dispatch.dispatch_id)
+
+    assert context["timeout_seconds"] == 30
+    assert "Timeout: `30s`" in dispatch.worker_brief
+
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        runtime.prepare_worker(run_id, task.candidate_id, timeout_seconds=0)
+
+
+def test_submit_candidate_validates_worker_dispatch_context_hash(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+    dispatch = runtime.prepare_worker(run_id, tasks[0].candidate_id, "try one concrete variant")
+
+    with pytest.raises(ValueError, match="context_hash is required"):
+        runtime.submit_candidate(
+            run_id,
+            tasks[0].candidate_id,
+            ArtifactBundle(
+                candidate_id=tasks[0].candidate_id,
+                status="patch_ready",
+                dispatch_id=dispatch.dispatch_id,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="context_hash"):
+        runtime.submit_candidate(
+            run_id,
+            tasks[0].candidate_id,
+            ArtifactBundle(
+                candidate_id=tasks[0].candidate_id,
+                status="patch_ready",
+                dispatch_id=dispatch.dispatch_id,
+                context_hash="wrong",
+            ),
+        )
+
+    with pytest.raises(ValueError, match="does not belong"):
+        runtime.submit_candidate(
+            run_id,
+            tasks[1].candidate_id,
+            ArtifactBundle(
+                candidate_id=tasks[1].candidate_id,
+                status="patch_ready",
+                dispatch_id=dispatch.dispatch_id,
+                context_hash=dispatch.context_hash,
+            ),
+        )
+
+    runtime.submit_candidate(
+        run_id,
+        tasks[0].candidate_id,
+        ArtifactBundle(
+            candidate_id=tasks[0].candidate_id,
+            status="patch_ready",
+            dispatch_id=dispatch.dispatch_id,
+            context_hash=dispatch.context_hash,
+            summary="implemented the dispatched idea",
+            next_ideas=["try a smaller mutation next"],
+        ),
+    )
+    record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
+    assert record.artifact.dispatch_id == dispatch.dispatch_id
+    assert record.artifact.context_hash == dispatch.context_hash
+
+
+def test_history_and_report_include_worker_dispatches(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    task = runtime.next_batch(run_id, 1)[0]
+    dispatch = runtime.prepare_worker(run_id, task.candidate_id, {"goal": "document dispatch"})
+    runtime.submit_candidate(
+        run_id,
+        task.candidate_id,
+        ArtifactBundle(
+            candidate_id=task.candidate_id,
+            status="patch_ready",
+            dispatch_id=dispatch.dispatch_id,
+            context_hash=dispatch.context_hash,
+            summary="dispatch-aware candidate",
+            next_ideas=["inspect report linkage"],
+        ),
+    )
+
+    history = runtime.list_history(run_id)
+    candidate = history["candidates"][0]
+    assert candidate["dispatches"][0]["dispatch_id"] == dispatch.dispatch_id
+    assert candidate["artifact_dispatch_id"] == dispatch.dispatch_id
+    assert candidate["next_ideas"] == ["inspect report linkage"]
+
+    report_path = runtime.report(run_id)
+    report = report_path.read_text(encoding="utf-8")
+    assert "## Worker Dispatches" in report
+    assert dispatch.dispatch_id in report
+    assert "goal=document dispatch" in report
 
 
 def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) -> None:
@@ -332,6 +569,26 @@ def test_submit_candidate_detects_out_of_surface_changes(tmp_path: Path) -> None
     assert record.detected_changed_files == ["config.yaml"]
     assert record.touched_denied_files is True
     assert record.changed_outside_allowed is True
+
+
+def test_submit_candidate_ignores_workspace_tmp_scratch(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    task = runtime.next_batch(run_id, 1)[0]
+    (task.workspace / ".tmp" / "prototype.py").write_text("print('scratch')\n", encoding="utf-8")
+
+    runtime.submit_candidate(
+        run_id,
+        task.candidate_id,
+        ArtifactBundle(candidate_id=task.candidate_id, status="patch_ready"),
+    )
+    record = runtime._load_candidate_record(run_id, task.candidate_id)
+
+    assert record.detected_changed_files == []
+    assert record.touched_denied_files is False
+    assert record.changed_outside_allowed is False
 
 
 def test_run_verifier_parses_subprocess_metrics_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

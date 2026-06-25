@@ -108,12 +108,13 @@ The skill should guide the host agent through this sequence:
 3. Call `search-runtime_search_create`.
 4. Call `search-runtime_search_plan_next` with `requested_k=4`.
 5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-6. Edit only `initial_program.py` inside each candidate workspace.
-7. Call `search-runtime_search_submit_candidate` for each candidate.
-8. Call `search-runtime_search_run_verifier` for each candidate.
-9. Call `search-runtime_search_select`.
-10. Call `search-runtime_search_report`.
-11. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+6. Follow the returned `worker_policy`. The bundled k_module spec uses `main-agent-search-direct`, so the host edits directly. Specs with `sub-agent-search-dispatch` must call `search-runtime_search_prepare_worker` for each candidate and pass the returned `dispatch_id` to the subagent. If `worker_policy.subagent_type` is present, use it as the OpenCode `subagent_type`; bundled dispatch examples use `AnySearchAgent`. Default worker timeout is 600 seconds unless the spec sets `strategy.worker_timeout_seconds`; `search_prepare_worker(..., timeout_seconds=...)` can override one dispatch. Default worker-local verifier limit is 0, so actual verification is main-agent/runtime-owned.
+7. Edit only `initial_program.py` inside each candidate workspace.
+8. Call `search-runtime_search_submit_candidate` for each candidate.
+9. Call `search-runtime_search_run_verifier` for each candidate.
+10. Call `search-runtime_search_select`.
+11. Call `search-runtime_search_report`.
+12. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
 
 `search-runtime_search_next_batch(run_id, 4)` is still available as a compatibility shortcut for this default independent strategy; it performs the plan/start sequence internally.
 
@@ -149,9 +150,21 @@ After candidate creation:
 .search/runs/<run_id>/workspace/c002/
 .search/runs/<run_id>/workspace/c003/
 .search/runs/<run_id>/workspace/c004/
+.search/runs/<run_id>/workspace/c001/.tmp/
 .search/runs/<run_id>/candidates/c001/candidate.json
 .search/runs/<run_id>/candidates/c001/task.json
 ```
+
+Use each workspace's `.tmp/` directory for temporary files. Runtime change detection ignores `.tmp/`, and promotion patches do not include it.
+
+If worker dispatches are used:
+
+```text
+.search/runs/<run_id>/dispatches/<dispatch_id>.json
+.search/runs/<run_id>/dispatches/<dispatch_id>.md
+```
+
+The JSON file stores the main agent directive, context hash, and authoritative worker context. The markdown file is the brief that can be pasted into a subagent.
 
 After verification and reporting:
 

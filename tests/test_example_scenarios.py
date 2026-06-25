@@ -45,6 +45,10 @@ def test_two_round_example_specs_are_valid(
     assert parsed.budget.max_parallel == 4
     assert parsed.root_hypotheses == []
     assert parsed.constraints["suggested_batch_size"] == 4
+    assert parsed.strategy.worker_mode == "sub-agent-search-dispatch"
+    assert parsed.strategy.worker_agent_type == "AnySearchAgent"
+    assert parsed.strategy.worker_timeout_seconds == 600
+    assert parsed.strategy.worker_local_verifier_max_runs == 0
     assert not Path(parsed.source_path).is_absolute()
     assert (ROOT / verifier_path).exists()
 
@@ -73,11 +77,22 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert second_round[0]["hypothesis"] == "Independent candidate c005"
 
     for candidate_id in ("c001", "c005"):
+        dispatch = tools.search_prepare_worker(
+            run_id,
+            candidate_id,
+            {"goal": f"verify baseline fixture path for {candidate_id}"},
+            timeout_seconds=60,
+        )
+        assert dispatch["context"]["timeout_seconds"] == 60
+        assert dispatch["context"]["local_verifier_max_runs"] == 0
+        assert dispatch["context"]["local_validation_policy"]["actual_verifier_allowed"] is False
         tools.search_submit_candidate(
             run_id,
             candidate_id,
             {
                 "candidate_id": candidate_id,
+                "dispatch_id": dispatch["dispatch_id"],
+                "context_hash": dispatch["context_hash"],
                 "status": "patch_ready",
                 "summary": "baseline candidate",
             },

@@ -52,6 +52,19 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_next_batch(run_id, k)
 
     @mcp.tool()
+    def search_prepare_worker(
+        run_id: str,
+        candidate_id: str,
+        main_directive: dict[str, Any] | str | None = None,
+        timeout_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        return tools.search_prepare_worker(run_id, candidate_id, main_directive, timeout_seconds)
+
+    @mcp.tool()
+    def search_get_worker_context(dispatch_id: str) -> dict[str, Any]:
+        return tools.search_get_worker_context(dispatch_id)
+
+    @mcp.tool()
     def search_submit_candidate(
         run_id: str,
         candidate_id: str,

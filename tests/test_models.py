@@ -56,6 +56,9 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["process_verifiers"][0]["role"] == "ranking_signal"
     assert dumped["metric_direction"] == "maximize"
     assert dumped["strategy"]["name"] == "independent_branches"
+    assert dumped["strategy"]["worker_mode"] == "main-agent-search-direct"
+    assert dumped["strategy"]["worker_timeout_seconds"] == 600
+    assert dumped["strategy"]["worker_local_verifier_max_runs"] == 0
 
 
 def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
@@ -72,6 +75,23 @@ def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.name == "agent_guided"
     assert spec.strategy.history_policy.top_n == 3
+    assert spec.strategy.worker_mode == "main-agent-search-direct"
+    assert spec.strategy.worker_timeout_seconds == 600
+    assert spec.strategy.worker_local_verifier_max_runs == 0
+
+    data = valid_spec_dict()
+    data["strategy"] = {
+        "name": "independent_branches",
+        "worker_mode": "sub-agent-search-dispatch",
+        "worker_agent_type": "AnySearchAgent",
+        "worker_timeout_seconds": 120,
+        "worker_local_verifier_max_runs": 2,
+    }
+    spec = SearchSpec.model_validate(data)
+    assert spec.strategy.worker_mode == "sub-agent-search-dispatch"
+    assert spec.strategy.worker_agent_type == "AnySearchAgent"
+    assert spec.strategy.worker_timeout_seconds == 120
+    assert spec.strategy.worker_local_verifier_max_runs == 2
 
 
 def test_strategy_plan_models_capture_proposal_contract() -> None:
