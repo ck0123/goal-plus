@@ -1528,13 +1528,12 @@ class FileSearchRuntime:
 
         instructions = [
             "Work only inside this candidate workspace.",
-            "Use this workspace's .tmp/ directory only for notes, static drafts, and non-scoring helper material.",
-            "Do not create or run scratch experiment scripts, scorer clones, validation harnesses, parameter sweeps, or benchmark scripts.",
-            "Do not use /tmp or other directories outside the candidate workspace for scratch work.",
-            "Do not delete, move, reset, restore, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, find -delete, git clean, git reset, git restore, and git checkout are forbidden.",
-            "Modify only allowed files.",
-            "Do not modify frozen verifier files.",
-            "Submit artifacts to the runtime; do not change the main workspace.",
+            "Use this workspace's .tmp/ directory for notes, scratch drafts, and your local iteration log (e.g. results.tsv).",
+            "Do not use /tmp, home directories, or paths outside the candidate workspace for candidate work.",
+            "Modify only files listed in allowed_files; never touch denied_files or frozen verifier artifacts.",
+            "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
+            "You may git init, git add, git commit, git reset, git restore, and git checkout INSIDE this workspace to advance and revert iterations.",
+            "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
         ]
         if plan.worker_policy.get("requires_agent_session"):
             instructions.append(
@@ -1549,20 +1548,21 @@ class FileSearchRuntime:
             instructions.append(
                 "Do not launch long-running foreground Task calls when supervision or abort is required; run workers as background/managed sessions so the supervisor can wait, inspect status, and abort."
             )
-            if plan.worker_policy["local_verifier_max_runs"] == 0:
+            local_runs = plan.worker_policy["local_verifier_max_runs"]
+            if local_runs == 0:
                 instructions.append(
-                    "Agent session must not run the process verifier or any equivalent local scorer; only non-scoring static checks such as py_compile are allowed."
+                    "Local verifier budget is 0; you may not call search_run_verifier yourself. Edit, submit once, and finish."
                 )
             else:
                 instructions.append(
-                    f"Agent session may run local verifier sanity checks at most {plan.worker_policy['local_verifier_max_runs']} times before submitting."
+                    f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
                 )
-            instructions.append(
-                "Final candidate code must be bounded and fast; do not embed long searches, random restarts, or parameter sweeps in the final allowed file."
-            )
-            instructions.append(
-                "If the session directive mentions score targets or baseline scores, treat them as context only and do not run local scoring to satisfy them."
-            )
+                instructions.append(
+                    "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
+                )
+                instructions.append(
+                    "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
+                )
             if plan.worker_policy.get("subagent_type"):
                 instructions.append(
                     f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."

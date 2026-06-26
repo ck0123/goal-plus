@@ -207,9 +207,15 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     assert any("agent_session_id" in instruction for instruction in tasks[0].instructions)
     assert any("subagent_type='AnySearchAgent'" in instruction for instruction in tasks[0].instructions)
     assert any("120 seconds" in instruction for instruction in tasks[0].instructions)
-    assert any("at most 3 times" in instruction for instruction in tasks[0].instructions)
-    assert any("bounded and fast" in instruction for instruction in tasks[0].instructions)
-    assert any("score targets" in instruction for instruction in tasks[0].instructions)
+    assert any(
+        "search_run_verifier" in instruction for instruction in tasks[0].instructions
+    )
+    assert any(
+        "git init" in instruction for instruction in tasks[0].instructions
+    )
+    assert any(
+        "iteration log" in instruction for instruction in tasks[0].instructions
+    )
 
     with pytest.raises(ValueError, match="agent_session_id"):
         runtime.submit_candidate(
