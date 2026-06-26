@@ -18,7 +18,6 @@ from agentic_any_search_mcp.models import (
     StrategySpec,
     VerifierCommand,
     VerifierRole,
-    WorkerDispatch,
 )
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
@@ -41,5 +40,4 @@ __all__ = [
     "StrategySpec",
     "VerifierCommand",
     "VerifierRole",
-    "WorkerDispatch",
 ]

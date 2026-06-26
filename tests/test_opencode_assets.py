@@ -32,6 +32,36 @@ def test_search_skill_is_slash_command_ready() -> None:
     assert "k_module" in skill
 
 
+def test_search_skill_requires_opencode_background_subagents() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
+    orchestrator = (ROOT / ".opencode" / "agents" / "search-orchestrator.md").read_text(
+        encoding="utf-8"
+    )
+
+    combined = skill + "\n" + orchestrator
+    assert "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true" in combined
+    assert "background: true" in combined
+    assert "no `timeout` parameter" in combined
+    assert "MCP server subprocess" in combined
+
+
+def test_subagent_contract_derives_identifiers_from_context() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
+    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+        encoding="utf-8"
+    )
+    orchestrator = (ROOT / ".opencode" / "agents" / "search-orchestrator.md").read_text(
+        encoding="utf-8"
+    )
+
+    combined = skill + "\n" + agent + "\n" + orchestrator
+    assert "Do not hard-code `run_id`, `candidate_id`, or workspace paths" in combined
+    assert "context.run_id" in combined
+    assert "context.candidate_id" in combined
+    assert "context.workspace" in combined
+    assert "search_get_agent_context" in combined
+
+
 def test_k_module_example_spec_is_valid_json() -> None:
     spec_path = ROOT / "examples" / "k_module_search_spec.json"
     spec = json.loads(spec_path.read_text(encoding="utf-8"))

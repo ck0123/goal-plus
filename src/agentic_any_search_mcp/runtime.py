@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import calendar
 import hashlib
 import importlib
 import json
@@ -15,6 +16,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from agentic_any_search_mcp.models import (
+    AgentObservation,
+    AgentSessionBudget,
+    AgentSessionEvent,
+    AgentSessionPhase,
+    AgentSessionRecord,
+    AgentSessionStatus,
+    AgentSessionWaitResult,
     ArtifactBundle,
     CandidateRecord,
     CandidateProposal,
@@ -30,10 +38,11 @@ from agentic_any_search_mcp.models import (
     SearchPlan,
     SearchSpec,
     StrategySpec,
+    TERMINAL_AGENT_SESSION_STATUSES,
     VerifierCommand,
     VerifierResult,
     VerifierRole,
-    WorkerDispatch,
+    VisibilityMode,
 )
 
 
@@ -45,8 +54,12 @@ def utc_timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def utc_timestamp_after(seconds: int) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + seconds))
+def utc_timestamp_from_epoch(epoch_seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def parse_utc_timestamp(timestamp: str) -> float:
+    return float(calendar.timegm(time.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")))
 
 
 def sha256_file(path: Path) -> str:
@@ -194,7 +207,9 @@ class FileSearchRuntime:
         (self._run_dir(run_id) / "candidates").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
-        (self._run_dir(run_id) / "dispatches").mkdir(parents=True, exist_ok=True)
+        (self._run_dir(run_id) / "agent_sessions").mkdir(parents=True, exist_ok=True)
+        (self._run_dir(run_id) / "agent_events").mkdir(parents=True, exist_ok=True)
+        (self._run_dir(run_id) / "observations").mkdir(parents=True, exist_ok=True)
         return run_id
 
     def status(self, run_id: str) -> RunSummary:
@@ -375,60 +390,419 @@ class FileSearchRuntime:
             )
         return self.start_batch(run_id, plan.plan_id)
 
-    def prepare_worker(
+    def start_agent_session(
         self,
         run_id: str,
-        candidate_id: str,
-        main_directive: dict[str, Any] | str | None = None,
-        timeout_seconds: int | None = None,
-    ) -> WorkerDispatch:
-        if timeout_seconds is not None and timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be > 0")
+        candidate_id: str | None = None,
+        directive: dict[str, Any] | str | None = None,
+        budget: dict[str, Any] | None = None,
+        visibility_mode: str = "observations",
+    ) -> AgentSessionRecord:
         run = self._load_run(run_id)
+        if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
+            raise RuntimeError(f"cannot start agent session from state {run.state}")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
-        record = self._load_candidate_record(run_id, candidate_id)
-        directive = self._normalize_main_directive(main_directive)
+        self._refresh_agent_session_deadlines(run_id)
+        if self._run_deadline_reached(run, frozen):
+            self.abort_all_agent_sessions(run_id, "run budget exhausted")
+            raise RuntimeError("run budget exhausted")
 
-        dispatch_id = f"dispatch_{run.run_id.removeprefix('run_')}_{run.next_dispatch_index:03d}"
-        run.next_dispatch_index += 1
-        created_at = utc_timestamp()
+        active_count = self._active_agent_session_count(run_id)
+        if active_count >= frozen.spec.budget.max_parallel:
+            raise RuntimeError("agent session pool is full")
 
-        context_without_hash = self._build_worker_context(
-            run=run,
-            frozen=frozen,
-            record=record,
-            dispatch_id=dispatch_id,
-            main_directive=directive,
-            created_at=created_at,
-            timeout_seconds_override=timeout_seconds,
+        candidate_record: CandidateRecord | None = None
+        workspace: Path | None = None
+        if candidate_id is not None:
+            candidate_record = self._load_candidate_record(run_id, candidate_id)
+            workspace = candidate_record.task.workspace
+
+        requested_budget = dict(budget or {})
+        remaining_seconds = self._remaining_run_seconds(run, frozen)
+        if remaining_seconds <= 0:
+            self.abort_all_agent_sessions(run_id, "run budget exhausted")
+            raise RuntimeError("run budget exhausted")
+        requested_wall_seconds = int(
+            requested_budget.get("max_wall_seconds")
+            or frozen.spec.budget.max_worker_seconds
+            or frozen.spec.strategy.worker_timeout_seconds
         )
-        context_hash = sha256_text(canonical_json(context_without_hash))
-        context = {**context_without_hash, "context_hash": context_hash}
-        worker_brief = self._render_worker_brief(context)
-        dispatch_dir = self._dispatch_dir(run_id)
-        dispatch_path = dispatch_dir / f"{dispatch_id}.json"
-        brief_path = dispatch_dir / f"{dispatch_id}.md"
+        if requested_wall_seconds <= 0:
+            raise ValueError("max_wall_seconds must be > 0")
+        max_wall_seconds = max(1, min(requested_wall_seconds, remaining_seconds))
+        deadline_epoch = min(time.time() + max_wall_seconds, self._run_deadline_epoch(run, frozen))
+        deadline_at = utc_timestamp_from_epoch(deadline_epoch)
 
-        dispatch = WorkerDispatch(
-            dispatch_id=dispatch_id,
+        session_budget = AgentSessionBudget.model_validate(
+            {
+                "max_wall_seconds": max_wall_seconds,
+                "deadline_at": deadline_at,
+                "max_steps": requested_budget.get("max_steps"),
+                "max_tool_calls": requested_budget.get("max_tool_calls"),
+                "max_verifier_runs": requested_budget.get(
+                    "max_verifier_runs",
+                    frozen.spec.strategy.worker_local_verifier_max_runs,
+                ),
+                "heartbeat_interval_seconds": requested_budget.get("heartbeat_interval_seconds", 30),
+                "stale_after_seconds": requested_budget.get("stale_after_seconds", 90),
+                "finalize_before_seconds": requested_budget.get("finalize_before_seconds", 30),
+                "grace_seconds": requested_budget.get("grace_seconds", 30),
+            }
+        )
+
+        agent_session_id = self._make_agent_session_id(run_id, run.next_agent_session_index)
+        run.next_agent_session_index += 1
+        now = utc_timestamp()
+        session = AgentSessionRecord(
+            agent_session_id=agent_session_id,
             run_id=run_id,
             candidate_id=candidate_id,
-            plan_id=record.task.plan_id,
-            created_at=created_at,
-            main_directive=directive,
-            context_hash=context_hash,
-            worker_brief=worker_brief,
-            dispatch_path=dispatch_path,
-            brief_path=brief_path,
-            context=context,
+            created_at=now,
+            updated_at=now,
+            last_heartbeat_at=now,
+            status=AgentSessionStatus.RUNNING.value,
+            phase=AgentSessionPhase.PROBING.value,
+            visibility_mode=VisibilityMode(visibility_mode),
+            directive=self._normalize_main_directive(directive),
+            workspace=workspace,
+            budget=session_budget,
+            current_goal=self._normalize_main_directive(directive).get("goal", ""),
         )
-        self._write_worker_dispatch(dispatch)
         self._write_run(run)
-        return dispatch
+        self._write_agent_session(session)
+        self._append_agent_event(
+            run_id,
+            "agent_started",
+            agent_session_id,
+            {
+                "candidate_id": candidate_id,
+                "deadline_at": session_budget.deadline_at,
+                "max_wall_seconds": session_budget.max_wall_seconds,
+                "active_count": active_count + 1,
+                "max_concurrent_agents": frozen.spec.budget.max_parallel,
+            },
+        )
+        return session
 
-    def get_worker_context(self, dispatch_id: str) -> dict[str, Any]:
-        dispatch = self._load_worker_dispatch_by_id(dispatch_id)
-        return dispatch.context
+    def get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
+        session = self._load_agent_session_by_id(agent_session_id)
+        run = self._load_run(session.run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        candidate_record = (
+            self._load_candidate_record(session.run_id, session.candidate_id)
+            if session.candidate_id
+            else None
+        )
+        return {
+            "agent_session_id": session.agent_session_id,
+            "run_id": session.run_id,
+            "candidate_id": session.candidate_id,
+            "status": session.status,
+            "phase": session.phase,
+            "visibility_mode": session.visibility_mode,
+            "directive": session.directive,
+            "budget": session.budget.model_dump(mode="json"),
+            "workspace": str(session.workspace) if session.workspace else None,
+            "objective": frozen.spec.objective,
+            "metric_name": frozen.spec.metric_name,
+            "metric_direction": frozen.spec.metric_direction,
+            "run_budget": frozen.spec.budget.model_dump(mode="json"),
+            "run_deadline_at": utc_timestamp_from_epoch(self._run_deadline_epoch(run, frozen)),
+            "candidate_task": candidate_record.task.model_dump(mode="json") if candidate_record else None,
+            "history": self.list_history(session.run_id, top_n=5, sort_by="score"),
+            "peer_status": [
+                peer.model_dump(mode="json")
+                for peer in self.list_agent_status(session.run_id)
+                if peer.agent_session_id != session.agent_session_id
+            ],
+            "observations": self.list_observations(session.run_id, top_n=20),
+        }
+
+    def update_agent_status(
+        self,
+        agent_session_id: str,
+        phase: str,
+        current_goal: str = "",
+        last_action: str = "",
+        next_step: str = "",
+        blockers: list[str] | None = None,
+        status: str | None = None,
+        heartbeat: bool = True,
+    ) -> AgentSessionRecord:
+        session = self._load_agent_session_by_id(agent_session_id)
+        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+            raise RuntimeError(f"cannot update terminal agent session {agent_session_id}")
+
+        now = utc_timestamp()
+        next_phase = AgentSessionPhase(phase)
+        if status is not None:
+            next_status = AgentSessionStatus(status).value
+        elif next_phase == AgentSessionPhase.BLOCKED:
+            next_status = AgentSessionStatus.BLOCKED.value
+        elif session.status == AgentSessionStatus.BLOCKED.value and next_phase != AgentSessionPhase.BLOCKED:
+            next_status = AgentSessionStatus.RUNNING.value
+        else:
+            next_status = session.status
+
+        updated = session.model_copy(
+            update={
+                "phase": next_phase.value,
+                "status": next_status,
+                "current_goal": current_goal,
+                "last_action": last_action,
+                "next_step": next_step,
+                "blockers": blockers or [],
+                "updated_at": now,
+                "last_heartbeat_at": now if heartbeat else session.last_heartbeat_at,
+            }
+        )
+        self._write_agent_session(updated)
+        self._append_agent_event(
+            session.run_id,
+            "agent_blocked" if next_status == AgentSessionStatus.BLOCKED.value else "agent_status_updated",
+            agent_session_id,
+            {
+                "phase": next_phase.value,
+                "status": next_status,
+                "current_goal": current_goal,
+                "last_action": last_action,
+                "next_step": next_step,
+                "blockers": blockers or [],
+            },
+        )
+        return updated
+
+    def list_agent_status(self, run_id: str, include_stale: bool = True) -> list[AgentSessionRecord]:
+        self._refresh_agent_session_deadlines(run_id)
+        sessions = self._load_agent_sessions(run_id)
+        if include_stale:
+            return sessions
+        return [session for session in sessions if not self._agent_session_is_stale(session)]
+
+    def finish_agent_session(
+        self,
+        agent_session_id: str,
+        status: str = "completed",
+        summary: str = "",
+        result: dict[str, Any] | None = None,
+    ) -> AgentSessionRecord:
+        if status not in {"completed", "failed"}:
+            raise ValueError("finish status must be 'completed' or 'failed'")
+        session = self._load_agent_session_by_id(agent_session_id)
+        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+            return session
+        now = utc_timestamp()
+        next_status = AgentSessionStatus(status)
+        updated = session.model_copy(
+            update={
+                "status": next_status.value,
+                "phase": AgentSessionPhase.IDLE.value,
+                "summary": summary,
+                "result": result or {},
+                "updated_at": now,
+                "last_heartbeat_at": now,
+            }
+        )
+        self._write_agent_session(updated)
+        self._append_agent_event(
+            session.run_id,
+            "agent_completed" if next_status == AgentSessionStatus.COMPLETED else "agent_failed",
+            agent_session_id,
+            {"summary": summary, "result": result or {}},
+        )
+        return updated
+
+    def request_agent_finalize(self, agent_session_id: str, reason: str = "") -> AgentSessionRecord:
+        session = self._load_agent_session_by_id(agent_session_id)
+        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+            return session
+        now = utc_timestamp()
+        updated = session.model_copy(
+            update={
+                "status": AgentSessionStatus.FINALIZING.value,
+                "phase": AgentSessionPhase.FINALIZING.value,
+                "next_step": "submit best-so-far candidate or summarize why no candidate is available",
+                "updated_at": now,
+                "last_heartbeat_at": now,
+            }
+        )
+        self._write_agent_session(updated)
+        self._append_agent_event(
+            session.run_id,
+            "agent_finalize_requested",
+            agent_session_id,
+            {"reason": reason},
+        )
+        return updated
+
+    def abort_agent_session(self, agent_session_id: str, reason: str = "") -> AgentSessionRecord:
+        session = self._load_agent_session_by_id(agent_session_id)
+        return self._abort_agent_session_record(session, reason)
+
+    def _abort_agent_session_record(
+        self,
+        session: AgentSessionRecord,
+        reason: str = "",
+    ) -> AgentSessionRecord:
+        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+            return session
+        now = utc_timestamp()
+        updated = session.model_copy(
+            update={
+                "status": AgentSessionStatus.ABORTED.value,
+                "phase": AgentSessionPhase.IDLE.value,
+                "summary": reason,
+                "updated_at": now,
+                "last_heartbeat_at": now,
+            }
+        )
+        self._write_agent_session(updated)
+        self._append_agent_event(
+            session.run_id,
+            "agent_aborted",
+            session.agent_session_id,
+            {"reason": reason},
+        )
+        return updated
+
+    def abort_all_agent_sessions(self, run_id: str, reason: str = "") -> list[AgentSessionRecord]:
+        aborted: list[AgentSessionRecord] = []
+        for session in self._load_agent_sessions(run_id):
+            if session.status not in TERMINAL_AGENT_SESSION_STATUSES:
+                aborted.append(self._abort_agent_session_record(session, reason))
+        return aborted
+
+    def record_agent_step(
+        self,
+        agent_session_id: str,
+        steps_delta: int = 0,
+        tool_calls_delta: int = 0,
+        verifier_runs_delta: int = 0,
+        tokens_delta: int = 0,
+    ) -> AgentSessionRecord:
+        if min(steps_delta, tool_calls_delta, verifier_runs_delta, tokens_delta) < 0:
+            raise ValueError("counter deltas must be non-negative")
+        session = self._load_agent_session_by_id(agent_session_id)
+        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+            raise RuntimeError(f"cannot update terminal agent session {agent_session_id}")
+        counters = dict(session.counters)
+        counters["steps"] = counters.get("steps", 0) + steps_delta
+        counters["tool_calls"] = counters.get("tool_calls", 0) + tool_calls_delta
+        counters["verifier_runs"] = counters.get("verifier_runs", 0) + verifier_runs_delta
+        counters["tokens"] = counters.get("tokens", 0) + tokens_delta
+        updated = session.model_copy(update={"counters": counters, "updated_at": utc_timestamp()})
+        self._write_agent_session(updated)
+        self._append_agent_event(
+            session.run_id,
+            "agent_budget_updated",
+            agent_session_id,
+            {"counters": counters},
+        )
+        if updated.budget.max_steps is not None and counters["steps"] >= updated.budget.max_steps:
+            return self.request_agent_finalize(agent_session_id, "max_steps reached")
+        if updated.budget.max_tool_calls is not None and counters["tool_calls"] >= updated.budget.max_tool_calls:
+            return self.request_agent_finalize(agent_session_id, "max_tool_calls reached")
+        if counters["verifier_runs"] > updated.budget.max_verifier_runs:
+            return self.request_agent_finalize(agent_session_id, "max_verifier_runs exceeded")
+        return updated
+
+    def publish_observation(
+        self,
+        agent_session_id: str,
+        summary: str,
+        evidence: str = "",
+        next_ideas: list[str] | None = None,
+        tags: list[str] | None = None,
+        visibility: str = "observations",
+    ) -> AgentObservation:
+        session = self._load_agent_session_by_id(agent_session_id)
+        run = self._load_run(session.run_id)
+        observation_id = f"obs_{run.next_observation_index:06d}"
+        run.next_observation_index += 1
+        observation = AgentObservation(
+            observation_id=observation_id,
+            run_id=session.run_id,
+            agent_session_id=agent_session_id,
+            created_at=utc_timestamp(),
+            summary=summary,
+            evidence=evidence,
+            next_ideas=next_ideas or [],
+            tags=tags or [],
+            visibility=VisibilityMode(visibility),
+        )
+        self._write_run(run)
+        self._write_observation(observation)
+        self._append_agent_event(
+            session.run_id,
+            "observation_published",
+            agent_session_id,
+            {"observation_id": observation_id, "summary": summary, "tags": tags or []},
+        )
+        return observation
+
+    def list_observations(
+        self,
+        run_id: str,
+        visibility: str | None = None,
+        tags: list[str] | None = None,
+        top_n: int = 20,
+    ) -> list[dict[str, Any]]:
+        if top_n <= 0:
+            raise ValueError("top_n must be > 0")
+        observations = self._load_observations(run_id)
+        if visibility is not None:
+            mode = VisibilityMode(visibility).value
+            observations = [obs for obs in observations if obs.visibility == mode]
+        if tags:
+            required = set(tags)
+            observations = [obs for obs in observations if required.intersection(obs.tags)]
+        return [obs.model_dump(mode="json") for obs in observations[-top_n:]]
+
+    def wait_agent_events(
+        self,
+        run_id: str,
+        timeout_seconds: int = 300,
+        wake_on: list[str] | None = None,
+        since_event_id: str | None = None,
+    ) -> AgentSessionWaitResult:
+        if timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be >= 0")
+        wake_set = set(
+            wake_on
+            or [
+                "agent_completed",
+                "agent_failed",
+                "agent_blocked",
+                "agent_aborted",
+                "agent_timed_out",
+                "run_deadline",
+            ]
+        )
+        deadline = time.time() + timeout_seconds
+        while True:
+            run_deadline_reached = self._enforce_run_deadline(run_id)
+            self._refresh_agent_session_deadlines(run_id)
+            event_log = self._load_agent_events(run_id)
+            events = [
+                event
+                for event in event_log
+                if event.type in wake_set
+                and (since_event_id is None or event.event_id > since_event_id)
+            ]
+            if events or run_deadline_reached or timeout_seconds == 0 or time.time() >= deadline:
+                sessions = self._load_agent_sessions(run_id)
+                frozen = self._load_frozen_spec(self._load_run(run_id).frozen_spec_id)
+                return AgentSessionWaitResult(
+                    run_id=run_id,
+                    timed_out=not events and not run_deadline_reached,
+                    run_deadline_reached=run_deadline_reached,
+                    last_event_id=event_log[-1].event_id if event_log else since_event_id,
+                    events=events,
+                    sessions=sessions,
+                    active_count=self._active_agent_session_count(run_id),
+                    max_concurrent_agents=frozen.spec.budget.max_parallel,
+                )
+            time.sleep(min(0.1, max(0.0, deadline - time.time())))
 
     def submit_candidate(
         self,
@@ -442,18 +816,21 @@ class FileSearchRuntime:
         if artifact.candidate_id != candidate_id:
             raise ValueError("artifact candidate_id does not match candidate_id")
         worker_policy = self._worker_policy(frozen.spec.strategy)
-        if worker_policy["requires_dispatch"] and not artifact.dispatch_id:
+        if worker_policy["requires_agent_session"] and not artifact.agent_session_id:
             raise ValueError(
-                "candidate artifact must include dispatch_id for worker_mode=sub-agent-search-dispatch"
+                "candidate artifact must include agent_session_id for worker_mode=agent-session-pool"
             )
-        if artifact.dispatch_id:
-            if not artifact.context_hash:
-                raise ValueError("artifact context_hash is required when dispatch_id is provided")
-            dispatch = self._load_worker_dispatch_by_id(artifact.dispatch_id)
-            if dispatch.run_id != run_id or dispatch.candidate_id != candidate_id:
-                raise ValueError("artifact dispatch_id does not belong to this candidate")
-            if artifact.context_hash and artifact.context_hash != dispatch.context_hash:
-                raise ValueError("artifact context_hash does not match worker dispatch")
+        if artifact.agent_session_id:
+            session = self._load_agent_session_by_id(artifact.agent_session_id, run_id=run_id)
+            if session.run_id != run_id or session.candidate_id != candidate_id:
+                raise ValueError("artifact agent_session_id does not belong to this candidate")
+            if session.status in {
+                AgentSessionStatus.ABORTED.value,
+                AgentSessionStatus.TIMED_OUT.value,
+            }:
+                raise RuntimeError(
+                    f"cannot submit artifact from {session.status} agent session"
+                )
 
         detected_changed = self._detect_changed_files(Path(run.source_path), record.task.workspace)
         touched_denied = any(
@@ -587,7 +964,7 @@ class FileSearchRuntime:
                 "",
                 "## Candidates",
                 "",
-                "| Candidate | Plan | Dispatches | Parent/Base | Status | Score | Process | Summary | Key Metrics | Changed Files |",
+                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Process | Summary | Key Metrics | Changed Files |",
                 "|---|---|---|---|---|---:|---|---|---|---|",
             ]
         )
@@ -602,7 +979,9 @@ class FileSearchRuntime:
                 f"{key}={value}" for key, value in payload["key_metrics"].items()
             )
             changed = ", ".join(record.detected_changed_files)
-            dispatches = ", ".join(dispatch["dispatch_id"] for dispatch in payload["dispatches"])
+            agent_sessions = ", ".join(
+                session["agent_session_id"] for session in payload["agent_sessions"]
+            )
             parent_base = ", ".join(
                 part
                 for part in [
@@ -613,30 +992,27 @@ class FileSearchRuntime:
             )
             lines.append(
                 f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
-                f"{self._markdown_cell(dispatches)} | "
+                f"{self._markdown_cell(agent_sessions)} | "
                 f"{self._markdown_cell(parent_base)} | {record.status} | {score} | {passed} | "
                 f"{self._markdown_cell(payload['summary'])} | "
                 f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} |"
             )
-        dispatches = self._load_worker_dispatches(run_id)
-        if dispatches:
+        agent_sessions = self._load_agent_sessions(run_id)
+        if agent_sessions:
             lines.extend(
                 [
                     "",
-                    "## Worker Dispatches",
+                    "## Agent Sessions",
                     "",
-                    "| Dispatch | Candidate | Plan | Context Hash | Main Directive | Brief |",
+                    "| Session | Candidate | Status | Phase | Deadline | Summary |",
                     "|---|---|---|---|---|---|",
                 ]
             )
-            for dispatch in dispatches:
-                directive = "; ".join(
-                    f"{key}={value}" for key, value in dispatch.main_directive.items()
-                )
+            for session in agent_sessions:
                 lines.append(
-                    f"| `{dispatch.dispatch_id}` | `{dispatch.candidate_id}` | "
-                    f"`{dispatch.plan_id or ''}` | `{dispatch.context_hash}` | "
-                    f"{self._markdown_cell(directive)} | `{dispatch.brief_path}` |"
+                    f"| `{session.agent_session_id}` | `{session.candidate_id or ''}` | "
+                    f"{session.status} | {session.phase} | `{session.budget.deadline_at}` | "
+                    f"{self._markdown_cell(session.summary)} |"
                 )
         lines.append("")
 
@@ -673,11 +1049,11 @@ class FileSearchRuntime:
         mode = strategy.worker_mode
         if mode == "auto":
             mode = (
-                "sub-agent-search-dispatch"
+                "agent-session-pool"
                 if self._strategy_mode(strategy) not in {"independent", "independent_branches"}
                 else "main-agent-search-direct"
             )
-        requires_dispatch = mode == "sub-agent-search-dispatch"
+        requires_agent_session = mode == "agent-session-pool"
         local_verifier_max_runs = strategy.worker_local_verifier_max_runs
         if local_verifier_max_runs == 0:
             local_validation_rule = (
@@ -708,15 +1084,17 @@ class FileSearchRuntime:
                 "main-agent context only and must not run local scoring to satisfy it."
             ),
             "local_validation_rule": local_validation_rule,
-            "requires_dispatch": requires_dispatch,
+            "requires_agent_session": requires_agent_session,
             "direct_edit_allowed": mode == "main-agent-search-direct",
-            "dispatch_tools": [
-                "search_prepare_worker",
-                "search_get_worker_context",
+            "supervisor_tools": [
+                "search_start_agent_session",
+                "search_wait_agent_events",
+                "search_abort_agent_session",
+                "search_abort_all_agent_sessions",
             ],
             "reason": (
-                "worker_mode=sub-agent-search-dispatch requires durable worker dispatch before candidate submission"
-                if requires_dispatch
+                "worker_mode=agent-session-pool requires durable agent sessions and supervisor wait/abort control"
+                if requires_agent_session
                 else "worker_mode=main-agent-search-direct allows the host agent to edit candidate workspaces directly"
             ),
         }
@@ -737,217 +1115,6 @@ class FileSearchRuntime:
         if isinstance(main_directive, dict):
             return main_directive
         raise TypeError("main_directive must be a dict, string, or null")
-
-    def _build_worker_context(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        record: CandidateRecord,
-        dispatch_id: str,
-        main_directive: dict[str, Any],
-        created_at: str,
-        timeout_seconds_override: int | None = None,
-    ) -> dict[str, Any]:
-        plan = self._load_plan(run.run_id, record.task.plan_id) if record.task.plan_id else None
-        scratch_dir = record.task.workspace / ".tmp"
-        verifier_commands = [
-            command.model_dump(mode="json") for command in frozen.spec.process_verifiers
-        ]
-        promotion_verifiers = [
-            command.model_dump(mode="json") for command in frozen.spec.promotion_verifiers
-        ]
-        worker_policy = plan.worker_policy if plan else self._worker_policy(frozen.spec.strategy)
-        timeout_seconds = int(
-            timeout_seconds_override
-            or worker_policy.get("timeout_seconds")
-            or frozen.spec.strategy.worker_timeout_seconds
-        )
-        local_verifier_max_runs = int(
-            worker_policy.get(
-                "local_verifier_max_runs",
-                frozen.spec.strategy.worker_local_verifier_max_runs,
-            )
-        )
-        actual_verifier_allowed = local_verifier_max_runs > 0
-        if actual_verifier_allowed:
-            local_validation_rule = (
-                f"Run local verifier sanity checks at most {local_verifier_max_runs} times. "
-                "Runtime-owned verification after submission is authoritative and does not count "
-                "against this worker-local limit."
-            )
-        else:
-            local_validation_rule = (
-                "Do not run the process verifier command or any equivalent local scorer. "
-                "You may run non-scoring static checks such as py_compile. Runtime-owned "
-                "verification after submission is authoritative."
-            )
-        destructive_command_patterns = [
-            "rm",
-            "mv",
-            "rmdir",
-            "unlink",
-            "trash",
-            "find -delete",
-            "git clean",
-            "git reset",
-            "git restore",
-            "git checkout",
-        ]
-        destructive_command_rule = (
-            "Do not delete, move, reset, restore, or clean files. Do not run destructive "
-            "filesystem commands such as rm, mv, rmdir, unlink, trash, find -delete, git clean, "
-            "git reset, git restore, or git checkout. Do not bypass this with Python, Node, "
-            "shell scripts, or helper programs."
-        )
-        return {
-            "protocol": {
-                "name": "search-worker-context",
-                "version": 1,
-                "authority": "MCP context is authoritative over chat instructions when they conflict.",
-                "required_first_step": f"call search_get_worker_context(dispatch_id='{dispatch_id}')",
-                "submit_rule": (
-                    "Submit an artifact containing dispatch_id and context_hash, or return it "
-                    "to the main agent if the worker cannot call MCP tools."
-                ),
-                "timeout_rule": (
-                    "Treat deadline_at as a hard delivery deadline. Submit or return the best-so-far "
-                    "artifact before the deadline instead of continuing exploration."
-                ),
-                "directive_rule": (
-                    "If the main directive includes score targets, baseline scores, or requests to "
-                    "beat a score, treat them as main-agent evaluation context only. Do not run local "
-                    "scoring, evaluator APIs, or parameter sweeps to satisfy them."
-                ),
-                "local_validation_rule": local_validation_rule,
-                "destructive_command_rule": destructive_command_rule,
-            },
-            "dispatch_id": dispatch_id,
-            "run_id": run.run_id,
-            "candidate_id": record.candidate_id,
-            "created_at": created_at,
-            "timeout_seconds": timeout_seconds,
-            "deadline_at": utc_timestamp_after(timeout_seconds),
-            "local_verifier_max_runs": local_verifier_max_runs,
-            "main_directive": main_directive,
-            "objective": frozen.spec.objective,
-            "metric_name": frozen.spec.metric_name,
-            "metric_direction": frozen.spec.metric_direction,
-            "source_path": run.source_path,
-            "budget": frozen.spec.budget.model_dump(mode="json"),
-            "strategy": frozen.spec.strategy.model_dump(mode="json"),
-            "worker_policy": worker_policy,
-            "plan": plan.model_dump(mode="json") if plan else None,
-            "official_history": plan.official_history if plan else {},
-            "derivation_policy": plan.derivation_policy if plan else {},
-            "strategy_trace": plan.strategy_trace if plan else {},
-            "candidate_task": record.task.model_dump(mode="json"),
-            "workspace": str(record.task.workspace),
-            "scratch_dir": str(scratch_dir),
-            "allowed_files": record.task.allowed_files,
-            "denied_files": record.task.denied_files,
-            "base_candidate_id": record.task.base_candidate_id,
-            "parent_candidate_ids": record.task.parent_candidate_ids,
-            "hypothesis": record.task.hypothesis,
-            "proposal": record.task.proposal.model_dump(mode="json") if record.task.proposal else None,
-            "strategy_metadata": record.task.strategy_metadata,
-            "instructions": record.task.instructions,
-            "expected_artifacts": record.task.expected_artifacts,
-            "stop_conditions": record.task.stop_conditions,
-            "process_verifiers": verifier_commands,
-            "promotion_verifiers": promotion_verifiers,
-            "local_validation_policy": {
-                "max_verifier_runs": local_verifier_max_runs,
-                "actual_verifier_allowed": actual_verifier_allowed,
-                "verifier_run_definition": (
-                    "One execution of any command intended to evaluate the candidate with the "
-                    "provided process verifier or an equivalent local scorer."
-                ),
-                "forbidden_when_max_runs_is_zero": [
-                    "running process_verifiers",
-                    "calling evaluator.evaluate(...)",
-                    "running benchmark/scoring scripts that execute the candidate for a score",
-                    "parameter sweeps driven by candidate scores",
-                ],
-                "allowed_static_checks": [
-                    "python -m py_compile on edited Python files",
-                    "syntax-only or formatting checks that do not execute candidate scoring logic",
-                ],
-                "scratch_rule": (
-                    "Scratch files are for notes, static drafts, and non-scoring helper material only. "
-                    "Do not create or run experiment scripts, parameter sweeps, scorer clones, or "
-                    "validation harnesses in scratch."
-                ),
-                "destructive_command_rule": destructive_command_rule,
-                "forbidden_destructive_commands": destructive_command_patterns,
-                "final_candidate_rule": (
-                    "Keep the final allowed-file change bounded and fast. Do not put long parameter "
-                    "sweeps, random restarts, or "
-                    "open-ended optimization loops in the final candidate implementation."
-                ),
-            },
-            "artifact_requirements": {
-                "candidate_id": record.candidate_id,
-                "dispatch_id": dispatch_id,
-                "status": "patch_ready | answer_ready | abandoned | failed",
-                "summary": (
-                    "Describe what was tried, the logic behind it, observed result if known, "
-                    "tradeoffs, and concrete next ideas."
-                ),
-                "context_hash": "fill with the context_hash returned by search_get_worker_context",
-            },
-        }
-
-    def _render_worker_brief(self, context: dict[str, Any]) -> str:
-        directive = context.get("main_directive") or {}
-        lines = [
-            f"# Search Worker Dispatch: {context['dispatch_id']}",
-            "",
-            f"- Run: `{context['run_id']}`",
-            f"- Candidate: `{context['candidate_id']}`",
-            f"- Plan: `{(context.get('plan') or {}).get('plan_id', '')}`",
-            f"- Strategy: `{context['strategy']['name']}` ({context['strategy']['driver']})",
-            f"- Context hash: `{context['context_hash']}`",
-            f"- Timeout: `{context['timeout_seconds']}s`; deadline: `{context['deadline_at']}`",
-            f"- Local verifier limit: `{context['local_verifier_max_runs']}` runs",
-            "",
-            "## Required First Step",
-            "",
-            "Call the MCP tool:",
-            "",
-            f"`search_get_worker_context(dispatch_id=\"{context['dispatch_id']}\")`",
-            "",
-            "Treat the MCP context as authoritative. If this brief conflicts with MCP context, report the conflict and follow MCP context.",
-            "",
-            "## Main Agent Directive",
-            "",
-        ]
-        if directive:
-            for key, value in directive.items():
-                lines.append(f"- {key}: {value}")
-        else:
-            lines.append("- No additional directive provided.")
-        lines.extend(
-            [
-                "",
-                "## Non-Negotiable Environment Rules",
-                "",
-                f"- Work only in `{context['workspace']}`.",
-                f"- Use `{context['scratch_dir']}` only for notes, static drafts, and non-scoring helper material.",
-                "- Do not create or run scratch experiment scripts, scorer clones, validation harnesses, parameter sweeps, or benchmark scripts.",
-                "- Do not use `/tmp`, home directories, or other external scratch locations for candidate work.",
-                f"- Modify only: `{', '.join(context['allowed_files'])}`.",
-                f"- Do not modify: `{', '.join(context['denied_files'])}`.",
-                f"- Stop exploration before `{context['deadline_at']}` and return the best-so-far artifact.",
-                "- Do not run the process verifier or any equivalent local scorer unless MCP context explicitly allows nonzero local verifier runs.",
-                "- Do not delete, move, reset, restore, or clean files. Do not use `rm`, `mv`, `rmdir`, `unlink`, `trash`, `find -delete`, `git clean`, `git reset`, `git restore`, or `git checkout`.",
-                "- Do not bypass destructive-command restrictions with Python, Node, shell scripts, or helper programs.",
-                "- Treat score targets or baseline scores in the main directive as main-agent context only; do not run local scoring to satisfy them.",
-                "- You may run non-scoring static checks such as `python -m py_compile`.",
-                "- Keep final candidate code bounded and fast; do not embed long searches or parameter sweeps in the final allowed file.",
-                "- Return or submit an artifact with `dispatch_id`, `context_hash`, `summary`, and any next ideas.",
-            ]
-        )
-        return "\n".join(lines) + "\n"
 
     def _plan_independent(
         self,
@@ -1340,30 +1507,36 @@ class FileSearchRuntime:
             "Do not modify frozen verifier files.",
             "Submit artifacts to the runtime; do not change the main workspace.",
         ]
-        if plan.worker_policy.get("requires_dispatch"):
+        if plan.worker_policy.get("requires_agent_session"):
             instructions.append(
-                "This run is configured with worker_mode=sub-agent-search-dispatch; candidate artifacts must include dispatch_id and context_hash."
+                "This run is configured with worker_mode=agent-session-pool; candidate execution must be tracked by search_start_agent_session and supervised with search_wait_agent_events."
             )
             instructions.append(
-                f"Worker timeout is {plan.worker_policy['timeout_seconds']} seconds; collect a best-so-far artifact by the deadline."
+                f"Agent session wall-clock budget defaults to {plan.worker_policy['timeout_seconds']} seconds and is capped by the remaining run budget."
+            )
+            instructions.append(
+                "Candidate artifacts must include the producing agent_session_id."
+            )
+            instructions.append(
+                "Do not launch long-running foreground Task calls when supervision or abort is required; run workers as background/managed sessions so the supervisor can wait, inspect status, and abort."
             )
             if plan.worker_policy["local_verifier_max_runs"] == 0:
                 instructions.append(
-                    "Worker must not run the process verifier or any equivalent local scorer; only non-scoring static checks such as py_compile are allowed."
+                    "Agent session must not run the process verifier or any equivalent local scorer; only non-scoring static checks such as py_compile are allowed."
                 )
             else:
                 instructions.append(
-                    f"Worker may run local verifier sanity checks at most {plan.worker_policy['local_verifier_max_runs']} times before submitting."
+                    f"Agent session may run local verifier sanity checks at most {plan.worker_policy['local_verifier_max_runs']} times before submitting."
                 )
             instructions.append(
                 "Final candidate code must be bounded and fast; do not embed long searches, random restarts, or parameter sweeps in the final allowed file."
             )
             instructions.append(
-                "If the worker directive mentions score targets or baseline scores, treat them as context only and do not run local scoring to satisfy them."
+                "If the session directive mentions score targets or baseline scores, treat them as context only and do not run local scoring to satisfy them."
             )
             if plan.worker_policy.get("subagent_type"):
                 instructions.append(
-                    f"Dispatch this candidate with subagent_type={plan.worker_policy['subagent_type']!r}."
+                    f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."
                 )
         instructions.extend(proposal.instructions)
 
@@ -1771,12 +1944,11 @@ class FileSearchRuntime:
             "history_refs": record.task.proposal.history_refs if record.task.proposal else [],
             "strategy_metadata": record.task.strategy_metadata,
             "workspace": str(record.task.workspace),
-            "dispatches": self._dispatch_payloads_for_candidate(
+            "agent_sessions": self._agent_session_payloads_for_candidate(
                 record.task.run_id,
                 record.candidate_id,
             ),
-            "artifact_dispatch_id": artifact.dispatch_id if artifact else None,
-            "artifact_context_hash": artifact.context_hash if artifact else None,
+            "artifact_agent_session_id": artifact.agent_session_id if artifact else None,
             "summary": artifact.summary if artifact else "",
             "next_ideas": artifact.next_ideas if artifact else [],
             "risk_notes": artifact.risk_notes if artifact else [],
@@ -1793,24 +1965,25 @@ class FileSearchRuntime:
             "log_paths": log_paths,
         }
 
-    def _dispatch_payloads_for_candidate(
+    def _agent_session_payloads_for_candidate(
         self,
         run_id: str,
         candidate_id: str,
     ) -> list[dict[str, Any]]:
         return [
             {
-                "dispatch_id": dispatch.dispatch_id,
-                "candidate_id": dispatch.candidate_id,
-                "plan_id": dispatch.plan_id,
-                "created_at": dispatch.created_at,
-                "context_hash": dispatch.context_hash,
-                "main_directive": dispatch.main_directive,
-                "brief_path": str(dispatch.brief_path),
-                "dispatch_path": str(dispatch.dispatch_path),
+                "agent_session_id": session.agent_session_id,
+                "candidate_id": session.candidate_id,
+                "status": session.status,
+                "phase": session.phase,
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+                "deadline_at": session.budget.deadline_at,
+                "directive": session.directive,
+                "summary": session.summary,
             }
-            for dispatch in self._load_worker_dispatches(run_id)
-            if dispatch.candidate_id == candidate_id
+            for session in self._load_agent_sessions(run_id)
+            if session.candidate_id == candidate_id
         ]
 
     def _frozen_hash_failures(self, frozen: FrozenSpec, workspace: Path) -> dict[str, dict[str, str | None]]:
@@ -1873,8 +2046,109 @@ class FileSearchRuntime:
     def _plan_dir(self, run_id: str) -> Path:
         return self._run_dir(run_id) / "plans"
 
-    def _dispatch_dir(self, run_id: str) -> Path:
-        return self._run_dir(run_id) / "dispatches"
+    def _agent_session_dir(self, run_id: str) -> Path:
+        return self._run_dir(run_id) / "agent_sessions"
+
+    def _agent_event_dir(self, run_id: str) -> Path:
+        return self._run_dir(run_id) / "agent_events"
+
+    def _observation_dir(self, run_id: str) -> Path:
+        return self._run_dir(run_id) / "observations"
+
+    def _run_deadline_epoch(self, run: RunRecord, frozen: FrozenSpec) -> float:
+        return parse_utc_timestamp(run.created_at) + frozen.spec.budget.wall_clock_seconds
+
+    def _run_deadline_reached(self, run: RunRecord, frozen: FrozenSpec) -> bool:
+        return time.time() >= self._run_deadline_epoch(run, frozen)
+
+    def _remaining_run_seconds(self, run: RunRecord, frozen: FrozenSpec) -> int:
+        return max(0, int(self._run_deadline_epoch(run, frozen) - time.time()))
+
+    def _active_agent_session_count(self, run_id: str) -> int:
+        return len(
+            [
+                session
+                for session in self._load_agent_sessions(run_id)
+                if session.status not in TERMINAL_AGENT_SESSION_STATUSES
+                and session.status != AgentSessionStatus.QUEUED.value
+            ]
+        )
+
+    def _agent_session_is_stale(self, session: AgentSessionRecord) -> bool:
+        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+            return False
+        return time.time() - parse_utc_timestamp(session.last_heartbeat_at) > session.budget.stale_after_seconds
+
+    def _refresh_agent_session_deadlines(self, run_id: str) -> None:
+        now = time.time()
+        for session in self._load_agent_sessions(run_id):
+            if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+                continue
+            if now < parse_utc_timestamp(session.budget.deadline_at):
+                continue
+            updated = session.model_copy(
+                update={
+                    "status": AgentSessionStatus.TIMED_OUT.value,
+                    "phase": AgentSessionPhase.IDLE.value,
+                    "updated_at": utc_timestamp(),
+                    "summary": "agent session exceeded its hard deadline",
+                }
+            )
+            self._write_agent_session(updated)
+            self._append_agent_event(
+                run_id,
+                "agent_timed_out",
+                session.agent_session_id,
+                {"deadline_at": session.budget.deadline_at},
+            )
+
+    def _enforce_run_deadline(self, run_id: str) -> bool:
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        if not self._run_deadline_reached(run, frozen):
+            return False
+        active_count = self._active_agent_session_count(run_id)
+        if active_count > 0:
+            self.abort_all_agent_sessions(run_id, "run budget exhausted")
+        self._append_agent_event(
+            run_id,
+            "run_deadline",
+            None,
+            {"run_deadline_at": utc_timestamp_from_epoch(self._run_deadline_epoch(run, frozen))},
+            dedupe_type=True,
+        )
+        return True
+
+    def _append_agent_event(
+        self,
+        run_id: str,
+        event_type: str,
+        agent_session_id: str | None,
+        payload: dict[str, Any] | None = None,
+        *,
+        dedupe_type: bool = False,
+    ) -> AgentSessionEvent:
+        if dedupe_type:
+            existing = [
+                event
+                for event in self._load_agent_events(run_id)
+                if event.type == event_type and event.agent_session_id == agent_session_id
+            ]
+            if existing:
+                return existing[-1]
+        run = self._load_run(run_id)
+        event = AgentSessionEvent(
+            event_id=f"event_{run.next_agent_event_index:06d}",
+            run_id=run_id,
+            agent_session_id=agent_session_id,
+            type=event_type,
+            created_at=utc_timestamp(),
+            payload=payload or {},
+        )
+        run.next_agent_event_index += 1
+        self._write_run(run)
+        self._write_agent_event(event)
+        return event
 
     def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
         return FrozenSpec.model_validate(load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json"))
@@ -1903,23 +2177,78 @@ class FileSearchRuntime:
             for path in sorted(plan_dir.glob("plan_*.json"))
         ]
 
-    def _write_worker_dispatch(self, dispatch: WorkerDispatch) -> None:
-        dispatch.brief_path.parent.mkdir(parents=True, exist_ok=True)
-        dispatch.brief_path.write_text(dispatch.worker_brief, encoding="utf-8")
-        write_json(dispatch.dispatch_path, dispatch.model_dump(mode="json"))
+    @staticmethod
+    def _make_agent_session_id(run_id: str, index: int) -> str:
+        run_suffix = run_id.removeprefix("run_")
+        return f"agent_{run_suffix}_{index:03d}"
 
-    def _load_worker_dispatch_by_id(self, dispatch_id: str) -> WorkerDispatch:
-        for path in sorted(self.runs_dir.glob(f"*/dispatches/{dispatch_id}.json")):
-            return WorkerDispatch.model_validate(load_json(path))
-        raise FileNotFoundError(f"worker dispatch not found: {dispatch_id}")
+    def _load_agent_session_by_id(
+        self,
+        agent_session_id: str,
+        run_id: str | None = None,
+    ) -> AgentSessionRecord:
+        if run_id is not None:
+            path = self._agent_session_dir(run_id) / f"{agent_session_id}.json"
+            if path.exists():
+                return AgentSessionRecord.model_validate(load_json(path))
+            raise FileNotFoundError(
+                f"agent session not found: {agent_session_id} in run {run_id}"
+            )
 
-    def _load_worker_dispatches(self, run_id: str) -> list[WorkerDispatch]:
-        dispatch_dir = self._dispatch_dir(run_id)
-        if not dispatch_dir.exists():
+        matches = sorted(self.runs_dir.glob(f"*/agent_sessions/{agent_session_id}.json"))
+        if len(matches) == 1:
+            return AgentSessionRecord.model_validate(load_json(matches[0]))
+        if len(matches) > 1:
+            match_runs = ", ".join(path.parents[1].name for path in matches)
+            raise RuntimeError(
+                f"ambiguous agent_session_id {agent_session_id}; matched runs: {match_runs}. "
+                "Use a globally unique agent_session_id from search_start_agent_session."
+            )
+        raise FileNotFoundError(f"agent session not found: {agent_session_id}")
+
+    def _write_agent_session(self, session: AgentSessionRecord) -> None:
+        write_json(
+            self._agent_session_dir(session.run_id) / f"{session.agent_session_id}.json",
+            session.model_dump(mode="json"),
+        )
+
+    def _load_agent_sessions(self, run_id: str) -> list[AgentSessionRecord]:
+        session_dir = self._agent_session_dir(run_id)
+        if not session_dir.exists():
             return []
         return [
-            WorkerDispatch.model_validate(load_json(path))
-            for path in sorted(dispatch_dir.glob("dispatch_*.json"))
+            AgentSessionRecord.model_validate(load_json(path))
+            for path in sorted(session_dir.glob("agent_*.json"))
+        ]
+
+    def _write_agent_event(self, event: AgentSessionEvent) -> None:
+        write_json(
+            self._agent_event_dir(event.run_id) / f"{event.event_id}.json",
+            event.model_dump(mode="json"),
+        )
+
+    def _load_agent_events(self, run_id: str) -> list[AgentSessionEvent]:
+        event_dir = self._agent_event_dir(run_id)
+        if not event_dir.exists():
+            return []
+        return [
+            AgentSessionEvent.model_validate(load_json(path))
+            for path in sorted(event_dir.glob("event_*.json"))
+        ]
+
+    def _write_observation(self, observation: AgentObservation) -> None:
+        write_json(
+            self._observation_dir(observation.run_id) / f"{observation.observation_id}.json",
+            observation.model_dump(mode="json"),
+        )
+
+    def _load_observations(self, run_id: str) -> list[AgentObservation]:
+        observation_dir = self._observation_dir(run_id)
+        if not observation_dir.exists():
+            return []
+        return [
+            AgentObservation.model_validate(load_json(path))
+            for path in sorted(observation_dir.glob("obs_*.json"))
         ]
 
     def _load_candidate_record(self, run_id: str, candidate_id: str) -> CandidateRecord:

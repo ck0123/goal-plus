@@ -92,7 +92,7 @@ That error is expected because the run was never created.
 Start OpenCode:
 
 ```bash
-opencode
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
 Then send:
@@ -108,7 +108,7 @@ The skill should guide the host agent through this sequence:
 3. Call `search-runtime_search_create`.
 4. Call `search-runtime_search_plan_next` with `requested_k=4`.
 5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-6. Follow the returned `worker_policy`. The bundled k_module spec uses `main-agent-search-direct`, so the host edits directly. Specs with `sub-agent-search-dispatch` must call `search-runtime_search_prepare_worker` for each candidate and pass the returned `dispatch_id` to the subagent. If `worker_policy.subagent_type` is present, use it as the OpenCode `subagent_type`; bundled dispatch examples use `AnySearchAgent`. Default worker timeout is 600 seconds unless the spec sets `strategy.worker_timeout_seconds`; `search_prepare_worker(..., timeout_seconds=...)` can override one dispatch. Default worker-local verifier limit is 0, so actual verification is main-agent/runtime-owned.
+6. Follow the returned `worker_policy`. The bundled k_module spec uses `main-agent-search-direct`, so the host edits directly. Specs with `agent-session-pool` must call `search-runtime_search_start_agent_session` for each managed candidate, launch the configured subagent with `agent_session_id`, and supervise with `search-runtime_search_wait_agent_events`.
 7. Edit only `initial_program.py` inside each candidate workspace.
 8. Call `search-runtime_search_submit_candidate` for each candidate.
 9. Call `search-runtime_search_run_verifier` for each candidate.
@@ -123,13 +123,13 @@ The skill should guide the host agent through this sequence:
 You can trigger the same skill from the command line:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
 ```
 
 If you want to inspect before promotion, use:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Stop after report generation and do not promote."
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Stop after report generation and do not promote."
 ```
 
 ## 7. Expected Runtime Artifacts
@@ -157,14 +157,15 @@ After candidate creation:
 
 Use each workspace's `.tmp/` directory for temporary files. Runtime change detection ignores `.tmp/`, and promotion patches do not include it.
 
-If worker dispatches are used:
+If agent sessions are used:
 
 ```text
-.search/runs/<run_id>/dispatches/<dispatch_id>.json
-.search/runs/<run_id>/dispatches/<dispatch_id>.md
+.search/runs/<run_id>/agent_sessions/<agent_session_id>.json
+.search/runs/<run_id>/agent_events/<event_id>.json
+.search/runs/<run_id>/observations/<observation_id>.json
 ```
 
-The JSON file stores the main agent directive, context hash, and authoritative worker context. The markdown file is the brief that can be pasted into a subagent.
+The session file stores candidate linkage, budget, status, heartbeat, summary, and counters. Event files drive supervisor wakeups.
 
 After verification and reporting:
 

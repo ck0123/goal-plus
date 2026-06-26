@@ -28,8 +28,18 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_plan_next",
         "search_start_batch",
         "search_next_batch",
-        "search_prepare_worker",
-        "search_get_worker_context",
+        "search_start_agent_session",
+        "search_get_agent_context",
+        "search_update_agent_status",
+        "search_list_agent_status",
+        "search_finish_agent_session",
+        "search_request_agent_finalize",
+        "search_abort_agent_session",
+        "search_abort_all_agent_sessions",
+        "search_record_agent_step",
+        "search_publish_observation",
+        "search_list_observations",
+        "search_wait_agent_events",
         "search_submit_candidate",
         "search_run_verifier",
         "search_select",
@@ -39,16 +49,16 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
     }
 
 
-def test_search_prepare_worker_accepts_string_main_directive(tmp_path: Path) -> None:
+def test_start_agent_session_accepts_string_directive_and_budget(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
     tools = asyncio.run(mcp.get_tools())
-    schema = tools["search_prepare_worker"].parameters
-    main_directive = schema["properties"]["main_directive"]
-    timeout_seconds = schema["properties"]["timeout_seconds"]
+    schema = tools["search_start_agent_session"].parameters
+    directive = schema["properties"]["directive"]
+    budget = schema["properties"]["budget"]
 
-    assert {"type": "string"} in main_directive["anyOf"]
-    assert {"type": "integer"} in timeout_seconds["anyOf"]
+    assert {"type": "string"} in directive["anyOf"]
+    assert {"type": "object", "additionalProperties": True} in budget["anyOf"]
 
 
 def test_create_mcp_constructs_runtime_with_configured_root(
@@ -86,10 +96,40 @@ def test_create_mcp_constructs_runtime_with_configured_root(
         def search_next_batch(self, *args, **kwargs):
             return []
 
-        def search_prepare_worker(self, *args, **kwargs):
+        def search_start_agent_session(self, *args, **kwargs):
             return {}
 
-        def search_get_worker_context(self, *args, **kwargs):
+        def search_get_agent_context(self, *args, **kwargs):
+            return {}
+
+        def search_update_agent_status(self, *args, **kwargs):
+            return {}
+
+        def search_list_agent_status(self, *args, **kwargs):
+            return []
+
+        def search_finish_agent_session(self, *args, **kwargs):
+            return {}
+
+        def search_request_agent_finalize(self, *args, **kwargs):
+            return {}
+
+        def search_abort_agent_session(self, *args, **kwargs):
+            return {}
+
+        def search_abort_all_agent_sessions(self, *args, **kwargs):
+            return {}
+
+        def search_record_agent_step(self, *args, **kwargs):
+            return {}
+
+        def search_publish_observation(self, *args, **kwargs):
+            return {}
+
+        def search_list_observations(self, *args, **kwargs):
+            return []
+
+        def search_wait_agent_events(self, *args, **kwargs):
             return {}
 
         def search_submit_candidate(self, *args, **kwargs):

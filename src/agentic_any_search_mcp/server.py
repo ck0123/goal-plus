@@ -52,17 +52,126 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_next_batch(run_id, k)
 
     @mcp.tool()
-    def search_prepare_worker(
+    def search_start_agent_session(
         run_id: str,
-        candidate_id: str,
-        main_directive: dict[str, Any] | str | None = None,
-        timeout_seconds: int | None = None,
+        candidate_id: str | None = None,
+        directive: dict[str, Any] | str | None = None,
+        budget: dict[str, Any] | None = None,
+        visibility_mode: str = "observations",
     ) -> dict[str, Any]:
-        return tools.search_prepare_worker(run_id, candidate_id, main_directive, timeout_seconds)
+        return tools.search_start_agent_session(
+            run_id,
+            candidate_id,
+            directive,
+            budget,
+            visibility_mode,
+        )
 
     @mcp.tool()
-    def search_get_worker_context(dispatch_id: str) -> dict[str, Any]:
-        return tools.search_get_worker_context(dispatch_id)
+    def search_get_agent_context(agent_session_id: str) -> dict[str, Any]:
+        return tools.search_get_agent_context(agent_session_id)
+
+    @mcp.tool()
+    def search_update_agent_status(
+        agent_session_id: str,
+        phase: str,
+        current_goal: str = "",
+        last_action: str = "",
+        next_step: str = "",
+        blockers: list[str] | None = None,
+        status: str | None = None,
+        heartbeat: bool = True,
+    ) -> dict[str, Any]:
+        return tools.search_update_agent_status(
+            agent_session_id,
+            phase,
+            current_goal,
+            last_action,
+            next_step,
+            blockers,
+            status,
+            heartbeat,
+        )
+
+    @mcp.tool()
+    def search_list_agent_status(
+        run_id: str,
+        include_stale: bool = True,
+    ) -> list[dict[str, Any]]:
+        return tools.search_list_agent_status(run_id, include_stale)
+
+    @mcp.tool()
+    def search_finish_agent_session(
+        agent_session_id: str,
+        status: str = "completed",
+        summary: str = "",
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return tools.search_finish_agent_session(agent_session_id, status, summary, result)
+
+    @mcp.tool()
+    def search_request_agent_finalize(agent_session_id: str, reason: str = "") -> dict[str, Any]:
+        return tools.search_request_agent_finalize(agent_session_id, reason)
+
+    @mcp.tool()
+    def search_abort_agent_session(agent_session_id: str, reason: str = "") -> dict[str, Any]:
+        return tools.search_abort_agent_session(agent_session_id, reason)
+
+    @mcp.tool()
+    def search_abort_all_agent_sessions(run_id: str, reason: str = "") -> dict[str, Any]:
+        return tools.search_abort_all_agent_sessions(run_id, reason)
+
+    @mcp.tool()
+    def search_record_agent_step(
+        agent_session_id: str,
+        steps_delta: int = 0,
+        tool_calls_delta: int = 0,
+        verifier_runs_delta: int = 0,
+        tokens_delta: int = 0,
+    ) -> dict[str, Any]:
+        return tools.search_record_agent_step(
+            agent_session_id,
+            steps_delta,
+            tool_calls_delta,
+            verifier_runs_delta,
+            tokens_delta,
+        )
+
+    @mcp.tool()
+    def search_publish_observation(
+        agent_session_id: str,
+        summary: str,
+        evidence: str = "",
+        next_ideas: list[str] | None = None,
+        tags: list[str] | None = None,
+        visibility: str = "observations",
+    ) -> dict[str, Any]:
+        return tools.search_publish_observation(
+            agent_session_id,
+            summary,
+            evidence,
+            next_ideas,
+            tags,
+            visibility,
+        )
+
+    @mcp.tool()
+    def search_list_observations(
+        run_id: str,
+        visibility: str | None = None,
+        tags: list[str] | None = None,
+        top_n: int = 20,
+    ) -> list[dict[str, Any]]:
+        return tools.search_list_observations(run_id, visibility, tags, top_n)
+
+    @mcp.tool()
+    def search_wait_agent_events(
+        run_id: str,
+        timeout_seconds: int = 300,
+        wake_on: list[str] | None = None,
+        since_event_id: str | None = None,
+    ) -> dict[str, Any]:
+        return tools.search_wait_agent_events(run_id, timeout_seconds, wake_on, since_event_id)
 
     @mcp.tool()
     def search_submit_candidate(

@@ -23,6 +23,43 @@ class RunState(str, Enum):
     FAILED = "failed"
 
 
+class AgentSessionStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    FINALIZING = "finalizing"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    ABORTED = "aborted"
+
+
+class AgentSessionPhase(str, Enum):
+    PROBING = "probing"
+    IMPLEMENTING = "implementing"
+    EXPERIMENTING = "experimenting"
+    BLOCKED = "blocked"
+    SUBMITTING = "submitting"
+    FINALIZING = "finalizing"
+    IDLE = "idle"
+
+
+class VisibilityMode(str, Enum):
+    NONE = "none"
+    STATUS_ONLY = "status_only"
+    OBSERVATIONS = "observations"
+    TOP_HISTORY = "top_history"
+    FULL = "full"
+
+
+TERMINAL_AGENT_SESSION_STATUSES = {
+    AgentSessionStatus.COMPLETED.value,
+    AgentSessionStatus.FAILED.value,
+    AgentSessionStatus.TIMED_OUT.value,
+    AgentSessionStatus.ABORTED.value,
+}
+
+
 class VerifierRole(str, Enum):
     VALIDITY_GATE = "validity_gate"
     PROCESS_GATE = "process_gate"
@@ -79,7 +116,7 @@ class StrategySpec(SearchModel):
     agent_role: str = "planner_and_mutator"
     worker_mode: Literal[
         "main-agent-search-direct",
-        "sub-agent-search-dispatch",
+        "agent-session-pool",
         "auto",
     ] = "main-agent-search-direct"
     worker_agent_type: str | None = None
@@ -94,6 +131,13 @@ class StrategySpec(SearchModel):
     def name_must_be_nonempty(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("strategy name must be non-empty")
+        return value
+
+    @field_validator("worker_mode", mode="before")
+    @classmethod
+    def worker_mode_accepts_legacy_dispatch(cls, value: Any) -> Any:
+        if value == "sub-agent-search-dispatch":
+            return "agent-session-pool"
         return value
 
     @field_validator("worker_agent_type")
@@ -225,8 +269,7 @@ class SearchPlan(SearchModel):
 class ArtifactBundle(SearchModel):
     candidate_id: str
     status: Literal["patch_ready", "answer_ready", "abandoned", "failed"]
-    dispatch_id: str | None = None
-    context_hash: str | None = None
+    agent_session_id: str | None = None
     changed_files: list[str] = Field(default_factory=list)
     patch_path: Path | None = None
     result_path: Path | None = None
@@ -281,7 +324,9 @@ class RunRecord(SearchModel):
     created_at: str
     next_candidate_index: int = 1
     next_plan_index: int = 1
-    next_dispatch_index: int = 1
+    next_agent_session_index: int = 1
+    next_agent_event_index: int = 1
+    next_observation_index: int = 1
     candidates_total: int = 0
     candidates_evaluated: int = 0
     best_candidate_id: str | None = None
@@ -307,15 +352,74 @@ class CandidateRecord(SearchModel):
         return self
 
 
-class WorkerDispatch(SearchModel):
-    dispatch_id: str
+class AgentSessionBudget(SearchModel):
+    max_wall_seconds: int = Field(gt=0)
+    deadline_at: str
+    max_steps: int | None = Field(default=None, gt=0)
+    max_tool_calls: int | None = Field(default=None, gt=0)
+    max_verifier_runs: int = Field(default=0, ge=0)
+    heartbeat_interval_seconds: int = Field(default=30, gt=0)
+    stale_after_seconds: int = Field(default=90, gt=0)
+    finalize_before_seconds: int = Field(default=30, ge=0)
+    grace_seconds: int = Field(default=30, ge=0)
+
+
+class AgentSessionRecord(SearchModel):
+    agent_session_id: str
     run_id: str
-    candidate_id: str
-    plan_id: str | None = None
+    candidate_id: str | None = None
     created_at: str
-    main_directive: dict[str, Any] = Field(default_factory=dict)
-    context_hash: str
-    worker_brief: str
-    dispatch_path: Path
-    brief_path: Path
-    context: dict[str, Any] = Field(default_factory=dict)
+    updated_at: str
+    last_heartbeat_at: str
+    status: AgentSessionStatus = AgentSessionStatus.RUNNING
+    phase: AgentSessionPhase = AgentSessionPhase.PROBING
+    visibility_mode: VisibilityMode = VisibilityMode.OBSERVATIONS
+    directive: dict[str, Any] = Field(default_factory=dict)
+    workspace: Path | None = None
+    budget: AgentSessionBudget
+    current_goal: str = ""
+    last_action: str = ""
+    next_step: str = ""
+    blockers: list[str] = Field(default_factory=list)
+    counters: dict[str, int] = Field(
+        default_factory=lambda: {
+            "steps": 0,
+            "tool_calls": 0,
+            "verifier_runs": 0,
+            "tokens": 0,
+        }
+    )
+    summary: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentSessionEvent(SearchModel):
+    event_id: str
+    run_id: str
+    agent_session_id: str | None = None
+    type: str = Field(min_length=1)
+    created_at: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentObservation(SearchModel):
+    observation_id: str
+    run_id: str
+    agent_session_id: str
+    created_at: str
+    summary: str = Field(min_length=1)
+    evidence: str = ""
+    next_ideas: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    visibility: VisibilityMode = VisibilityMode.OBSERVATIONS
+
+
+class AgentSessionWaitResult(SearchModel):
+    run_id: str
+    timed_out: bool
+    run_deadline_reached: bool = False
+    last_event_id: str | None = None
+    events: list[AgentSessionEvent] = Field(default_factory=list)
+    sessions: list[AgentSessionRecord] = Field(default_factory=list)
+    active_count: int = 0
+    max_concurrent_agents: int = Field(gt=0)

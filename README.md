@@ -6,7 +6,7 @@ The goal of V0 is not to control one specific coding agent. The runtime exposes 
 
 Strategies are run-level settings. The built-in modes include independent branches, agent-guided proposal mode, evolve-style parent selection, and an MCTS-style expansion placeholder. Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract.
 
-Candidate execution is controlled by `strategy.worker_mode`. `main-agent-search-direct` lets the host edit candidate workspaces directly. `sub-agent-search-dispatch` requires the two-channel worker protocol: the main agent records an explicit worker directive with `search_prepare_worker`, while the worker retrieves authoritative environment context with `search_get_worker_context(dispatch_id)`. `strategy.worker_agent_type` can tell OpenCode which `subagent_type` to launch; bundled dispatch examples use `AnySearchAgent`. `strategy.worker_timeout_seconds` defaults to 600 seconds and is returned in worker context as a delivery deadline; `search_prepare_worker(..., timeout_seconds=...)` can override it for one dispatch. `strategy.worker_local_verifier_max_runs` defaults to 0, so dispatch workers do not run scoring/evaluator commands; the main agent/runtime owns actual verification after submission. Dispatch files are persisted under `.search/runs/<run_id>/dispatches/` for debugging and report review.
+Candidate execution is controlled by `strategy.worker_mode`. `main-agent-search-direct` lets the host edit candidate workspaces directly. `agent-session-pool` runs candidate work through durable subagent sessions: `search_start_agent_session` creates a session with a per-session budget, `search_wait_agent_events` lets the supervisor wake on completion/block/timeout/run-deadline events, and `search_abort_agent_session` / `search_abort_all_agent_sessions` stop managed work when budgets are exhausted. The runtime enforces `budget.max_parallel` for active sessions. `strategy.worker_agent_type` can tell OpenCode which `subagent_type` to launch; bundled multi-batch examples use `AnySearchAgent`.
 
 ## Quick Start With OpenCode
 
@@ -29,7 +29,7 @@ python -m agentic_any_search_mcp.server --root .search
 Then run the toy search from the OpenCode TUI:
 
 ```bash
-opencode
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
 Inside OpenCode:
@@ -41,8 +41,10 @@ Inside OpenCode:
 For a headless command-line run:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
 ```
+
+The environment variable must be set on the OpenCode process. It exposes `Task(background=true)`, which is required for supervised `agent-session-pool` runs. OpenCode `Task` does not currently expose a `timeout` parameter; `worker_timeout_seconds` is enforced by the MCP supervisor loop, not by Task itself.
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 
@@ -87,8 +89,18 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_plan_next`
 - `search-runtime_search_start_batch`
 - `search-runtime_search_next_batch`
-- `search-runtime_search_prepare_worker`
-- `search-runtime_search_get_worker_context`
+- `search-runtime_search_start_agent_session`
+- `search-runtime_search_get_agent_context`
+- `search-runtime_search_update_agent_status`
+- `search-runtime_search_list_agent_status`
+- `search-runtime_search_finish_agent_session`
+- `search-runtime_search_request_agent_finalize`
+- `search-runtime_search_abort_agent_session`
+- `search-runtime_search_abort_all_agent_sessions`
+- `search-runtime_search_record_agent_step`
+- `search-runtime_search_publish_observation`
+- `search-runtime_search_list_observations`
+- `search-runtime_search_wait_agent_events`
 - `search-runtime_search_submit_candidate`
 - `search-runtime_search_run_verifier`
 - `search-runtime_search_select`

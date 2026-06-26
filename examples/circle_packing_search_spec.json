@@ -41,7 +41,7 @@
   },
   "strategy": {
     "name": "independent_branches",
-    "worker_mode": "sub-agent-search-dispatch",
+    "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
     "worker_timeout_seconds": 600,
     "worker_local_verifier_max_runs": 0

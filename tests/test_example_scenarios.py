@@ -45,7 +45,7 @@ def test_two_round_example_specs_are_valid(
     assert parsed.budget.max_parallel == 4
     assert parsed.root_hypotheses == []
     assert parsed.constraints["suggested_batch_size"] == 4
-    assert parsed.strategy.worker_mode == "sub-agent-search-dispatch"
+    assert parsed.strategy.worker_mode == "agent-session-pool"
     assert parsed.strategy.worker_agent_type == "AnySearchAgent"
     assert parsed.strategy.worker_timeout_seconds == 600
     assert parsed.strategy.worker_local_verifier_max_runs == 0
@@ -77,26 +77,27 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert second_round[0]["hypothesis"] == "Independent candidate c005"
 
     for candidate_id in ("c001", "c005"):
-        dispatch = tools.search_prepare_worker(
+        session = tools.search_start_agent_session(
             run_id,
             candidate_id,
             {"goal": f"verify baseline fixture path for {candidate_id}"},
-            timeout_seconds=60,
+            {"max_wall_seconds": 60},
         )
-        assert dispatch["context"]["timeout_seconds"] == 60
-        assert dispatch["context"]["local_verifier_max_runs"] == 0
-        assert dispatch["context"]["local_validation_policy"]["actual_verifier_allowed"] is False
+        context = tools.search_get_agent_context(session["agent_session_id"])
+        assert context["budget"]["max_wall_seconds"] <= 60
+        assert context["budget"]["max_verifier_runs"] == 0
+        assert context["candidate_task"]["candidate_id"] == candidate_id
         tools.search_submit_candidate(
             run_id,
             candidate_id,
             {
                 "candidate_id": candidate_id,
-                "dispatch_id": dispatch["dispatch_id"],
-                "context_hash": dispatch["context_hash"],
+                "agent_session_id": session["agent_session_id"],
                 "status": "patch_ready",
                 "summary": "baseline candidate",
             },
         )
+        tools.search_finish_agent_session(session["agent_session_id"], summary="baseline submitted")
         report = tools.search_run_verifier(run_id, candidate_id)
 
         assert report["process_passed"] is True

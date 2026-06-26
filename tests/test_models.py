@@ -6,6 +6,11 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_any_search_mcp.models import (
+    AgentObservation,
+    AgentSessionBudget,
+    AgentSessionRecord,
+    AgentSessionStatus,
+    AgentSessionWaitResult,
     ArtifactBundle,
     Budget,
     CandidateRecord,
@@ -82,16 +87,24 @@ def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
     data = valid_spec_dict()
     data["strategy"] = {
         "name": "independent_branches",
-        "worker_mode": "sub-agent-search-dispatch",
+        "worker_mode": "agent-session-pool",
         "worker_agent_type": "AnySearchAgent",
         "worker_timeout_seconds": 120,
         "worker_local_verifier_max_runs": 2,
     }
     spec = SearchSpec.model_validate(data)
-    assert spec.strategy.worker_mode == "sub-agent-search-dispatch"
+    assert spec.strategy.worker_mode == "agent-session-pool"
     assert spec.strategy.worker_agent_type == "AnySearchAgent"
     assert spec.strategy.worker_timeout_seconds == 120
     assert spec.strategy.worker_local_verifier_max_runs == 2
+
+    data = valid_spec_dict()
+    data["strategy"] = {
+        "name": "independent_branches",
+        "worker_mode": "sub-agent-search-dispatch",
+    }
+    spec = SearchSpec.model_validate(data)
+    assert spec.strategy.worker_mode == "agent-session-pool"
 
 
 def test_strategy_plan_models_capture_proposal_contract() -> None:
@@ -114,6 +127,46 @@ def test_strategy_plan_models_capture_proposal_contract() -> None:
 
     assert plan.proposal_contract.count == 2
     assert proposal.parent_candidate_ids == ["c001"]
+
+
+def test_agent_session_models_capture_budget_events_and_observations() -> None:
+    budget = AgentSessionBudget(
+        max_wall_seconds=300,
+        deadline_at="2026-06-24T00:05:00Z",
+        max_steps=12,
+        max_tool_calls=40,
+    )
+    session = AgentSessionRecord(
+        agent_session_id="agent_001",
+        run_id="run_1",
+        created_at="2026-06-24T00:00:00Z",
+        updated_at="2026-06-24T00:00:00Z",
+        last_heartbeat_at="2026-06-24T00:00:00Z",
+        status=AgentSessionStatus.RUNNING,
+        budget=budget,
+        directive={"goal": "try one direction"},
+    )
+    observation = AgentObservation(
+        observation_id="obs_000001",
+        run_id="run_1",
+        agent_session_id="agent_001",
+        created_at="2026-06-24T00:01:00Z",
+        summary="corner cases look weak",
+        tags=["layout"],
+    )
+    wait = AgentSessionWaitResult(
+        run_id="run_1",
+        timed_out=True,
+        sessions=[session],
+        active_count=1,
+        max_concurrent_agents=2,
+    )
+
+    assert session.status == "running"
+    assert session.budget.max_steps == 12
+    assert session.counters["tool_calls"] == 0
+    assert observation.visibility == "observations"
+    assert wait.sessions[0].agent_session_id == "agent_001"
 
 
 def test_search_spec_rejects_invalid_budget_and_blank_source_path() -> None:

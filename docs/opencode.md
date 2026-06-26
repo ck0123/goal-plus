@@ -14,7 +14,7 @@ examples/k_module_search_spec.json
 From the project root:
 
 ```bash
-opencode
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 ```
 
 OpenCode should start the local MCP server named `search-runtime` using:
@@ -24,6 +24,16 @@ PYTHONPATH=src python -m agentic_any_search_mcp.server --root .search
 ```
 
 The server uses stdio transport.
+
+The background-subagent flag must be set on the OpenCode process. Setting it only in `.opencode/opencode.json` under the MCP server environment is not enough, because that environment belongs to the Python MCP subprocess, not the OpenCode `Task` tool.
+
+For headless runs, use the same environment:
+
+```bash
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
+```
+
+Current OpenCode `Task` exposes `background: true` behind this flag, but it does not expose a Task-level `timeout` parameter. Search timeouts are enforced by MCP session deadlines and the supervisor wait loop.
 
 ## Verify MCP Connectivity
 
@@ -57,7 +67,7 @@ In OpenCode:
 Headless:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
 ```
 
 Expected behavior:
@@ -81,8 +91,18 @@ search-runtime_search_list_history
 search-runtime_search_plan_next
 search-runtime_search_start_batch
 search-runtime_search_next_batch
-search-runtime_search_prepare_worker
-search-runtime_search_get_worker_context
+search-runtime_search_start_agent_session
+search-runtime_search_get_agent_context
+search-runtime_search_update_agent_status
+search-runtime_search_list_agent_status
+search-runtime_search_finish_agent_session
+search-runtime_search_request_agent_finalize
+search-runtime_search_abort_agent_session
+search-runtime_search_abort_all_agent_sessions
+search-runtime_search_record_agent_step
+search-runtime_search_publish_observation
+search-runtime_search_list_observations
+search-runtime_search_wait_agent_events
 search-runtime_search_submit_candidate
 search-runtime_search_run_verifier
 search-runtime_search_select
@@ -91,25 +111,20 @@ search-runtime_search_promote
 search-runtime_search_abort
 ```
 
-## Current Limit
+## Agent Session Pool
 
-This is a V0 host-guided flow. It does not yet spawn native OpenCode subagents or headless workers automatically. The main agent can act as the worker by editing candidate workspaces directly.
+The autonomous-search control plane represents each long-running subagent as an agent session:
 
-If `strategy.worker_mode` is `sub-agent-search-dispatch`, use the worker dispatch protocol:
+1. Main agent creates candidate workspaces with `search_start_batch`.
+2. Main agent starts sessions with `search_start_agent_session(run_id, candidate_id, directive, budget)`.
+3. Runtime enforces `budget.max_parallel` as the active session pool size; attempts above the pool fail instead of relying on prompt discipline.
+4. Main agent launches `AnySearchAgent` with the returned `agent_session_id` through an OpenCode Task call with `background: true`, which returns control immediately. Do not use foreground long-running Task calls. If the host cannot launch background/managed tasks, use direct candidate work or stop instead of pretending the run is supervised.
+5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace. They may call `search_update_agent_status` sparingly after meaningful progress or when blocked, but should not do status heartbeats before the first file read. Shared findings can be published with `search_publish_observation`.
+6. The supervisor loop calls `search_wait_agent_events(run_id, timeout_seconds=300, since_event_id=<last_event_id>)` and feeds the returned `last_event_id` into the next wait call.
+   It returns when a session completes/fails/blocks/times out, when the run deadline is reached, or when the wait timeout expires with a status snapshot.
+7. Completed sessions are finalized with `search_finish_agent_session`; stuck sessions can be nudged with `search_request_agent_finalize` or stopped with `search_abort_agent_session`.
+8. When the run budget is exhausted, call `search_abort_all_agent_sessions` and summarize/verify the best submitted candidates.
 
-1. Main agent calls `search-runtime_search_prepare_worker(run_id, candidate_id, main_directive)`.
-   `main_directive` may be a plain string or a structured object.
-2. Main agent launches the worker with `worker_policy.subagent_type` when present. Bundled dispatch examples use `subagent_type="AnySearchAgent"`.
-3. Main agent passes the returned `dispatch_id` or `worker_brief` to the subagent.
-4. Subagent first calls `search-runtime_search_get_worker_context(dispatch_id)`.
-5. Subagent works only in the returned `workspace`, uses the returned `scratch_dir`, and returns/submits an artifact with `dispatch_id` and `context_hash`.
-6. Main agent treats `worker_policy.timeout_seconds` and worker context `deadline_at` as the collection deadline. Default timeout is 600 seconds; pass `timeout_seconds` to `search_prepare_worker` to override one dispatch.
-7. By default `worker_policy.local_verifier_max_runs` is 0: subagents must not run the process verifier command, evaluator APIs, equivalent local scorers, score-driven sweeps, or custom scratch scripts that execute the candidate to estimate quality. They may run non-scoring static checks such as `py_compile`. Runtime-owned `search_run_verifier` after submission is the actual verification path.
-
-Dispatch audit files are written under `.search/runs/<run_id>/dispatches/`.
-
-The main agent must call `search-runtime_search_run_verifier` for every submitted candidate before selection. Worker-reported scores are not authoritative. Worker directives should not contain numeric score targets or baseline scores; those encourage local scoring loops. The timeout is a host-side collection rule; V0 does not rely on MCP to terminate the OpenCode subagent process. Final candidate code should be bounded and fast; workers should not put long parameter sweeps or open-ended optimization loops in the final allowed file.
-
-If `strategy.worker_mode` is `main-agent-search-direct`, the host agent can edit the candidate workspace directly.
+The runtime owns durable pool, deadline, event, and observation state. `worker_timeout_seconds` is a runtime/session deadline, not an OpenCode Task timeout. Hard process/session cancellation still requires the host adapter to wire `search_abort_agent_session` to OpenCode's native abort for the child session; the MCP state transition is the control-plane source of truth.
 
 For the full walkthrough, see [toy-example.md](toy-example.md).

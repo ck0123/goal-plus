@@ -162,7 +162,7 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
 
     assert plan.strategy.name == "independent_branches"
     assert plan.worker_policy["mode"] == "main-agent-search-direct"
-    assert plan.worker_policy["requires_dispatch"] is False
+    assert plan.worker_policy["requires_agent_session"] is False
     assert plan.planned_k == 2
     assert [task.candidate_id for task in tasks] == ["c001", "c002"]
     assert tasks[0].plan_id == "plan_001"
@@ -175,14 +175,14 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     assert saved_plan.started_candidate_ids == ["c001", "c002"]
 
 
-def test_dispatch_worker_mode_is_planned_and_required_for_submission(tmp_path: Path) -> None:
+def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
         project,
         {
             "name": "independent_branches",
-            "worker_mode": "sub-agent-search-dispatch",
+            "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
             "worker_timeout_seconds": 120,
             "worker_local_verifier_max_runs": 3,
@@ -194,153 +194,215 @@ def test_dispatch_worker_mode_is_planned_and_required_for_submission(tmp_path: P
     plan = runtime.plan_next(run_id, requested_k=1)
     tasks = runtime.start_batch(run_id, plan.plan_id)
 
-    assert plan.worker_policy["mode"] == "sub-agent-search-dispatch"
+    assert plan.worker_policy["mode"] == "agent-session-pool"
     assert plan.worker_policy["subagent_type"] == "AnySearchAgent"
     assert plan.worker_policy["timeout_seconds"] == 120
     assert plan.worker_policy["local_verifier_max_runs"] == 3
-    assert plan.worker_policy["requires_dispatch"] is True
-    assert tasks[0].strategy_metadata["worker_mode"] == "sub-agent-search-dispatch"
+    assert plan.worker_policy["requires_agent_session"] is True
+    assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
     assert any(
-        "worker_mode=sub-agent-search-dispatch" in instruction
+        "worker_mode=agent-session-pool" in instruction
         for instruction in tasks[0].instructions
     )
+    assert any("agent_session_id" in instruction for instruction in tasks[0].instructions)
     assert any("subagent_type='AnySearchAgent'" in instruction for instruction in tasks[0].instructions)
-    assert any("Worker timeout is 120 seconds" in instruction for instruction in tasks[0].instructions)
+    assert any("120 seconds" in instruction for instruction in tasks[0].instructions)
     assert any("at most 3 times" in instruction for instruction in tasks[0].instructions)
     assert any("bounded and fast" in instruction for instruction in tasks[0].instructions)
     assert any("score targets" in instruction for instruction in tasks[0].instructions)
 
-    with pytest.raises(ValueError, match="dispatch_id"):
+    with pytest.raises(ValueError, match="agent_session_id"):
         runtime.submit_candidate(
             run_id,
             tasks[0].candidate_id,
             ArtifactBundle(candidate_id=tasks[0].candidate_id, status="patch_ready"),
         )
 
-    dispatch = runtime.prepare_worker(run_id, tasks[0].candidate_id, {"goal": "try worker"})
-    context = runtime.get_worker_context(dispatch.dispatch_id)
-    assert context["timeout_seconds"] == 120
-    assert context["local_verifier_max_runs"] == 3
-    assert context["local_validation_policy"]["max_verifier_runs"] == 3
-    assert context["deadline_at"].endswith("Z")
-    assert "120s" in dispatch.worker_brief
-    assert "Local verifier limit: `3` runs" in dispatch.worker_brief
-    assert "best-so-far" in dispatch.worker_brief
+    session = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "try worker"})
+    context = runtime.get_agent_context(session.agent_session_id)
+    assert context["budget"]["max_wall_seconds"] <= 120
+    assert context["budget"]["max_verifier_runs"] == 3
+    assert context["budget"]["deadline_at"].endswith("Z")
+    assert context["candidate_task"]["candidate_id"] == tasks[0].candidate_id
     runtime.submit_candidate(
         run_id,
         tasks[0].candidate_id,
         ArtifactBundle(
             candidate_id=tasks[0].candidate_id,
             status="patch_ready",
-            dispatch_id=dispatch.dispatch_id,
-            context_hash=dispatch.context_hash,
+            agent_session_id=session.agent_session_id,
         ),
     )
     record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
     assert record.status == "submitted"
 
 
-def test_prepare_worker_persists_dispatch_and_context(tmp_path: Path) -> None:
+def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    spec_data = spec_for(project, max_candidates=4).model_dump(mode="json")
+    spec_data["budget"]["max_parallel"] = 2
+    frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
+    tasks = runtime.next_batch(run_id, 3)
 
-    dispatch = runtime.prepare_worker(
+    first = runtime.start_agent_session(
         run_id,
-        task.candidate_id,
-        {
-            "goal": "try a weighted local search",
-            "expected_output": "edit initial_program.py and summarize the result",
-        },
+        tasks[0].candidate_id,
+        {"goal": "try first"},
+        budget={"max_wall_seconds": 120, "max_steps": 2, "max_tool_calls": 4},
     )
-    context = runtime.get_worker_context(dispatch.dispatch_id)
+    second = runtime.start_agent_session(run_id, tasks[1].candidate_id, "try second")
 
-    assert dispatch.dispatch_id.startswith(f"dispatch_{run_id.removeprefix('run_')}_")
-    assert dispatch.candidate_id == task.candidate_id
-    assert dispatch.brief_path.exists()
-    assert dispatch.dispatch_path.exists()
-    assert "search_get_worker_context" in dispatch.worker_brief
-    assert context["dispatch_id"] == dispatch.dispatch_id
-    assert context["context_hash"] == dispatch.context_hash
-    assert context["main_directive"]["goal"] == "try a weighted local search"
-    assert context["workspace"] == str(task.workspace)
-    assert context["scratch_dir"] == str(task.workspace / ".tmp")
-    assert context["allowed_files"] == ["initial_program.py"]
-    assert context["denied_files"] == ["evaluator.py", "config.yaml"]
-    assert context["process_verifiers"][0]["name"] == "score"
-    assert context["protocol"]["authority"].startswith("MCP context is authoritative")
-    assert context["timeout_seconds"] == 600
-    assert context["local_verifier_max_runs"] == 0
-    assert context["local_validation_policy"]["max_verifier_runs"] == 0
-    assert context["local_validation_policy"]["actual_verifier_allowed"] is False
-    assert "Scratch files are for notes" in context["local_validation_policy"]["scratch_rule"]
-    assert "rm" in context["local_validation_policy"]["forbidden_destructive_commands"]
-    assert "git clean" in context["local_validation_policy"]["forbidden_destructive_commands"]
-    assert "score targets" in context["protocol"]["directive_rule"]
-    assert context["deadline_at"].endswith("Z")
-    assert "deadline_at" in context["protocol"]["timeout_rule"]
-    assert "Do not run the process verifier" in context["protocol"]["local_validation_rule"]
-    assert "Do not delete" in context["protocol"]["destructive_command_rule"]
-    assert "Timeout: `600s`" in dispatch.worker_brief
-    assert "Local verifier limit: `0` runs" in dispatch.worker_brief
-    assert "Do not run the process verifier" in dispatch.worker_brief
-    assert "Do not create or run scratch experiment scripts" in dispatch.worker_brief
-    assert "Do not delete" in dispatch.worker_brief
-    assert "score targets" in dispatch.worker_brief
+    run_suffix = run_id.removeprefix("run_")
+    assert first.agent_session_id == f"agent_{run_suffix}_001"
+    assert first.budget.max_wall_seconds <= 120
+    assert second.agent_session_id == f"agent_{run_suffix}_002"
+    assert runtime._active_agent_session_count(run_id) == 2
+
+    with pytest.raises(RuntimeError, match="pool is full"):
+        runtime.start_agent_session(run_id, tasks[2].candidate_id)
+
+    context = runtime.get_agent_context(first.agent_session_id)
+    assert context["agent_session_id"] == first.agent_session_id
+    assert context["candidate_task"]["candidate_id"] == tasks[0].candidate_id
+    assert context["peer_status"][0]["agent_session_id"] == second.agent_session_id
+
+    updated = runtime.update_agent_status(
+        first.agent_session_id,
+        phase="implementing",
+        current_goal="edit initializer",
+        last_action="read workspace",
+        next_step="make one patch",
+    )
+    assert updated.phase == "implementing"
+    assert updated.current_goal == "edit initializer"
+
+    observation = runtime.publish_observation(
+        first.agent_session_id,
+        summary="first direction leaves gaps",
+        evidence="static inspection",
+        next_ideas=["seed corners"],
+        tags=["layout"],
+    )
+    observations = runtime.list_observations(run_id, tags=["layout"])
+    assert observations[0]["observation_id"] == observation.observation_id
+    assert observations[0]["next_ideas"] == ["seed corners"]
+
+    stepped = runtime.record_agent_step(first.agent_session_id, steps_delta=2, tool_calls_delta=1)
+    assert stepped.status == "finalizing"
+    assert stepped.counters["steps"] == 2
+
+    completed = runtime.finish_agent_session(second.agent_session_id, summary="second done")
+    assert completed.status == "completed"
+    wait = runtime.wait_agent_events(run_id, timeout_seconds=0)
+    assert wait.timed_out is False
+    assert wait.last_event_id is not None
+    assert any(event.type == "agent_completed" for event in wait.events)
+    repeated_wait = runtime.wait_agent_events(
+        run_id,
+        timeout_seconds=0,
+        since_event_id=wait.last_event_id,
+    )
+    assert repeated_wait.events == []
+    assert repeated_wait.last_event_id == wait.last_event_id
+
+    third = runtime.start_agent_session(run_id, tasks[2].candidate_id)
+    assert third.agent_session_id == f"agent_{run_suffix}_003"
+    assert runtime._active_agent_session_count(run_id) == 2
 
 
-def test_prepare_worker_allows_per_dispatch_timeout_override(tmp_path: Path) -> None:
+def test_agent_session_ids_are_unique_across_runs(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
 
-    dispatch = runtime.prepare_worker(
-        run_id,
-        task.candidate_id,
-        "short exploratory attempt",
-        timeout_seconds=30,
-    )
-    context = runtime.get_worker_context(dispatch.dispatch_id)
+    first_run_id = runtime.create_run(frozen.frozen_spec_id)
+    second_run_id = runtime.create_run(frozen.frozen_spec_id)
+    first_task = runtime.next_batch(first_run_id, 1)[0]
+    second_task = runtime.next_batch(second_run_id, 1)[0]
 
-    assert context["timeout_seconds"] == 30
-    assert "Timeout: `30s`" in dispatch.worker_brief
+    first = runtime.start_agent_session(first_run_id, first_task.candidate_id)
+    second = runtime.start_agent_session(second_run_id, second_task.candidate_id)
 
-    with pytest.raises(ValueError, match="timeout_seconds"):
-        runtime.prepare_worker(run_id, task.candidate_id, timeout_seconds=0)
+    assert first.agent_session_id != second.agent_session_id
+    assert first_run_id.removeprefix("run_") in first.agent_session_id
+    assert second_run_id.removeprefix("run_") in second.agent_session_id
+    assert runtime.get_agent_context(first.agent_session_id)["run_id"] == first_run_id
+    assert runtime.get_agent_context(second.agent_session_id)["run_id"] == second_run_id
 
 
-def test_submit_candidate_validates_worker_dispatch_context_hash(tmp_path: Path) -> None:
+def test_legacy_agent_session_id_collision_is_not_silent(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+
+    first_run_id = runtime.create_run(frozen.frozen_spec_id)
+    second_run_id = runtime.create_run(frozen.frozen_spec_id)
+    first_task = runtime.next_batch(first_run_id, 1)[0]
+    second_task = runtime.next_batch(second_run_id, 1)[0]
+    first = runtime.start_agent_session(first_run_id, first_task.candidate_id)
+    second = runtime.start_agent_session(second_run_id, second_task.candidate_id)
+
+    legacy_first = first.model_copy(update={"agent_session_id": "agent_001"})
+    legacy_second = second.model_copy(update={"agent_session_id": "agent_001"})
+    runtime._write_agent_session(legacy_first)
+    runtime._write_agent_session(legacy_second)
+
+    with pytest.raises(RuntimeError, match="ambiguous agent_session_id"):
+        runtime.get_agent_context("agent_001")
+
+
+def test_agent_session_abort_and_run_deadline_enforcement(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
+    task = runtime.next_batch(run_id, 1)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    timeout_wait = runtime.wait_agent_events(run_id, timeout_seconds=0, since_event_id="event_999999")
+    assert timeout_wait.timed_out is True
+    assert timeout_wait.active_count == 1
+
+    aborted = runtime.abort_all_agent_sessions(run_id, "stop search")
+    assert [item.status for item in aborted] == ["aborted"]
+    assert runtime._active_agent_session_count(run_id) == 0
+    abort_wait = runtime.wait_agent_events(run_id, timeout_seconds=0)
+    assert any(event.type == "agent_aborted" for event in abort_wait.events)
+
+    run = runtime._load_run(run_id)
+    run.created_at = "2000-01-01T00:00:00Z"
+    runtime._write_run(run)
+    with pytest.raises(RuntimeError, match="run budget exhausted"):
+        runtime.start_agent_session(run_id, task.candidate_id)
+    assert runtime.wait_agent_events(run_id, timeout_seconds=0).run_deadline_reached is True
+
+
+def test_submit_candidate_validates_agent_session_provenance(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
     tasks = runtime.next_batch(run_id, 2)
-    dispatch = runtime.prepare_worker(run_id, tasks[0].candidate_id, "try one concrete variant")
+    session = runtime.start_agent_session(run_id, tasks[0].candidate_id, "try one concrete variant")
 
-    with pytest.raises(ValueError, match="context_hash is required"):
+    with pytest.raises(ValueError, match="agent_session_id"):
         runtime.submit_candidate(
             run_id,
             tasks[0].candidate_id,
             ArtifactBundle(
                 candidate_id=tasks[0].candidate_id,
                 status="patch_ready",
-                dispatch_id=dispatch.dispatch_id,
-            ),
-        )
-
-    with pytest.raises(ValueError, match="context_hash"):
-        runtime.submit_candidate(
-            run_id,
-            tasks[0].candidate_id,
-            ArtifactBundle(
-                candidate_id=tasks[0].candidate_id,
-                status="patch_ready",
-                dispatch_id=dispatch.dispatch_id,
-                context_hash="wrong",
             ),
         )
 
@@ -351,8 +413,7 @@ def test_submit_candidate_validates_worker_dispatch_context_hash(tmp_path: Path)
             ArtifactBundle(
                 candidate_id=tasks[1].candidate_id,
                 status="patch_ready",
-                dispatch_id=dispatch.dispatch_id,
-                context_hash=dispatch.context_hash,
+                agent_session_id=session.agent_session_id,
             ),
         )
 
@@ -362,48 +423,85 @@ def test_submit_candidate_validates_worker_dispatch_context_hash(tmp_path: Path)
         ArtifactBundle(
             candidate_id=tasks[0].candidate_id,
             status="patch_ready",
-            dispatch_id=dispatch.dispatch_id,
-            context_hash=dispatch.context_hash,
+            agent_session_id=session.agent_session_id,
             summary="implemented the dispatched idea",
             next_ideas=["try a smaller mutation next"],
         ),
     )
     record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
-    assert record.artifact.dispatch_id == dispatch.dispatch_id
-    assert record.artifact.context_hash == dispatch.context_hash
+    assert record.artifact.agent_session_id == session.agent_session_id
 
 
-def test_history_and_report_include_worker_dispatches(tmp_path: Path) -> None:
+def test_submit_candidate_rejects_aborted_agent_session(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
     task = runtime.next_batch(run_id, 1)[0]
-    dispatch = runtime.prepare_worker(run_id, task.candidate_id, {"goal": "document dispatch"})
+    session = runtime.start_agent_session(run_id, task.candidate_id, "try one concrete variant")
+    runtime.abort_agent_session(session.agent_session_id, "deadline exceeded")
+
+    with pytest.raises(RuntimeError, match="aborted agent session"):
+        runtime.submit_candidate(
+            run_id,
+            task.candidate_id,
+            ArtifactBundle(
+                candidate_id=task.candidate_id,
+                status="patch_ready",
+                agent_session_id=session.agent_session_id,
+            ),
+        )
+
+
+def test_history_and_report_include_agent_sessions(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    task = runtime.next_batch(run_id, 1)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "document session"})
     runtime.submit_candidate(
         run_id,
         task.candidate_id,
         ArtifactBundle(
             candidate_id=task.candidate_id,
             status="patch_ready",
-            dispatch_id=dispatch.dispatch_id,
-            context_hash=dispatch.context_hash,
-            summary="dispatch-aware candidate",
+            agent_session_id=session.agent_session_id,
+            summary="session-aware candidate",
             next_ideas=["inspect report linkage"],
         ),
     )
+    runtime.finish_agent_session(session.agent_session_id, summary="session completed")
 
     history = runtime.list_history(run_id)
     candidate = history["candidates"][0]
-    assert candidate["dispatches"][0]["dispatch_id"] == dispatch.dispatch_id
-    assert candidate["artifact_dispatch_id"] == dispatch.dispatch_id
+    assert candidate["agent_sessions"][0]["agent_session_id"] == session.agent_session_id
+    assert candidate["artifact_agent_session_id"] == session.agent_session_id
     assert candidate["next_ideas"] == ["inspect report linkage"]
 
     report_path = runtime.report(run_id)
     report = report_path.read_text(encoding="utf-8")
-    assert "## Worker Dispatches" in report
-    assert dispatch.dispatch_id in report
-    assert "goal=document dispatch" in report
+    assert "## Agent Sessions" in report
+    assert session.agent_session_id in report
+    assert "session completed" in report
 
 
 def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) -> None:

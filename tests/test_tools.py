@@ -4,6 +4,11 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from agentic_any_search_mcp.models import (
+    AgentObservation,
+    AgentSessionBudget,
+    AgentSessionEvent,
+    AgentSessionRecord,
+    AgentSessionWaitResult,
     ArtifactBundle,
     CandidateProposal,
     CandidateTask,
@@ -15,7 +20,6 @@ from agentic_any_search_mcp.models import (
     SearchSpec,
     StrategySpec,
     VerifierResult,
-    WorkerDispatch,
 )
 from agentic_any_search_mcp.tools import SearchTools
 
@@ -73,6 +77,16 @@ def test_search_freeze_spec_converts_input_and_serializes_output() -> None:
 
 def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime = Mock()
+    agent_budget = AgentSessionBudget(max_wall_seconds=120, deadline_at="2026-06-24T00:02:00Z")
+    agent_session = AgentSessionRecord(
+        agent_session_id="agent_001",
+        run_id="run_1",
+        candidate_id="c001",
+        created_at="2026-06-24T00:00:00Z",
+        updated_at="2026-06-24T00:00:00Z",
+        last_heartbeat_at="2026-06-24T00:00:00Z",
+        budget=agent_budget,
+    )
     runtime.create_run.return_value = "run_1"
     runtime.status.return_value = RunSummary(
         run_id="run_1",
@@ -115,23 +129,44 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             denied_files=["evaluator.py"],
         )
     ]
-    runtime.prepare_worker.return_value = WorkerDispatch(
-        dispatch_id="dispatch_001",
+    runtime.start_agent_session.return_value = agent_session
+    runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
+    runtime.update_agent_status.return_value = agent_session.model_copy(update={"phase": "implementing"})
+    runtime.list_agent_status.return_value = [agent_session]
+    runtime.finish_agent_session.return_value = agent_session.model_copy(update={"status": "completed"})
+    runtime.request_agent_finalize.return_value = agent_session.model_copy(update={"status": "finalizing"})
+    runtime.abort_agent_session.return_value = agent_session.model_copy(update={"status": "aborted"})
+    runtime.abort_all_agent_sessions.return_value = [agent_session.model_copy(update={"status": "aborted"})]
+    runtime.record_agent_step.return_value = agent_session.model_copy(update={"counters": {"steps": 1}})
+    runtime.publish_observation.return_value = AgentObservation(
+        observation_id="obs_000001",
         run_id="run_1",
-        candidate_id="c001",
-        plan_id="plan_001",
-        created_at="2026-06-24T00:00:00Z",
-        main_directive={"goal": "try variant"},
-        context_hash="abc123",
-        worker_brief="call search_get_worker_context",
-        dispatch_path=Path("/tmp/dispatch_001.json"),
-        brief_path=Path("/tmp/dispatch_001.md"),
-        context={"dispatch_id": "dispatch_001", "context_hash": "abc123"},
+        agent_session_id="agent_001",
+        created_at="2026-06-24T00:00:01Z",
+        summary="found one issue",
     )
-    runtime.get_worker_context.return_value = {
-        "dispatch_id": "dispatch_001",
-        "context_hash": "abc123",
-    }
+    runtime.list_observations.return_value = [
+        {
+            "observation_id": "obs_000001",
+            "summary": "found one issue",
+        }
+    ]
+    runtime.wait_agent_events.return_value = AgentSessionWaitResult(
+        run_id="run_1",
+        timed_out=False,
+        events=[
+            AgentSessionEvent(
+                event_id="event_000001",
+                run_id="run_1",
+                agent_session_id="agent_001",
+                type="agent_completed",
+                created_at="2026-06-24T00:00:02Z",
+            )
+        ],
+        sessions=[agent_session],
+        active_count=0,
+        max_concurrent_agents=2,
+    )
     runtime.run_verifier.return_value = ScoreReport(
         run_id="run_1",
         candidate_id="c001",
@@ -165,17 +200,27 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         [{"intent": "derive from official history", "parent_candidate_ids": ["c001"]}],
     )[0]["candidate_id"] == "c001"
     assert tools.search_next_batch("run_1", 1)[0]["candidate_id"] == "c001"
-    assert tools.search_prepare_worker(
+    assert tools.search_start_agent_session(
         "run_1",
         "c001",
-        {"goal": "try variant"},
-        timeout_seconds=45,
-    )["dispatch_id"] == "dispatch_001"
-    assert runtime.prepare_worker.call_args.kwargs["timeout_seconds"] == 45
-    assert tools.search_get_worker_context("dispatch_001") == {
-        "dispatch_id": "dispatch_001",
-        "context_hash": "abc123",
-    }
+        {"goal": "try one"},
+        {"max_wall_seconds": 120},
+    )["agent_session_id"] == "agent_001"
+    assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
+    assert tools.search_update_agent_status(
+        "agent_001",
+        "implementing",
+        current_goal="patch",
+    )["phase"] == "implementing"
+    assert tools.search_list_agent_status("run_1")[0]["agent_session_id"] == "agent_001"
+    assert tools.search_finish_agent_session("agent_001")["status"] == "completed"
+    assert tools.search_request_agent_finalize("agent_001", "deadline")["status"] == "finalizing"
+    assert tools.search_abort_agent_session("agent_001", "stop")["status"] == "aborted"
+    assert tools.search_abort_all_agent_sessions("run_1", "stop")["aborted"] == 1
+    assert tools.search_record_agent_step("agent_001", steps_delta=1)["counters"]["steps"] == 1
+    assert tools.search_publish_observation("agent_001", "found one issue")["observation_id"] == "obs_000001"
+    assert tools.search_list_observations("run_1")[0]["summary"] == "found one issue"
+    assert tools.search_wait_agent_events("run_1", timeout_seconds=0)["events"][0]["type"] == "agent_completed"
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
@@ -195,10 +240,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.abort.assert_called_once_with("run_1", "stop")
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
     runtime.plan_next.assert_called_once_with("run_1", requested_k=1)
-    runtime.prepare_worker.assert_called_once_with(
+    runtime.start_agent_session.assert_called_once_with(
         run_id="run_1",
         candidate_id="c001",
-        main_directive={"goal": "try variant"},
-        timeout_seconds=45,
+        directive={"goal": "try one"},
+        budget={"max_wall_seconds": 120},
+        visibility_mode="observations",
     )
-    runtime.get_worker_context.assert_called_once_with("dispatch_001")
