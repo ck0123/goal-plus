@@ -6,7 +6,7 @@ The goal of V0 is not to control one specific coding agent. The runtime exposes 
 
 Strategies are run-level settings. The built-in modes include independent branches, agent-guided proposal mode, evolve-style parent selection, and an MCTS-style expansion placeholder. Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract.
 
-Candidate execution is controlled by `strategy.worker_mode`. `main-agent-search-direct` lets the host edit candidate workspaces directly. `agent-session-pool` runs candidate work through durable subagent sessions: `search_start_agent_session` creates a session with a per-session budget, `search_wait_agent_events` lets the supervisor wake on completion/block/timeout/run-deadline events, and `search_abort_agent_session` / `search_abort_all_agent_sessions` stop managed work when budgets are exhausted. The runtime enforces `budget.max_parallel` for active sessions. `strategy.worker_agent_type` can tell OpenCode which `subagent_type` to launch; bundled multi-batch examples use `AnySearchAgent`.
+Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The host dispatches one subagent per candidate via `search_start_agent_session`, supervises terminal events via `search_wait_agent_events`, and stops work via `search_abort_agent_session` / `search_abort_all_agent_sessions` when budgets are exhausted. The runtime enforces `budget.max_parallel` for active sessions. `strategy.worker_agent_type` tells OpenCode which `subagent_type` to launch; bundled examples use `AnySearchAgent`, an autoresearch-style looper that self-iterates inside its workspace and self-verifies through `search_run_verifier`.
 
 ## Quick Start With OpenCode
 

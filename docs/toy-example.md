@@ -108,7 +108,7 @@ The skill should guide the host agent through this sequence:
 3. Call `search-runtime_search_create`.
 4. Call `search-runtime_search_plan_next` with `requested_k=4`.
 5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-6. Follow the returned `worker_policy`. The bundled k_module spec uses `main-agent-search-direct`, so the host edits directly. Specs with `agent-session-pool` must call `search-runtime_search_start_agent_session` for each managed candidate, launch the configured subagent with `agent_session_id`, and supervise with `search-runtime_search_wait_agent_events`.
+6. Follow the returned `worker_policy`. Call `search-runtime_search_start_agent_session` for each candidate, launch the configured subagent (e.g. `AnySearchAgent`) with `agent_session_id`, and supervise with `search-runtime_search_wait_agent_events`. For `budget.max_parallel == 1`, foreground Task is acceptable; otherwise use `background: true`.
 7. Edit only `initial_program.py` inside each candidate workspace.
 8. Call `search-runtime_search_submit_candidate` for each candidate.
 9. Call `search-runtime_search_run_verifier` for each candidate.

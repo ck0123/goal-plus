@@ -39,6 +39,13 @@
     "max_parallel": 4,
     "wall_clock_seconds": 300
   },
+  "strategy": {
+    "name": "independent_branches",
+    "worker_mode": "agent-session-pool",
+    "worker_agent_type": "AnySearchAgent",
+    "worker_timeout_seconds": 240,
+    "worker_local_verifier_max_runs": 3
+  },
   "root_hypotheses": [
     "baseline",
     "fix loader",
