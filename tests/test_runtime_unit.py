@@ -243,6 +243,33 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     assert record.status == "submitted"
 
 
+def test_agent_session_pool_zero_verifier_budget_disables_self_verify(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+            "worker_timeout_seconds": 120,
+            "worker_local_verifier_max_runs": 0,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    instructions_blob = "\n".join(tasks[0].instructions)
+    assert "Local verifier budget is 0" in instructions_blob
+    assert "you may not call search_run_verifier yourself" in instructions_blob
+    # iteration-loop-specific guidance is gated behind nonzero budget
+    assert "mark iterations that improved" not in instructions_blob
+    assert "iteration log" not in instructions_blob
+
+
 def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")

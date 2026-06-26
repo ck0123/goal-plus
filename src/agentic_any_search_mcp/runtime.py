@@ -1528,7 +1528,7 @@ class FileSearchRuntime:
 
         instructions = [
             "Work only inside this candidate workspace.",
-            "Use this workspace's .tmp/ directory for notes, scratch drafts, and your local iteration log (e.g. results.tsv).",
+            "Use this workspace's .tmp/ directory for notes and scratch drafts.",
             "Do not use /tmp, home directories, or paths outside the candidate workspace for candidate work.",
             "Modify only files listed in allowed_files; never touch denied_files or frozen verifier artifacts.",
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
