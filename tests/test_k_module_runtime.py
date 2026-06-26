@@ -101,11 +101,13 @@ def create_run(tools: SearchTools, project: Path) -> tuple[str, list[dict]]:
 
 
 def submit(tools: SearchTools, run_id: str, candidate_id: str) -> None:
+    session = tools.search_start_agent_session(run_id, candidate_id, {"goal": "submit"})
     tools.search_submit_candidate(
         run_id,
         candidate_id,
         {
             "candidate_id": candidate_id,
+            "agent_session_id": session["agent_session_id"],
             "status": "patch_ready",
             "summary": f"{candidate_id} ready",
         },

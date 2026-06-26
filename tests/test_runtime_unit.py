@@ -81,10 +81,15 @@ def create_submitted_candidate(
     frozen = runtime.freeze_spec(spec_for(project, direction=direction), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
     task = runtime.next_batch(run_id, 1)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
     runtime.submit_candidate(
         run_id,
         task.candidate_id,
-        ArtifactBundle(candidate_id=task.candidate_id, status="patch_ready"),
+        ArtifactBundle(
+            candidate_id=task.candidate_id,
+            status="patch_ready",
+            agent_session_id=session.agent_session_id,
+        ),
     )
     return run_id, task.candidate_id, task.workspace
 
@@ -161,8 +166,8 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     tasks = runtime.start_batch(run_id, plan.plan_id)
 
     assert plan.strategy.name == "independent_branches"
-    assert plan.worker_policy["mode"] == "main-agent-search-direct"
-    assert plan.worker_policy["requires_agent_session"] is False
+    assert plan.worker_policy["mode"] == "agent-session-pool"
+    assert plan.worker_policy["requires_agent_session"] is True
     assert plan.planned_k == 2
     assert [task.candidate_id for task in tasks] == ["c001", "c002"]
     assert tasks[0].plan_id == "plan_001"
@@ -201,7 +206,7 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     assert plan.worker_policy["requires_agent_session"] is True
     assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
     assert any(
-        "worker_mode=agent-session-pool" in instruction
+        "tracked by search_start_agent_session" in instruction
         for instruction in tasks[0].instructions
     )
     assert any("agent_session_id" in instruction for instruction in tasks[0].instructions)
@@ -613,10 +618,15 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
     (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
 
     for task in tasks:
+        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
         runtime.submit_candidate(
             run_id,
             task.candidate_id,
-            ArtifactBundle(candidate_id=task.candidate_id, status="patch_ready"),
+            ArtifactBundle(
+                candidate_id=task.candidate_id,
+                status="patch_ready",
+                agent_session_id=session.agent_session_id,
+            ),
         )
 
     def fake_run(*args, **kwargs):
@@ -688,12 +698,17 @@ def test_submit_candidate_detects_out_of_surface_changes(tmp_path: Path) -> None
     frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
     task = runtime.next_batch(run_id, 1)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "test"})
     (task.workspace / "config.yaml").write_text("name: changed\n", encoding="utf-8")
 
     runtime.submit_candidate(
         run_id,
         task.candidate_id,
-        ArtifactBundle(candidate_id=task.candidate_id, status="patch_ready"),
+        ArtifactBundle(
+            candidate_id=task.candidate_id,
+            status="patch_ready",
+            agent_session_id=session.agent_session_id,
+        ),
     )
     record = runtime._load_candidate_record(run_id, task.candidate_id)
 
@@ -708,12 +723,17 @@ def test_submit_candidate_ignores_workspace_tmp_scratch(tmp_path: Path) -> None:
     frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
     task = runtime.next_batch(run_id, 1)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "test"})
     (task.workspace / ".tmp" / "prototype.py").write_text("print('scratch')\n", encoding="utf-8")
 
     runtime.submit_candidate(
         run_id,
         task.candidate_id,
-        ArtifactBundle(candidate_id=task.candidate_id, status="patch_ready"),
+        ArtifactBundle(
+            candidate_id=task.candidate_id,
+            status="patch_ready",
+            agent_session_id=session.agent_session_id,
+        ),
     )
     record = runtime._load_candidate_record(run_id, task.candidate_id)
 
@@ -774,10 +794,15 @@ def test_select_uses_metric_direction_for_minimize(tmp_path: Path, monkeypatch: 
     run_id = runtime.create_run(frozen.frozen_spec_id)
     tasks = runtime.next_batch(run_id, 2)
     for task in tasks:
+        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
         runtime.submit_candidate(
             run_id,
             task.candidate_id,
-            ArtifactBundle(candidate_id=task.candidate_id, status="patch_ready"),
+            ArtifactBundle(
+                candidate_id=task.candidate_id,
+                status="patch_ready",
+                agent_session_id=session.agent_session_id,
+            ),
         )
 
     def fake_run(*args, **kwargs):

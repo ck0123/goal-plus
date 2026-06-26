@@ -114,11 +114,7 @@ class StrategySpec(SearchModel):
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
     ref: str | None = None
     agent_role: str = "planner_and_mutator"
-    worker_mode: Literal[
-        "main-agent-search-direct",
-        "agent-session-pool",
-        "auto",
-    ] = "main-agent-search-direct"
+    worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_agent_type: str | None = None
     worker_timeout_seconds: int = Field(default=600, gt=0)
     worker_local_verifier_max_runs: int = Field(default=0, ge=0)
@@ -136,7 +132,12 @@ class StrategySpec(SearchModel):
     @field_validator("worker_mode", mode="before")
     @classmethod
     def worker_mode_accepts_legacy_dispatch(cls, value: Any) -> Any:
-        if value == "sub-agent-search-dispatch":
+        # Legacy values are normalized to the only supported mode.
+        if value in {
+            "sub-agent-search-dispatch",
+            "main-agent-search-direct",
+            "auto",
+        }:
             return "agent-session-pool"
         return value
 

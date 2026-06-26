@@ -1075,14 +1075,6 @@ class FileSearchRuntime:
         return strategy.name.strip().lower().replace("-", "_")
 
     def _worker_policy(self, strategy: StrategySpec) -> dict[str, Any]:
-        mode = strategy.worker_mode
-        if mode == "auto":
-            mode = (
-                "agent-session-pool"
-                if self._strategy_mode(strategy) not in {"independent", "independent_branches"}
-                else "main-agent-search-direct"
-            )
-        requires_agent_session = mode == "agent-session-pool"
         local_verifier_max_runs = strategy.worker_local_verifier_max_runs
         if local_verifier_max_runs == 0:
             local_validation_rule = (
@@ -1097,7 +1089,7 @@ class FileSearchRuntime:
                 "local limit."
             )
         return {
-            "mode": mode,
+            "mode": "agent-session-pool",
             "configured_mode": strategy.worker_mode,
             "worker_agent_type": strategy.worker_agent_type,
             "subagent_type": strategy.worker_agent_type,
@@ -1113,8 +1105,8 @@ class FileSearchRuntime:
                 "main-agent context only and must not run local scoring to satisfy it."
             ),
             "local_validation_rule": local_validation_rule,
-            "requires_agent_session": requires_agent_session,
-            "direct_edit_allowed": mode == "main-agent-search-direct",
+            "requires_agent_session": True,
+            "direct_edit_allowed": False,
             "supervisor_tools": [
                 "search_start_agent_session",
                 "search_wait_agent_events",
@@ -1123,8 +1115,6 @@ class FileSearchRuntime:
             ],
             "reason": (
                 "worker_mode=agent-session-pool requires durable agent sessions and supervisor wait/abort control"
-                if requires_agent_session
-                else "worker_mode=main-agent-search-direct allows the host agent to edit candidate workspaces directly"
             ),
         }
 
@@ -1534,39 +1524,29 @@ class FileSearchRuntime:
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
             "You may git init, git add, git commit, git reset, git restore, and git checkout INSIDE this workspace to advance and revert iterations.",
             "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
+            "Candidate execution must be tracked by search_start_agent_session.",
+            f"Agent session wall-clock budget defaults to {plan.worker_policy['timeout_seconds']} seconds and is capped by the remaining run budget.",
+            "Candidate artifacts must include the producing agent_session_id.",
         ]
-        if plan.worker_policy.get("requires_agent_session"):
+        local_runs = plan.worker_policy["local_verifier_max_runs"]
+        if local_runs == 0:
             instructions.append(
-                "This run is configured with worker_mode=agent-session-pool; candidate execution must be tracked by search_start_agent_session and supervised with search_wait_agent_events."
+                "Local verifier budget is 0; you may not call search_run_verifier yourself. Edit, submit once, and finish."
+            )
+        else:
+            instructions.append(
+                f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
             )
             instructions.append(
-                f"Agent session wall-clock budget defaults to {plan.worker_policy['timeout_seconds']} seconds and is capped by the remaining run budget."
+                "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
             )
             instructions.append(
-                "Candidate artifacts must include the producing agent_session_id."
+                "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
             )
+        if plan.worker_policy.get("subagent_type"):
             instructions.append(
-                "Do not launch long-running foreground Task calls when supervision or abort is required; run workers as background/managed sessions so the supervisor can wait, inspect status, and abort."
+                f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."
             )
-            local_runs = plan.worker_policy["local_verifier_max_runs"]
-            if local_runs == 0:
-                instructions.append(
-                    "Local verifier budget is 0; you may not call search_run_verifier yourself. Edit, submit once, and finish."
-                )
-            else:
-                instructions.append(
-                    f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
-                )
-                instructions.append(
-                    "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
-                )
-                instructions.append(
-                    "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
-                )
-            if plan.worker_policy.get("subagent_type"):
-                instructions.append(
-                    f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."
-                )
         instructions.extend(proposal.instructions)
 
         parent_id = parent_candidate_ids[0] if parent_candidate_ids else None
