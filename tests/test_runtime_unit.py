@@ -765,3 +765,97 @@ def test_select_uses_metric_direction_for_minimize(tmp_path: Path, monkeypatch: 
 
     assert selection["selected_candidate_id"] == "c002"
     assert selection["selected_score"] == 0.1
+
+
+def test_run_verifier_increments_session_verifier_runs_and_enforces_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+            "worker_timeout_seconds": 120,
+            "worker_local_verifier_max_runs": 2,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    runtime.submit_candidate(
+        run_id,
+        candidate_id,
+        ArtifactBundle(
+            candidate_id=candidate_id,
+            status="patch_ready",
+            agent_session_id=session.agent_session_id,
+        ),
+    )
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.5, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+    session = runtime._load_agent_session_by_id(session.agent_session_id)
+    assert session.counters["verifier_runs"] == 1
+    assert session.status == "running"
+
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+    session = runtime._load_agent_session_by_id(session.agent_session_id)
+    assert session.counters["verifier_runs"] == 2
+    assert session.status == "finalizing"
+
+
+def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_local_verifier_max_runs": 2,
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    session_for_c0 = runtime.start_agent_session(
+        run_id, tasks[0].candidate_id, {"goal": "c0"}
+    )
+    other_session = runtime.start_agent_session(
+        run_id, tasks[1].candidate_id, {"goal": "c1"}
+    )
+    runtime.submit_candidate(
+        run_id,
+        tasks[0].candidate_id,
+        ArtifactBundle(
+            candidate_id=tasks[0].candidate_id,
+            status="patch_ready",
+            agent_session_id=session_for_c0.agent_session_id,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="agent_session_id does not belong"):
+        runtime.run_verifier(
+            run_id,
+            tasks[0].candidate_id,
+            agent_session_id=other_session.agent_session_id,
+        )

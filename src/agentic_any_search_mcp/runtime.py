@@ -857,12 +857,25 @@ class FileSearchRuntime:
         run_id: str,
         candidate_id: str,
         scope: Literal["process", "promotion"] = "process",
+        agent_session_id: str | None = None,
     ) -> ScoreReport:
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
         if record.status not in {"submitted", "evaluated"}:
             raise RuntimeError("candidate must be submitted before verification")
+
+        session = None
+        if agent_session_id:
+            session = self._load_agent_session_by_id(agent_session_id, run_id=run_id)
+            if session.candidate_id != candidate_id:
+                raise ValueError(
+                    "artifact agent_session_id does not belong to this candidate"
+                )
+            if session.status in TERMINAL_AGENT_SESSION_STATUSES:
+                raise RuntimeError(
+                    f"cannot verify from terminal agent session {agent_session_id}"
+                )
 
         old_state = run.state
         run.state = RunState.EVALUATING
@@ -892,6 +905,22 @@ class FileSearchRuntime:
             if run.state == RunState.EVALUATING:
                 run.state = RunState.RUNNING if old_state != RunState.READY_TO_PROMOTE else old_state
             self._write_run(run)
+
+            if session is not None and agent_session_id is not None:
+                counters = dict(session.counters)
+                counters["verifier_runs"] = counters.get("verifier_runs", 0) + 1
+                updated = session.model_copy(
+                    update={"counters": counters, "updated_at": utc_timestamp()}
+                )
+                self._write_agent_session(updated)
+                if (
+                    updated.budget.max_verifier_runs is not None
+                    and counters["verifier_runs"] >= updated.budget.max_verifier_runs
+                ):
+                    self.request_agent_finalize(
+                        agent_session_id, "max_verifier_runs reached"
+                    )
+
             return report
         except Exception:
             run.state = RunState.FAILED
