@@ -30,6 +30,6 @@ Rules:
 6. When a session terminates, run `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 7. Reallocate the next batch when slots free and budget remains. Read recent observations via `search_list_observations` to inform the next plan.
 8. Select, report, and promote only through runtime APIs.
-9. OpenCode managed subagents require the parent process to be started with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` or `OPENCODE_EXPERIMENTAL=true`. Each Task must include `background: true`.
+9. OpenCode managed subagents require the parent process to be started with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` or `OPENCODE_EXPERIMENTAL=true` when `budget.max_parallel > 1`. Each parallel Task must include `background: true`. For `budget.max_parallel == 1`, foreground Task is acceptable.
 10. Do not pass a Task-level `timeout`. Treat `worker_timeout_seconds` as an MCP supervisor deadline enforced via `search_wait_agent_events`, finalize, and abort.
 11. Keep updates concise. Always report `run_id`, selected candidate, score, and report path.
