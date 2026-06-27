@@ -1185,3 +1185,58 @@ def test_run_verifier_auto_attributes_to_unique_active_session(
 
     session_after = runtime._load_agent_session_by_id(session.agent_session_id)
     assert session_after.counters["verifier_runs"] == 1
+
+
+def test_run_verifier_auto_attributes_when_session_is_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OS process outlives MCP timeout. Subagent calls run_verifier after
+    its session is marked terminal. Auto-attribution must still find the
+    session and record provenance; counter increments but finalize is
+    not re-triggered."""
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+            "worker_timeout_seconds": 120,
+            "worker_local_verifier_max_runs": 5,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    # Force the session into terminal state (simulating supervisor timeout).
+    terminal = session.model_copy(update={"status": "timed_out"})
+    runtime._write_agent_session(terminal)
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.7, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    # Should NOT raise even though session is terminal.
+    report = runtime.run_verifier(run_id, candidate_id)
+    assert report.aggregate_score == 0.7
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    assert record.iterations[-1].agent_session_id == session.agent_session_id
+
+    # Counter still increments.
+    session_after = runtime._load_agent_session_by_id(session.agent_session_id)
+    assert session_after.counters["verifier_runs"] == 1
+    # Status stays terminal - no state transition back.
+    assert session_after.status == "timed_out"

@@ -883,27 +883,28 @@ class FileSearchRuntime:
 
         session = None
         if not agent_session_id:
-            # Auto-attribute to the unique active session for this candidate.
+            # Auto-attribute to the unique session for this candidate.
             # Subagents often call run_verifier without passing agent_session_id
             # even when instructed to; this fallback makes the counter work
-            # without relying on prompt adherence.
-            active = [
+            # without relying on prompt adherence. Includes terminal sessions
+            # because the OS process often outlives the MCP session deadline
+            # (MCP abort doesn't kill the OS process).
+            sessions_for_candidate = [
                 s for s in self._load_agent_sessions(run_id)
                 if s.candidate_id == candidate_id
-                and s.status not in TERMINAL_AGENT_SESSION_STATUSES
             ]
-            if len(active) == 1:
-                agent_session_id = active[0].agent_session_id
+            if len(sessions_for_candidate) == 1:
+                agent_session_id = sessions_for_candidate[0].agent_session_id
         if agent_session_id:
             session = self._load_agent_session_by_id(agent_session_id, run_id=run_id)
             if session.candidate_id != candidate_id:
                 raise ValueError(
                     "artifact agent_session_id does not belong to this candidate"
                 )
-            if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-                raise RuntimeError(
-                    f"cannot verify from terminal agent session {agent_session_id}"
-                )
+            # Note: we no longer reject terminal sessions. The OS process
+            # outlives MCP timeout, so verify calls from terminal sessions
+            # still need to be recorded for audit. Counter increment on
+            # terminal sessions is a no-op (skip the finalize trigger).
 
         # Detect workspace changes here so every iteration captures the edit surface
         # state (was previously done in submit_candidate).
@@ -979,14 +980,20 @@ class FileSearchRuntime:
             self._write_run(run)
 
             if session is not None and agent_session_id is not None:
+                is_terminal = session.status in TERMINAL_AGENT_SESSION_STATUSES
                 counters = dict(session.counters)
                 counters["verifier_runs"] = counters.get("verifier_runs", 0) + 1
                 updated = session.model_copy(
                     update={"counters": counters, "updated_at": utc_timestamp()}
                 )
                 self._write_agent_session(updated)
+                # Only trigger finalize on non-terminal sessions. Terminal
+                # sessions (timed_out / aborted) can still receive verify
+                # calls because the OS process outlives MCP timeout; we
+                # record the counter but don't try to transition state.
                 if (
-                    updated.budget.max_verifier_runs is not None
+                    not is_terminal
+                    and updated.budget.max_verifier_runs is not None
                     and counters["verifier_runs"] >= updated.budget.max_verifier_runs
                 ):
                     self.request_agent_finalize(
