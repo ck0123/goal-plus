@@ -97,7 +97,6 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_request_agent_finalize`
 - `search-runtime_search_abort_agent_session`
 - `search-runtime_search_abort_all_agent_sessions`
-- `search-runtime_search_record_agent_step`
 - `search-runtime_search_publish_observation`
 - `search-runtime_search_list_observations`
 - `search-runtime_search_wait_agent_events`

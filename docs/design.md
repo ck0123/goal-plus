@@ -144,7 +144,7 @@ search_promote
 
 `strategy.worker_timeout_seconds` or `budget.max_worker_seconds` defines the MCP per-session wall-clock budget. Runtime truncates session deadlines to remaining run time. For OpenCode hosts, this is not a `Task` timeout parameter; the main agent must keep control through `Task(background=true)` and enforce the deadline in the supervisor loop.
 
-`AgentSessionBudget.max_steps`, `max_tool_calls`, and `max_verifier_runs` are optional counters. Exceeding them moves the session to finalizing so the supervisor/subagent can submit best-so-far work.
+`AgentSessionBudget.max_verifier_runs` is an optional counter. Exceeding it moves the session to finalizing so the supervisor/subagent can submit best-so-far work. (The runtime no longer tracks step/tool counters — only `verifier_runs` is auto-incremented inside `run_verifier`.)
 
 ## Supervisor Responsibilities
 

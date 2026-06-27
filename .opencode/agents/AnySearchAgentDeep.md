@@ -99,11 +99,6 @@ before deadline:
                                 summary="best score X over N iterations",
                                 result={best_score, best_iter, total_iterations})
 ```
-    search_submit_candidate(artifact={..., summary:"best score X over N iterations"})
-    search_finish_agent_session(status="completed",
-                                summary="best score X, tried N iterations",
-                                result={best_score, best_iter, total_iterations})
-```
 
 ## Session Rules
 

@@ -110,7 +110,7 @@ Minimum shape:
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
     "worker_timeout_seconds": 180,
-    "worker_local_verifier_max_runs": 0,
+    "worker_local_verifier_max_runs": 3,
     "history_policy": {
       "scope": "top_n",
       "top_n": 5
@@ -121,13 +121,7 @@ Minimum shape:
 
 `max_candidates` and `max_parallel` are enforced by the runtime. `wall_clock_seconds` is the run budget. `worker_timeout_seconds` is the default MCP session budget, capped by remaining run time. It is not an OpenCode `Task` parameter. Prefer small worker budgets for exploratory examples; use larger values only when the verifier/task genuinely needs them.
 
-`strategy.worker_mode` values:
-
-- `main-agent-search-direct`: the main agent edits candidate workspaces directly.
-- `agent-session-pool`: candidate execution is done by managed subagent sessions. The runtime enforces pool admission and records deadlines/events.
-- `auto`: runtime resolves the effective mode.
-
-Use `agent-session-pool` for all managed-subagent specs.
+`strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values `main-agent-search-direct`, `auto`, and `sub-agent-search-dispatch` are normalized to `agent-session-pool` at parse time, so legacy specs still load.
 
 `strategy.worker_agent_type` selects the OpenCode subagent variant, which fixes the per-session step cap:
 

@@ -143,7 +143,7 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
 ### Agent marked "stale - no progress in background task"
 
 - **Look at**: `agent_sessions/<id>.json` `last_heartbeat_at` vs `updated_at`
-- **Cause**: Agent didn't call `search_update_agent_status` or `search_record_agent_step`. Common when the agent is deep in bash work and skips heartbeats.
+- **Cause**: Agent didn't call `search_update_agent_status`. Common when the agent is deep in bash work and skips heartbeats. (The runtime no longer tracks step/tool counters — only `verifier_runs` is auto-incremented inside `run_verifier`.)
 - **Verification**: Cross-reference with OpenCode SQLite — `tool` count for the session. If bash count is high but heartbeat is stale, agent was busy but didn't tell MCP.
 
 ### Agent ran evaluator via bash (MCP bypass)
