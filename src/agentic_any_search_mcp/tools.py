@@ -157,22 +157,6 @@ class SearchTools:
             "sessions": [session.model_dump(mode="json") for session in sessions],
         }
 
-    def search_record_agent_step(
-        self,
-        agent_session_id: str,
-        steps_delta: int = 0,
-        tool_calls_delta: int = 0,
-        verifier_runs_delta: int = 0,
-        tokens_delta: int = 0,
-    ) -> dict[str, Any]:
-        return self.runtime.record_agent_step(
-            agent_session_id=agent_session_id,
-            steps_delta=steps_delta,
-            tool_calls_delta=tool_calls_delta,
-            verifier_runs_delta=verifier_runs_delta,
-            tokens_delta=tokens_delta,
-        ).model_dump(mode="json")
-
     def search_publish_observation(
         self,
         agent_session_id: str,

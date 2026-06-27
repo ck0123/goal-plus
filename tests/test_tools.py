@@ -137,7 +137,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.request_agent_finalize.return_value = agent_session.model_copy(update={"status": "finalizing"})
     runtime.abort_agent_session.return_value = agent_session.model_copy(update={"status": "aborted"})
     runtime.abort_all_agent_sessions.return_value = [agent_session.model_copy(update={"status": "aborted"})]
-    runtime.record_agent_step.return_value = agent_session.model_copy(update={"counters": {"steps": 1}})
     runtime.publish_observation.return_value = AgentObservation(
         observation_id="obs_000001",
         run_id="run_1",
@@ -220,7 +219,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_request_agent_finalize("agent_001", "deadline")["status"] == "finalizing"
     assert tools.search_abort_agent_session("agent_001", "stop")["status"] == "aborted"
     assert tools.search_abort_all_agent_sessions("run_1", "stop")["aborted"] == 1
-    assert tools.search_record_agent_step("agent_001", steps_delta=1)["counters"]["steps"] == 1
     assert tools.search_publish_observation("agent_001", "found one issue")["observation_id"] == "obs_000001"
     assert tools.search_list_observations("run_1")[0]["summary"] == "found one issue"
     assert tools.search_wait_agent_events("run_1", timeout_seconds=0)["events"][0]["type"] == "agent_completed"

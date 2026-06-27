@@ -684,36 +684,6 @@ class FileSearchRuntime:
                 aborted.append(self._abort_agent_session_record(session, reason))
         return aborted
 
-    def record_agent_step(
-        self,
-        agent_session_id: str,
-        steps_delta: int = 0,
-        tool_calls_delta: int = 0,
-        verifier_runs_delta: int = 0,
-        tokens_delta: int = 0,
-    ) -> AgentSessionRecord:
-        if min(steps_delta, tool_calls_delta, verifier_runs_delta, tokens_delta) < 0:
-            raise ValueError("counter deltas must be non-negative")
-        session = self._load_agent_session_by_id(agent_session_id)
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            raise RuntimeError(f"cannot update terminal agent session {agent_session_id}")
-        counters = dict(session.counters)
-        counters["steps"] = counters.get("steps", 0) + steps_delta
-        counters["tool_calls"] = counters.get("tool_calls", 0) + tool_calls_delta
-        counters["verifier_runs"] = counters.get("verifier_runs", 0) + verifier_runs_delta
-        counters["tokens"] = counters.get("tokens", 0) + tokens_delta
-        updated = session.model_copy(update={"counters": counters, "updated_at": utc_timestamp()})
-        self._write_agent_session(updated)
-        self._append_agent_event(
-            session.run_id,
-            "agent_budget_updated",
-            agent_session_id,
-            {"counters": counters},
-        )
-        if counters["verifier_runs"] > updated.budget.max_verifier_runs:
-            return self.request_agent_finalize(agent_session_id, "max_verifier_runs exceeded")
-        return updated
-
     def publish_observation(
         self,
         agent_session_id: str,

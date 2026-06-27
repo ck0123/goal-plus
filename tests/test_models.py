@@ -171,7 +171,6 @@ def test_agent_session_models_capture_budget_events_and_observations() -> None:
     )
 
     assert session.status == "running"
-    assert session.counters["tool_calls"] == 0
     assert observation.visibility == "observations"
     assert wait.sessions[0].agent_session_id == "agent_001"
 

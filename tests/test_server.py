@@ -35,7 +35,6 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_request_agent_finalize",
         "search_abort_agent_session",
         "search_abort_all_agent_sessions",
-        "search_record_agent_step",
         "search_publish_observation",
         "search_list_observations",
         "search_wait_agent_events",
@@ -114,9 +113,6 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return {}
 
         def search_abort_all_agent_sessions(self, *args, **kwargs):
-            return {}
-
-        def search_record_agent_step(self, *args, **kwargs):
             return {}
 
         def search_publish_observation(self, *args, **kwargs):

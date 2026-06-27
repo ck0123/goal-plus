@@ -395,12 +395,7 @@ class AgentSessionRecord(SearchModel):
     next_step: str = ""
     blockers: list[str] = Field(default_factory=list)
     counters: dict[str, int] = Field(
-        default_factory=lambda: {
-            "steps": 0,
-            "tool_calls": 0,
-            "verifier_runs": 0,
-            "tokens": 0,
-        }
+        default_factory=lambda: {"verifier_runs": 0}
     )
     summary: str = ""
     result: dict[str, Any] = Field(default_factory=dict)

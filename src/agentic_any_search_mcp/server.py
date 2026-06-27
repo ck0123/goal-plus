@@ -118,22 +118,6 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_abort_all_agent_sessions(run_id, reason)
 
     @mcp.tool()
-    def search_record_agent_step(
-        agent_session_id: str,
-        steps_delta: int = 0,
-        tool_calls_delta: int = 0,
-        verifier_runs_delta: int = 0,
-        tokens_delta: int = 0,
-    ) -> dict[str, Any]:
-        return tools.search_record_agent_step(
-            agent_session_id,
-            steps_delta,
-            tool_calls_delta,
-            verifier_runs_delta,
-            tokens_delta,
-        )
-
-    @mcp.tool()
     def search_publish_observation(
         agent_session_id: str,
         summary: str,
