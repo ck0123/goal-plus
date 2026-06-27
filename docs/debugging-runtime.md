@@ -110,6 +110,34 @@ print(f\\\"{d['candidate_id']}: {len(iters)} iters, scores={[i['score'] for i in
 "
 ```
 
+## Checking OpenCode Step Count
+
+The MCP runtime does not track agent steps — OpenCode enforces the per-agent `steps` cap (defined in each `.opencode/agents/*.md` frontmatter) and you read the live count from the SQLite DB.
+
+### Step count for a session
+
+```bash
+sqlite3 ~/.local/share/opencode/opencode.db \
+  "SELECT count(*) FROM part
+   WHERE session_id='<SID>'
+     AND json_extract(data, '\$.type')='step-start';"
+```
+
+### All recent subagent sessions with step usage
+
+```bash
+sqlite3 ~/.local/share/opencode/opencode.db \
+  "SELECT s.id, s.title, count(p.id) as step_starts
+   FROM session s
+   LEFT JOIN part p ON p.session_id = s.id
+     AND json_extract(p.data, '\$.type')='step-start'
+   WHERE s.agent='AnySearchAgent'
+   GROUP BY s.id
+   ORDER BY s.time_created DESC LIMIT 10;"
+```
+
+When the step cap is reached OpenCode injects a system prompt instructing the agent to summarize and stop — the session ends cleanly without a hard kill.
+
 ## Common Failure Modes
 
 ### Agent marked "stale - no progress in background task"

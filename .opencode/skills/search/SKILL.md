@@ -47,7 +47,6 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_request_agent_finalize` | `search-runtime_search_request_agent_finalize` |
 | `search_abort_agent_session` | `search-runtime_search_abort_agent_session` |
 | `search_abort_all_agent_sessions` | `search-runtime_search_abort_all_agent_sessions` |
-| `search_record_agent_step` | `search-runtime_search_record_agent_step` |
 | `search_publish_observation` | `search-runtime_search_publish_observation` |
 | `search_list_observations` | `search-runtime_search_list_observations` |
 | `search_wait_agent_events` | `search-runtime_search_wait_agent_events` |
@@ -129,6 +128,15 @@ Minimum shape:
 - `auto`: runtime resolves the effective mode.
 
 Use `agent-session-pool` for all managed-subagent specs.
+
+`strategy.worker_agent_type` selects the OpenCode subagent variant, which fixes the per-session step cap:
+
+| Variant | Steps | Use when |
+|---|---|---|
+| `AnySearchAgentFlash` | 15 | Smoke tests, cheap iterations |
+| `AnySearchAgent` (default) | 50 | Standard autoresearch loop |
+| `AnySearchAgentDeep` | 100 | Sustained iteration on harder problems |
+| `AnySearchAgentExtraDeep` | 150 | Extensive search, complex fixtures |
 
 ## Workflow
 
