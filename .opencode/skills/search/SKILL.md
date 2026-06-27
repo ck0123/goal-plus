@@ -39,7 +39,6 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_list_history` | `search-runtime_search_list_history` |
 | `search_plan_next` | `search-runtime_search_plan_next` |
 | `search_start_batch` | `search-runtime_search_start_batch` |
-| `search_next_batch` | `search-runtime_search_next_batch` |
 | `search_start_agent_session` | `search-runtime_search_start_agent_session` |
 | `search_get_agent_context` | `search-runtime_search_get_agent_context` |
 | `search_update_agent_status` | `search-runtime_search_update_agent_status` |
@@ -48,12 +47,12 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_request_agent_finalize` | `search-runtime_search_request_agent_finalize` |
 | `search_abort_agent_session` | `search-runtime_search_abort_agent_session` |
 | `search_abort_all_agent_sessions` | `search-runtime_search_abort_all_agent_sessions` |
-| `search_record_agent_step` | `search-runtime_search_record_agent_step` |
 | `search_publish_observation` | `search-runtime_search_publish_observation` |
 | `search_list_observations` | `search-runtime_search_list_observations` |
 | `search_wait_agent_events` | `search-runtime_search_wait_agent_events` |
 | `search_submit_candidate` | `search-runtime_search_submit_candidate` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
+| `search_list_iterations` | `search-runtime_search_list_iterations` |
 | `search_select` | `search-runtime_search_select` |
 | `search_report` | `search-runtime_search_report` |
 | `search_promote` | `search-runtime_search_promote` |
@@ -112,7 +111,7 @@ Minimum shape:
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
     "worker_timeout_seconds": 180,
-    "worker_local_verifier_max_runs": 0,
+    "worker_local_verifier_max_runs": 3,
     "history_policy": {
       "scope": "top_n",
       "top_n": 5
@@ -123,13 +122,16 @@ Minimum shape:
 
 `max_candidates` and `max_parallel` are enforced by the runtime. `wall_clock_seconds` is the run budget. `worker_timeout_seconds` is the default MCP session budget, capped by remaining run time. It is not an OpenCode `Task` parameter. Prefer small worker budgets for exploratory examples; use larger values only when the verifier/task genuinely needs them.
 
-`strategy.worker_mode` values:
+`strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values `main-agent-search-direct`, `auto`, and `sub-agent-search-dispatch` are normalized to `agent-session-pool` at parse time, so legacy specs still load.
 
-- `main-agent-search-direct`: the main agent edits candidate workspaces directly.
-- `agent-session-pool`: candidate execution is done by managed subagent sessions. The runtime enforces pool admission and records deadlines/events.
-- `auto`: runtime resolves the effective mode.
+`strategy.worker_agent_type` selects the OpenCode subagent variant, which fixes the per-session step cap:
 
-Use `agent-session-pool` for all managed-subagent specs.
+| Variant | Steps | Use when |
+|---|---|---|
+| `AnySearchAgentFlash` | 15 | Smoke tests, cheap iterations |
+| `AnySearchAgent` (default) | 50 | Standard autoresearch loop |
+| `AnySearchAgentDeep` | 100 | Sustained iteration on harder problems |
+| `AnySearchAgentExtraDeep` | 150 | Extensive search, complex fixtures |
 
 ## Workflow
 
@@ -172,8 +174,6 @@ Call:
 search-runtime_search_plan_next(run_id="<run_id>", requested_k=<k>)
 search-runtime_search_start_batch(run_id="<run_id>", plan_id="<plan_id>", proposals=<optional>)
 ```
-
-Use `search_next_batch` only for fixed-work-order strategies when proposals are not required.
 
 Each returned `CandidateTask` owns an isolated workspace. Candidate work must stay inside that workspace and only modify allowed files.
 
@@ -239,8 +239,8 @@ while pending_candidates or active_sessions:
 
 The subagent receives only `agent_session_id` and a candidate idea. It then:
 
-1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `observations`.
-2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_submit_candidate` → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression).
+1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, `observations`, and `iterations` (its own previous attempts).
+2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate `submit_candidate` step is needed.
 3. Maintains `workspace/.tmp/results.tsv` as its private iteration log.
 4. Calls `search-runtime_search_finish_agent_session(agent_session_id, status, summary, result)` when done, with the best score and iteration count.
 

@@ -34,6 +34,7 @@ from agentic_any_search_mcp.models import (
     RunRecord,
     RunState,
     RunSummary,
+    IterationRecord,
     ScoreReport,
     SearchPlan,
     SearchSpec,
@@ -287,6 +288,14 @@ class FileSearchRuntime:
             "candidates": candidates,
         }
 
+    def list_iterations(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> list[dict[str, Any]]:
+        record = self._load_candidate_record(run_id, candidate_id)
+        return [it.model_dump(mode="json") for it in record.iterations]
+
     def plan_next(self, run_id: str, requested_k: int = 4) -> SearchPlan:
         if requested_k <= 0:
             raise ValueError("requested_k must be > 0")
@@ -437,8 +446,6 @@ class FileSearchRuntime:
             {
                 "max_wall_seconds": max_wall_seconds,
                 "deadline_at": deadline_at,
-                "max_steps": requested_budget.get("max_steps"),
-                "max_tool_calls": requested_budget.get("max_tool_calls"),
                 "max_verifier_runs": requested_budget.get(
                     "max_verifier_runs",
                     frozen.spec.strategy.worker_local_verifier_max_runs,
@@ -516,6 +523,11 @@ class FileSearchRuntime:
                 if peer.agent_session_id != session.agent_session_id
             ],
             "observations": self.list_observations(session.run_id, top_n=20),
+            "iterations": (
+                self.list_iterations(session.run_id, session.candidate_id)
+                if session.candidate_id
+                else []
+            ),
         }
 
     def update_agent_status(
@@ -671,40 +683,6 @@ class FileSearchRuntime:
             if session.status not in TERMINAL_AGENT_SESSION_STATUSES:
                 aborted.append(self._abort_agent_session_record(session, reason))
         return aborted
-
-    def record_agent_step(
-        self,
-        agent_session_id: str,
-        steps_delta: int = 0,
-        tool_calls_delta: int = 0,
-        verifier_runs_delta: int = 0,
-        tokens_delta: int = 0,
-    ) -> AgentSessionRecord:
-        if min(steps_delta, tool_calls_delta, verifier_runs_delta, tokens_delta) < 0:
-            raise ValueError("counter deltas must be non-negative")
-        session = self._load_agent_session_by_id(agent_session_id)
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            raise RuntimeError(f"cannot update terminal agent session {agent_session_id}")
-        counters = dict(session.counters)
-        counters["steps"] = counters.get("steps", 0) + steps_delta
-        counters["tool_calls"] = counters.get("tool_calls", 0) + tool_calls_delta
-        counters["verifier_runs"] = counters.get("verifier_runs", 0) + verifier_runs_delta
-        counters["tokens"] = counters.get("tokens", 0) + tokens_delta
-        updated = session.model_copy(update={"counters": counters, "updated_at": utc_timestamp()})
-        self._write_agent_session(updated)
-        self._append_agent_event(
-            session.run_id,
-            "agent_budget_updated",
-            agent_session_id,
-            {"counters": counters},
-        )
-        if updated.budget.max_steps is not None and counters["steps"] >= updated.budget.max_steps:
-            return self.request_agent_finalize(agent_session_id, "max_steps reached")
-        if updated.budget.max_tool_calls is not None and counters["tool_calls"] >= updated.budget.max_tool_calls:
-            return self.request_agent_finalize(agent_session_id, "max_tool_calls reached")
-        if counters["verifier_runs"] > updated.budget.max_verifier_runs:
-            return self.request_agent_finalize(agent_session_id, "max_verifier_runs exceeded")
-        return updated
 
     def publish_observation(
         self,
@@ -862,20 +840,56 @@ class FileSearchRuntime:
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
-        if record.status not in {"submitted", "evaluated"}:
-            raise RuntimeError("candidate must be submitted before verification")
+        if record.status not in {"created", "submitted", "evaluated"}:
+            raise RuntimeError(
+                f"cannot verify candidate in status {record.status}"
+            )
 
         session = None
+        if not agent_session_id:
+            # Auto-attribute to the unique session for this candidate.
+            # Subagents often call run_verifier without passing agent_session_id
+            # even when instructed to; this fallback makes the counter work
+            # without relying on prompt adherence. Includes terminal sessions
+            # because the OS process often outlives the MCP session deadline
+            # (MCP abort doesn't kill the OS process).
+            sessions_for_candidate = [
+                s for s in self._load_agent_sessions(run_id)
+                if s.candidate_id == candidate_id
+            ]
+            if len(sessions_for_candidate) == 1:
+                agent_session_id = sessions_for_candidate[0].agent_session_id
         if agent_session_id:
             session = self._load_agent_session_by_id(agent_session_id, run_id=run_id)
             if session.candidate_id != candidate_id:
                 raise ValueError(
                     "artifact agent_session_id does not belong to this candidate"
                 )
-            if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-                raise RuntimeError(
-                    f"cannot verify from terminal agent session {agent_session_id}"
-                )
+            # Note: we no longer reject terminal sessions. The OS process
+            # outlives MCP timeout, so verify calls from terminal sessions
+            # still need to be recorded for audit. Counter increment on
+            # terminal sessions is a no-op (skip the finalize trigger).
+
+        # Detect workspace changes here so every iteration captures the edit surface
+        # state (was previously done in submit_candidate).
+        detected_changed = self._detect_changed_files(
+            Path(run.source_path), record.task.workspace
+        )
+        touched_denied = any(
+            path_matches(path, frozen.spec.edit_surface.deny) for path in detected_changed
+        )
+        outside_allowed = any(
+            not path_matches(path, frozen.spec.edit_surface.allow) for path in detected_changed
+        )
+        if (
+            frozen.spec.edit_surface.max_file_changes is not None
+            and len(detected_changed) > frozen.spec.edit_surface.max_file_changes
+        ):
+            outside_allowed = True
+
+        record.detected_changed_files = detected_changed
+        record.touched_denied_files = touched_denied
+        record.changed_outside_allowed = outside_allowed
 
         old_state = run.state
         run.state = RunState.EVALUATING
@@ -897,6 +911,29 @@ class FileSearchRuntime:
 
             record.status = "evaluated"
             record.score_report = report
+            record.iterations.append(
+                IterationRecord(
+                    iteration=len(record.iterations) + 1,
+                    agent_session_id=agent_session_id,
+                    score=report.aggregate_score,
+                    failure_class=(
+                        next(
+                            (
+                                r.failure_class
+                                for r in report.verifier_results
+                                if r.failure_class
+                            ),
+                            None,
+                        )
+                    ),
+                    summary="",
+                    changed_files=list(detected_changed),
+                    touched_denied_files=touched_denied,
+                    changed_outside_allowed=outside_allowed,
+                    metrics={r.name: r.metrics for r in report.verifier_results},
+                    created_at=utc_timestamp(),
+                )
+            )
             self._write_candidate_record(run_id, record)
             self._update_best_seen(run, frozen.spec, report)
             run.candidates_evaluated = len(
@@ -907,14 +944,20 @@ class FileSearchRuntime:
             self._write_run(run)
 
             if session is not None and agent_session_id is not None:
+                is_terminal = session.status in TERMINAL_AGENT_SESSION_STATUSES
                 counters = dict(session.counters)
                 counters["verifier_runs"] = counters.get("verifier_runs", 0) + 1
                 updated = session.model_copy(
                     update={"counters": counters, "updated_at": utc_timestamp()}
                 )
                 self._write_agent_session(updated)
+                # Only trigger finalize on non-terminal sessions. Terminal
+                # sessions (timed_out / aborted) can still receive verify
+                # calls because the OS process outlives MCP timeout; we
+                # record the counter but don't try to transition state.
                 if (
-                    updated.budget.max_verifier_runs is not None
+                    not is_terminal
+                    and updated.budget.max_verifier_runs is not None
                     and counters["verifier_runs"] >= updated.budget.max_verifier_runs
                 ):
                     self.request_agent_finalize(
@@ -1529,20 +1572,15 @@ class FileSearchRuntime:
             "Candidate artifacts must include the producing agent_session_id.",
         ]
         local_runs = plan.worker_policy["local_verifier_max_runs"]
-        if local_runs == 0:
-            instructions.append(
-                "Local verifier budget is 0; you may not call search_run_verifier yourself. Edit, submit once, and finish."
-            )
-        else:
-            instructions.append(
-                f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
-            )
-            instructions.append(
-                "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
-            )
-            instructions.append(
-                "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
-            )
+        instructions.append(
+            f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
+        )
+        instructions.append(
+            "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
+        )
+        instructions.append(
+            "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
+        )
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
                 f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."

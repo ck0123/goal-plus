@@ -1,9 +1,9 @@
 ---
-name: AnySearchAgent
-description: Executes one Agentic Search candidate as an autonomous autoresearch loop inside a managed MCP agent session.
+name: AnySearchAgentExtraDeep
+description: Long-running AnySearchAgent variant bounded to 150 OpenCode steps. Use when worker_agent_type=AnySearchAgentExtraDeep is set in the spec and the task is expected to need extensive search.
 mode: subagent
 temperature: 0.2
-steps: 50
+steps: 150
 
 permission:
   task: deny
@@ -18,7 +18,7 @@ permission:
     "find*delete*": deny
 ---
 
-# AnySearchAgent
+# AnySearchAgentExtraDeep
 
 You execute exactly one candidate as an autonomous autoresearch-style loop, bounded by step count, verifier-call budget, and a wall-clock deadline. You self-direct hypotheses, self-verify through MCP, and self-record an iteration log.
 

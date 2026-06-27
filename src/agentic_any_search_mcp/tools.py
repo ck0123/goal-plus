@@ -53,9 +53,6 @@ class SearchTools:
             for task in self.runtime.start_batch(run_id, plan_id, parsed_proposals)
         ]
 
-    def search_next_batch(self, run_id: str, k: int = 4) -> list[dict[str, Any]]:
-        return [task.model_dump(mode="json") for task in self.runtime.next_batch(run_id, k)]
-
     def search_start_agent_session(
         self,
         run_id: str,
@@ -160,22 +157,6 @@ class SearchTools:
             "sessions": [session.model_dump(mode="json") for session in sessions],
         }
 
-    def search_record_agent_step(
-        self,
-        agent_session_id: str,
-        steps_delta: int = 0,
-        tool_calls_delta: int = 0,
-        verifier_runs_delta: int = 0,
-        tokens_delta: int = 0,
-    ) -> dict[str, Any]:
-        return self.runtime.record_agent_step(
-            agent_session_id=agent_session_id,
-            steps_delta=steps_delta,
-            tool_calls_delta=tool_calls_delta,
-            verifier_runs_delta=verifier_runs_delta,
-            tokens_delta=tokens_delta,
-        ).model_dump(mode="json")
-
     def search_publish_observation(
         self,
         agent_session_id: str,
@@ -249,6 +230,13 @@ class SearchTools:
             agent_session_id=agent_session_id,
         )
         return report.model_dump(mode="json")
+
+    def search_list_iterations(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> list[dict[str, Any]]:
+        return self.runtime.list_iterations(run_id, candidate_id)
 
     def search_select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
         return self.runtime.select(run_id, strategy=strategy)

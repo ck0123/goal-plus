@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -109,3 +111,20 @@ def test_any_search_agent_documents_autoresearch_loop() -> None:
     assert "search_run_verifier" in agent
     assert "results.tsv" in agent
     assert "agent_session_id" in agent
+
+
+@pytest.mark.parametrize(
+    "agent_file,expected_steps",
+    [
+        ("AnySearchAgentFlash.md", 15),
+        ("AnySearchAgent.md", 50),
+        ("AnySearchAgentDeep.md", 100),
+        ("AnySearchAgentExtraDeep.md", 150),
+    ],
+)
+def test_any_search_agent_tier_has_expected_step_cap(
+    agent_file: str, expected_steps: int
+) -> None:
+    text = (ROOT / ".opencode" / "agents" / agent_file).read_text(encoding="utf-8")
+    assert f"steps: {expected_steps}" in text
+    assert "mode: subagent" in text

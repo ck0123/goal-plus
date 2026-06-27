@@ -137,7 +137,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.request_agent_finalize.return_value = agent_session.model_copy(update={"status": "finalizing"})
     runtime.abort_agent_session.return_value = agent_session.model_copy(update={"status": "aborted"})
     runtime.abort_all_agent_sessions.return_value = [agent_session.model_copy(update={"status": "aborted"})]
-    runtime.record_agent_step.return_value = agent_session.model_copy(update={"counters": {"steps": 1}})
     runtime.publish_observation.return_value = AgentObservation(
         observation_id="obs_000001",
         run_id="run_1",
@@ -182,6 +181,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             )
         ],
     )
+    runtime.list_iterations.return_value = [
+        {"iteration": 1, "score": 0.4, "agent_session_id": "agent_001"},
+        {"iteration": 2, "score": 0.7, "agent_session_id": "agent_001"},
+    ]
     runtime.select.return_value = {"selected_candidate_id": "c001"}
     runtime.report.return_value = Path("/tmp/report.md")
     runtime.promote.return_value = Path("/tmp/c001.patch")
@@ -199,7 +202,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "plan_001",
         [{"intent": "derive from official history", "parent_candidate_ids": ["c001"]}],
     )[0]["candidate_id"] == "c001"
-    assert tools.search_next_batch("run_1", 1)[0]["candidate_id"] == "c001"
     assert tools.search_start_agent_session(
         "run_1",
         "c001",
@@ -217,7 +219,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_request_agent_finalize("agent_001", "deadline")["status"] == "finalizing"
     assert tools.search_abort_agent_session("agent_001", "stop")["status"] == "aborted"
     assert tools.search_abort_all_agent_sessions("run_1", "stop")["aborted"] == 1
-    assert tools.search_record_agent_step("agent_001", steps_delta=1)["counters"]["steps"] == 1
     assert tools.search_publish_observation("agent_001", "found one issue")["observation_id"] == "obs_000001"
     assert tools.search_list_observations("run_1")[0]["summary"] == "found one issue"
     assert tools.search_wait_agent_events("run_1", timeout_seconds=0)["events"][0]["type"] == "agent_completed"
@@ -231,6 +232,11 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         scope="process",
         agent_session_id="agent_001",
     )
+    iterations = tools.search_list_iterations("run_1", "c001")
+    assert len(iterations) == 2
+    assert iterations[0]["iteration"] == 1
+    assert iterations[1]["score"] == 0.7
+    runtime.list_iterations.assert_called_once_with("run_1", "c001")
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
     assert tools.search_promote("run_1", "c001") == {"artifact_path": "/tmp/c001.patch"}

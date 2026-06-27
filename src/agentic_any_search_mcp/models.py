@@ -117,7 +117,7 @@ class StrategySpec(SearchModel):
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_agent_type: str | None = None
     worker_timeout_seconds: int = Field(default=600, gt=0)
-    worker_local_verifier_max_runs: int = Field(default=3, ge=0)
+    worker_local_verifier_max_runs: int = Field(default=3, ge=1)
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -305,6 +305,19 @@ class ScoreReport(SearchModel):
     hardcoding_suspected: bool = False
 
 
+class IterationRecord(SearchModel):
+    iteration: int
+    agent_session_id: str | None = None
+    score: float | None = None
+    failure_class: str | None = None
+    summary: str = ""
+    changed_files: list[str] = Field(default_factory=list)
+    touched_denied_files: bool = False
+    changed_outside_allowed: bool = False
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
 class RunSummary(SearchModel):
     run_id: str
     state: RunState
@@ -345,6 +358,7 @@ class CandidateRecord(SearchModel):
     touched_denied_files: bool = False
     changed_outside_allowed: bool = False
     score_report: ScoreReport | None = None
+    iterations: list[IterationRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def artifact_matches_candidate(self) -> CandidateRecord:
@@ -356,8 +370,6 @@ class CandidateRecord(SearchModel):
 class AgentSessionBudget(SearchModel):
     max_wall_seconds: int = Field(gt=0)
     deadline_at: str
-    max_steps: int | None = Field(default=None, gt=0)
-    max_tool_calls: int | None = Field(default=None, gt=0)
     max_verifier_runs: int = Field(default=0, ge=0)
     heartbeat_interval_seconds: int = Field(default=30, gt=0)
     stale_after_seconds: int = Field(default=90, gt=0)
@@ -383,12 +395,7 @@ class AgentSessionRecord(SearchModel):
     next_step: str = ""
     blockers: list[str] = Field(default_factory=list)
     counters: dict[str, int] = Field(
-        default_factory=lambda: {
-            "steps": 0,
-            "tool_calls": 0,
-            "verifier_runs": 0,
-            "tokens": 0,
-        }
+        default_factory=lambda: {"verifier_runs": 0}
     )
     summary: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
