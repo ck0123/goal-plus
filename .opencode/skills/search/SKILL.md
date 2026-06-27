@@ -2,7 +2,7 @@
 name: search
 description: >
   Run MCP-controlled Search Mode for measurable multi-candidate coding tasks.
-  Use when the user invokes /search or asks to try several candidate fixes,
+  Use when the user asks to try several candidate fixes,
   optimizations, or configurations under a frozen verifier.
 argument-hint: >
   Objective, source path, allowed files, verifier command/artifacts, budget.

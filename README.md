@@ -35,7 +35,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 Inside OpenCode:
 
 ```text
-/search run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py.
+Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test end-to-end (freeze_spec → create → plan_next → start_batch → start sessions → verify → select → report).
 ```
 
 For a headless command-line run:
@@ -55,7 +55,7 @@ Additional bundled specs are listed in [examples/README.md](examples/README.md),
 ```text
 .opencode/
   opencode.json                       # local MCP server config
-  skills/search/SKILL.md              # /search workflow guide for the host agent
+  skills/search/SKILL.md              # search workflow guide (loaded by host agent via Skill tool, NOT a slash command)
   agents/search-orchestrator.md       # optional host-agent prompt
   agents/AnySearchAgent.md            # candidate worker subagent prompt
 docs/

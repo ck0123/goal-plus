@@ -61,7 +61,7 @@ The expected result is that the tool is callable and reports that the run does n
 In OpenCode:
 
 ```text
-/search run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py.
+Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test end-to-end (freeze → create → plan → batch → sessions → verify → select → report).
 ```
 
 Headless:

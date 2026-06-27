@@ -22,7 +22,7 @@ The retired two-channel worker-dispatch API is not part of the public MCP surfac
 ```text
 User
   |
-  | /search ...
+  | "load examples/k_module_search_spec.json and run the search"
   v
 OpenCode host agent
   |

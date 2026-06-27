@@ -98,7 +98,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 Then send:
 
 ```text
-/search run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py.
+Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test with 4 candidates end-to-end (freeze_spec → create → plan_next → start_batch → start sessions → verify → select → report).
 ```
 
 The skill should guide the host agent through this sequence:
