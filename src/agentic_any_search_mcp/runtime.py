@@ -525,6 +525,11 @@ class FileSearchRuntime:
                 if peer.agent_session_id != session.agent_session_id
             ],
             "observations": self.list_observations(session.run_id, top_n=20),
+            "iterations": (
+                self.list_iterations(session.run_id, session.candidate_id)
+                if session.candidate_id
+                else []
+            ),
         }
 
     def update_agent_status(
