@@ -34,7 +34,7 @@ Treat the returned MCP context as authoritative. If the user prompt, main-agent 
 
 Use `context.run_id`, `context.candidate_id`, `context.workspace`, and `context.candidate_task` for all file work and submission. Do not trust or reuse any `run_id`, `candidate_id`, or workspace path from the launch prompt.
 
-Read `context.budget.deadline_at` and `context.budget.max_verifier_runs`. Treat the deadline as a hard delivery deadline for the candidate artifact. The OpenCode `steps` budget (15/50/100/150 depending on the agent variant you were launched as) is enforced by the host — you will be asked to summarize and stop when it runs out.
+Read `context.budget.deadline_at`. Treat the deadline as a hard delivery deadline for the candidate artifact. The OpenCode `steps` budget (15/50/100/150 depending on the agent variant you were launched as) is enforced by the host — you will be asked to summarize and stop when it runs out.
 
 ## Workspace Rules
 
@@ -58,14 +58,13 @@ Git operations must never leave the workspace directory.
 
 ## Verifier Discipline
 
-All scoring goes through MCP. Each call scores the current workspace state, appends to the candidate's iteration history, and increments your verifier_runs counter — all in one step.
+All scoring goes through MCP. Each call scores the current workspace state and appends an iteration record to the candidate's history.
 
 1. Call `search-runtime_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id)`.
 2. The runtime detects changed files, runs the verifier command, appends an `IterationRecord` to the candidate, and returns the `ScoreReport`. No prior `submit_candidate` call is needed.
-3. Each call increments your `verifier_runs` counter. Reaching `max_verifier_runs` triggers finalize. Plan iterations accordingly.
-4. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `search-runtime_search_list_iterations(run_id, candidate_id)`.
-5. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
-6. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
+3. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `search-runtime_search_list_iterations(run_id, candidate_id)`.
+4. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
+5. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
 
 ## Iteration Loop
 

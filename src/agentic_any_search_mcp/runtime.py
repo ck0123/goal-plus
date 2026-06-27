@@ -446,10 +446,6 @@ class FileSearchRuntime:
             {
                 "max_wall_seconds": max_wall_seconds,
                 "deadline_at": deadline_at,
-                "max_verifier_runs": requested_budget.get(
-                    "max_verifier_runs",
-                    frozen.spec.strategy.worker_local_verifier_max_runs,
-                ),
                 "heartbeat_interval_seconds": requested_budget.get("heartbeat_interval_seconds", 30),
                 "stale_after_seconds": requested_budget.get("stale_after_seconds", 90),
                 "finalize_before_seconds": requested_budget.get("finalize_before_seconds", 30),
@@ -944,25 +940,10 @@ class FileSearchRuntime:
             self._write_run(run)
 
             if session is not None and agent_session_id is not None:
-                is_terminal = session.status in TERMINAL_AGENT_SESSION_STATUSES
-                counters = dict(session.counters)
-                counters["verifier_runs"] = counters.get("verifier_runs", 0) + 1
                 updated = session.model_copy(
-                    update={"counters": counters, "updated_at": utc_timestamp()}
+                    update={"updated_at": utc_timestamp()}
                 )
                 self._write_agent_session(updated)
-                # Only trigger finalize on non-terminal sessions. Terminal
-                # sessions (timed_out / aborted) can still receive verify
-                # calls because the OS process outlives MCP timeout; we
-                # record the counter but don't try to transition state.
-                if (
-                    not is_terminal
-                    and updated.budget.max_verifier_runs is not None
-                    and counters["verifier_runs"] >= updated.budget.max_verifier_runs
-                ):
-                    self.request_agent_finalize(
-                        agent_session_id, "max_verifier_runs reached"
-                    )
 
             return report
         except Exception:
@@ -1118,26 +1099,12 @@ class FileSearchRuntime:
         return strategy.name.strip().lower().replace("-", "_")
 
     def _worker_policy(self, strategy: StrategySpec) -> dict[str, Any]:
-        local_verifier_max_runs = strategy.worker_local_verifier_max_runs
-        if local_verifier_max_runs == 0:
-            local_validation_rule = (
-                "Workers must not run the process verifier or any equivalent scoring/evaluation "
-                "command. Workers may run non-scoring static checks such as py_compile. "
-                "The main agent/runtime owns all actual verification after submission."
-            )
-        else:
-            local_validation_rule = (
-                f"Workers may run local verifier sanity checks at most {local_verifier_max_runs} "
-                "times; runtime-owned verification after submission does not count against this "
-                "local limit."
-            )
         return {
             "mode": "agent-session-pool",
             "configured_mode": strategy.worker_mode,
             "worker_agent_type": strategy.worker_agent_type,
             "subagent_type": strategy.worker_agent_type,
             "timeout_seconds": strategy.worker_timeout_seconds,
-            "local_verifier_max_runs": local_verifier_max_runs,
             "collection_rule": (
                 "Collect or salvage a best-so-far artifact by the worker deadline; "
                 "do not leave dispatched candidates unsubmitted."
@@ -1147,7 +1114,6 @@ class FileSearchRuntime:
                 "targets or baseline scores. Workers must treat any score target in a directive as "
                 "main-agent context only and must not run local scoring to satisfy it."
             ),
-            "local_validation_rule": local_validation_rule,
             "requires_agent_session": True,
             "direct_edit_allowed": False,
             "supervisor_tools": [
@@ -1570,17 +1536,10 @@ class FileSearchRuntime:
             "Candidate execution must be tracked by search_start_agent_session.",
             f"Agent session wall-clock budget defaults to {plan.worker_policy['timeout_seconds']} seconds and is capped by the remaining run budget.",
             "Candidate artifacts must include the producing agent_session_id.",
+            "Iterate freely within your OpenCode step budget; each run_verifier call records an iteration. When steps run out OpenCode will ask you to summarize and stop.",
+            "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed.",
+            "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome.",
         ]
-        local_runs = plan.worker_policy["local_verifier_max_runs"]
-        instructions.append(
-            f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
-        )
-        instructions.append(
-            "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
-        )
-        instructions.append(
-            "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
-        )
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
                 f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."

@@ -117,7 +117,6 @@ class StrategySpec(SearchModel):
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_agent_type: str | None = None
     worker_timeout_seconds: int = Field(default=600, gt=0)
-    worker_local_verifier_max_runs: int = Field(default=3, ge=1)
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -370,7 +369,6 @@ class CandidateRecord(SearchModel):
 class AgentSessionBudget(SearchModel):
     max_wall_seconds: int = Field(gt=0)
     deadline_at: str
-    max_verifier_runs: int = Field(default=0, ge=0)
     heartbeat_interval_seconds: int = Field(default=30, gt=0)
     stale_after_seconds: int = Field(default=90, gt=0)
     finalize_before_seconds: int = Field(default=30, ge=0)
@@ -394,9 +392,7 @@ class AgentSessionRecord(SearchModel):
     last_action: str = ""
     next_step: str = ""
     blockers: list[str] = Field(default_factory=list)
-    counters: dict[str, int] = Field(
-        default_factory=lambda: {"verifier_runs": 0}
-    )
+    counters: dict[str, int] = Field(default_factory=dict)
     summary: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
 

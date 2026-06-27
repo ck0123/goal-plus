@@ -19,14 +19,14 @@ EXAMPLE_SPECS = [
         "tests/fixtures/circle_packing/evaluator.py",
         "combined_score",
         {"max_candidates": 4, "max_parallel": 2, "worker_agent_type": "AnySearchAgentFlash",
-         "worker_timeout_seconds": 240, "worker_local_verifier_max_runs": 3},
+         "worker_timeout_seconds": 240},
     ),
     (
         "signal_processing_search_spec.json",
         "tests/fixtures/signal_processing/evaluator.py",
         "overall_score",
         {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "AnySearchAgent",
-         "worker_timeout_seconds": 600, "worker_local_verifier_max_runs": 2},
+         "worker_timeout_seconds": 600},
     ),
 ]
 
@@ -60,7 +60,6 @@ def test_two_round_example_specs_are_valid(
     assert parsed.strategy.worker_mode == "agent-session-pool"
     assert parsed.strategy.worker_agent_type == expected["worker_agent_type"]
     assert parsed.strategy.worker_timeout_seconds == expected["worker_timeout_seconds"]
-    assert parsed.strategy.worker_local_verifier_max_runs == expected["worker_local_verifier_max_runs"]
     assert not Path(parsed.source_path).is_absolute()
     assert (ROOT / verifier_path).exists()
 
@@ -96,8 +95,6 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         )
         context = tools.search_get_agent_context(session["agent_session_id"])
         assert context["budget"]["max_wall_seconds"] <= 60
-        assert context["budget"]["max_verifier_runs"] == expected["worker_local_verifier_max_runs"]
-        assert context["candidate_task"]["candidate_id"] == candidate_id
         tools.search_submit_candidate(
             run_id,
             candidate_id,

@@ -32,21 +32,17 @@ def valid_spec_dict() -> dict:
         "source_path": ".",
         "edit_surface": {
             "allow": ["initial_program.py"],
-            "deny": ["evaluator.py"],
-        },
+            "deny": ["evaluator.py"]},
         "budget": {
             "max_candidates": 4,
             "max_parallel": 2,
-            "wall_clock_seconds": 300,
-        },
+            "wall_clock_seconds": 300},
         "process_verifiers": [
             {
                 "name": "score",
                 "role": "ranking_signal",
-                "command": ["python", "evaluator.py"],
-            }
-        ],
-    }
+                "command": ["python", "evaluator.py"]}
+        ]}
 
 
 def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
@@ -63,7 +59,6 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["strategy"]["name"] == "independent_branches"
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
     assert dumped["strategy"]["worker_timeout_seconds"] == 600
-    assert dumped["strategy"]["worker_local_verifier_max_runs"] == 3
 
 
 def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
@@ -75,34 +70,28 @@ def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
     data = valid_spec_dict()
     data["strategy"] = {
         "name": "agent_guided",
-        "history_policy": {"scope": "top_n", "top_n": 3},
-    }
+        "history_policy": {"scope": "top_n", "top_n": 3}}
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.name == "agent_guided"
     assert spec.strategy.history_policy.top_n == 3
     assert spec.strategy.worker_mode == "agent-session-pool"
     assert spec.strategy.worker_timeout_seconds == 600
-    assert spec.strategy.worker_local_verifier_max_runs == 3
 
     data = valid_spec_dict()
     data["strategy"] = {
         "name": "independent_branches",
         "worker_mode": "agent-session-pool",
         "worker_agent_type": "AnySearchAgent",
-        "worker_timeout_seconds": 120,
-        "worker_local_verifier_max_runs": 2,
-    }
+        "worker_timeout_seconds": 120}
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.worker_mode == "agent-session-pool"
     assert spec.strategy.worker_agent_type == "AnySearchAgent"
     assert spec.strategy.worker_timeout_seconds == 120
-    assert spec.strategy.worker_local_verifier_max_runs == 2
 
     data = valid_spec_dict()
     data["strategy"] = {
         "name": "independent_branches",
-        "worker_mode": "sub-agent-search-dispatch",
-    }
+        "worker_mode": "sub-agent-search-dispatch"}
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.worker_mode == "agent-session-pool"
 
@@ -111,8 +100,7 @@ def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
         data = valid_spec_dict()
         data["strategy"] = {
             "name": "independent_branches",
-            "worker_mode": retired,
-        }
+            "worker_mode": retired}
         spec = SearchSpec.model_validate(data)
         assert spec.strategy.worker_mode == "agent-session-pool"
 
