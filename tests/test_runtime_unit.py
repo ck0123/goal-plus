@@ -277,7 +277,7 @@ def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> 
         run_id,
         tasks[0].candidate_id,
         {"goal": "try first"},
-        budget={"max_wall_seconds": 120, "max_steps": 2, "max_tool_calls": 4},
+        budget={"max_wall_seconds": 120},
     )
     second = runtime.start_agent_session(run_id, tasks[1].candidate_id, "try second")
 
@@ -315,10 +315,6 @@ def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> 
     observations = runtime.list_observations(run_id, tags=["layout"])
     assert observations[0]["observation_id"] == observation.observation_id
     assert observations[0]["next_ideas"] == ["seed corners"]
-
-    stepped = runtime.record_agent_step(first.agent_session_id, steps_delta=2, tool_calls_delta=1)
-    assert stepped.status == "finalizing"
-    assert stepped.counters["steps"] == 2
 
     completed = runtime.finish_agent_session(second.agent_session_id, summary="second done")
     assert completed.status == "completed"

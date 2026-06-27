@@ -370,8 +370,6 @@ class CandidateRecord(SearchModel):
 class AgentSessionBudget(SearchModel):
     max_wall_seconds: int = Field(gt=0)
     deadline_at: str
-    max_steps: int | None = Field(default=None, gt=0)
-    max_tool_calls: int | None = Field(default=None, gt=0)
     max_verifier_runs: int = Field(default=0, ge=0)
     heartbeat_interval_seconds: int = Field(default=30, gt=0)
     stale_after_seconds: int = Field(default=90, gt=0)

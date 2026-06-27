@@ -143,8 +143,6 @@ def test_agent_session_models_capture_budget_events_and_observations() -> None:
     budget = AgentSessionBudget(
         max_wall_seconds=300,
         deadline_at="2026-06-24T00:05:00Z",
-        max_steps=12,
-        max_tool_calls=40,
     )
     session = AgentSessionRecord(
         agent_session_id="agent_001",
@@ -173,7 +171,6 @@ def test_agent_session_models_capture_budget_events_and_observations() -> None:
     )
 
     assert session.status == "running"
-    assert session.budget.max_steps == 12
     assert session.counters["tool_calls"] == 0
     assert observation.visibility == "observations"
     assert wait.sessions[0].agent_session_id == "agent_001"

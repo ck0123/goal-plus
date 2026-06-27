@@ -446,8 +446,6 @@ class FileSearchRuntime:
             {
                 "max_wall_seconds": max_wall_seconds,
                 "deadline_at": deadline_at,
-                "max_steps": requested_budget.get("max_steps"),
-                "max_tool_calls": requested_budget.get("max_tool_calls"),
                 "max_verifier_runs": requested_budget.get(
                     "max_verifier_runs",
                     frozen.spec.strategy.worker_local_verifier_max_runs,
@@ -712,10 +710,6 @@ class FileSearchRuntime:
             agent_session_id,
             {"counters": counters},
         )
-        if updated.budget.max_steps is not None and counters["steps"] >= updated.budget.max_steps:
-            return self.request_agent_finalize(agent_session_id, "max_steps reached")
-        if updated.budget.max_tool_calls is not None and counters["tool_calls"] >= updated.budget.max_tool_calls:
-            return self.request_agent_finalize(agent_session_id, "max_tool_calls reached")
         if counters["verifier_runs"] > updated.budget.max_verifier_runs:
             return self.request_agent_finalize(agent_session_id, "max_verifier_runs exceeded")
         return updated
