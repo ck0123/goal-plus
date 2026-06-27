@@ -1137,3 +1137,51 @@ def test_list_iterations_empty_for_fresh_candidate(tmp_path: Path) -> None:
 
     iterations = runtime.list_iterations(run_id, tasks[0].candidate_id)
     assert iterations == []
+
+
+def test_run_verifier_auto_attributes_to_unique_active_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Subagent often forgets to pass agent_session_id. When the candidate
+    has exactly one active session, runtime should auto-attribute the call
+    so the counter increments."""
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+            "worker_timeout_seconds": 120,
+            "worker_local_verifier_max_runs": 2,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.6, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    # Call WITHOUT agent_session_id - should auto-attribute to the unique active session.
+    report = runtime.run_verifier(run_id, candidate_id)
+    assert report.aggregate_score == 0.6
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    assert len(record.iterations) == 1
+    assert record.iterations[0].agent_session_id == session.agent_session_id
+
+    session_after = runtime._load_agent_session_by_id(session.agent_session_id)
+    assert session_after.counters["verifier_runs"] == 1

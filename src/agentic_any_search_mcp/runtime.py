@@ -882,6 +882,18 @@ class FileSearchRuntime:
             )
 
         session = None
+        if not agent_session_id:
+            # Auto-attribute to the unique active session for this candidate.
+            # Subagents often call run_verifier without passing agent_session_id
+            # even when instructed to; this fallback makes the counter work
+            # without relying on prompt adherence.
+            active = [
+                s for s in self._load_agent_sessions(run_id)
+                if s.candidate_id == candidate_id
+                and s.status not in TERMINAL_AGENT_SESSION_STATUSES
+            ]
+            if len(active) == 1:
+                agent_session_id = active[0].agent_session_id
         if agent_session_id:
             session = self._load_agent_session_by_id(agent_session_id, run_id=run_id)
             if session.candidate_id != candidate_id:
