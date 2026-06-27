@@ -7,6 +7,7 @@ The example specs are small local scenarios for exercising the Search MCP runtim
 | `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | Single-round control-plane smoke test with four discrete configuration slots. |
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | Multi-batch geometric optimization for circle packing. |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | Multi-batch algorithm search for causal signal filtering. |
+| `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | Single-batch SWE-bench bug fix (`sympy__sympy-20212`, issue 19572). Score reflects FAIL_TO_PASS + PASS_TO_PASS assertion counts. |
 
 For the multi-batch examples, create the run, call `search_plan_next(run_id, 4)`, then start the returned plan with `search_start_batch(run_id, plan_id)`. Submit and verify those candidates, inspect their artifacts and verifier results, then optionally plan another batch. The compatibility helper `search_next_batch(run_id, 4)` still works for the default fixed-work-order examples. The runtime enforces isolated workspaces and verifier-owned scoring; the active strategy defines how later candidates should derive from history.
 

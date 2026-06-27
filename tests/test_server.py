@@ -27,7 +27,6 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_list_history",
         "search_plan_next",
         "search_start_batch",
-        "search_next_batch",
         "search_start_agent_session",
         "search_get_agent_context",
         "search_update_agent_status",
@@ -91,9 +90,6 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return {}
 
         def search_start_batch(self, *args, **kwargs):
-            return []
-
-        def search_next_batch(self, *args, **kwargs):
             return []
 
         def search_start_agent_session(self, *args, **kwargs):

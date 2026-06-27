@@ -68,8 +68,10 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     frozen = tools.search_freeze_spec(spec, [verifier_path])
     run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
 
-    first_round = tools.search_next_batch(run_id, 4)
-    second_round = tools.search_next_batch(run_id, 4)
+    first_plan = tools.search_plan_next(run_id, 4)
+    first_round = tools.search_start_batch(run_id, first_plan["plan_id"])
+    second_plan = tools.search_plan_next(run_id, 4)
+    second_round = tools.search_start_batch(run_id, second_plan["plan_id"])
 
     assert [task["candidate_id"] for task in first_round] == ["c001", "c002", "c003", "c004"]
     assert [task["candidate_id"] for task in second_round] == ["c005", "c006", "c007", "c008"]

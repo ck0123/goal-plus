@@ -53,9 +53,6 @@ class SearchTools:
             for task in self.runtime.start_batch(run_id, plan_id, parsed_proposals)
         ]
 
-    def search_next_batch(self, run_id: str, k: int = 4) -> list[dict[str, Any]]:
-        return [task.model_dump(mode="json") for task in self.runtime.next_batch(run_id, k)]
-
     def search_start_agent_session(
         self,
         run_id: str,

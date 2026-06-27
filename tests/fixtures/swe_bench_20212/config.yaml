@@ -1,0 +1,4 @@
+name: swe_bench_20212
+description: SWE-bench sympy__sympy-20212 (issue 19572), 0**-oo should return zoo
+source: https://github.com/sympy/sympy/issues/19572
+metric: combined_score

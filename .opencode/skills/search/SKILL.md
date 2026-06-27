@@ -39,7 +39,6 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_list_history` | `search-runtime_search_list_history` |
 | `search_plan_next` | `search-runtime_search_plan_next` |
 | `search_start_batch` | `search-runtime_search_start_batch` |
-| `search_next_batch` | `search-runtime_search_next_batch` |
 | `search_start_agent_session` | `search-runtime_search_start_agent_session` |
 | `search_get_agent_context` | `search-runtime_search_get_agent_context` |
 | `search_update_agent_status` | `search-runtime_search_update_agent_status` |
@@ -172,8 +171,6 @@ Call:
 search-runtime_search_plan_next(run_id="<run_id>", requested_k=<k>)
 search-runtime_search_start_batch(run_id="<run_id>", plan_id="<plan_id>", proposals=<optional>)
 ```
-
-Use `search_next_batch` only for fixed-work-order strategies when proposals are not required.
 
 Each returned `CandidateTask` owns an isolated workspace. Candidate work must stay inside that workspace and only modify allowed files.
 

@@ -48,10 +48,6 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_start_batch(run_id, plan_id, proposals)
 
     @mcp.tool()
-    def search_next_batch(run_id: str, k: int = 4) -> list[dict[str, Any]]:
-        return tools.search_next_batch(run_id, k)
-
-    @mcp.tool()
     def search_start_agent_session(
         run_id: str,
         candidate_id: str | None = None,

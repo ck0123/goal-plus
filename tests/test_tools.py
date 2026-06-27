@@ -203,7 +203,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "plan_001",
         [{"intent": "derive from official history", "parent_candidate_ids": ["c001"]}],
     )[0]["candidate_id"] == "c001"
-    assert tools.search_next_batch("run_1", 1)[0]["candidate_id"] == "c001"
     assert tools.search_start_agent_session(
         "run_1",
         "c001",

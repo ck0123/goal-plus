@@ -95,7 +95,8 @@ def create_run(tools: SearchTools, project: Path) -> tuple[str, list[dict]]:
     frozen = tools.search_freeze_spec(spec_for(project), [str(project / "evaluator.py")])
     created = tools.search_create(frozen["frozen_spec_id"])
     run_id = created["run_id"]
-    tasks = tools.search_next_batch(run_id, k=5)
+    plan = tools.search_plan_next(run_id, 5)
+    tasks = tools.search_start_batch(run_id, plan["plan_id"])
     assert len(tasks) == 5
     return run_id, tasks
 
@@ -225,7 +226,8 @@ def test_frozen_verifier_hash_catches_source_mutation_after_freeze(
     )
 
     run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
-    task = tools.search_next_batch(run_id, k=1)[0]
+    plan = tools.search_plan_next(run_id, 1)
+    task = tools.search_start_batch(run_id, plan["plan_id"])[0]
     submit(tools, run_id, task["candidate_id"])
     report = tools.search_run_verifier(run_id, task["candidate_id"])
 
