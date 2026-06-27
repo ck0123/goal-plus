@@ -82,3 +82,19 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "R
 ```
 
 For the OpenCode TUI, start `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode` and send the same text prefixed by `/search`.
+
+## SWE-bench Style Fixture
+
+`swe_bench_20212_search_spec.json` wraps a SWE-bench bug fix (`sympy__sympy-20212`) instead of a multi-batch optimization. The candidate's job is to patch `evaluate_power` in `tests/fixtures/swe_bench_20212/initial_program.py` so that `evaluate_power(ZERO, NEG_INFINITY)` returns `COMPLEX_INFINITY`. See `tests/fixtures/swe_bench_20212/README.md` for the bug background and the local verification recipe (no sympy or docker required).
+
+```bash
+OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the swe_bench_20212 search. Use examples/swe_bench_20212_search_spec.json and freeze tests/fixtures/swe_bench_20212/evaluator.py. Request 4 candidates. After submitting and verifying them, inspect summaries and FAIL_TO_PASS / PASS_TO_PASS results. Stop after report generation and do not promote."
+```
+
+Quick local sanity check (no runtime needed):
+
+```bash
+cd tests/fixtures/swe_bench_20212 && python3 -c "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), indent=2))"
+```
+
+The buggy baseline returns `combined_score = 0.0`; after applying the two-line gold patch described in the fixture README the score reaches `1.0`.
