@@ -85,10 +85,27 @@ def test_any_search_agent_denies_destructive_shell_commands() -> None:
         '"rm*": deny',
         '"mv*": deny',
         '"rmdir*": deny',
+        '"unlink*": deny',
+        '"trash*": deny',
         '"find*delete*": deny',
-        '"git clean*": deny',
+    ]:
+        assert pattern in agent
+    for pattern in [
         '"git reset*": deny',
         '"git restore*": deny',
         '"git checkout*": deny',
+        '"git clean*": deny',
     ]:
-        assert pattern in agent
+        assert pattern not in agent
+
+
+def test_any_search_agent_documents_autoresearch_loop() -> None:
+    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "## Iteration Loop" in agent
+    assert "git init" in agent
+    assert "search_run_verifier" in agent
+    assert "results.tsv" in agent
+    assert "agent_session_id" in agent

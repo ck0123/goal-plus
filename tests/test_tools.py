@@ -222,6 +222,15 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_list_observations("run_1")[0]["summary"] == "found one issue"
     assert tools.search_wait_agent_events("run_1", timeout_seconds=0)["events"][0]["type"] == "agent_completed"
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
+    assert tools.search_run_verifier(
+        "run_1", "c001", agent_session_id="agent_001"
+    )["aggregate_score"] == 1.0
+    runtime.run_verifier.assert_called_with(
+        "run_1",
+        "c001",
+        scope="process",
+        agent_session_id="agent_001",
+    )
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
     assert tools.search_promote("run_1", "c001") == {"artifact_path": "/tmp/c001.patch"}

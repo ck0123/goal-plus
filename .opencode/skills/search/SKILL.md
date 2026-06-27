@@ -66,7 +66,7 @@ If these tools are unavailable, stop and report that the MCP server is not conne
 1. Do not start candidate execution before freezing the SearchSpec and verifier artifacts.
 2. Do not modify verifier files during candidate execution.
 3. Do not edit the main source workspace while exploring candidates.
-4. Do not accept subagent-reported scores. Always call `search_run_verifier`.
+4. Subagents self-verify via `search_run_verifier` with their own `agent_session_id`. After session termination, call `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 5. Do not promote by manually copying files. Use `search_promote`; it exports a patch/report.
 6. If a candidate touches denied files or files outside the edit surface, submit it anyway and let runtime mark it failed.
 7. For `agent-session-pool`, do not use foreground long-running Task calls. The main agent must be able to wake, inspect, start more work, request finalize, or abort.
@@ -177,27 +177,28 @@ Use `search_next_batch` only for fixed-work-order strategies when proposals are 
 
 Each returned `CandidateTask` owns an isolated workspace. Candidate work must stay inside that workspace and only modify allowed files.
 
-### Step 5: Supervise Agent Sessions
+### Step 5: Dispatch Autoresearcher Sessions
 
-For `worker_policy.mode == "agent-session-pool"`:
+For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 
 1. Start at most `budget.max_parallel` sessions.
-2. For each candidate, call `search-runtime_search_start_agent_session` with the candidate id, directive, and a session budget.
-3. Launch the subagent with `subagent_type=worker_policy.subagent_type` when present, passing only the `agent_session_id` and a concise candidate idea/directive.
-4. In OpenCode, the Task call must include `background: true`. This requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`; if the Task schema does not expose `background`, supervised subagents are unavailable in this host process.
-5. Launch workers only through a background/managed mechanism that returns control to the main agent immediately. Do not issue foreground long-running Task calls that block the main agent from waiting or aborting. If no background/managed launch is available, do not run `agent-session-pool`; switch to direct candidate work or stop and report that supervised subagents are unavailable.
-6. Enter a supervisor loop with `search-runtime_search_wait_agent_events(run_id, timeout_seconds=<poll window>, since_event_id=<last seen>)`.
-7. On session completion/failure, verify any submitted candidate and start another candidate if budget remains and the pool has capacity.
-8. On `agent_blocked`, decide whether to wait, adjust the plan, request finalization, or abort that session.
-9. On `agent_timed_out` or run deadline, call `search-runtime_search_abort_agent_session` or `search-runtime_search_abort_all_agent_sessions`, then summarize/verify whatever has been submitted.
-10. If `search_wait_agent_events` itself times out without events, call `search_list_agent_status` and choose: keep waiting, request finalize, start available work, or abort at budget exhaustion.
+2. For each candidate, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive, budget)` to get `agent_session_id`.
+3. Launch the subagent with `Task(subagent_type="AnySearchAgent", prompt="<agent_session_id>; candidate idea: <one paragraph>")`.
+4. **If `budget.max_parallel == 1`**, foreground Task is fine — main blocks on the worker, no supervisor loop needed. Skip to step 7 when it returns.
+5. **If `budget.max_parallel > 1`**, Task must include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process). No `timeout` field exists on Task; the MCP supervisor loop enforces deadlines.
+6. Each AnySearchAgent runs an autoresearch-style loop inside its workspace: it self-iterates, calls `search_run_verifier` with its own `agent_session_id`, tracks git commits, and maintains a local `results.tsv`. You do not supervise iteration-level progress.
+7. For parallel runs, enter a supervisor loop with `search-runtime_search_wait_agent_events(run_id, timeout_seconds=<poll window>, since_event_id=<last seen>)` to wake on terminal events.
+8. When a session terminates (completed / failed / aborted / timed_out), run `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself to confirm the final score.
+9. If slots free and candidate budget remains, plan and start the next batch. Read `search-runtime_search_list_observations(run_id, top_n=20)` to inform the next plan when useful.
+10. On run deadline, call `search-runtime_search_abort_all_agent_sessions(run_id)` before reporting.
 
 Hard host rule:
 
-- A normal OpenCode `Task` call is not a supervised background launch unless the host explicitly provides a background/managed option and returns control before the worker finishes.
-- In current OpenCode, that means Task input must include `background: true`. There is no supported `timeout` field on Task; use MCP session deadlines and the supervisor loop instead.
+- For `max_parallel > 1`, Task input must include `background: true`. A normal OpenCode `Task` call without `background` blocks the main agent and prevents supervision.
+- For `max_parallel == 1`, foreground Task is acceptable — there is nothing else to wait on, and the supervisor loop would be pure overhead.
+- There is no supported `timeout` field on Task; use MCP session deadlines and the supervisor loop instead.
 - The Task prompt must not hard-code `run_id`, `candidate_id`, or workspace paths for the worker to use. The worker must derive them from `search_get_agent_context(agent_session_id)`. Human-readable candidate ideas are fine; authoritative identifiers and paths come only from MCP context.
-- Seeing `AnySearchAgent Task — ...` followed by worker tool activity, with no immediate `search_wait_agent_events` call from the main agent, means the main agent is blocked in foreground Task execution.
+- Seeing `AnySearchAgent Task — ...` followed by worker tool activity, with no immediate `search_wait_agent_events` call from the main agent, means the main agent is blocked in foreground Task execution. This is fine for `max_parallel == 1` and a bug for `max_parallel > 1`.
 - Do not launch foreground Task calls "to see if they block". If foreground Task is the only available subagent mechanism, do not use `agent-session-pool` subagents for that run.
 
 Supervisor loop sketch:
@@ -208,7 +209,8 @@ pending_candidates = [...]
 while pending_candidates or active_sessions:
   while pending_candidates and active_count < max_parallel:
     session = search_start_agent_session(...)
-    launch AnySearchAgent Task(background=true) with session.agent_session_id
+    Task(subagent_type="AnySearchAgent", background=true,
+         prompt=f"agent_session_id={session.agent_session_id}; {idea}")
     active_count += 1
 
   wait = search_wait_agent_events(run_id, timeout_seconds=300, since_event_id=last_event_id)
@@ -219,41 +221,30 @@ while pending_candidates or active_sessions:
     break
 
   for terminal event in wait.events:
-    verify submitted candidate if present
+    search_run_verifier(run_id, event.candidate_id, "process")  # main-side final confirm
     active_count = wait.active_count
+
+  if not pending_candidates and budget_remaining and active_count == 0:
+    observations = search_list_observations(run_id, top_n=20)
+    plan = search_plan_next(run_id, requested_k=k)
+    tasks = search_start_batch(run_id, plan.plan_id)
+    pending_candidates = [t.candidate_id for t in tasks]
 
   if wait.timed_out:
     inspect search_list_agent_status(run_id)
     request finalize or abort sessions that are stale/over budget
 ```
 
-### Step 6: Subagent Contract
+### Step 6: Subagent Autoresearch Contract
 
-The subagent receives `agent_session_id` and must call:
+The subagent receives only `agent_session_id` and a candidate idea. It then:
 
-```text
-search-runtime_search_get_agent_context(agent_session_id="<agent_session_id>")
-```
+1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `observations`.
+2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_submit_candidate` → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression).
+3. Maintains `workspace/.tmp/results.tsv` as its private iteration log.
+4. Calls `search-runtime_search_finish_agent_session(agent_session_id, status, summary, result)` when done, with the best score and iteration count.
 
-The returned context is authoritative. The subagent must use `context.run_id`, `context.candidate_id`, `context.agent_session_id`, and `context.workspace`; it must not use any run id, candidate id, or workspace path from the launch prompt.
-
-It submits with values from context:
-
-```json
-{
-  "run_id": "context.run_id",
-  "candidate_id": "context.candidate_id",
-  "artifact": {
-    "candidate_id": "context.candidate_id",
-    "agent_session_id": "context.agent_session_id",
-    "status": "patch_ready",
-    "summary": "what was tried and why",
-    "next_ideas": []
-  }
-}
-```
-
-The subagent then calls `search_finish_agent_session`. If it cannot produce code, it should submit `abandoned` or finish with `failed`; it must not keep exploring past its deadline.
+You do not pass numeric score targets, baseline scores, or local-verification requests in the worker prompt. The worker reads its own verifier output and decides next steps.
 
 ### Step 7: Verify, Select, Report
 

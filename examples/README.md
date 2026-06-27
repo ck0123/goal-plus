@@ -12,10 +12,7 @@ For the multi-batch examples, create the run, call `search_plan_next(run_id, 4)`
 
 Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far. To advance the search, call `search_plan_next`; the returned plan states the current strategy mode, worker policy, official history view, derivation policy, and whether the host must submit proposals.
 
-`strategy.worker_mode` controls candidate execution:
-
-- `main-agent-search-direct`: the main agent edits candidate workspaces directly.
-- `agent-session-pool`: call `search_start_agent_session(run_id, candidate_id, directive, budget?)`, launch the configured subagent with the returned `agent_session_id`, and supervise progress with `search_wait_agent_events`. Candidate submission should include `agent_session_id`.
+`strategy.worker_mode` is always `agent-session-pool`. Candidate execution always goes through a managed subagent session: call `search_start_agent_session(run_id, candidate_id, directive, budget?)`, launch the configured subagent with the returned `agent_session_id`, and supervise progress with `search_wait_agent_events`. Candidate submission must include `agent_session_id`.
 
 `strategy.worker_timeout_seconds` is the default MCP per-session wall-clock budget. `budget.max_worker_seconds`, when set, can provide a run-level worker cap. The runtime truncates session deadlines to the remaining run budget. For OpenCode, this is not a `Task` timeout; start OpenCode with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and launch candidate subagents with `background: true`.
 

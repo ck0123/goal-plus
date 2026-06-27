@@ -240,8 +240,14 @@ class SearchTools:
         run_id: str,
         candidate_id: str,
         scope: str = "process",
+        agent_session_id: str | None = None,
     ) -> dict[str, Any]:
-        report = self.runtime.run_verifier(run_id, candidate_id, scope=scope)  # type: ignore[arg-type]
+        report = self.runtime.run_verifier(
+            run_id,
+            candidate_id,
+            scope=scope,  # type: ignore[arg-type]
+            agent_session_id=agent_session_id,
+        )
         return report.model_dump(mode="json")
 
     def search_select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:

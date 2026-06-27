@@ -64,13 +64,13 @@ FileSearchRuntime
 
 - `name`: strategy mode, for example `independent_branches`, `agent_guided`, `evolve`, or `mcts`
 - `driver`: `builtin`, `python`, or `external_mcp`
-- `worker_mode`: `main-agent-search-direct`, `agent-session-pool`, or `auto`
+- `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`
 - `worker_timeout_seconds`: default per-session wall-clock budget
 - `worker_local_verifier_max_runs`: local scoring/evaluator budget for the subagent, defaulting to 0
 - `history_policy`, `parent_policy`, and `config`: strategy-specific controls
 
-Legacy specs that contain `worker_mode: "sub-agent-search-dispatch"` are normalized to `agent-session-pool` when parsed. New specs should not use the legacy value.
+Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) are normalized to `agent-session-pool` at parse time so legacy specs keep working.
 
 `SearchPlan` is produced by `search_plan_next`. It contains worker policy, requested/planned batch size, official history, derivation policy, optional proposal contract, fixed work orders, and strategy trace.
 
