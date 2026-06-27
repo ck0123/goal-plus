@@ -305,6 +305,19 @@ class ScoreReport(SearchModel):
     hardcoding_suspected: bool = False
 
 
+class IterationRecord(SearchModel):
+    iteration: int
+    agent_session_id: str | None = None
+    score: float | None = None
+    failure_class: str | None = None
+    summary: str = ""
+    changed_files: list[str] = Field(default_factory=list)
+    touched_denied_files: bool = False
+    changed_outside_allowed: bool = False
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
 class RunSummary(SearchModel):
     run_id: str
     state: RunState
@@ -345,6 +358,7 @@ class CandidateRecord(SearchModel):
     touched_denied_files: bool = False
     changed_outside_allowed: bool = False
     score_report: ScoreReport | None = None
+    iterations: list[IterationRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def artifact_matches_candidate(self) -> CandidateRecord:
