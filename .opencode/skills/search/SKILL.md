@@ -111,7 +111,6 @@ Minimum shape:
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
     "worker_timeout_seconds": 180,
-    "worker_local_verifier_max_runs": 3,
     "history_policy": {
       "scope": "top_n",
       "top_n": 5

@@ -17,8 +17,6 @@ Before requesting a follow-up batch, the host can call `search_list_history(run_
 
 `strategy.worker_timeout_seconds` is the default MCP per-session wall-clock budget. The runtime truncates session deadlines to the remaining run budget. For OpenCode, this is not a `Task` timeout; start OpenCode with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and launch candidate subagents with `background: true` whenever `max_parallel > 1`.
 
-`strategy.worker_local_verifier_max_runs` bounds how many times the worker may call `search_run_verifier` itself (each call also appends an iteration record). Defaults to 3; minimum 1 (0 is forbidden because it leaves the worker no way to self-verify).
-
 ## Step Tiers
 
 `strategy.worker_agent_type` picks one of four OpenCode subagent variants. The variant fixes the host-enforced step cap; runtime cannot override it per call.
@@ -72,7 +70,6 @@ Example specs currently use the default `independent_branches` strategy. To test
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
     "worker_timeout_seconds": 240,
-    "worker_local_verifier_max_runs": 3,
     "history_policy": {"scope": "top_n", "top_n": 5}
   }
 }
@@ -93,7 +90,7 @@ Then paste a plain-language prompt into the Build agent. The host loads the `sea
 ### circle_packing — two batches, AnySearchAgentFlash
 
 ```
-Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash (15 step cap), worker_local_verifier_max_runs=3, worker_timeout_seconds=240. Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash (15 step cap), worker_timeout_seconds=240. Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
 Batch 1 (c001, c002 in parallel):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)

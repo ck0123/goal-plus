@@ -67,7 +67,6 @@ FileSearchRuntime
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`
 - `worker_timeout_seconds`: default per-session wall-clock budget
-- `worker_local_verifier_max_runs`: local scoring/evaluator budget for the subagent, defaulting to 3 (minimum 1; 0 is forbidden)
 - `history_policy`, `parent_policy`, and `config`: strategy-specific controls
 
 Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) are normalized to `agent-session-pool` at parse time so legacy specs keep working.
@@ -143,8 +142,6 @@ search_promote
 `budget.wall_clock_seconds` is the run-level deadline. `search_wait_agent_events` wakes on `run_deadline`, and the supervisor should call `search_abort_all_agent_sessions` before reporting submitted candidates.
 
 `strategy.worker_timeout_seconds` or `budget.max_worker_seconds` defines the MCP per-session wall-clock budget. Runtime truncates session deadlines to remaining run time. For OpenCode hosts, this is not a `Task` timeout parameter; the main agent must keep control through `Task(background=true)` and enforce the deadline in the supervisor loop.
-
-`AgentSessionBudget.max_verifier_runs` is an optional counter. Exceeding it moves the session to finalizing so the supervisor/subagent can submit best-so-far work. (The runtime no longer tracks step/tool counters — only `verifier_runs` is auto-incremented inside `run_verifier`.)
 
 ## Supervisor Responsibilities
 

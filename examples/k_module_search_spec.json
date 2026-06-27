@@ -43,8 +43,7 @@
     "name": "independent_branches",
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgentFlash",
-    "worker_timeout_seconds": 180,
-    "worker_local_verifier_max_runs": 3
+    "worker_timeout_seconds": 180
   },
   "root_hypotheses": [
     "baseline",

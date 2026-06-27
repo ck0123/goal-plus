@@ -58,7 +58,7 @@ for f in $RUN/agent_sessions/*.json; do
 import json
 d = json.load(open('$f'))
 print(f\"{d['candidate_id']}: status={d['status']} phase={d['phase']} \"
-      f\"vruns={d['counters']['verifier_runs']}/{d['budget']['max_verifier_runs']} \"
+      f\"deadline={d['budget']['deadline_at']} \"
       f\"heartbeat={d['last_heartbeat_at']}\")
 "
 done
@@ -155,7 +155,7 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
   GROUP BY 1;
   ```
 - **Symptom**: `bash` count high, `search-runtime_search_run_verifier` count 0 or low
-- **Cause**: Agent didn't trust MCP path, or `worker_local_verifier_max_runs` was 0 (now forbidden)
+- **Cause**: Agent didn't trust MCP path, or prompt was unclear about MCP being the official scorer
 - **Verification**: Look at bash command contents — if `python evaluator.py` appears, agent bypassed MCP
 
 ### Candidate has 0 iterations but session shows activity
@@ -201,4 +201,4 @@ Example: "session aborted as stale"
 - Log shows: no errors, all permissions allowed
 - Runtime shows: `counters.verifier_runs=0`, `last_heartbeat_at` unchanged for 5 min
 
-→ Diagnosis: Agent was doing bash work (probably running evaluator directly), never told MCP it was alive, supervisor marked stale. Fix: bump `worker_local_verifier_max_runs` so agent uses MCP verifier (which auto-updates counters as a side effect).
+→ Diagnosis: Agent was doing bash work (probably running evaluator directly), never told MCP it was alive, supervisor marked stale. Fix: ensure AnySearchAgent prompt clearly says MCP verifier is the official scorer; consider switching to a larger step tier.

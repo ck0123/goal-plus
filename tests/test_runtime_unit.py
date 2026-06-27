@@ -190,7 +190,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
             "worker_timeout_seconds": 120,
-            "worker_local_verifier_max_runs": 3,
         },
         max_candidates=1,
     )
@@ -202,7 +201,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     assert plan.worker_policy["mode"] == "agent-session-pool"
     assert plan.worker_policy["subagent_type"] == "AnySearchAgent"
     assert plan.worker_policy["timeout_seconds"] == 120
-    assert plan.worker_policy["local_verifier_max_runs"] == 3
     assert plan.worker_policy["requires_agent_session"] is True
     assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
     assert any(
@@ -232,7 +230,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     session = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "try worker"})
     context = runtime.get_agent_context(session.agent_session_id)
     assert context["budget"]["max_wall_seconds"] <= 120
-    assert context["budget"]["max_verifier_runs"] == 3
     assert context["budget"]["deadline_at"].endswith("Z")
     assert context["candidate_task"]["candidate_id"] == tasks[0].candidate_id
     runtime.submit_candidate(
@@ -247,21 +244,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
     assert record.status == "submitted"
 
-
-def test_zero_verifier_budget_is_rejected(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    with pytest.raises(ValueError, match="worker_local_verifier_max_runs"):
-        spec_with_strategy(
-            project,
-            {
-                "name": "independent_branches",
-                "worker_mode": "agent-session-pool",
-                "worker_agent_type": "AnySearchAgent",
-                "worker_timeout_seconds": 120,
-                "worker_local_verifier_max_runs": 0,
-            },
-            max_candidates=1,
-        )
 
 
 def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> None:
@@ -810,60 +792,6 @@ def test_select_uses_metric_direction_for_minimize(tmp_path: Path, monkeypatch: 
     assert selection["selected_score"] == 0.1
 
 
-def test_run_verifier_increments_session_verifier_runs_and_enforces_budget(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
-            "worker_timeout_seconds": 120,
-            "worker_local_verifier_max_runs": 2,
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=1)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    candidate_id = tasks[0].candidate_id
-    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
-
-    runtime.submit_candidate(
-        run_id,
-        candidate_id,
-        ArtifactBundle(
-            candidate_id=candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-        ),
-    )
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout='{"combined_score": 0.5, "valid": true}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-
-    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
-    session = runtime._load_agent_session_by_id(session.agent_session_id)
-    assert session.counters["verifier_runs"] == 1
-    assert session.status == "running"
-
-    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
-    session = runtime._load_agent_session_by_id(session.agent_session_id)
-    assert session.counters["verifier_runs"] == 2
-    assert session.status == "finalizing"
-
-
 def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -872,7 +800,6 @@ def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_local_verifier_max_runs": 2,
         },
         max_candidates=2,
     )
@@ -916,7 +843,6 @@ def test_run_verifier_works_without_submit_and_records_iterations(
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
             "worker_timeout_seconds": 120,
-            "worker_local_verifier_max_runs": 3,
         },
         max_candidates=1,
     )
@@ -952,10 +878,6 @@ def test_run_verifier_works_without_submit_and_records_iterations(
     assert [it.iteration for it in record.iterations] == [1, 2, 3]
     assert record.score_report.aggregate_score == 0.9
 
-    session = runtime._load_agent_session_by_id(session.agent_session_id)
-    assert session.counters["verifier_runs"] == 3
-    assert session.status == "finalizing"
-
 
 def test_list_iterations_returns_all_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -967,7 +889,6 @@ def test_list_iterations_returns_all_records(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_local_verifier_max_runs": 5,
         },
         max_candidates=1,
     )
@@ -1007,7 +928,6 @@ def test_get_agent_context_returns_iterations(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_local_verifier_max_runs": 5,
         },
         max_candidates=1,
     )
@@ -1047,7 +967,6 @@ def test_run_verifier_records_edit_surface_violation_in_iteration(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_local_verifier_max_runs": 5,
         },
         max_candidates=1,
     )
@@ -1088,7 +1007,6 @@ def test_run_verifier_records_failure_class_on_timeout(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_local_verifier_max_runs": 5,
         },
         max_candidates=1,
     )
@@ -1122,7 +1040,6 @@ def test_list_iterations_empty_for_fresh_candidate(tmp_path: Path) -> None:
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_local_verifier_max_runs": 3,
         },
         max_candidates=1,
     )
@@ -1150,7 +1067,6 @@ def test_run_verifier_auto_attributes_to_unique_active_session(
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
             "worker_timeout_seconds": 120,
-            "worker_local_verifier_max_runs": 2,
         },
         max_candidates=1,
     )
@@ -1180,7 +1096,6 @@ def test_run_verifier_auto_attributes_to_unique_active_session(
     assert record.iterations[0].agent_session_id == session.agent_session_id
 
     session_after = runtime._load_agent_session_by_id(session.agent_session_id)
-    assert session_after.counters["verifier_runs"] == 1
 
 
 def test_run_verifier_auto_attributes_when_session_is_terminal(
@@ -1199,7 +1114,6 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
             "worker_timeout_seconds": 120,
-            "worker_local_verifier_max_runs": 5,
         },
         max_candidates=1,
     )
@@ -1233,6 +1147,5 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
 
     # Counter still increments.
     session_after = runtime._load_agent_session_by_id(session.agent_session_id)
-    assert session_after.counters["verifier_runs"] == 1
     # Status stays terminal - no state transition back.
     assert session_after.status == "timed_out"
