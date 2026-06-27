@@ -1589,20 +1589,15 @@ class FileSearchRuntime:
             "Candidate artifacts must include the producing agent_session_id.",
         ]
         local_runs = plan.worker_policy["local_verifier_max_runs"]
-        if local_runs == 0:
-            instructions.append(
-                "Local verifier budget is 0; you may not call search_run_verifier yourself. Edit, submit once, and finish."
-            )
-        else:
-            instructions.append(
-                f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
-            )
-            instructions.append(
-                "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
-            )
-            instructions.append(
-                "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
-            )
+        instructions.append(
+            f"You may call search_run_verifier (with your agent_session_id) at most {local_runs} times. Each call increments your verifier_runs counter; reaching the cap triggers finalize."
+        )
+        instructions.append(
+            "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed."
+        )
+        instructions.append(
+            "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome."
+        )
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
                 f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."

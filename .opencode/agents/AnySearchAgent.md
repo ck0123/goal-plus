@@ -67,8 +67,6 @@ All scoring goes through MCP. Each call scores the current workspace state, appe
 5. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
 6. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
 
-If `context.budget.max_verifier_runs` is 0, you may not call `search_run_verifier`. Edit your best implementation, then call `search-runtime_search_submit_candidate` once and finish.
-
 ## Iteration Loop
 
 Run an autoresearch-style loop inside your session:

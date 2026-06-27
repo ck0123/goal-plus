@@ -117,7 +117,7 @@ class StrategySpec(SearchModel):
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_agent_type: str | None = None
     worker_timeout_seconds: int = Field(default=600, gt=0)
-    worker_local_verifier_max_runs: int = Field(default=3, ge=0)
+    worker_local_verifier_max_runs: int = Field(default=3, ge=1)
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
