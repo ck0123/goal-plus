@@ -58,48 +58,49 @@ Git operations must never leave the workspace directory.
 
 ## Verifier Discipline
 
-All scoring must go through MCP:
+All scoring goes through MCP. Each call scores the current workspace state, appends to the candidate's iteration history, and increments your verifier_runs counter — all in one step.
 
-1. Call `search-runtime_search_submit_candidate(run_id=context.run_id, candidate_id=context.candidate_id, artifact={...})` to unlock the verifier. You may call this multiple times; each call refreshes the workspace snapshot the runtime scores against.
-2. Call `search-runtime_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id)` to score the current workspace state.
-3. The runtime increments your `verifier_runs` counter and triggers finalize when `max_verifier_runs` is reached. Plan your iterations accordingly.
-4. Never run the verifier command (`context.candidate_task` process_verifiers) directly via bash.
-5. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
+1. Call `search-runtime_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id)`.
+2. The runtime detects changed files, runs the verifier command, appends an `IterationRecord` to the candidate, and returns the `ScoreReport`. No prior `submit_candidate` call is needed.
+3. Each call increments your `verifier_runs` counter. Reaching `max_verifier_runs` triggers finalize. Plan iterations accordingly.
+4. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `search-runtime_search_list_iterations(run_id, candidate_id)`.
+5. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
 6. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
 
-If `context.budget.max_verifier_runs` is 0, you may not call `search_run_verifier`. Submit once with your best implementation and finish.
+If `context.budget.max_verifier_runs` is 0, you may not call `search_run_verifier`. Edit your best implementation, then call `search-runtime_search_submit_candidate` once and finish.
 
 ## Iteration Loop
 
 Run an autoresearch-style loop inside your session:
 
 ```text
-read context -> understand objective, allowed_files, history, observations
+read context -> objective, allowed_files, history, observations, iterations
 git init baseline in workspace
 write .tmp/results.tsv with header: iter \t score \t status \t hypothesis
 
 while steps_remaining and verifier_runs_remaining and time_remaining:
     decide next hypothesis based on:
-      - your own previous iteration log
+      - your previous iterations in context.iterations (score trajectory)
       - context.history (top scored candidates across the run)
       - context.observations (cross-session findings)
     edit allowed_files to implement the hypothesis
-    search_submit_candidate(artifact={candidate_id, agent_session_id,
-                            status:"patch_ready",
-                            summary:"iter N: <hypothesis>", next_ideas:[]})
-    search_run_verifier(..., agent_session_id=self)
-    read returned ScoreReport.aggregate_score and failure_class
-    if improved:
+    report = search_run_verifier(..., agent_session_id=self)
+    score = report.aggregate_score
+    if score improved over previous iteration:
         git commit -m "iter N: score=X"
-        append row to results.tsv with status=keep
+        append results.tsv row with status=keep
     else:
         git reset --hard HEAD~1
-        append row to results.tsv with status=discard
+        append results.tsv row with status=discard
     (optional) search_publish_observation(summary, evidence, next_ideas)
       when you find something surprising worth sharing with peer sessions
 
 before deadline:
     ensure best-so-far workspace state is in place
+    search_finish_agent_session(status="completed",
+                                summary="best score X over N iterations",
+                                result={best_score, best_iter, total_iterations})
+```
     search_submit_candidate(artifact={..., summary:"best score X over N iterations"})
     search_finish_agent_session(status="completed",
                                 summary="best score X, tried N iterations",

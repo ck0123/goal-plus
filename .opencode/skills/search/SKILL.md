@@ -239,8 +239,8 @@ while pending_candidates or active_sessions:
 
 The subagent receives only `agent_session_id` and a candidate idea. It then:
 
-1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `observations`.
-2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_submit_candidate` → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression).
+1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, `observations`, and `iterations` (its own previous attempts).
+2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate `submit_candidate` step is needed.
 3. Maintains `workspace/.tmp/results.tsv` as its private iteration log.
 4. Calls `search-runtime_search_finish_agent_session(agent_session_id, status, summary, result)` when done, with the best score and iteration count.
 
