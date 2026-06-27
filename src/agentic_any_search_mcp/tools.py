@@ -250,6 +250,13 @@ class SearchTools:
         )
         return report.model_dump(mode="json")
 
+    def search_list_iterations(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> list[dict[str, Any]]:
+        return self.runtime.list_iterations(run_id, candidate_id)
+
     def search_select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
         return self.runtime.select(run_id, strategy=strategy)
 

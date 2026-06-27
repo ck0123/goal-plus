@@ -182,6 +182,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             )
         ],
     )
+    runtime.list_iterations.return_value = [
+        {"iteration": 1, "score": 0.4, "agent_session_id": "agent_001"},
+        {"iteration": 2, "score": 0.7, "agent_session_id": "agent_001"},
+    ]
     runtime.select.return_value = {"selected_candidate_id": "c001"}
     runtime.report.return_value = Path("/tmp/report.md")
     runtime.promote.return_value = Path("/tmp/c001.patch")
@@ -231,6 +235,11 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         scope="process",
         agent_session_id="agent_001",
     )
+    iterations = tools.search_list_iterations("run_1", "c001")
+    assert len(iterations) == 2
+    assert iterations[0]["iteration"] == 1
+    assert iterations[1]["score"] == 0.7
+    runtime.list_iterations.assert_called_once_with("run_1", "c001")
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
     assert tools.search_promote("run_1", "c001") == {"artifact_path": "/tmp/c001.patch"}
