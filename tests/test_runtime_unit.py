@@ -999,3 +999,141 @@ def test_list_iterations_returns_all_records(
     assert iterations[0]["iteration"] == 1
     assert iterations[1]["iteration"] == 2
     assert all(it["agent_session_id"] == session.agent_session_id for it in iterations)
+
+
+def test_get_agent_context_returns_iterations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_local_verifier_max_runs": 5,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.42, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+
+    context = runtime.get_agent_context(session.agent_session_id)
+    assert "iterations" in context
+    assert len(context["iterations"]) == 1
+    assert context["iterations"][0]["iteration"] == 1
+    assert context["iterations"][0]["score"] == 0.42
+    assert context["iterations"][0]["agent_session_id"] == session.agent_session_id
+
+
+def test_run_verifier_records_edit_surface_violation_in_iteration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_local_verifier_max_runs": 5,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "cheat"})
+
+    # Worker touches a denied file.
+    (tasks[0].workspace / "config.yaml").write_text("name: tampered\n", encoding="utf-8")
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.9, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    it = record.iterations[-1]
+    assert it.touched_denied_files is True
+    assert "config.yaml" in it.changed_files
+
+
+def test_run_verifier_records_failure_class_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_local_verifier_max_runs": 5,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    report = runtime.run_verifier(
+        run_id, candidate_id, agent_session_id=session.agent_session_id
+    )
+
+    assert report.aggregate_score == 0.0
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    it = record.iterations[-1]
+    assert it.failure_class == "Timeout"
+    assert it.score == 0.0
+
+
+def test_list_iterations_empty_for_fresh_candidate(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_local_verifier_max_runs": 3,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    iterations = runtime.list_iterations(run_id, tasks[0].candidate_id)
+    assert iterations == []
