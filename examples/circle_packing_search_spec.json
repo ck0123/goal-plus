@@ -35,16 +35,16 @@
     }
   ],
   "budget": {
-    "max_candidates": 8,
-    "max_parallel": 4,
+    "max_candidates": 4,
+    "max_parallel": 2,
     "wall_clock_seconds": 600
   },
   "strategy": {
     "name": "independent_branches",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgent",
-    "worker_timeout_seconds": 600,
-    "worker_local_verifier_max_runs": 2
+    "worker_agent_type": "AnySearchAgentFlash",
+    "worker_timeout_seconds": 240,
+    "worker_local_verifier_max_runs": 3
   },
   "constraints": {
     "suggested_batch_size": 4,
