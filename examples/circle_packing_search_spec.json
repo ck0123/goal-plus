@@ -44,7 +44,7 @@
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
     "worker_timeout_seconds": 600,
-    "worker_local_verifier_max_runs": 0
+    "worker_local_verifier_max_runs": 2
   },
   "constraints": {
     "suggested_batch_size": 4,

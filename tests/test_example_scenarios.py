@@ -48,7 +48,7 @@ def test_two_round_example_specs_are_valid(
     assert parsed.strategy.worker_mode == "agent-session-pool"
     assert parsed.strategy.worker_agent_type == "AnySearchAgent"
     assert parsed.strategy.worker_timeout_seconds == 600
-    assert parsed.strategy.worker_local_verifier_max_runs == 0
+    assert parsed.strategy.worker_local_verifier_max_runs == 2
     assert not Path(parsed.source_path).is_absolute()
     assert (ROOT / verifier_path).exists()
 
@@ -85,7 +85,7 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         )
         context = tools.search_get_agent_context(session["agent_session_id"])
         assert context["budget"]["max_wall_seconds"] <= 60
-        assert context["budget"]["max_verifier_runs"] == 0
+        assert context["budget"]["max_verifier_runs"] == 2
         assert context["candidate_task"]["candidate_id"] == candidate_id
         tools.search_submit_candidate(
             run_id,
