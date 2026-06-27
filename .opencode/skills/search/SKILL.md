@@ -52,6 +52,7 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_wait_agent_events` | `search-runtime_search_wait_agent_events` |
 | `search_submit_candidate` | `search-runtime_search_submit_candidate` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
+| `search_list_iterations` | `search-runtime_search_list_iterations` |
 | `search_select` | `search-runtime_search_select` |
 | `search_report` | `search-runtime_search_report` |
 | `search_promote` | `search-runtime_search_promote` |

@@ -67,7 +67,7 @@ FileSearchRuntime
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`
 - `worker_timeout_seconds`: default per-session wall-clock budget
-- `worker_local_verifier_max_runs`: local scoring/evaluator budget for the subagent, defaulting to 0
+- `worker_local_verifier_max_runs`: local scoring/evaluator budget for the subagent, defaulting to 3 (minimum 1; 0 is forbidden)
 - `history_policy`, `parent_policy`, and `config`: strategy-specific controls
 
 Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) are normalized to `agent-session-pool` at parse time so legacy specs keep working.
