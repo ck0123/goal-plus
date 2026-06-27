@@ -3,10 +3,85 @@
 This project ships a local OpenCode setup for running the Search MCP Runtime:
 
 ```text
-.opencode/opencode.json
+opencode.json
 .opencode/skills/search/SKILL.md
 .opencode/agents/search-orchestrator.md
 examples/k_module_search_spec.json
+```
+
+## Install The MCP Server
+
+Install this Python package so the `agentic-any-search-mcp` command is available
+on `PATH`:
+
+From Git:
+
+```bash
+python -m pip install --user "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
+agentic-any-search-mcp --help
+```
+
+From an existing checkout:
+
+```bash
+cd agentic-any-search-mcp
+python -m pip install -e .
+agentic-any-search-mcp --help
+```
+
+The OpenCode MCP config should call the console script, not import from the
+source tree through `PYTHONPATH`. This package is not published to PyPI yet, so
+do not document direct PyPI install commands until that release exists.
+
+## Config Scope
+
+OpenCode config files are merged by scope. Use the smallest scope that matches
+the use case:
+
+- Project or directory-level: `opencode.json` in the project root. This is the
+  checked-in setup used by this repository.
+- User/global: `~/.config/opencode/opencode.json`. Use this when one person
+  wants the MCP server available across many projects.
+- Custom one-off config: set `OPENCODE_CONFIG=/path/to/opencode.json`.
+- Managed organization config: use OpenCode's platform-specific managed config
+  locations when admins need enforced defaults.
+
+The `.opencode/` directory remains useful for project-local agents, skills, and
+commands. It is not the preferred place for the main MCP server config.
+
+All scopes should configure the same installed command:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "search-runtime": {
+      "type": "local",
+      "command": ["agentic-any-search-mcp", "--root", ".search"],
+      "cwd": ".",
+      "timeout": 300000,
+      "enabled": true
+    }
+  }
+}
+```
+
+## Updating
+
+For a Git install through user-level pip:
+
+```bash
+python -m pip install --user -U "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
+```
+
+For editable development installs:
+
+```bash
+cd agentic-any-search-mcp
+git pull
+python -m pip install -e ".[dev]"
+python -m pytest -q
+opencode mcp list
 ```
 
 ## Start
@@ -20,12 +95,12 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 OpenCode should start the local MCP server named `search-runtime` using:
 
 ```bash
-PYTHONPATH=src python -m agentic_any_search_mcp.server --root .search
+agentic-any-search-mcp --root .search
 ```
 
 The server uses stdio transport.
 
-The background-subagent flag must be set on the OpenCode process. Setting it only in `.opencode/opencode.json` under the MCP server environment is not enough, because that environment belongs to the Python MCP subprocess, not the OpenCode `Task` tool.
+The background-subagent flag must be set on the OpenCode process. Setting it only in `opencode.json` under the MCP server environment is not enough, because that environment belongs to the Python MCP subprocess, not the OpenCode `Task` tool.
 
 For headless runs, use the same environment:
 
@@ -45,7 +120,7 @@ Expected entry:
 
 ```text
 search-runtime connected
-python -m agentic_any_search_mcp.server --root .search
+agentic-any-search-mcp --root .search
 ```
 
 You can also run a safe negative probe:

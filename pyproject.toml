@@ -9,13 +9,13 @@ description = "A small MCP-first runtime for verifiable agentic search."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "fastmcp>=2.0",
-  "pydantic>=2.0",
+  "fastmcp>=2.3,<3.0",
+  "pydantic>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0",
+  "pytest>=7.0",
 ]
 
 [project.scripts]

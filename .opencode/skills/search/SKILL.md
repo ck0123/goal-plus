@@ -23,7 +23,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
 ```
 
-`OPENCODE_EXPERIMENTAL=true` also enables the same flag. This environment variable belongs to the OpenCode process itself, not only to the MCP server subprocess configured in `.opencode/opencode.json`.
+`OPENCODE_EXPERIMENTAL=true` also enables the same flag. This environment variable belongs to the OpenCode process itself, not only to the MCP server subprocess configured in `opencode.json`.
 
 OpenCode `Task` currently has no `timeout` parameter. Search session timeouts are MCP supervisor deadlines: the main agent must launch subagents with `background: true`, wait with `search_wait_agent_events`, and mark/finalize/abort runtime sessions when budgets expire. Do not pass or invent a Task-level timeout.
 

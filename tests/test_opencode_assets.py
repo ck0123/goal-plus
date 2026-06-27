@@ -10,19 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_opencode_config_registers_search_runtime_mcp() -> None:
-    config = json.loads((ROOT / ".opencode" / "opencode.json").read_text(encoding="utf-8"))
+    config = json.loads((ROOT / "opencode.json").read_text(encoding="utf-8"))
 
     server = config["mcp"]["search-runtime"]
     assert server["type"] == "local"
     assert server["command"] == [
-        "python",
-        "-m",
-        "agentic_any_search_mcp.server",
+        "agentic-any-search-mcp",
         "--root",
         ".search",
     ]
-    assert server["environment"]["PYTHONPATH"] == "src"
+    assert "environment" not in server
     assert server["timeout"] >= 300000
+    assert server["enabled"] is True
 
 
 def test_search_skill_is_slash_command_ready() -> None:

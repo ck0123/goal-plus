@@ -12,7 +12,7 @@ tests/fixtures/k_module_problem/
   initial_program.py      # only editable file
   evaluator.py            # frozen verifier artifact
   config.yaml             # denied config file
-.opencode/opencode.json   # starts the MCP server
+opencode.json             # starts the MCP server
 .opencode/skills/search/SKILL.md
 ```
 
@@ -31,9 +31,12 @@ From the project root:
 
 ```bash
 python -m pip install -e ".[dev]"
+agentic-any-search-mcp --help
 ```
 
-The OpenCode MCP config uses `PYTHONPATH=src`, so editable install is not required for local imports, but it is the simplest way to install `fastmcp`, `pydantic`, and `pytest`.
+The OpenCode MCP config calls the installed `agentic-any-search-mcp` console
+script. Editable install is the development setup; normal users should install
+from Git and keep the same MCP command.
 
 ## 2. Run Local Tests
 
@@ -60,15 +63,15 @@ Expected:
 
 ```text
 search-runtime connected
-python -m agentic_any_search_mcp.server --root .search
+agentic-any-search-mcp --root .search
 ```
 
-If `search-runtime` is missing, run the command from the project root and check `.opencode/opencode.json`.
+If `search-runtime` is missing, run the command from the project root and check `opencode.json`.
 
 If it is present but not connected, make sure the Python environment can import `fastmcp`:
 
 ```bash
-python -c "import fastmcp, pydantic"
+agentic-any-search-mcp --help
 ```
 
 ## 4. Optional Negative Probe

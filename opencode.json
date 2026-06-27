@@ -4,17 +4,13 @@
     "search-runtime": {
       "type": "local",
       "command": [
-        "python",
-        "-m",
-        "agentic_any_search_mcp.server",
+        "agentic-any-search-mcp",
         "--root",
         ".search"
       ],
       "cwd": ".",
-      "environment": {
-        "PYTHONPATH": "src"
-      },
-      "timeout": 300000
+      "timeout": 300000,
+      "enabled": true
     }
   },
   "permission": {
@@ -23,4 +19,3 @@
     }
   }
 }
-
