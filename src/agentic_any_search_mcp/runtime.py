@@ -34,6 +34,7 @@ from agentic_any_search_mcp.models import (
     RunRecord,
     RunState,
     RunSummary,
+    IterationRecord,
     ScoreReport,
     SearchPlan,
     SearchSpec,
@@ -286,6 +287,14 @@ class FileSearchRuntime:
             "sort_by": sort_by,
             "candidates": candidates,
         }
+
+    def list_iterations(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> list[dict[str, Any]]:
+        record = self._load_candidate_record(run_id, candidate_id)
+        return [it.model_dump(mode="json") for it in record.iterations]
 
     def plan_next(self, run_id: str, requested_k: int = 4) -> SearchPlan:
         if requested_k <= 0:
@@ -862,8 +871,10 @@ class FileSearchRuntime:
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
-        if record.status not in {"submitted", "evaluated"}:
-            raise RuntimeError("candidate must be submitted before verification")
+        if record.status not in {"created", "submitted", "evaluated"}:
+            raise RuntimeError(
+                f"cannot verify candidate in status {record.status}"
+            )
 
         session = None
         if agent_session_id:
@@ -876,6 +887,27 @@ class FileSearchRuntime:
                 raise RuntimeError(
                     f"cannot verify from terminal agent session {agent_session_id}"
                 )
+
+        # Detect workspace changes here so every iteration captures the edit surface
+        # state (was previously done in submit_candidate).
+        detected_changed = self._detect_changed_files(
+            Path(run.source_path), record.task.workspace
+        )
+        touched_denied = any(
+            path_matches(path, frozen.spec.edit_surface.deny) for path in detected_changed
+        )
+        outside_allowed = any(
+            not path_matches(path, frozen.spec.edit_surface.allow) for path in detected_changed
+        )
+        if (
+            frozen.spec.edit_surface.max_file_changes is not None
+            and len(detected_changed) > frozen.spec.edit_surface.max_file_changes
+        ):
+            outside_allowed = True
+
+        record.detected_changed_files = detected_changed
+        record.touched_denied_files = touched_denied
+        record.changed_outside_allowed = outside_allowed
 
         old_state = run.state
         run.state = RunState.EVALUATING
@@ -897,6 +929,29 @@ class FileSearchRuntime:
 
             record.status = "evaluated"
             record.score_report = report
+            record.iterations.append(
+                IterationRecord(
+                    iteration=len(record.iterations) + 1,
+                    agent_session_id=agent_session_id,
+                    score=report.aggregate_score,
+                    failure_class=(
+                        next(
+                            (
+                                r.failure_class
+                                for r in report.verifier_results
+                                if r.failure_class
+                            ),
+                            None,
+                        )
+                    ),
+                    summary="",
+                    changed_files=list(detected_changed),
+                    touched_denied_files=touched_denied,
+                    changed_outside_allowed=outside_allowed,
+                    metrics={r.name: r.metrics for r in report.verifier_results},
+                    created_at=utc_timestamp(),
+                )
+            )
             self._write_candidate_record(run_id, record)
             self._update_best_seen(run, frozen.spec, report)
             run.candidates_evaluated = len(

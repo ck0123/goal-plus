@@ -917,3 +917,96 @@ def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
             tasks[0].candidate_id,
             agent_session_id=other_session.agent_session_id,
         )
+
+
+def test_run_verifier_works_without_submit_and_records_iterations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+            "worker_timeout_seconds": 120,
+            "worker_local_verifier_max_runs": 3,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    scores = [0.4, 0.7, 0.9]
+
+    def fake_run(*args, **kwargs):
+        score = scores.pop(0)
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    for expected_score in [0.4, 0.7, 0.9]:
+        report = runtime.run_verifier(
+            run_id, candidate_id, agent_session_id=session.agent_session_id
+        )
+        assert report.aggregate_score == expected_score
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    assert len(record.iterations) == 3
+    assert [it.score for it in record.iterations] == [0.4, 0.7, 0.9]
+    assert [it.iteration for it in record.iterations] == [1, 2, 3]
+    assert record.score_report.aggregate_score == 0.9
+
+    session = runtime._load_agent_session_by_id(session.agent_session_id)
+    assert session.counters["verifier_runs"] == 3
+    assert session.status == "finalizing"
+
+
+def test_list_iterations_returns_all_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_local_verifier_max_runs": 5,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.5, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+
+    iterations = runtime.list_iterations(run_id, candidate_id)
+    assert len(iterations) == 2
+    assert iterations[0]["iteration"] == 1
+    assert iterations[1]["iteration"] == 2
+    assert all(it["agent_session_id"] == session.agent_session_id for it in iterations)
