@@ -187,12 +187,14 @@ class SearchTools:
         timeout_seconds: int = 300,
         wake_on: list[str] | None = None,
         since_event_id: str | None = None,
+        return_when_all_idle: bool = True,
     ) -> dict[str, Any]:
         return self.runtime.wait_agent_events(
             run_id=run_id,
             timeout_seconds=timeout_seconds,
             wake_on=wake_on,
             since_event_id=since_event_id,
+            return_when_all_idle=return_when_all_idle,
         ).model_dump(mode="json")
 
     def search_submit_candidate(

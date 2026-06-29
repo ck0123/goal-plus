@@ -688,6 +688,7 @@ class FileSearchRuntime:
         timeout_seconds: int = 300,
         wake_on: list[str] | None = None,
         since_event_id: str | None = None,
+        return_when_all_idle: bool = True,
     ) -> AgentSessionWaitResult:
         if timeout_seconds < 0:
             raise ValueError("timeout_seconds must be >= 0")
@@ -709,19 +710,28 @@ class FileSearchRuntime:
                 if event.type in wake_set
                 and (since_event_id is None or event.event_id > since_event_id)
             ]
-            if events or timeout_seconds == 0 or time.time() >= deadline:
+            active_count = self._active_agent_session_count(run_id)
+            all_idle = active_count == 0 and len(self._load_agent_sessions(run_id)) > 0
+            should_return = (
+                events
+                or timeout_seconds == 0
+                or time.time() >= deadline
+                or (return_when_all_idle and all_idle)
+            )
+            if should_return:
                 sessions = self._load_agent_sessions(run_id)
                 frozen = self._load_frozen_spec(self._load_run(run_id).frozen_spec_id)
+                poll_expired = not events and not (return_when_all_idle and all_idle)
                 return AgentSessionWaitResult(
                     run_id=run_id,
-                    poll_window_expired=not events,
+                    poll_window_expired=poll_expired,
                     last_event_id=event_log[-1].event_id if event_log else since_event_id,
                     events=events,
                     sessions=sessions,
-                    active_count=self._active_agent_session_count(run_id),
+                    active_count=active_count,
                     max_concurrent_agents=frozen.spec.budget.max_parallel,
                 )
-            time.sleep(min(0.1, max(0.0, deadline - time.time())))
+            time.sleep(min(0.5, max(0.0, deadline - time.time())))
 
     def submit_candidate(
         self,

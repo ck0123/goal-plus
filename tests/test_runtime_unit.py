@@ -1275,3 +1275,178 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
     session_after = runtime._load_agent_session_by_id(session.agent_session_id)
     # Status stays terminal - no state transition back.
     assert session_after.status == "aborted"
+
+
+def test_wait_agent_events_returns_immediately_when_all_agents_idle(
+    tmp_path: Path,
+) -> None:
+    """Regression test: when all dispatched subagents have finished (completed/
+    failed/aborted), wait_agent_events must return immediately without waiting
+    for the full timeout, even if since_event_id filters out all terminal events.
+    This prevents the supervisor from blocking for 300s after workers are done."""
+    import time
+
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+
+    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
+    s2 = runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "worker2"})
+    assert runtime._active_agent_session_count(run_id) == 2
+
+    # Finish both workers immediately.
+    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
+    runtime.finish_agent_session(s2.agent_session_id, summary="done2")
+    assert runtime._active_agent_session_count(run_id) == 0
+
+    # Capture last event id, then call wait with a future since_event_id that
+    # filters out all terminal events (simulating the orchestrator loop where
+    # since_event_id is advanced to last_event_id after processing events).
+    all_events = runtime._load_agent_events(run_id)
+    last_terminal_event_id = all_events[-1].event_id
+
+    # With a large timeout, wait should return immediately (well under 1s)
+    # because all agents are idle.
+    t0 = time.monotonic()
+    result = runtime.wait_agent_events(
+        run_id,
+        timeout_seconds=300,
+        since_event_id=last_terminal_event_id,
+    )
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0, f"wait took {elapsed:.2f}s, expected <1s (did not wait for timeout)"
+    assert result.active_count == 0
+    # poll_window_expired is False because we returned due to all_idle, not timeout
+    assert result.poll_window_expired is False
+
+
+def test_wait_agent_events_does_not_return_when_some_still_running(
+    tmp_path: Path,
+) -> None:
+    """Wait must NOT return early if at least one agent is still active, even
+    if there are no new events. It should only return when there's a new event
+    or the timeout fires."""
+    import time
+
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+
+    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
+    s2 = runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "worker2"})
+
+    # Only finish s1; s2 is still running.
+    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
+    assert runtime._active_agent_session_count(run_id) == 1
+
+    # Wait with short timeout and since_event_id that filters out s1's completion.
+    all_events = runtime._load_agent_events(run_id)
+    last_event_id = all_events[-1].event_id
+
+    t0 = time.monotonic()
+    result = runtime.wait_agent_events(
+        run_id,
+        timeout_seconds=1,
+        since_event_id=last_event_id,
+    )
+    elapsed = time.monotonic() - t0
+
+    # Should have waited ~1s (timeout), not returned immediately
+    assert elapsed >= 0.9, f"wait returned early in {elapsed:.2f}s, expected ~1s timeout"
+    assert result.active_count == 1
+    assert result.poll_window_expired is True
+
+
+def test_wait_agent_events_return_when_all_idle_can_be_disabled(
+    tmp_path: Path,
+) -> None:
+    """return_when_all_idle=False restores the legacy behavior: only return on
+    new events or timeout, regardless of active_count."""
+    import time
+
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 1)
+
+    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
+    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
+
+    all_events = runtime._load_agent_events(run_id)
+    last_event_id = all_events[-1].event_id
+
+    # With return_when_all_idle=False, even though active_count==0, wait should
+    # block until timeout because since_event_id filters all events.
+    t0 = time.monotonic()
+    result = runtime.wait_agent_events(
+        run_id,
+        timeout_seconds=1,
+        since_event_id=last_event_id,
+        return_when_all_idle=False,
+    )
+    elapsed = time.monotonic() - t0
+
+    assert elapsed >= 0.9, f"wait returned early in {elapsed:.2f}s, expected ~1s timeout"
+    assert result.poll_window_expired is True
+    assert result.active_count == 0
+
+
+def test_wait_agent_events_returns_on_event_before_all_idle(tmp_path: Path) -> None:
+    """Wait should return as soon as a wake_on event arrives (e.g. one agent
+    completes), even if other agents are still running. This preserves the
+    incremental event-processing behavior of the orchestrator loop."""
+    import time
+
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+
+    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
+    s2 = runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "worker2"})
+    assert runtime._active_agent_session_count(run_id) == 2
+
+    # Finish only s1; s2 is still active.
+    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
+
+    # Should return immediately on the agent_completed event for s1,
+    # without waiting for s2 or timeout.
+    t0 = time.monotonic()
+    result = runtime.wait_agent_events(run_id, timeout_seconds=300)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0, f"wait took {elapsed:.2f}s, expected <1s"
+    assert result.active_count == 1
+    assert any(e.type == "agent_completed" and e.agent_session_id == s1.agent_session_id for e in result.events)
+    assert result.poll_window_expired is False
+
+
+def test_wait_agent_events_timeout_zero_returns_immediately(tmp_path: Path) -> None:
+    """timeout_seconds=0 must return immediately with current state (poll),
+    regardless of active sessions. Backward compatibility."""
+    import time
+
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+
+    runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "w1"})
+    runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "w2"})
+
+    t0 = time.monotonic()
+    result = runtime.wait_agent_events(run_id, timeout_seconds=0)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    assert result.active_count == 2
+    # No events generated yet, so poll_window_expired=True
+    assert result.poll_window_expired is True

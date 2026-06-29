@@ -192,20 +192,28 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         timeout_seconds: int = 300,
         wake_on: list[str] | None = None,
         since_event_id: str | None = None,
+        return_when_all_idle: bool = True,
     ) -> dict[str, Any]:
-        """Block until a terminal agent event arrives or the poll window expires.
+        """Block until a terminal agent event arrives, all agents finish, or the poll window expires.
 
         Returns terminal events (agent_completed/failed/blocked/aborted) plus
-        the current active session count. `poll_window_expired=True` means the
-        poll window elapsed with no terminal events — inspect `sessions` to
-        decide whether to nudge, abort, or keep waiting. Precondition: every
-        session you want to supervise must already have a running worker — i.e.
-        `search_start_agent_session` followed by a matching host-side
-        `Task(subagent_type=..., background=true, ...)` call. Calling wait
-        without launching Tasks first returns `poll_window_expired=True` with
-        no events and no real work done.
+        the current active session count.
+
+        Return conditions (any one triggers return):
+        1. A wake_on event arrives (default: agent_completed/failed/blocked/aborted)
+        2. All agent sessions are idle (active_count=0) when return_when_all_idle=true
+        3. timeout_seconds elapses (poll_window_expired=True)
+        4. timeout_seconds=0 returns immediately with current state
+
+        `poll_window_expired=True` means only the timeout fired — inspect `sessions`
+        to decide whether to nudge, abort, or keep waiting. When all agents finish
+        before timeout, `poll_window_expired=False` and `active_count=0`.
+
+        Precondition: every session you want to supervise must already have a
+        running worker — i.e. `search_start_agent_session` followed by a matching
+        host-side `Task(subagent_type=..., background=true, ...)` call.
         """
-        return tools.search_wait_agent_events(run_id, timeout_seconds, wake_on, since_event_id)
+        return tools.search_wait_agent_events(run_id, timeout_seconds, wake_on, since_event_id, return_when_all_idle)
 
     @mcp.tool()
     def search_submit_candidate(

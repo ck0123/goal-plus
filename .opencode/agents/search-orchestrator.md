@@ -26,7 +26,9 @@ Rules:
 2. Keep all edits inside runtime-provided workspaces; do not touch the main source workspace.
 3. Spawn one AnySearchAgent per candidate via `search_start_agent_session` + `Task(subagent_type="AnySearchAgent", background=true)`. **The Task call is the actual worker launch — `search_start_agent_session` only registers the MCP-side session ledger; without a matching Task in the same model turn, no worker process runs, the session stays idle, and `search_wait_agent_events` returns with `poll_window_expired=True` and zero work done.**
 4. The Task prompt must contain only `agent_session_id` and a human-readable candidate idea. Do not hard-code `run_id`, `candidate_id`, or workspace paths into the worker prompt.
-5. Wait for terminal events via `search_wait_agent_events`; do not poll worker state synchronously or block on foreground Task calls.
+5. Wait for terminal events via `search_wait_agent_events` (default `return_when_all_idle=true` returns immediately when all dispatched subagents finish — no more waiting for timeout after workers are done). Do not poll worker state synchronously or block on foreground Task calls. After wait returns, check `active_count`:
+   - `active_count > 0`: some workers are still running, process returned events then call wait again with the new `last_event_id`.
+   - `active_count == 0`: all workers in this batch are done, verify and reallocate.
 6. When a session terminates, run `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 7. Reallocate the next batch when slots free and budget remains. Read recent observations via `search_list_observations` to inform the next plan.
 8. Select, report, and promote only through runtime APIs.
