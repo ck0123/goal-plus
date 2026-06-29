@@ -200,3 +200,5 @@ The autonomous-search control plane represents each long-running subagent as an 
 The runtime owns durable pool, deadline, event, and observation state. `worker_timeout_seconds` is a runtime/session deadline, not an OpenCode Task timeout. Hard process/session cancellation still requires the host adapter to wire `search_abort_agent_session` to OpenCode's native abort for the child session; the MCP state transition is the control-plane source of truth.
 
 For the full walkthrough, see [toy-example.md](toy-example.md).
+
+For the per-step information flow — which agent sees which fields at each stage, and which OpenCode platform constraints gate the flow — see [flow-view.md](flow-view.md). That doc is the reference for designing strategy changes (evolve, mcts, hybrid) without building on APIs the platform does not actually expose.

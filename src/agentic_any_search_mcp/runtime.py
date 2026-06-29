@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -319,6 +320,8 @@ class FileSearchRuntime:
             plan = self._plan_evolve(run, frozen, requested_k, planned_k, remaining)
         elif mode in {"mcts", "mcts_mode"}:
             plan = self._plan_mcts(run, frozen, requested_k, planned_k, remaining)
+        elif mode in {"random", "random_mode"}:
+            plan = self._plan_random(run, frozen, requested_k, planned_k, remaining)
         elif mode in {"independent", "independent_branches"}:
             plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
         else:
@@ -1333,6 +1336,78 @@ class FileSearchRuntime:
                 "selection_rule": "best-score frontier placeholder",
                 "frontier_node": frontier.candidate_id,
                 "reason": "Builtin mcts-mode exposes the same plan contract; a full UCB tree policy can replace this planner.",
+            },
+            created_at=utc_timestamp(),
+        )
+
+    def _plan_random(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        records = self._load_candidate_records(run.run_id)
+        scored = self._scored_records(records)
+
+        if not scored:
+            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
+            plan.strategy_trace = {
+                "selection_rule": "random bootstrap",
+                "reason": "No verified parent exists yet, so the first generation starts from source.",
+            }
+            return plan
+
+        seed = frozen.spec.strategy.config.get("seed")
+        rng = random.Random(seed) if seed is not None else random
+        parent = rng.choice(scored)
+
+        work_orders = []
+        for slot in range(1, planned_k + 1):
+            work_orders.append(
+                CandidateWorkOrder(
+                    slot=slot,
+                    base_candidate_id=parent.candidate_id,
+                    parent_candidate_ids=[parent.candidate_id],
+                    inspiration_candidate_ids=[],
+                    intent=(
+                        f"Mutate randomly chosen parent `{parent.candidate_id}`; "
+                        "explore a different direction than the parent."
+                    ),
+                    hypothesis=f"Random mutation from {parent.candidate_id} slot {slot}",
+                    must_derive_from=[parent.candidate_id],
+                    metadata={
+                        "strategy": "random",
+                        "parent_score": parent.score_report.aggregate_score if parent.score_report else None,
+                    },
+                )
+            )
+
+        return SearchPlan(
+            run_id=run.run_id,
+            plan_id=self._next_plan_id(run),
+            strategy=frozen.spec.strategy,
+            requested_k=requested_k,
+            planned_k=planned_k,
+            remaining_budget=remaining,
+            requires_agent_proposals=False,
+            official_history=self._history_view(
+                run,
+                frozen,
+                frozen.spec.strategy.history_policy,
+                forced_candidate_ids=[parent.candidate_id],
+            ),
+            derivation_policy={
+                "base_workspace_source": f"candidate:{parent.candidate_id}",
+                "must_derive_from": [parent.candidate_id],
+            },
+            work_orders=work_orders,
+            strategy_trace={
+                "selection_rule": "random verified parent",
+                "parent_candidate_id": parent.candidate_id,
+                "seed": seed,
+                "reason": "Builtin random-mode picks one verified parent at random for the next generation.",
             },
             created_at=utc_timestamp(),
         )

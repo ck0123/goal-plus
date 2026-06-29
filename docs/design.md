@@ -62,7 +62,7 @@ FileSearchRuntime
 
 `StrategySpec` controls planning and execution:
 
-- `name`: strategy mode, for example `independent_branches`, `agent_guided`, `evolve`, or `mcts`
+- `name`: strategy mode, for example `independent_branches`, `agent_guided`, `evolve`, `mcts`, or `random`
 - `driver`: `builtin`, `python`, or `external_mcp`
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`
@@ -184,3 +184,7 @@ Workers must not modify denied files, frozen verifier artifacts, or the main sou
 ## Current Boundary
 
 The runtime records and enforces MCP-level session state, pool admission, and deadlines. Killing a currently running OpenCode child session still needs host integration: the host must translate `search_abort_agent_session` or `search_abort_all_agent_sessions` into native OpenCode session abort. Until that adapter is wired, abort is authoritative runtime state but not guaranteed process termination.
+
+## Information Flow Reference
+
+This doc covers the data model and state machine. For **which agent does which step, what each agent actually sees, and which OpenCode platform constraints gate the flow**, see [flow-view.md](flow-view.md). Consult it before designing strategy changes (evolve, mcts, hybrid) to avoid building on APIs the platform does not actually expose.

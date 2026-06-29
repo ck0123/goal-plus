@@ -619,6 +619,149 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
     assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 2\n"
 
 
+def test_random_strategy_gen1_independent_bootstrap(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(project, {"name": "random"}, max_candidates=4)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, 2)
+
+    assert plan.requires_agent_proposals is False
+    assert plan.strategy_trace["selection_rule"] == "random bootstrap"
+    assert "parent_candidate_id" not in plan.strategy_trace
+    assert plan.derivation_policy["base_workspace_source"] == "source"
+    assert len(plan.work_orders) == 2
+    assert all(wo.base_candidate_id is None for wo in plan.work_orders)
+
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    assert all(t.base_candidate_id is None for t in tasks)
+
+
+def test_random_strategy_gen2_picks_scored_parent_with_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {"name": "random", "config": {"seed": 42}},
+        max_candidates=4,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+    (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    for task in tasks:
+        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
+        runtime.submit_candidate(
+            run_id,
+            task.candidate_id,
+            ArtifactBundle(
+                candidate_id=task.candidate_id,
+                status="patch_ready",
+                agent_session_id=session.agent_session_id,
+            ),
+        )
+
+    def fake_run(*args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        score = 0.9 if cwd.name == "c002" else 0.1
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    plan = runtime.plan_next(run_id, 2)
+    followups = runtime.start_batch(run_id, plan.plan_id)
+
+    parent_id = plan.strategy_trace["parent_candidate_id"]
+    assert plan.strategy_trace["selection_rule"] == "random verified parent"
+    assert parent_id in {"c001", "c002"}
+    assert plan.strategy_trace["seed"] == 42
+    assert followups[0].base_candidate_id == parent_id
+    assert followups[0].parent_candidate_ids == [parent_id]
+    expected_value = "VALUE = 2\n" if parent_id == "c002" else "VALUE = 1\n"
+    assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == expected_value
+
+
+def test_random_strategy_gen2_without_seed_picks_scored_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(project, {"name": "random"}, max_candidates=4)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    tasks = runtime.next_batch(run_id, 2)
+    (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    for task in tasks:
+        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
+        runtime.submit_candidate(
+            run_id,
+            task.candidate_id,
+            ArtifactBundle(
+                candidate_id=task.candidate_id,
+                status="patch_ready",
+                agent_session_id=session.agent_session_id,
+            ),
+        )
+
+    def fake_run(*args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        score = 0.9 if cwd.name == "c002" else 0.1
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    plan = runtime.plan_next(run_id, 2)
+    followups = runtime.start_batch(run_id, plan.plan_id)
+
+    parent_id = plan.strategy_trace["parent_candidate_id"]
+    assert plan.strategy_trace["selection_rule"] == "random verified parent"
+    assert parent_id in {"c001", "c002"}
+    assert plan.strategy_trace["seed"] is None
+    assert followups[0].base_candidate_id == parent_id
+    assert followups[0].parent_candidate_ids == [parent_id]
+
+
+def test_random_strategy_name_normalizes_case_and_dash(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    for name in ("Random", "random-mode", "RANDOM_MODE"):
+        spec = spec_with_strategy(project, {"name": name}, max_candidates=4)
+        frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+        run_id = runtime.create_run(frozen.frozen_spec_id)
+
+        plan = runtime.plan_next(run_id, 2)
+
+        assert plan.strategy_trace["selection_rule"] == "random bootstrap"
+        assert plan.requires_agent_proposals is False
+
+
 def test_python_strategy_driver_can_return_standard_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

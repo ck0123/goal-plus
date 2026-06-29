@@ -75,7 +75,7 @@ Example specs currently use the default `independent_branches` strategy. To test
 }
 ```
 
-In `agent_guided`, `search_plan_next` returns a proposal contract and `search_start_batch` must receive explicit proposals. In `evolve`, the runtime selects a parent and inspirations, then starts candidate workspaces from the selected parent.
+In `agent_guided`, `search_plan_next` returns a proposal contract and `search_start_batch` must receive explicit proposals. In `evolve`, the runtime selects a parent and inspirations, then starts candidate workspaces from the selected parent. In `random`, the runtime picks one verified parent at random (seedable via `strategy.config.seed`) and starts each candidate workspace from that parent; the first batch bootstraps from source like `independent_branches`.
 
 ## Running an example
 
@@ -107,6 +107,30 @@ After both batches terminate, run run_verifier on c003 and c004 yourself (no age
 For each Task: pass only agent_session_id + the one-paragraph directive. Do not hard-code run_id/candidate_id/workspace. Use background: true for each Task (max_parallel=2 > 1).
 
 Report at the end: run_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
+```
+
+### circle_packing — random strategy, two batches
+
+Same fixture as above but the spec uses the `random` strategy so batch 2 derives from a runtime-picked parent instead of fresh source branches. Copy `circle_packing_search_spec.json` and set `"strategy": {"name": "random", "config": {"seed": 42}}` (seed optional; omit for non-deterministic parent pick).
+
+```
+Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash, worker_timeout_seconds=240; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+
+Batch 1 (c001, c002 in parallel — random bootstrap, both derive from source):
+  - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
+  - c002: square grid with shrink-to-fit (start uniform, iteratively shrink radii to remove overlaps and maximize sum)
+
+Wait for both to finish, run run_verifier on each, then plan_next(k=2) → start_batch for batch 2. The runtime will randomly pick one of {c001, c002} as the parent; batch 2 workspaces are copied from that parent.
+
+Batch 2 (c003, c004 in parallel — both mutate the runtime-picked parent):
+  - c003: concentric rings with optimized ring radii (try 1+6+12+7 or 1+8+16+1 type layouts, tune ring radii)
+  - c004: boundary-hugging approach (pack circles along the perimeter first, then fill center)
+
+After both batches terminate, run run_verifier on c003 and c004 yourself (no agent_session_id, auto-attribute), then select across all 4 candidates and report. Report strategy_trace.parent_candidate_id from the batch 2 plan so the random pick is visible.
+
+For each Task: pass only agent_session_id + the one-paragraph directive. Do not hard-code run_id/candidate_id/workspace. Use background: true for each Task (max_parallel=2 > 1).
+
+Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
 ```
 
 ### k_module — smoke test, AnySearchAgentFlash
