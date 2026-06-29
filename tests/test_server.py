@@ -32,7 +32,6 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_update_agent_status",
         "search_list_agent_status",
         "search_finish_agent_session",
-        "search_request_agent_finalize",
         "search_abort_agent_session",
         "search_abort_all_agent_sessions",
         "search_publish_observation",
@@ -43,7 +42,6 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_select",
         "search_report",
         "search_promote",
-        "search_abort",
     }
 
 
@@ -106,9 +104,6 @@ def test_create_mcp_constructs_runtime_with_configured_root(
         def search_finish_agent_session(self, *args, **kwargs):
             return {}
 
-        def search_request_agent_finalize(self, *args, **kwargs):
-            return {}
-
         def search_abort_agent_session(self, *args, **kwargs):
             return {}
 
@@ -137,9 +132,6 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return {}
 
         def search_promote(self, *args, **kwargs):
-            return {}
-
-        def search_abort(self, *args, **kwargs):
             return {}
 
     monkeypatch.setattr(server_module, "FileSearchRuntime", FakeRuntime)

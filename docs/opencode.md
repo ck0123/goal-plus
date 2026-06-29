@@ -171,7 +171,6 @@ search-runtime_search_get_agent_context
 search-runtime_search_update_agent_status
 search-runtime_search_list_agent_status
 search-runtime_search_finish_agent_session
-search-runtime_search_request_agent_finalize
 search-runtime_search_abort_agent_session
 search-runtime_search_abort_all_agent_sessions
 search-runtime_search_publish_observation
@@ -182,7 +181,6 @@ search-runtime_search_run_verifier
 search-runtime_search_select
 search-runtime_search_report
 search-runtime_search_promote
-search-runtime_search_abort
 ```
 
 ## Agent Session Pool
@@ -196,7 +194,7 @@ The autonomous-search control plane represents each long-running subagent as an 
 5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace. They may call `search_update_agent_status` sparingly after meaningful progress or when blocked, but should not do status heartbeats before the first file read. Shared findings can be published with `search_publish_observation`.
 6. The supervisor loop calls `search_wait_agent_events(run_id, timeout_seconds=300, since_event_id=<last_event_id>)` and feeds the returned `last_event_id` into the next wait call.
    It returns when a session completes/fails/blocks/times out, when the run deadline is reached, or when the wait timeout expires with a status snapshot.
-7. Completed sessions are finalized with `search_finish_agent_session`; stuck sessions can be nudged with `search_request_agent_finalize` or stopped with `search_abort_agent_session`.
+7. Completed sessions are finalized with `search_finish_agent_session`; stuck sessions are stopped with `search_abort_agent_session`.
 8. When the run budget is exhausted, call `search_abort_all_agent_sessions` and summarize/verify the best submitted candidates.
 
 The runtime owns durable pool, deadline, event, and observation state. `worker_timeout_seconds` is a runtime/session deadline, not an OpenCode Task timeout. Hard process/session cancellation still requires the host adapter to wire `search_abort_agent_session` to OpenCode's native abort for the child session; the MCP state transition is the control-plane source of truth.

@@ -272,7 +272,6 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_update_agent_status`
 - `search-runtime_search_list_agent_status`
 - `search-runtime_search_finish_agent_session`
-- `search-runtime_search_request_agent_finalize`
 - `search-runtime_search_abort_agent_session`
 - `search-runtime_search_abort_all_agent_sessions`
 - `search-runtime_search_publish_observation`
@@ -283,7 +282,6 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_select`
 - `search-runtime_search_report`
 - `search-runtime_search_promote`
-- `search-runtime_search_abort`
 
 The same methods are available through the Python `SearchTools` facade for unit tests and non-OpenCode hosts.
 

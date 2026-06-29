@@ -620,29 +620,6 @@ class FileSearchRuntime:
         )
         return updated
 
-    def request_agent_finalize(self, agent_session_id: str, reason: str = "") -> AgentSessionRecord:
-        session = self._load_agent_session_by_id(agent_session_id)
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            return session
-        now = utc_timestamp()
-        updated = session.model_copy(
-            update={
-                "status": AgentSessionStatus.FINALIZING.value,
-                "phase": AgentSessionPhase.FINALIZING.value,
-                "next_step": "submit best-so-far candidate or summarize why no candidate is available",
-                "updated_at": now,
-                "last_heartbeat_at": now,
-            }
-        )
-        self._write_agent_session(updated)
-        self._append_agent_event(
-            session.run_id,
-            "agent_finalize_requested",
-            agent_session_id,
-            {"reason": reason},
-        )
-        return updated
-
     def abort_agent_session(self, agent_session_id: str, reason: str = "") -> AgentSessionRecord:
         session = self._load_agent_session_by_id(agent_session_id)
         return self._abort_agent_session_record(session, reason)
@@ -1088,12 +1065,6 @@ class FileSearchRuntime:
         run.selected_candidate_id = candidate_id
         self._write_run(run)
         return patch_path
-
-    def abort(self, run_id: str, reason: str) -> None:
-        run = self._load_run(run_id)
-        run.state = RunState.ABORTED
-        run.budget_used["abort_reason"] = reason
-        self._write_run(run)
 
     def _strategy_mode(self, strategy: StrategySpec) -> str:
         return strategy.name.strip().lower().replace("-", "_")

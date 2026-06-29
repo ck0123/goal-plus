@@ -132,13 +132,6 @@ class SearchTools:
             result=result,
         ).model_dump(mode="json")
 
-    def search_request_agent_finalize(
-        self,
-        agent_session_id: str,
-        reason: str = "",
-    ) -> dict[str, Any]:
-        return self.runtime.request_agent_finalize(agent_session_id, reason).model_dump(mode="json")
-
     def search_abort_agent_session(
         self,
         agent_session_id: str,
@@ -246,7 +239,3 @@ class SearchTools:
 
     def search_promote(self, run_id: str, candidate_id: str) -> dict[str, str]:
         return {"artifact_path": str(self.runtime.promote(run_id, candidate_id))}
-
-    def search_abort(self, run_id: str, reason: str = "") -> dict[str, bool]:
-        self.runtime.abort(run_id, reason)
-        return {"aborted": True}

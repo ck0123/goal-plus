@@ -134,7 +134,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.update_agent_status.return_value = agent_session.model_copy(update={"phase": "implementing"})
     runtime.list_agent_status.return_value = [agent_session]
     runtime.finish_agent_session.return_value = agent_session.model_copy(update={"status": "completed"})
-    runtime.request_agent_finalize.return_value = agent_session.model_copy(update={"status": "finalizing"})
     runtime.abort_agent_session.return_value = agent_session.model_copy(update={"status": "aborted"})
     runtime.abort_all_agent_sessions.return_value = [agent_session.model_copy(update={"status": "aborted"})]
     runtime.publish_observation.return_value = AgentObservation(
@@ -216,7 +215,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     )["phase"] == "implementing"
     assert tools.search_list_agent_status("run_1")[0]["agent_session_id"] == "agent_001"
     assert tools.search_finish_agent_session("agent_001")["status"] == "completed"
-    assert tools.search_request_agent_finalize("agent_001", "deadline")["status"] == "finalizing"
     assert tools.search_abort_agent_session("agent_001", "stop")["status"] == "aborted"
     assert tools.search_abort_all_agent_sessions("run_1", "stop")["aborted"] == 1
     assert tools.search_publish_observation("agent_001", "found one issue")["observation_id"] == "obs_000001"
@@ -240,7 +238,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
     assert tools.search_promote("run_1", "c001") == {"artifact_path": "/tmp/c001.patch"}
-    assert tools.search_abort("run_1", "stop") == {"aborted": True}
 
     submit_result = tools.search_submit_candidate(
         "run_1",
@@ -252,7 +249,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert isinstance(artifact, ArtifactBundle)
     proposal_arg = runtime.start_batch.call_args.args[2][0]
     assert isinstance(proposal_arg, CandidateProposal)
-    runtime.abort.assert_called_once_with("run_1", "stop")
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
     runtime.plan_next.assert_called_once_with("run_1", requested_k=1)
     runtime.start_agent_session.assert_called_once_with(

@@ -147,11 +147,6 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         return tools.search_finish_agent_session(agent_session_id, status, summary, result)
 
     @mcp.tool()
-    def search_request_agent_finalize(agent_session_id: str, reason: str = "") -> dict[str, Any]:
-        """Main-agent nudge asking a still-running worker to wrap up and call finish."""
-        return tools.search_request_agent_finalize(agent_session_id, reason)
-
-    @mcp.tool()
     def search_abort_agent_session(agent_session_id: str, reason: str = "") -> dict[str, Any]:
         """Force-cancel one agent session. Does not kill the host worker process by itself."""
         return tools.search_abort_agent_session(agent_session_id, reason)
@@ -242,11 +237,6 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
     def search_promote(run_id: str, candidate_id: str) -> dict[str, str]:
         """Export the selected candidate as a patch. Does not mutate the main source workspace."""
         return tools.search_promote(run_id, candidate_id)
-
-    @mcp.tool()
-    def search_abort(run_id: str, reason: str = "") -> dict[str, bool]:
-        """Mark the whole run aborted. Use after aborting all agent sessions."""
-        return tools.search_abort(run_id, reason)
 
     return mcp
 

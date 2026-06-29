@@ -44,7 +44,6 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_update_agent_status` | `search-runtime_search_update_agent_status` |
 | `search_list_agent_status` | `search-runtime_search_list_agent_status` |
 | `search_finish_agent_session` | `search-runtime_search_finish_agent_session` |
-| `search_request_agent_finalize` | `search-runtime_search_request_agent_finalize` |
 | `search_abort_agent_session` | `search-runtime_search_abort_agent_session` |
 | `search_abort_all_agent_sessions` | `search-runtime_search_abort_all_agent_sessions` |
 | `search_publish_observation` | `search-runtime_search_publish_observation` |
@@ -56,7 +55,6 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_select` | `search-runtime_search_select` |
 | `search_report` | `search-runtime_search_report` |
 | `search_promote` | `search-runtime_search_promote` |
-| `search_abort` | `search-runtime_search_abort` |
 
 If these tools are unavailable, stop and report that the MCP server is not connected. Do not simulate runtime state in chat.
 
@@ -285,7 +283,7 @@ Promotion exports a patch and should not directly mutate the main source workspa
 | Run deadline reached | Abort all active sessions and report submitted candidates |
 | Verifier fails | Keep the failure in report; do not edit verifier |
 | No passing candidates | Report scores and failure classes; ask whether to run another batch |
-| User wants to stop | Call `search-runtime_search_abort_all_agent_sessions` then `search-runtime_search_abort` |
+| User wants to stop | Call `search-runtime_search_abort_all_agent_sessions(run_id)` to cancel all active sessions; no separate run-level abort tool exists |
 
 ## k_module Smoke Pattern
 
