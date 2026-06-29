@@ -182,7 +182,7 @@ For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 
 1. Start at most `budget.max_parallel` sessions.
 2. For each candidate, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive, budget)` to get `agent_session_id`.
-3. Launch the subagent with `Task(subagent_type="AnySearchAgent", prompt="<agent_session_id>; candidate idea: <one paragraph>")`.
+3. Launch the subagent with `Task(subagent_type="AnySearchAgent", prompt="<agent_session_id>; candidate idea: <one paragraph>")`. **This is the actual worker launch — `search_start_agent_session` only registers an MCP-side session record; without a matching `Task` call, no worker process runs, the session stays idle, and `search_wait_agent_events` will block until `worker_timeout_seconds` elapses with zero real work done.** Call Task in the **same model turn** as the `search_start_agent_session` that produced the `agent_session_id`, never in a later turn — otherwise the host will already be blocked in `wait_agent_events` while no worker exists.
 4. **If `budget.max_parallel == 1`**, foreground Task is fine — main blocks on the worker, no supervisor loop needed. Skip to step 7 when it returns.
 5. **If `budget.max_parallel > 1`**, Task must include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process). No `timeout` field exists on Task; the MCP supervisor loop enforces deadlines.
 6. Each AnySearchAgent runs an autoresearch-style loop inside its workspace: it self-iterates, calls `search_run_verifier` with its own `agent_session_id`, tracks git commits, and maintains a local `results.tsv`. You do not supervise iteration-level progress.

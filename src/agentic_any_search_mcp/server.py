@@ -55,6 +55,23 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         budget: dict[str, Any] | None = None,
         visibility_mode: str = "observations",
     ) -> dict[str, Any]:
+        """Register an agent session record for a candidate. Does NOT start a worker.
+
+        This only creates the MCP-side session ledger entry (deadline, heartbeat
+        counter, candidate binding). Without a matching `Task(subagent_type=<worker_agent_type>, ...)`
+        call from the host, no worker process runs, the session stays idle, and
+        `search_wait_agent_events` will block until `worker_timeout_seconds`
+        elapses with no actual work done.
+
+        Immediately after this returns `agent_session_id`, the host must launch
+        the worker via Task in the same model turn:
+          Task(subagent_type="<worker_agent_type>",
+               prompt=f"agent_session_id={agent_session_id}; <one-paragraph idea>")
+
+        The Task prompt must contain only `agent_session_id` and a human-readable
+        candidate idea — never hard-code `run_id`, `candidate_id`, or workspace
+        paths; the worker derives those from `search_get_agent_context`.
+        """
         return tools.search_start_agent_session(
             run_id,
             candidate_id,
@@ -151,6 +168,16 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         wake_on: list[str] | None = None,
         since_event_id: str | None = None,
     ) -> dict[str, Any]:
+        """Block until a terminal agent event arrives or the poll window expires.
+
+        Returns terminal events (agent_completed/failed/blocked/aborted/timed_out,
+        run_deadline) plus the current active session count. Precondition: every
+        session you want to supervise must already have a running worker — i.e.
+        `search_start_agent_session` followed by a matching host-side
+        `Task(subagent_type=..., background=true, ...)` call. Calling wait
+        without launching Tasks first produces only `agent_timed_out` events
+        after the full `worker_timeout_seconds` window, with no real work done.
+        """
         return tools.search_wait_agent_events(run_id, timeout_seconds, wake_on, since_event_id)
 
     @mcp.tool()

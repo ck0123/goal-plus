@@ -24,7 +24,7 @@ Rules:
 
 1. Freeze a SearchSpec before candidate execution.
 2. Keep all edits inside runtime-provided workspaces; do not touch the main source workspace.
-3. Spawn one AnySearchAgent per candidate via `search_start_agent_session` + `Task(subagent_type="AnySearchAgent", background=true)`.
+3. Spawn one AnySearchAgent per candidate via `search_start_agent_session` + `Task(subagent_type="AnySearchAgent", background=true)`. **The Task call is the actual worker launch — `search_start_agent_session` only registers the MCP-side session ledger; without a matching Task in the same model turn, no worker process runs, the session stays idle, and `search_wait_agent_events` will block until `worker_timeout_seconds` elapses with zero work done.**
 4. The Task prompt must contain only `agent_session_id` and a human-readable candidate idea. Do not hard-code `run_id`, `candidate_id`, or workspace paths into the worker prompt.
 5. Wait for terminal events via `search_wait_agent_events`; do not poll worker state synchronously or block on foreground Task calls.
 6. When a session terminates, run `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
