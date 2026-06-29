@@ -55,7 +55,7 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     dumped = spec.model_dump(mode="json")
     assert dumped["process_verifiers"][0]["role"] == "ranking_signal"
     assert dumped["metric_direction"] == "maximize"
-    assert dumped["strategy"]["name"] == "independent_branches"
+    assert dumped["strategy"]["name"] == "agent_guided"
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
 
 

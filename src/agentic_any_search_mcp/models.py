@@ -106,7 +106,7 @@ class HistoryPolicy(SearchModel):
 
 
 class StrategySpec(SearchModel):
-    name: str = "independent_branches"
+    name: str = "agent_guided"
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
     ref: str | None = None
     agent_role: str = "planner_and_mutator"

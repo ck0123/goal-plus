@@ -58,7 +58,7 @@ tests/fixtures/swe_bench_20212/evaluator.py
 
 ## Strategy Modes
 
-Example specs currently use the default `independent_branches` strategy. To test strategy-aware follow-up behavior, add a structured strategy block to a copied spec:
+The default strategy is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch (pick parents, write one proposal per slot). The bundled example specs pin `independent_branches` to keep their demo flows independent of history; switch a copied spec to other modes by setting `strategy.name`:
 
 ```json
 {
@@ -72,7 +72,21 @@ Example specs currently use the default `independent_branches` strategy. To test
 }
 ```
 
-In `agent_guided`, `search_plan_next` returns a proposal contract and `search_start_batch` must receive explicit proposals. In `evolve`, the runtime selects a parent and inspirations, then starts candidate workspaces from the selected parent. In `random`, the runtime picks one verified parent at random (seedable via `strategy.config.seed`) and starts each candidate workspace from that parent; the first batch bootstraps from source like `independent_branches`.
+Comparison:
+
+| Strategy | Parent picker | `requires_agent_proposals` | First batch | Use when |
+|---|---|---|---|---|
+| `agent_guided` (default) | Main agent | `true` | Empty history → no reference constraint, proposals may start from source | Let the main agent judge which prior candidates to build on |
+| `independent_branches` | None — all from source | `false` | All from source | Baseline, no lineage |
+| `evolve` | Runtime: best-score parent + top-N inspirations | `false` | Bootstrap from source | OpenEvolve-style fixed parent selection |
+| `mcts` | Runtime: best-score frontier | `false` | Bootstrap from source | MCTS-style expansion (placeholder planner) |
+| `random` | Runtime: random scored parent (seedable via `strategy.config.seed`) | `false` | Bootstrap from source | Cheap random-walk baseline |
+
+Notes:
+
+- In `agent_guided`, `search_plan_next` returns `proposal_contract.must_reference_one_of` listing the candidate_ids each proposal must cite. The first batch has empty history so the constraint is empty; from the second batch on every proposal must reference at least one official candidate.
+- In `evolve` / `mcts` / `random`, the runtime selects the parent internally and emits fixed `work_orders`; `search_start_batch` must be called without proposals.
+- `independent_branches` ignores history entirely — every candidate starts from the frozen source workspace.
 
 ## Running an example
 

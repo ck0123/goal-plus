@@ -102,7 +102,7 @@ Minimum shape:
     "max_parallel": 2
   },
   "strategy": {
-    "name": "independent_branches",
+    "name": "agent_guided",
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
@@ -171,6 +171,15 @@ search-runtime_search_start_batch(run_id="<run_id>", plan_id="<plan_id>", propos
 
 Each returned `CandidateTask` owns an isolated workspace. Candidate work must stay inside that workspace and only modify allowed files.
 
+The default strategy is `agent_guided`, so `plan.requires_agent_proposals` is `true`. You MUST author `plan.planned_k` proposals and pass them to `search_start_batch`:
+
+- Read `plan.official_history.candidates` — each entry carries `candidate_id`, `parent_ids`, `hypothesis`, `intent`, `summary`, `next_ideas`, `key_metrics`, `score`, and `changed_files`.
+- Read `plan.proposal_contract`: `count` is the required number of proposals, `must_reference_one_of` lists the candidate_ids each proposal must cite via `parent_candidate_ids` / `history_refs` / `base_candidate_id`.
+- For each proposal, decide which prior candidate(s) to build on and write `intent` (one short sentence on the mutation direction), `expected_tradeoff` (what improves / what risks regressing), `instructions` (concrete steps the worker should follow), and `parent_candidate_ids` / `base_candidate_id` (which workspace to derive from).
+- First batch (empty history): `must_reference_one_of` is empty, so proposals may set `base_candidate_id=null` and start from source. From the second batch on, every proposal must reference at least one official candidate.
+
+If you switch the spec to a builtin that produces fixed work orders (`independent_branches`, `evolve`, `mcts`, `random`), `plan.requires_agent_proposals` is `false` and `search_start_batch` must be called without proposals.
+
 ### Step 5: Dispatch Autoresearcher Sessions
 
 For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
@@ -217,7 +226,11 @@ while pending_candidates or active_sessions:
   if not pending_candidates and budget_remaining and active_count == 0:
     observations = search_list_observations(run_id, top_n=20)
     plan = search_plan_next(run_id, requested_k=k)
-    tasks = search_start_batch(run_id, plan.plan_id)
+    if plan.requires_agent_proposals:
+      proposals = author_proposals(plan)  # read official_history + proposal_contract, write planned_k proposals
+      tasks = search_start_batch(run_id, plan.plan_id, proposals=proposals)
+    else:
+      tasks = search_start_batch(run_id, plan.plan_id)
     pending_candidates = [t.candidate_id for t in tasks]
 
   if wait.poll_window_expired:

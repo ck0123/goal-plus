@@ -56,6 +56,7 @@ def spec_for(project: Path, *, max_candidates: int = 4, direction: str = "maximi
                     "timeout_seconds": 30,
                 }
             ],
+            "strategy": {"name": "independent_branches"},
         }
     )
 

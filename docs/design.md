@@ -62,7 +62,7 @@ FileSearchRuntime
 
 `StrategySpec` controls planning and execution:
 
-- `name`: strategy mode, for example `independent_branches`, `agent_guided`, `evolve`, `mcts`, or `random`
+- `name`: strategy mode, default `agent_guided`; alternatives `independent_branches`, `evolve`, `mcts`, `random`
 - `driver`: `builtin`, `python`, or `external_mcp`
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`

@@ -87,6 +87,7 @@ def spec_for(project: Path) -> dict:
             "full target",
             "cheat by touching evaluator",
         ],
+        "strategy": {"name": "independent_branches"},
     }
 
 
