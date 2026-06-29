@@ -10,7 +10,7 @@ The current design is centered on a supervisor loop:
 - create isolated candidate workspaces
 - plan the next candidate batch
 - start managed agent sessions up to `budget.max_parallel`
-- wait for session events or deadlines
+- wait for session events
 - abort/finalize stuck sessions
 - verify submitted candidates through runtime-owned checks
 - select, report, and optionally promote
@@ -66,7 +66,6 @@ FileSearchRuntime
 - `driver`: `builtin`, `python`, or `external_mcp`
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`
-- `worker_timeout_seconds`: default per-session wall-clock budget
 - `history_policy`, `parent_policy`, and `config`: strategy-specific controls
 
 Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) are normalized to `agent-session-pool` at parse time so legacy specs keep working.
@@ -77,7 +76,7 @@ Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-sea
 
 `AgentSessionRecord` is produced by `search_start_agent_session`. It records a durable subagent session: candidate id, directive, workspace, status/phase, heartbeat, budget, counters, summary, and result.
 
-`AgentSessionEvent` records session lifecycle and supervisor wakeups: started, status updated, blocked, finalize requested, completed, failed, aborted, timed out, observation published, and run deadline.
+`AgentSessionEvent` records session lifecycle and supervisor wakeups: started, status updated, blocked, completed, failed, aborted, observation published.
 
 `ArtifactBundle` is submitted after a candidate workspace is ready. In `agent-session-pool` mode it must include the producing `agent_session_id`. Runtime verifier results, not artifact summaries, determine scores.
 
@@ -139,9 +138,7 @@ search_promote
 
 `budget.max_parallel` limits active agent sessions and is enforced by `search_start_agent_session`.
 
-`budget.wall_clock_seconds` is the run-level deadline. `search_wait_agent_events` wakes on `run_deadline`, and the supervisor should call `search_abort_all_agent_sessions` before reporting submitted candidates.
-
-`strategy.worker_timeout_seconds` or `budget.max_worker_seconds` defines the MCP per-session wall-clock budget. Runtime truncates session deadlines to remaining run time. For OpenCode hosts, this is not a `Task` timeout parameter; the main agent must keep control through `Task(background=true)` and enforce the deadline in the supervisor loop.
+There are no time-based deadlines. Subagents run until their OpenCode step cap (15/50/100/150, set by `strategy.worker_agent_type`) hits or until the supervisor aborts them via `search_abort_agent_session` / `search_abort_all_agent_sessions`. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
 
 ## Supervisor Responsibilities
 
@@ -153,7 +150,7 @@ The host agent must not hide long-running work inside foreground subagent calls.
 4. Verify completed candidates.
 5. Start more sessions when slots free and candidate budget remains.
 6. Request finalization for stale or blocked sessions when useful.
-7. Abort individual sessions or all sessions when budgets are exhausted.
+7. Abort individual sessions or all sessions when the user wants to stop or you are done supervising.
 
 The MCP runtime records the authoritative control-plane state. Actual OS/process-level cancellation requires the host adapter to wire runtime abort requests to the host's native child-session abort.
 
@@ -183,7 +180,7 @@ Workers must not modify denied files, frozen verifier artifacts, or the main sou
 
 ## Current Boundary
 
-The runtime records and enforces MCP-level session state, pool admission, and deadlines. Killing a currently running OpenCode child session still needs host integration: the host must translate `search_abort_agent_session` or `search_abort_all_agent_sessions` into native OpenCode session abort. Until that adapter is wired, abort is authoritative runtime state but not guaranteed process termination.
+The runtime records and enforces MCP-level session state and pool admission. Killing a currently running OpenCode child session still needs host integration: the host must translate `search_abort_agent_session` or `search_abort_all_agent_sessions` into native OpenCode session abort. Until that adapter is wired, abort is authoritative runtime state but not guaranteed process termination.
 
 ## Information Flow Reference
 

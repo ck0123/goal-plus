@@ -414,10 +414,6 @@ class FileSearchRuntime:
         if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
             raise RuntimeError(f"cannot start agent session from state {run.state}")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
-        self._refresh_agent_session_deadlines(run_id)
-        if self._run_deadline_reached(run, frozen):
-            self.abort_all_agent_sessions(run_id, "run budget exhausted")
-            raise RuntimeError("run budget exhausted")
 
         active_count = self._active_agent_session_count(run_id)
         if active_count >= frozen.spec.budget.max_parallel:
@@ -430,30 +426,8 @@ class FileSearchRuntime:
             workspace = candidate_record.task.workspace
 
         requested_budget = dict(budget or {})
-        remaining_seconds = self._remaining_run_seconds(run, frozen)
-        if remaining_seconds <= 0:
-            self.abort_all_agent_sessions(run_id, "run budget exhausted")
-            raise RuntimeError("run budget exhausted")
-        requested_wall_seconds = int(
-            requested_budget.get("max_wall_seconds")
-            or frozen.spec.budget.max_worker_seconds
-            or frozen.spec.strategy.worker_timeout_seconds
-        )
-        if requested_wall_seconds <= 0:
-            raise ValueError("max_wall_seconds must be > 0")
-        max_wall_seconds = max(1, min(requested_wall_seconds, remaining_seconds))
-        deadline_epoch = min(time.time() + max_wall_seconds, self._run_deadline_epoch(run, frozen))
-        deadline_at = utc_timestamp_from_epoch(deadline_epoch)
-
-        session_budget = AgentSessionBudget.model_validate(
-            {
-                "max_wall_seconds": max_wall_seconds,
-                "deadline_at": deadline_at,
-                "heartbeat_interval_seconds": requested_budget.get("heartbeat_interval_seconds", 30),
-                "stale_after_seconds": requested_budget.get("stale_after_seconds", 90),
-                "finalize_before_seconds": requested_budget.get("finalize_before_seconds", 30),
-                "grace_seconds": requested_budget.get("grace_seconds", 30),
-            }
+        session_budget = AgentSessionBudget(
+            stale_after_seconds=requested_budget.get("stale_after_seconds", 90),
         )
 
         agent_session_id = self._make_agent_session_id(run_id, run.next_agent_session_index)
@@ -482,8 +456,6 @@ class FileSearchRuntime:
             agent_session_id,
             {
                 "candidate_id": candidate_id,
-                "deadline_at": session_budget.deadline_at,
-                "max_wall_seconds": session_budget.max_wall_seconds,
                 "active_count": active_count + 1,
                 "max_concurrent_agents": frozen.spec.budget.max_parallel,
             },
@@ -513,7 +485,6 @@ class FileSearchRuntime:
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
-            "run_deadline_at": utc_timestamp_from_epoch(self._run_deadline_epoch(run, frozen)),
             "candidate_task": candidate_record.task.model_dump(mode="json") if candidate_record else None,
             "history": self.list_history(session.run_id, top_n=5, sort_by="score"),
             "peer_status": [
@@ -584,7 +555,6 @@ class FileSearchRuntime:
         return updated
 
     def list_agent_status(self, run_id: str, include_stale: bool = True) -> list[AgentSessionRecord]:
-        self._refresh_agent_session_deadlines(run_id)
         sessions = self._load_agent_sessions(run_id)
         if include_stale:
             return sessions
@@ -728,14 +698,10 @@ class FileSearchRuntime:
                 "agent_failed",
                 "agent_blocked",
                 "agent_aborted",
-                "agent_timed_out",
-                "run_deadline",
             ]
         )
         deadline = time.time() + timeout_seconds
         while True:
-            run_deadline_reached = self._enforce_run_deadline(run_id)
-            self._refresh_agent_session_deadlines(run_id)
             event_log = self._load_agent_events(run_id)
             events = [
                 event
@@ -743,13 +709,12 @@ class FileSearchRuntime:
                 if event.type in wake_set
                 and (since_event_id is None or event.event_id > since_event_id)
             ]
-            if events or run_deadline_reached or timeout_seconds == 0 or time.time() >= deadline:
+            if events or timeout_seconds == 0 or time.time() >= deadline:
                 sessions = self._load_agent_sessions(run_id)
                 frozen = self._load_frozen_spec(self._load_run(run_id).frozen_spec_id)
                 return AgentSessionWaitResult(
                     run_id=run_id,
-                    timed_out=not events and not run_deadline_reached,
-                    run_deadline_reached=run_deadline_reached,
+                    poll_window_expired=not events,
                     last_event_id=event_log[-1].event_id if event_log else since_event_id,
                     events=events,
                     sessions=sessions,
@@ -780,7 +745,6 @@ class FileSearchRuntime:
                 raise ValueError("artifact agent_session_id does not belong to this candidate")
             if session.status in {
                 AgentSessionStatus.ABORTED.value,
-                AgentSessionStatus.TIMED_OUT.value,
             }:
                 raise RuntimeError(
                     f"cannot submit artifact from {session.status} agent session"
@@ -1037,14 +1001,14 @@ class FileSearchRuntime:
                     "",
                     "## Agent Sessions",
                     "",
-                    "| Session | Candidate | Status | Phase | Deadline | Summary |",
-                    "|---|---|---|---|---|---|",
+                    "| Session | Candidate | Status | Phase | Summary |",
+                    "|---|---|---|---|---|",
                 ]
             )
             for session in agent_sessions:
                 lines.append(
                     f"| `{session.agent_session_id}` | `{session.candidate_id or ''}` | "
-                    f"{session.status} | {session.phase} | `{session.budget.deadline_at}` | "
+                    f"{session.status} | {session.phase} | "
                     f"{self._markdown_cell(session.summary)} |"
                 )
         lines.append("")
@@ -1078,10 +1042,9 @@ class FileSearchRuntime:
             "configured_mode": strategy.worker_mode,
             "worker_agent_type": strategy.worker_agent_type,
             "subagent_type": strategy.worker_agent_type,
-            "timeout_seconds": strategy.worker_timeout_seconds,
             "collection_rule": (
-                "Collect or salvage a best-so-far artifact by the worker deadline; "
-                "do not leave dispatched candidates unsubmitted."
+                "Collect or salvage a best-so-far artifact when your OpenCode step budget "
+                "is nearly exhausted; do not leave dispatched candidates unsubmitted."
             ),
             "directive_rule": (
                 "Worker directives should describe the candidate idea and deliverable, not score "
@@ -1580,7 +1543,6 @@ class FileSearchRuntime:
             "You may git init, git add, git commit, git reset, git restore, and git checkout INSIDE this workspace to advance and revert iterations.",
             "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
             "Candidate execution must be tracked by search_start_agent_session.",
-            f"Agent session wall-clock budget defaults to {plan.worker_policy['timeout_seconds']} seconds and is capped by the remaining run budget.",
             "Candidate artifacts must include the producing agent_session_id.",
             "Iterate freely within your OpenCode step budget; each run_verifier call records an iteration. When steps run out OpenCode will ask you to summarize and stop.",
             "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed.",
@@ -1607,9 +1569,7 @@ class FileSearchRuntime:
             denied_files=frozen.spec.edit_surface.deny,
             instructions=instructions,
             expected_artifacts=["patch", "notes", "logs"],
-            stop_conditions={
-                "max_worker_seconds": frozen.spec.budget.max_worker_seconds,
-            },
+            stop_conditions={},
             proposal=proposal,
             strategy_metadata={
                 "strategy": plan.strategy.name,
@@ -2030,7 +1990,6 @@ class FileSearchRuntime:
                 "phase": session.phase,
                 "created_at": session.created_at,
                 "updated_at": session.updated_at,
-                "deadline_at": session.budget.deadline_at,
                 "directive": session.directive,
                 "summary": session.summary,
             }
@@ -2107,15 +2066,6 @@ class FileSearchRuntime:
     def _observation_dir(self, run_id: str) -> Path:
         return self._run_dir(run_id) / "observations"
 
-    def _run_deadline_epoch(self, run: RunRecord, frozen: FrozenSpec) -> float:
-        return parse_utc_timestamp(run.created_at) + frozen.spec.budget.wall_clock_seconds
-
-    def _run_deadline_reached(self, run: RunRecord, frozen: FrozenSpec) -> bool:
-        return time.time() >= self._run_deadline_epoch(run, frozen)
-
-    def _remaining_run_seconds(self, run: RunRecord, frozen: FrozenSpec) -> int:
-        return max(0, int(self._run_deadline_epoch(run, frozen) - time.time()))
-
     def _active_agent_session_count(self, run_id: str) -> int:
         return len(
             [
@@ -2130,46 +2080,6 @@ class FileSearchRuntime:
         if session.status in TERMINAL_AGENT_SESSION_STATUSES:
             return False
         return time.time() - parse_utc_timestamp(session.last_heartbeat_at) > session.budget.stale_after_seconds
-
-    def _refresh_agent_session_deadlines(self, run_id: str) -> None:
-        now = time.time()
-        for session in self._load_agent_sessions(run_id):
-            if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-                continue
-            if now < parse_utc_timestamp(session.budget.deadline_at):
-                continue
-            updated = session.model_copy(
-                update={
-                    "status": AgentSessionStatus.TIMED_OUT.value,
-                    "phase": AgentSessionPhase.IDLE.value,
-                    "updated_at": utc_timestamp(),
-                    "summary": "agent session exceeded its hard deadline",
-                }
-            )
-            self._write_agent_session(updated)
-            self._append_agent_event(
-                run_id,
-                "agent_timed_out",
-                session.agent_session_id,
-                {"deadline_at": session.budget.deadline_at},
-            )
-
-    def _enforce_run_deadline(self, run_id: str) -> bool:
-        run = self._load_run(run_id)
-        frozen = self._load_frozen_spec(run.frozen_spec_id)
-        if not self._run_deadline_reached(run, frozen):
-            return False
-        active_count = self._active_agent_session_count(run_id)
-        if active_count > 0:
-            self.abort_all_agent_sessions(run_id, "run budget exhausted")
-        self._append_agent_event(
-            run_id,
-            "run_deadline",
-            None,
-            {"run_deadline_at": utc_timestamp_from_epoch(self._run_deadline_epoch(run, frozen))},
-            dedupe_type=True,
-        )
-        return True
 
     def _append_agent_event(
         self,

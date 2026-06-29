@@ -1,5 +1,7 @@
 # Search Design Balance
 
+> **Deprecation notice (2026-06-29):** This doc originally described a soft/hard deadline + `late_submission` model for agent sessions. **That model was never fully implemented and has been removed.** The runtime now has **no per-session or run-level time deadlines**. Subagents run until their OpenCode step cap (15/50/100/150) hits or the supervisor aborts them via `search_abort_agent_session` / `search_abort_all_agent_sessions`. `stale_after_seconds` remains as a heartbeat-health check only. Sections below still describe the old deadline framing as historical design context; treat the "no deadlines" model in `docs/design.md` / `docs/flow-view.md` as authoritative.
+
 ## 核心修正
 
 需要重新考虑当前方案的中心假设。
@@ -572,11 +574,13 @@ verify submitted candidates
 
 ## Timeout 的语义要明确
 
-当前 `worker_timeout_seconds` 是 MCP supervisor deadline：到点后 main agent 应该收集或放弃结果，并通过 runtime 状态标记 finalizing/timed_out/aborted。它不是 OpenCode `Task` 的 `timeout` 参数。
+> **Update (2026-06-29):** The three-tier `soft_deadline` / `hard_deadline` / `stale_timeout` model below was never implemented and has been removed. The runtime now enforces **no per-session or run-level time deadlines**. This section is kept as historical design context.
 
-只要 OpenCode 用 `Task(background=true)` 启动 subagent，main agent 就不会被 worker 阻塞；它可以每隔一段时间调用 `search_wait_agent_events`，超过 10 分钟就决定 request finalize、abort runtime session、验证已提交结果或停止整个 run。真正把后台 OpenCode child session 硬 kill 仍需要 host/native abort 接线，但这不是 main agent 可管理全局预算的前提。
+当前 runtime 不再有 per-session 或 run-level time deadline。Subagents run until their OpenCode step cap (15/50/100/150) hits or the supervisor aborts them via `search_abort_agent_session` / `search_abort_all_agent_sessions`. `stale_after_seconds` is a heartbeat-health check only — if a session stops heartbeating for that long, the supervisor can nudge or abort it, but the runtime does not auto-terminate it.
 
-新设计里建议明确区分三种 timeout：
+OpenCode `Task` has no `timeout` parameter. The supervisor loop polls `search_wait_agent_events`, which returns `poll_window_expired=True` when the poll window elapses with no terminal events; the supervisor then decides whether to keep waiting, nudge, or abort. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
+
+历史设计（已废弃，仅作参考）曾建议区分三种 timeout：
 
 ```text
 soft_deadline:
@@ -589,12 +593,7 @@ stale_timeout:
   超过一段时间没有 heartbeat/status update，supervisor 标记 stale 并决定 nudge/cancel。
 ```
 
-这样 `timeout_seconds` 不再是含混字段，而是：
-
-- `deadline_at`：预算时间点。
-- `finalize_before_seconds`：提前多少秒进入 finalizing。
-- `grace_seconds`：允许总结/提交的宽限。
-- `stale_after_seconds`：观测层的卡死判断。
+这套三层模型在代码里只实现了硬 deadline 的 `TIMED_OUT` 标记，`finalize_before_seconds` / `grace_seconds` / `late_submission` 都是只写不读的死字段，已在 2026-06-29 的清理中删除。`stale_after_seconds` 保留（有真实读取 `_agent_session_is_stale`）。
 
 ## 对当前 MCP API 的直接改动建议
 

@@ -37,7 +37,6 @@ def spec_dict() -> dict:
         "budget": {
             "max_candidates": 4,
             "max_parallel": 2,
-            "wall_clock_seconds": 300,
         },
         "process_verifiers": [
             {
@@ -77,7 +76,7 @@ def test_search_freeze_spec_converts_input_and_serializes_output() -> None:
 
 def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime = Mock()
-    agent_budget = AgentSessionBudget(max_wall_seconds=120, deadline_at="2026-06-24T00:02:00Z")
+    agent_budget = AgentSessionBudget(stale_after_seconds=90)
     agent_session = AgentSessionRecord(
         agent_session_id="agent_001",
         run_id="run_1",
@@ -151,7 +150,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     ]
     runtime.wait_agent_events.return_value = AgentSessionWaitResult(
         run_id="run_1",
-        timed_out=False,
+        poll_window_expired=False,
         events=[
             AgentSessionEvent(
                 event_id="event_000001",
@@ -205,7 +204,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "run_1",
         "c001",
         {"goal": "try one"},
-        {"max_wall_seconds": 120},
+        {},
     )["agent_session_id"] == "agent_001"
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
     assert tools.search_update_agent_status(
@@ -255,6 +254,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         run_id="run_1",
         candidate_id="c001",
         directive={"goal": "try one"},
-        budget={"max_wall_seconds": 120},
+        budget={},
         visibility_mode="observations",
     )

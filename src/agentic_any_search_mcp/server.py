@@ -72,11 +72,12 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
     ) -> dict[str, Any]:
         """Register an agent session record for a candidate. Does NOT start a worker.
 
-        This only creates the MCP-side session ledger entry (deadline, heartbeat
-        counter, candidate binding). Without a matching `Task(subagent_type=<worker_agent_type>, ...)`
-        call from the host, no worker process runs, the session stays idle, and
-        `search_wait_agent_events` will block until `worker_timeout_seconds`
-        elapses with no actual work done.
+        This only creates the MCP-side session ledger entry (candidate binding,
+        heartbeat health window). Without a matching
+        `Task(subagent_type=<worker_agent_type>, ...)` call from the host, no
+        worker process runs, the session stays idle, and
+        `search_wait_agent_events` returns with `poll_window_expired=True` and
+        no events.
 
         Immediately after this returns `agent_session_id`, the host must launch
         the worker via Task in the same model turn:
@@ -116,7 +117,7 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         status: str | None = None,
         heartbeat: bool = True,
     ) -> dict[str, Any]:
-        """Worker heartbeat + phase/goal update. Keeps the session's deadline alive."""
+        """Worker heartbeat + phase/goal update. Refreshes the session's heartbeat so stale detection does not flag it."""
         return tools.search_update_agent_status(
             agent_session_id,
             phase,
@@ -133,7 +134,7 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
         run_id: str,
         include_stale: bool = True,
     ) -> list[dict[str, Any]]:
-        """Read-only list of agent sessions with status, phase, deadline, heartbeat."""
+        """Read-only list of agent sessions with status, phase, heartbeat."""
         return tools.search_list_agent_status(run_id, include_stale)
 
     @mcp.tool()
@@ -153,7 +154,7 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
 
     @mcp.tool()
     def search_abort_all_agent_sessions(run_id: str, reason: str = "") -> dict[str, Any]:
-        """Abort every active session in the run. Call before reporting when the run deadline hits."""
+        """Abort every active session in the run. Call when the user wants to stop, or before reporting when you are done supervising."""
         return tools.search_abort_all_agent_sessions(run_id, reason)
 
     @mcp.tool()
@@ -194,13 +195,15 @@ def create_mcp(root_dir: str | Path = ".search") -> FastMCP:
     ) -> dict[str, Any]:
         """Block until a terminal agent event arrives or the poll window expires.
 
-        Returns terminal events (agent_completed/failed/blocked/aborted/timed_out,
-        run_deadline) plus the current active session count. Precondition: every
+        Returns terminal events (agent_completed/failed/blocked/aborted) plus
+        the current active session count. `poll_window_expired=True` means the
+        poll window elapsed with no terminal events — inspect `sessions` to
+        decide whether to nudge, abort, or keep waiting. Precondition: every
         session you want to supervise must already have a running worker — i.e.
         `search_start_agent_session` followed by a matching host-side
         `Task(subagent_type=..., background=true, ...)` call. Calling wait
-        without launching Tasks first produces only `agent_timed_out` events
-        after the full `worker_timeout_seconds` window, with no real work done.
+        without launching Tasks first returns `poll_window_expired=True` with
+        no events and no real work done.
         """
         return tools.search_wait_agent_events(run_id, timeout_seconds, wake_on, since_event_id)
 

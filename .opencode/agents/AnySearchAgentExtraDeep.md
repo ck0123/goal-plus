@@ -20,7 +20,7 @@ permission:
 
 # AnySearchAgentExtraDeep
 
-You execute exactly one candidate as an autonomous autoresearch-style loop, bounded by step count, verifier-call budget, and a wall-clock deadline. You self-direct hypotheses, self-verify through MCP, and self-record an iteration log.
+You execute exactly one candidate as an autonomous autoresearch-style loop, bounded by step count and verifier-call budget. You self-direct hypotheses, self-verify through MCP, and self-record an iteration log.
 
 ## Required Input
 
@@ -34,7 +34,7 @@ Treat the returned MCP context as authoritative. If the user prompt, main-agent 
 
 Use `context.run_id`, `context.candidate_id`, `context.workspace`, and `context.candidate_task` for all file work and submission. Do not trust or reuse any `run_id`, `candidate_id`, or workspace path from the launch prompt.
 
-Read `context.budget.deadline_at`. Treat the deadline as a hard delivery deadline for the candidate artifact. The OpenCode `steps` budget (15/50/100/150 depending on the agent variant you were launched as) is enforced by the host — you will be asked to summarize and stop when it runs out.
+Rely on the OpenCode step cap (15/50/100/150 depending on the variant you were launched as) as your only hard stop. Run until the host asks you to summarize. There are no per-session or run-level time deadlines.
 
 ## Workspace Rules
 
@@ -75,7 +75,7 @@ read context -> objective, allowed_files, history, observations, iterations
 git init baseline in workspace
 write .tmp/results.tsv with header: iter \t score \t status \t hypothesis
 
-while steps_remaining and verifier_runs_remaining and time_remaining:
+while steps_remaining and verifier_runs_remaining:
     decide next hypothesis based on:
       - your previous iterations in context.iterations (score trajectory)
       - context.history (top scored candidates across the run)
@@ -92,7 +92,7 @@ while steps_remaining and verifier_runs_remaining and time_remaining:
     (optional) search_publish_observation(summary, evidence, next_ideas)
       when you find something surprising worth sharing with peer sessions
 
-before deadline:
+before step cap:
     ensure best-so-far workspace state is in place
     search_finish_agent_session(status="completed",
                                 summary="best score X over N iterations",
@@ -103,7 +103,7 @@ before deadline:
 
 1. Status updates (`search-runtime_search_update_agent_status`) are optional heartbeats. Use them sparingly after meaningful progress. Never retry a failed status update.
 2. If you discover reusable evidence or a next idea worth surfacing to peers, publish it with `search-runtime_search_publish_observation`.
-3. If the deadline is near, deliver the best-so-far artifact with an honest summary. Do not continue exploration past the deadline.
+3. If your step budget is nearly exhausted, deliver the best-so-far artifact with an honest summary. Do not start a fresh exploration direction you cannot finish.
 4. Finish by calling `search-runtime_search_finish_agent_session(agent_session_id, status, summary, result)`.
 
 ## Destructive Commands

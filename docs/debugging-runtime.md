@@ -58,7 +58,6 @@ for f in $RUN/agent_sessions/*.json; do
 import json
 d = json.load(open('$f'))
 print(f\"{d['candidate_id']}: status={d['status']} phase={d['phase']} \"
-      f\"deadline={d['budget']['deadline_at']} \"
       f\"heartbeat={d['last_heartbeat_at']}\")
 "
 done

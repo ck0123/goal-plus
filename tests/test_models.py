@@ -35,8 +35,7 @@ def valid_spec_dict() -> dict:
             "deny": ["evaluator.py"]},
         "budget": {
             "max_candidates": 4,
-            "max_parallel": 2,
-            "wall_clock_seconds": 300},
+            "max_parallel": 2},
         "process_verifiers": [
             {
                 "name": "score",
@@ -58,7 +57,6 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["metric_direction"] == "maximize"
     assert dumped["strategy"]["name"] == "independent_branches"
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
-    assert dumped["strategy"]["worker_timeout_seconds"] == 600
 
 
 def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
@@ -75,18 +73,15 @@ def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
     assert spec.strategy.name == "agent_guided"
     assert spec.strategy.history_policy.top_n == 3
     assert spec.strategy.worker_mode == "agent-session-pool"
-    assert spec.strategy.worker_timeout_seconds == 600
 
     data = valid_spec_dict()
     data["strategy"] = {
         "name": "independent_branches",
         "worker_mode": "agent-session-pool",
-        "worker_agent_type": "AnySearchAgent",
-        "worker_timeout_seconds": 120}
+        "worker_agent_type": "AnySearchAgent"}
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.worker_mode == "agent-session-pool"
     assert spec.strategy.worker_agent_type == "AnySearchAgent"
-    assert spec.strategy.worker_timeout_seconds == 120
 
     data = valid_spec_dict()
     data["strategy"] = {
@@ -129,8 +124,7 @@ def test_strategy_plan_models_capture_proposal_contract() -> None:
 
 def test_agent_session_models_capture_budget_events_and_observations() -> None:
     budget = AgentSessionBudget(
-        max_wall_seconds=300,
-        deadline_at="2026-06-24T00:05:00Z",
+        stale_after_seconds=90,
     )
     session = AgentSessionRecord(
         agent_session_id="agent_001",
@@ -152,7 +146,7 @@ def test_agent_session_models_capture_budget_events_and_observations() -> None:
     )
     wait = AgentSessionWaitResult(
         run_id="run_1",
-        timed_out=True,
+        poll_window_expired=True,
         sessions=[session],
         active_count=1,
         max_concurrent_agents=2,

@@ -36,14 +36,12 @@
   ],
   "budget": {
     "max_candidates": 8,
-    "max_parallel": 4,
-    "wall_clock_seconds": 600
+    "max_parallel": 4
   },
   "strategy": {
     "name": "independent_branches",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgent",
-    "worker_timeout_seconds": 600
+    "worker_agent_type": "AnySearchAgent"
   },
   "constraints": {
     "suggested_batch_size": 4,

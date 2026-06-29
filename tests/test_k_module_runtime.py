@@ -79,7 +79,6 @@ def spec_for(project: Path) -> dict:
         "budget": {
             "max_candidates": 5,
             "max_parallel": 5,
-            "wall_clock_seconds": 300,
         },
         "root_hypotheses": [
             "baseline",

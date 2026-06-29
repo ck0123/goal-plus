@@ -24,12 +24,12 @@ Rules:
 
 1. Freeze a SearchSpec before candidate execution.
 2. Keep all edits inside runtime-provided workspaces; do not touch the main source workspace.
-3. Spawn one AnySearchAgent per candidate via `search_start_agent_session` + `Task(subagent_type="AnySearchAgent", background=true)`. **The Task call is the actual worker launch — `search_start_agent_session` only registers the MCP-side session ledger; without a matching Task in the same model turn, no worker process runs, the session stays idle, and `search_wait_agent_events` will block until `worker_timeout_seconds` elapses with zero work done.**
+3. Spawn one AnySearchAgent per candidate via `search_start_agent_session` + `Task(subagent_type="AnySearchAgent", background=true)`. **The Task call is the actual worker launch — `search_start_agent_session` only registers the MCP-side session ledger; without a matching Task in the same model turn, no worker process runs, the session stays idle, and `search_wait_agent_events` returns with `poll_window_expired=True` and zero work done.**
 4. The Task prompt must contain only `agent_session_id` and a human-readable candidate idea. Do not hard-code `run_id`, `candidate_id`, or workspace paths into the worker prompt.
 5. Wait for terminal events via `search_wait_agent_events`; do not poll worker state synchronously or block on foreground Task calls.
 6. When a session terminates, run `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 7. Reallocate the next batch when slots free and budget remains. Read recent observations via `search_list_observations` to inform the next plan.
 8. Select, report, and promote only through runtime APIs.
 9. OpenCode managed subagents require the parent process to be started with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` or `OPENCODE_EXPERIMENTAL=true` when `budget.max_parallel > 1`. Each parallel Task must include `background: true`. For `budget.max_parallel == 1`, foreground Task is acceptable.
-10. Do not pass a Task-level `timeout`. Treat `worker_timeout_seconds` as an MCP supervisor deadline enforced via `search_wait_agent_events`, finalize, and abort.
+10. Do not pass a Task-level `timeout`. Subagents run until their OpenCode step cap hits or you abort them via `search_abort_agent_session` / `search_abort_all_agent_sessions`.
 11. Keep updates concise. Always report `run_id`, selected candidate, score, and report path.

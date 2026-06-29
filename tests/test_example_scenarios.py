@@ -18,15 +18,13 @@ EXAMPLE_SPECS = [
         "circle_packing_search_spec.json",
         "tests/fixtures/circle_packing/evaluator.py",
         "combined_score",
-        {"max_candidates": 4, "max_parallel": 2, "worker_agent_type": "AnySearchAgentFlash",
-         "worker_timeout_seconds": 240},
+        {"max_candidates": 4, "max_parallel": 2, "worker_agent_type": "AnySearchAgentFlash"},
     ),
     (
         "signal_processing_search_spec.json",
         "tests/fixtures/signal_processing/evaluator.py",
         "overall_score",
-        {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "AnySearchAgent",
-         "worker_timeout_seconds": 600},
+        {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "AnySearchAgent"},
     ),
 ]
 
@@ -59,7 +57,6 @@ def test_two_round_example_specs_are_valid(
     assert parsed.constraints["suggested_batch_size"] == 4
     assert parsed.strategy.worker_mode == "agent-session-pool"
     assert parsed.strategy.worker_agent_type == expected["worker_agent_type"]
-    assert parsed.strategy.worker_timeout_seconds == expected["worker_timeout_seconds"]
     assert not Path(parsed.source_path).is_absolute()
     assert (ROOT / verifier_path).exists()
 
@@ -91,10 +88,9 @@ def test_two_round_examples_create_batches_and_verify_baseline(
             run_id,
             candidate_id,
             {"goal": f"verify baseline fixture path for {candidate_id}"},
-            {"max_wall_seconds": 60},
+            {},
         )
-        context = tools.search_get_agent_context(session["agent_session_id"])
-        assert context["budget"]["max_wall_seconds"] <= 60
+        tools.search_get_agent_context(session["agent_session_id"])
         tools.search_submit_candidate(
             run_id,
             candidate_id,

@@ -30,7 +30,6 @@ class AgentSessionStatus(str, Enum):
     BLOCKED = "blocked"
     COMPLETED = "completed"
     FAILED = "failed"
-    TIMED_OUT = "timed_out"
     ABORTED = "aborted"
 
 
@@ -55,7 +54,6 @@ class VisibilityMode(str, Enum):
 TERMINAL_AGENT_SESSION_STATUSES = {
     AgentSessionStatus.COMPLETED.value,
     AgentSessionStatus.FAILED.value,
-    AgentSessionStatus.TIMED_OUT.value,
     AgentSessionStatus.ABORTED.value,
 }
 
@@ -78,8 +76,6 @@ class FeedbackPolicy(str, Enum):
 class Budget(SearchModel):
     max_candidates: int = Field(gt=0)
     max_parallel: int = Field(gt=0)
-    wall_clock_seconds: int = Field(gt=0)
-    max_worker_seconds: int | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, gt=0)
 
 
@@ -116,7 +112,6 @@ class StrategySpec(SearchModel):
     agent_role: str = "planner_and_mutator"
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_agent_type: str | None = None
-    worker_timeout_seconds: int = Field(default=600, gt=0)
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
@@ -367,12 +362,7 @@ class CandidateRecord(SearchModel):
 
 
 class AgentSessionBudget(SearchModel):
-    max_wall_seconds: int = Field(gt=0)
-    deadline_at: str
-    heartbeat_interval_seconds: int = Field(default=30, gt=0)
     stale_after_seconds: int = Field(default=90, gt=0)
-    finalize_before_seconds: int = Field(default=30, ge=0)
-    grace_seconds: int = Field(default=30, ge=0)
 
 
 class AgentSessionRecord(SearchModel):
@@ -420,8 +410,7 @@ class AgentObservation(SearchModel):
 
 class AgentSessionWaitResult(SearchModel):
     run_id: str
-    timed_out: bool
-    run_deadline_reached: bool = False
+    poll_window_expired: bool
     last_event_id: str | None = None
     events: list[AgentSessionEvent] = Field(default_factory=list)
     sessions: list[AgentSessionRecord] = Field(default_factory=list)

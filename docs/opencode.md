@@ -108,7 +108,7 @@ For headless runs, use the same environment:
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
 ```
 
-Current OpenCode `Task` exposes `background: true` behind this flag, but it does not expose a Task-level `timeout` parameter. Search timeouts are enforced by MCP session deadlines and the supervisor wait loop.
+Current OpenCode `Task` exposes `background: true` behind this flag, but it does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or you abort them via MCP; there are no per-session or run-level time deadlines.
 
 ## Verify MCP Connectivity
 
@@ -193,11 +193,11 @@ The autonomous-search control plane represents each long-running subagent as an 
 4. Main agent launches `AnySearchAgent` with the returned `agent_session_id` through an OpenCode Task call with `background: true`, which returns control immediately. Do not use foreground long-running Task calls. If the host cannot launch background/managed tasks, use direct candidate work or stop instead of pretending the run is supervised.
 5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace. They may call `search_update_agent_status` sparingly after meaningful progress or when blocked, but should not do status heartbeats before the first file read. Shared findings can be published with `search_publish_observation`.
 6. The supervisor loop calls `search_wait_agent_events(run_id, timeout_seconds=300, since_event_id=<last_event_id>)` and feeds the returned `last_event_id` into the next wait call.
-   It returns when a session completes/fails/blocks/times out, when the run deadline is reached, or when the wait timeout expires with a status snapshot.
+   It returns when a session completes/fails/blocks/aborts, or when the poll window expires (`poll_window_expired=True`) with a status snapshot.
 7. Completed sessions are finalized with `search_finish_agent_session`; stuck sessions are stopped with `search_abort_agent_session`.
 8. When the run budget is exhausted, call `search_abort_all_agent_sessions` and summarize/verify the best submitted candidates.
 
-The runtime owns durable pool, deadline, event, and observation state. `worker_timeout_seconds` is a runtime/session deadline, not an OpenCode Task timeout. Hard process/session cancellation still requires the host adapter to wire `search_abort_agent_session` to OpenCode's native abort for the child session; the MCP state transition is the control-plane source of truth.
+The runtime owns durable pool, event, and observation state. Hard process/session cancellation still requires the host adapter to wire `search_abort_agent_session` to OpenCode's native abort for the child session; the MCP state transition is the control-plane source of truth.
 
 For the full walkthrough, see [toy-example.md](toy-example.md).
 

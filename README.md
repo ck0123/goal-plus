@@ -120,7 +120,7 @@ For a headless command-line run:
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
 ```
 
-The environment variable must be set on the OpenCode process. It exposes `Task(background=true)`, which is required for supervised `agent-session-pool` runs. OpenCode `Task` does not currently expose a `timeout` parameter; `worker_timeout_seconds` is enforced by the MCP supervisor loop, not by Task itself.
+The environment variable must be set on the OpenCode process. It exposes `Task(background=true)`, which is required for supervised `agent-session-pool` runs. OpenCode `Task` does not currently expose a `timeout` parameter; subagents run until their OpenCode step cap hits or you abort them via MCP, not by Task itself.
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 

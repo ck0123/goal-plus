@@ -115,7 +115,6 @@ class SearchTools:
             "status": session.status,
             "phase": session.phase,
             "updated_at": session.updated_at,
-            "deadline_at": session.budget.deadline_at,
         }
 
     def search_finish_agent_session(

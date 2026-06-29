@@ -47,7 +47,6 @@ def spec_for(project: Path, *, max_candidates: int = 4, direction: str = "maximi
             "budget": {
                 "max_candidates": max_candidates,
                 "max_parallel": max_candidates,
-                "wall_clock_seconds": 300,
             },
             "process_verifiers": [
                 {
@@ -189,7 +188,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
-            "worker_timeout_seconds": 120,
         },
         max_candidates=1,
     )
@@ -200,7 +198,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
 
     assert plan.worker_policy["mode"] == "agent-session-pool"
     assert plan.worker_policy["subagent_type"] == "AnySearchAgent"
-    assert plan.worker_policy["timeout_seconds"] == 120
     assert plan.worker_policy["requires_agent_session"] is True
     assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
     assert any(
@@ -209,7 +206,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     )
     assert any("agent_session_id" in instruction for instruction in tasks[0].instructions)
     assert any("subagent_type='AnySearchAgent'" in instruction for instruction in tasks[0].instructions)
-    assert any("120 seconds" in instruction for instruction in tasks[0].instructions)
     assert any(
         "search_run_verifier" in instruction for instruction in tasks[0].instructions
     )
@@ -229,8 +225,6 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
 
     session = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "try worker"})
     context = runtime.get_agent_context(session.agent_session_id)
-    assert context["budget"]["max_wall_seconds"] <= 120
-    assert context["budget"]["deadline_at"].endswith("Z")
     assert context["candidate_task"]["candidate_id"] == tasks[0].candidate_id
     runtime.submit_candidate(
         run_id,
@@ -259,13 +253,12 @@ def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> 
         run_id,
         tasks[0].candidate_id,
         {"goal": "try first"},
-        budget={"max_wall_seconds": 120},
+        budget={},
     )
     second = runtime.start_agent_session(run_id, tasks[1].candidate_id, "try second")
 
     run_suffix = run_id.removeprefix("run_")
     assert first.agent_session_id == f"agent_{run_suffix}_001"
-    assert first.budget.max_wall_seconds <= 120
     assert second.agent_session_id == f"agent_{run_suffix}_002"
     assert runtime._active_agent_session_count(run_id) == 2
 
@@ -301,7 +294,7 @@ def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> 
     completed = runtime.finish_agent_session(second.agent_session_id, summary="second done")
     assert completed.status == "completed"
     wait = runtime.wait_agent_events(run_id, timeout_seconds=0)
-    assert wait.timed_out is False
+    assert wait.poll_window_expired is False
     assert wait.last_event_id is not None
     assert any(event.type == "agent_completed" for event in wait.events)
     repeated_wait = runtime.wait_agent_events(
@@ -358,7 +351,7 @@ def test_legacy_agent_session_id_collision_is_not_silent(tmp_path: Path) -> None
         runtime.get_agent_context("agent_001")
 
 
-def test_agent_session_abort_and_run_deadline_enforcement(tmp_path: Path) -> None:
+def test_agent_session_abort_enforcement(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
@@ -367,7 +360,7 @@ def test_agent_session_abort_and_run_deadline_enforcement(tmp_path: Path) -> Non
     session = runtime.start_agent_session(run_id, task.candidate_id)
 
     timeout_wait = runtime.wait_agent_events(run_id, timeout_seconds=0, since_event_id="event_999999")
-    assert timeout_wait.timed_out is True
+    assert timeout_wait.poll_window_expired is True
     assert timeout_wait.active_count == 1
 
     aborted = runtime.abort_all_agent_sessions(run_id, "stop search")
@@ -375,13 +368,6 @@ def test_agent_session_abort_and_run_deadline_enforcement(tmp_path: Path) -> Non
     assert runtime._active_agent_session_count(run_id) == 0
     abort_wait = runtime.wait_agent_events(run_id, timeout_seconds=0)
     assert any(event.type == "agent_aborted" for event in abort_wait.events)
-
-    run = runtime._load_run(run_id)
-    run.created_at = "2000-01-01T00:00:00Z"
-    runtime._write_run(run)
-    with pytest.raises(RuntimeError, match="run budget exhausted"):
-        runtime.start_agent_session(run_id, task.candidate_id)
-    assert runtime.wait_agent_events(run_id, timeout_seconds=0).run_deadline_reached is True
 
 
 def test_submit_candidate_validates_agent_session_provenance(tmp_path: Path) -> None:
@@ -985,7 +971,6 @@ def test_run_verifier_works_without_submit_and_records_iterations(
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
-            "worker_timeout_seconds": 120,
         },
         max_candidates=1,
     )
@@ -1209,7 +1194,6 @@ def test_run_verifier_auto_attributes_to_unique_active_session(
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
-            "worker_timeout_seconds": 120,
         },
         max_candidates=1,
     )
@@ -1256,7 +1240,6 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
             "worker_agent_type": "AnySearchAgent",
-            "worker_timeout_seconds": 120,
         },
         max_candidates=1,
     )
@@ -1267,8 +1250,8 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
     candidate_id = tasks[0].candidate_id
     session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
 
-    # Force the session into terminal state (simulating supervisor timeout).
-    terminal = session.model_copy(update={"status": "timed_out"})
+    # Force the session into terminal state (simulating supervisor abort).
+    terminal = session.model_copy(update={"status": "aborted"})
     runtime._write_agent_session(terminal)
 
     def fake_run(*args, **kwargs):
@@ -1291,4 +1274,4 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
     # Counter still increments.
     session_after = runtime._load_agent_session_by_id(session.agent_session_id)
     # Status stays terminal - no state transition back.
-    assert session_after.status == "timed_out"
+    assert session_after.status == "aborted"

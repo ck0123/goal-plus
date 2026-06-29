@@ -15,7 +15,7 @@ Before requesting a follow-up batch, the host can call `search_list_history(run_
 
 `strategy.worker_mode` is always `agent-session-pool`. Candidate execution always goes through a managed subagent session: call `search_start_agent_session(run_id, candidate_id, directive, budget?)`, launch the configured subagent with the returned `agent_session_id`, and supervise progress with `search_wait_agent_events`.
 
-`strategy.worker_timeout_seconds` is the default MCP per-session wall-clock budget. The runtime truncates session deadlines to the remaining run budget. For OpenCode, this is not a `Task` timeout; start OpenCode with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and launch candidate subagents with `background: true` whenever `max_parallel > 1`.
+Subagents run until their OpenCode step cap hits or you abort them via MCP. There are no per-session or run-level time deadlines. For OpenCode, start OpenCode with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and launch candidate subagents with `background: true` whenever `max_parallel > 1`.
 
 ## Step Tiers
 
@@ -38,16 +38,14 @@ Each `SearchSpec` must include an explicit `budget`; there are no runtime defaul
 {
   "budget": {
     "max_candidates": 4,
-    "max_parallel": 2,
-    "wall_clock_seconds": 300
+    "max_parallel": 2
   }
 }
 ```
 
 - `max_candidates`: total candidate workspaces allowed for the run. Enforced by `search_plan_next` / `search_start_batch`.
 - `max_parallel`: maximum active agent sessions. Enforced by `search_start_agent_session`.
-- `wall_clock_seconds`: run-level time budget. `search_wait_agent_events` wakes on run deadline and `abort_all_agent_sessions` stops active work.
-- `max_worker_seconds` and `max_tokens`: optional worker-level caps.
+- `max_tokens`: optional worker-level cap.
 
 Freeze the matching evaluator as the verifier artifact:
 
@@ -69,7 +67,6 @@ Example specs currently use the default `independent_branches` strategy. To test
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
     "worker_agent_type": "AnySearchAgent",
-    "worker_timeout_seconds": 240,
     "history_policy": {"scope": "top_n", "top_n": 5}
   }
 }
@@ -90,7 +87,7 @@ Then paste a plain-language prompt into the Build agent. The host loads the `sea
 ### circle_packing — two batches, AnySearchAgentFlash
 
 ```
-Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash (15 step cap), worker_timeout_seconds=240. Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash (15 step cap). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
 Batch 1 (c001, c002 in parallel):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
@@ -114,7 +111,7 @@ Report at the end: run_id, all 4 candidate scores + iteration counts, selected c
 Same fixture as above but the spec uses the `random` strategy so batch 2 derives from a runtime-picked parent instead of fresh source branches. Copy `circle_packing_search_spec.json` and set `"strategy": {"name": "random", "config": {"seed": 42}}` (seed optional; omit for non-deterministic parent pick).
 
 ```
-Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash, worker_timeout_seconds=240; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
 Batch 1 (c001, c002 in parallel — random bootstrap, both derive from source):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)

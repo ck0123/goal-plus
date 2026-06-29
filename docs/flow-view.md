@@ -27,8 +27,8 @@ Use this before designing strategy changes (evolve, mcts, hybrid). If a planned 
 
 Three facts that repeatedly cause "API exists but agent can't use it" bugs:
 
-1. **`search_start_agent_session` does not start a worker.** It only writes an MCP-side `AgentSessionRecord` (runtime.py `start_agent_session`). The actual worker process is launched by the OpenCode `Task()` call that the main agent issues *in the same model turn*. Without that `Task` call, the session sits idle and `search_wait_agent_events` blocks until `worker_timeout_seconds` with no real work done. See `SKILL.md` Step 5 and `server.py` `search_start_agent_session` docstring.
-2. **OpenCode `Task` has no `timeout` parameter.** `worker_timeout_seconds` is a soft deadline enforced by the MCP supervisor loop (`wait_agent_events` polling + `abort`). It is not a process-level kill. See `SKILL.md` "OpenCode Host Requirement".
+1. **`search_start_agent_session` does not start a worker.** It only writes an MCP-side `AgentSessionRecord` (runtime.py `start_agent_session`). The actual worker process is launched by the OpenCode `Task()` call that the main agent issues *in the same model turn*. Without that `Task` call, the session sits idle and `search_wait_agent_events` returns with `poll_window_expired=True` and no real work done. See `SKILL.md` Step 5 and `server.py` `search_start_agent_session` docstring.
+2. **OpenCode `Task` has no `timeout` parameter.** There are no per-session or run-level time deadlines in the runtime. Subagents run until their OpenCode step cap hits or the supervisor aborts them. See `SKILL.md` "OpenCode Host Requirement".
 3. **`max_parallel > 1` requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process** (not just in `opencode.json`'s MCP env). Without it, `background: true` does not return control and the supervisor loop is dead. See `opencode.md` "Start".
 
 ## 2. Single-Batch Information Flow
@@ -69,7 +69,7 @@ Each step lists **who acts** and **what they see**.
 
 [5] Main: search_start_agent_session(run_id, candidate_id, directive)
     Runtime writes AgentSessionRecord (deadline, heartbeat, binding).
-    Main sees: agent_session_id, deadline_at
+    Main sees: agent_session_id
     Note: session.status == running but no worker process exists yet.
 
 [6] Main: Task(subagent_type=AnySearchAgent, background=true,
@@ -97,7 +97,6 @@ Each step lists **who acts** and **what they see**.
       • observations — list_observations(top_n=20): cross-session
         findings that peers chose to publish
       • iterations — this candidate's own run_verifier history
-      • budget.deadline_at, run_deadline_at
     The subagent treats this dict as the single source of truth.
 
 [8] Subagent autoresearch loop (AnySearchAgent.md "Iteration Loop"):
@@ -118,8 +117,7 @@ Each step lists **who acts** and **what they see**.
                                    since_event_id=last_event_id)
     Runtime blocks polling until a terminal event or poll timeout.
     Main sees:
-      • events[] — agent_completed/failed/blocked/aborted/timed_out,
-        run_deadline
+      • events[] — agent_completed/failed/blocked/aborted
       • sessions[] — all session current state
       • active_count, max_concurrent_agents
       • last_event_id — pass into next wait for incremental events
@@ -164,13 +162,13 @@ Each step lists **who acts** and **what they see**.
 | `proposal.history_refs` | Point worker at specific inspirations | Set by evolve, but worker only gets ids, not content |
 | `directive` (at session start) | Pass a goal to the worker | Mostly meaningful for `agent_guided`; in builtin evolve the proposal overrides it |
 | Observations reading | Read obs after a batch to inform the next plan | `_plan_evolve` does **not** read observations (acknowledged in `docs/superpowers/plans/2026-06-26-autoresearch-subagent.md`) |
-| `budget.max_parallel` / `wall_clock_seconds` | Concurrency and generation count | Used |
+| `budget.max_parallel` | Concurrency | Used |
 
 ## 5. OpenCode Platform Hard Constraints
 
 These are the root causes of "API exists but agent can't use it":
 
-1. **Task has no `timeout`.** `worker_timeout_seconds` is enforced softly via `wait_agent_events` polling + `abort`. If Main does not poll, the worker runs until OpenCode's step cap (15/50/100/150) is hit.
+1. **Task has no `timeout`.** There are no per-session or run-level time deadlines. The worker runs until OpenCode's step cap (15/50/100/150) is hit or Main aborts it.
 2. **Background Task requires an env flag.** Without `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process, `background: true` does not return control. Main blocks on a foreground Task and the supervisor loop is dead.
 3. **Subagents have no direct communication.** Subagent A cannot read subagent B's workspace. The only channel is `publish_observation` → Main reads it → Main injects into the next plan's `proposal.instructions`. **This is the single biggest information bottleneck for evolve.**
 4. **Subagent step budget is fixed per variant.** 15/50/100/150, not dynamically adjustable. "Give a promising candidate more steps" is not expressible; you can only relaunch a new session with a deeper variant.
