@@ -35,17 +35,19 @@ def test_search_skill_is_slash_command_ready() -> None:
     assert "k_module" in skill
 
 
-def test_search_skill_requires_opencode_background_subagents() -> None:
+def test_search_skill_uses_foreground_tasks() -> None:
     skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
     orchestrator = (ROOT / ".opencode" / "agents" / "search-orchestrator.md").read_text(
         encoding="utf-8"
     )
 
     combined = skill + "\n" + orchestrator
-    assert "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true" in combined
-    assert "background: true" in combined
     assert "Task(task_id=launch.task_id" in combined
     assert "metadata.sessionId" in combined
+    removed_task_arg = "back" + "ground: true"
+    removed_launch_key = "back" + "ground_required"
+    assert removed_task_arg not in combined
+    assert removed_launch_key not in combined
     assert "no `timeout` parameter" in combined
 
 

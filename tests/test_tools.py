@@ -83,7 +83,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             "subagent_type": "AnySearchAgent",
             "description": "c001 try one",
             "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: try one",
-            "background_required": True,
         },
     )
     runtime.create_run.return_value = "run_1"
@@ -128,7 +127,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
                 "subagent_type": "AnySearchAgent",
                 "description": "c001 continue try one",
                 "prompt": "continue_existing_agent_session=true; agent_session_id=agent_001",
-                "background_required": True,
             }
         }
     )

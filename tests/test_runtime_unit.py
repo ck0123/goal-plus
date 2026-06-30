@@ -204,7 +204,6 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
             "worker_agent_type": "AnySearchAgent",
         },
         max_candidates=1,
-        # max_parallel=1 -> background_required should be False
     )
     spec_data = spec.model_dump(mode="json")
     spec_data["budget"]["max_parallel"] = 1
@@ -223,7 +222,7 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     assert tasks[0].candidate_id in session.launch["description"]
     assert session.agent_session_id in session.launch["prompt"]
     assert tasks[0].candidate_id in session.launch["prompt"]
-    assert session.launch["background_required"] is False
+    assert "required" not in session.launch
 
 
 def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
@@ -274,7 +273,7 @@ def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
     assert continued.directive == {"goal": "keep improving the same node"}
     assert continued.launch["task_id"] == "opencode_session_001"
     assert continued.launch["subagent_type"] == "AnySearchAgent"
-    assert continued.launch["background_required"] is False
+    assert "required" not in continued.launch
     assert continued.agent_session_id in continued.launch["prompt"]
     assert task.candidate_id in continued.launch["prompt"]
     assert "search_get_agent_context" in continued.launch["prompt"]

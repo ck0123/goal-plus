@@ -95,7 +95,7 @@ That error is expected because the run was never created.
 Start OpenCode:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
+opencode
 ```
 
 Then send:
@@ -111,10 +111,10 @@ The skill should guide the host agent through this sequence:
 3. Call `search-runtime_search_create`.
 4. Call `search-runtime_search_plan_next` with `requested_k=4`.
 5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-6. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim. For `budget.max_parallel == 1`, foreground Task is acceptable; otherwise use `background: true`.
+6. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim as a foreground Task call.
 7. When Task metadata is available, call `search-runtime_search_bind_opencode_session` with the runtime `agent_session_id` and Task `metadata.sessionId`.
 8. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
-9. After OpenCode Task completion, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
+9. After OpenCode Task return, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
 10. Call `search-runtime_search_select`.
 11. Call `search-runtime_search_report`.
 12. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
@@ -126,13 +126,13 @@ There is no batch-shortcut tool. Call `search_plan_next` followed by `search_sta
 You can trigger the same skill from the command line:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
+opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
 ```
 
 If you want to inspect before promotion, use:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Stop after report generation and do not promote."
+opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Stop after report generation and do not promote."
 ```
 
 ## 7. Expected Runtime Artifacts

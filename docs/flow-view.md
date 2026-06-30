@@ -11,14 +11,13 @@ Use this before designing strategy changes (evolve, mcts, hybrid). If a planned 
 │  Main Agent (search-orchestrator, mode: primary)                │
 │  Owns: plan batches + launch OpenCode Tasks + final verify      │
 │  Sees: plan.work_orders, plan.official_history,                 │
-│        launch payload (subagent_type, prompt, background),      │
+│        launch payload (subagent_type, description, prompt),     │
 │        run_verifier ScoreReport                                 │
 └──────────────┬──────────────────────────────────────────────────┘
                │ The only worker-launch channel:
                │ OpenCode Task(subagent_type=<launch.subagent_type>,
                │               description=<launch.description>,
-               │               prompt=<launch.prompt>,
-               │               background=<launch.background_required>)
+               │               prompt=<launch.prompt>)
                ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Subagent (AnySearchAgent[Flash|<none>|Deep|ExtraDeep])         │
@@ -30,9 +29,9 @@ Use this before designing strategy changes (evolve, mcts, hybrid). If a planned 
 
 Three facts that repeatedly cause "API exists but agent can't use it" bugs:
 
-1. **`search_start_agent_session` creates a context handle, not a worker.** It returns a launch payload (subagent_type, description, prompt, background_required). The actual worker is launched by the OpenCode `Task()` call that the main agent issues *in the same model turn*, using that launch payload. Without the Task call, no worker process runs. See `SKILL.md` Step 5 and `server.py` `search_start_agent_session` docstring.
+1. **`search_start_agent_session` creates a context handle, not a worker.** It returns a launch payload (subagent_type, description, prompt). The actual worker is launched by the OpenCode `Task()` call that the main agent issues *in the same model turn*, using that launch payload. Without the Task call, no worker process runs. See `SKILL.md` Step 5 and `server.py` `search_start_agent_session` docstring.
 2. **OpenCode `Task` has no `timeout` parameter.** There are no per-session or run-level time deadlines in this runtime. Subagents run until their OpenCode step cap hits or the user interrupts the run. There is no MCP abort tool.
-3. **`max_parallel > 1` requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process** (not just in `opencode.json`'s MCP env). Without it, `background: true` does not return control and the main agent is stuck in foreground Task.
+3. **There is no MCP wait loop.** The main agent waits for each OpenCode Task to return, then binds metadata, verifies, and decides whether to continue the same session.
 
 ## 2. Single-Batch Information Flow
 
@@ -74,17 +73,15 @@ Each step lists **who acts** and **what they see**.
     Runtime writes AgentSessionRecord (context handle + launch payload).
     Main sees (the full record, including launch):
       agent_session_id, candidate_id, workspace, directive,
-      launch.subagent_type, launch.description, launch.prompt,
-      launch.background_required
+      launch.subagent_type, launch.description, launch.prompt
     Note: no worker is running yet — the record only describes what
     the worker will look like once Main launches Task.
 
 [6] Main: Task(subagent_type=launch.subagent_type,
               description=launch.description,
-              prompt=launch.prompt,
-              background=launch.background_required)
+              prompt=launch.prompt)
     OpenCode launches the subagent process.
-    Main sees: Task handle (returns immediately in background mode)
+    Main sees: Task result when the worker returns.
     Rule: the launch.prompt carries only agent_session_id + a
     human-readable candidate idea. The worker must derive
     run_id / candidate_id / workspace from MCP context, not from
@@ -115,15 +112,13 @@ Each step lists **who acts** and **what they see**.
       → if improved: git commit; else: git reset --hard HEAD~1
     finish:
       leave best workspace state checked out and summarize in text.
-      No finalize MCP call exists; OpenCode Task completion is the
+      No finalize MCP call exists; OpenCode Task return is the
       lifecycle signal.
 
-[9] Main waits for OpenCode Task completion / notification.
-    There is no MCP wait loop. Main is free to inspect run state
-    (search_status, search_list_history, search_list_iterations)
-    while Tasks run.
+[9] Main waits for OpenCode Task return.
+    There is no MCP wait loop.
 
-[10] Main on Task completion:
+[10] Main after Task return:
      search_run_verifier(run_id, candidate_id, scope="process")
        (without agent_session_id — confirms final score against the
         best-so-far workspace state)
@@ -159,14 +154,14 @@ Each step lists **who acts** and **what they see**.
 | `proposal.history_refs` | Point worker at specific inspirations | Set by evolve, but worker only gets ids, not content |
 | `directive` (at session start or continuation) | Pass a goal to the worker | Mostly meaningful for `agent_guided`; in builtin evolve the proposal overrides it |
 | `search_continue_agent_session(agent_session_id)` | Reuse the same OpenCode session and candidate workspace | Requires `search_bind_opencode_session` with the Task `metadata.sessionId`; this is not a fork |
-| `budget.max_parallel` | OpenCode concurrency budget | Used (enforced by Main, not runtime) |
+| `budget.max_parallel` | Batch planning hint | Used to size planned groups, not to supervise Task lifecycle |
 
 ## 5. OpenCode Platform Hard Constraints
 
 These are the root causes of "API exists but agent can't use it":
 
 1. **Task has no `timeout`.** There are no per-session or run-level time deadlines. The worker runs until OpenCode's step cap (15/50/100/150) is hit or the user interrupts the run. Stopping a running subagent is an OpenCode/user concern.
-2. **Background Task requires an env flag.** Without `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process, `background: true` does not return control. Main blocks on a foreground Task.
+2. **No MCP wait API.** The runtime records context/provenance and scores; it does not supervise Task lifecycle.
 3. **Subagents have no direct communication.** Subagent A cannot read subagent B's workspace. There is no observation bus or peer-status channel. Cross-session learning must happen via Main's next `plan_next`, not at runtime.
 4. **Subagent step budget is fixed per Task invocation.** 15/50/100/150, not dynamically adjustable inside a running invocation. A promising candidate can continue later only if Main bound the Task `metadata.sessionId` via `search_bind_opencode_session`, then relaunches with `Task(task_id=launch.task_id, ...)` from `search_continue_agent_session`.
 5. **No MCP process cancellation.** Stopping a running subagent is an OpenCode/user interruption concern, not an MCP call. There is no MCP abort tool.

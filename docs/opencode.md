@@ -93,7 +93,7 @@ opencode mcp list
 From the project root:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
+opencode
 ```
 
 OpenCode should start the local MCP server named `search-runtime` using:
@@ -104,15 +104,13 @@ agentic-any-search-mcp --root .search
 
 The server uses stdio transport.
 
-The background-subagent flag must be set on the OpenCode process. Setting it only in `opencode.json` under the MCP server environment is not enough, because that environment belongs to the Python MCP subprocess, not the OpenCode `Task` tool.
-
-For headless runs, use the same environment:
+For headless runs:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
+opencode run --command search "<prompt>"
 ```
 
-Current OpenCode `Task` exposes `background: true` behind this flag, but it does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or the user interrupts the run; there are no per-session or run-level time deadlines, and there is no MCP abort tool.
+Current OpenCode `Task` does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or the user interrupts the run; there are no per-session or run-level time deadlines, and there is no MCP abort tool.
 
 ## Verify MCP Connectivity
 
@@ -146,7 +144,7 @@ Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_probl
 Headless:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
 ```
 
 Expected behavior:
@@ -187,16 +185,16 @@ There are no wait, abort, finish, submit, observation, status, or host-sync tool
 The autonomous-search control plane represents each long-running subagent as an OpenCode Task launched from an MCP context handle:
 
 1. Main agent creates candidate workspaces with `search_start_batch`.
-2. Main agent calls `search_start_agent_session(run_id, candidate_id, directive)` to obtain a context handle plus a `launch` payload (`subagent_type`, `description`, `prompt`, `background_required`).
-3. Main agent launches the OpenCode Task using the launch payload verbatim. For `max_parallel > 1`, include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process).
+2. Main agent calls `search_start_agent_session(run_id, candidate_id, directive)` to obtain a context handle plus a `launch` payload (`subagent_type`, `description`, `prompt`).
+3. Main agent launches the OpenCode Task using the launch payload verbatim as a foreground Task call.
 4. When Task metadata is available, main agent calls `search_bind_opencode_session(agent_session_id, opencode_session_id=<Task metadata.sessionId>)`.
 5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace and self-score with `search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are those two.
-6. Main agent waits for OpenCode Task completion or notification. There is no MCP wait loop.
+6. Main agent waits for OpenCode Task to return. There is no MCP wait loop.
 7. After a Task returns, the main agent runs `search_run_verifier(run_id, candidate_id, "process")` to confirm the current best workspace state.
 8. To continue the same candidate/node, main agent calls `search_continue_agent_session(agent_session_id, directive?)` and launches `Task(task_id=launch.task_id, ...)`. This reuses the same OpenCode session and candidate workspace; it is not fork/branch creation.
 9. When the run budget is exhausted, the main agent stops launching new Tasks and reports the best candidates. Stopping a running subagent is an OpenCode/user interruption concern; there is no MCP abort.
 
-The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion. OpenCode owns the actual subagent lifecycle (start, step cap, stop/interrupt, completion notification). The runtime does not maintain lifecycle status, host-sync state, or process cancellation.
+The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion. OpenCode owns the actual subagent lifecycle (start, step cap, stop/interrupt, Task return). The runtime does not maintain lifecycle status, host-sync state, or process cancellation.
 
 For the full walkthrough, see [toy-example.md](toy-example.md).
 

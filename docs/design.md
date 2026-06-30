@@ -12,7 +12,7 @@ The current design is **not** a supervisor loop. The runtime is a scoring and ar
 - create a context handle (AgentSessionRecord) and return the OpenCode Task launch payload
 - the main agent uses the launch payload to spawn an OpenCode Task
 - the subagent self-scores via verifier calls
-- OpenCode reports Task completion back to the main agent
+- OpenCode Task returns to the main agent
 - the main agent final-confirms the score, then selects, reports, and optionally promotes
 
 The MCP runtime does not wait, abort, finalize, submit, observe, or host-sync subagent state. Those responsibilities belong to OpenCode (lifecycle) or to the main agent (selection).
@@ -72,7 +72,7 @@ Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-sea
 
 `CandidateTask` is produced by `search_start_batch`. It contains the candidate workspace path, allowed/denied files, candidate lineage, plan metadata, and local instructions.
 
-`AgentSessionRecord` is produced by `search_start_agent_session`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, optional opencode_session_id, workspace, directive, launch payload (subagent_type/description/prompt/background_required, plus task_id for continuation), and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to OpenCode.
+`AgentSessionRecord` is produced by `search_start_agent_session`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, optional opencode_session_id, workspace, directive, launch payload (subagent_type/description/prompt, plus task_id for continuation), and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to OpenCode.
 
 `IterationRecord` is produced by every `search_run_verifier` call. It records the iteration number, agent_session_id (or None for main final verify), score, failure_class, changed files, and metrics. There is no separate submit step.
 
@@ -111,7 +111,7 @@ subagent calls search_get_agent_context
 subagent calls search_run_verifier during its iteration loop
   |
   v
-OpenCode reports Task completion to Main
+OpenCode Task returns to Main
   |
   v
 Main calls search_run_verifier (final confirm, no agent_session_id)
@@ -141,17 +141,17 @@ There is no batch-shortcut compatibility helper. For fixed-work-order strategies
 
 `budget.max_candidates` limits total candidate workspaces and is enforced by planning/start APIs.
 
-`budget.max_parallel` is the OpenCode-side concurrency budget. The runtime does not gate session creation on it; OpenCode owns the actual process pool and the main agent must not launch more concurrent Tasks than `max_parallel`.
+`budget.max_parallel` is a batch planning hint. The runtime does not gate session creation on it and does not supervise Task lifecycle.
 
 There are no time-based deadlines. Subagents run until their OpenCode step cap (15/50/100/150, set by `strategy.worker_agent_type`) hits or until the user interrupts the run. Users can interrupt anytime and query current best via `search_list_history` / `search_status`. There is no MCP abort tool — stopping a running subagent is an OpenCode/user interruption concern.
 
 ## Main Agent Responsibilities
 
-The main agent must not hide long-running work inside foreground subagent calls when more than one worker is in flight. In `agent-session-pool` mode it should:
+In `agent-session-pool` mode the main agent should:
 
-1. Call `search_start_agent_session` for each candidate it wants to dispatch. The runtime does not enforce `max_parallel` on session creation; the main agent must respect it when launching Tasks.
-2. Use the launch payload verbatim to spawn OpenCode Task workers. For `max_parallel > 1`, start the parent process with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and call Task with `background: true`. If the host cannot do this, do not use `agent-session-pool` for parallel subagents.
-3. Wait for OpenCode Task completion or notification. There is no MCP wait loop.
+1. Call `search_start_agent_session` for each candidate it wants to dispatch.
+2. Use the launch payload verbatim to spawn OpenCode Task workers as foreground Task calls.
+3. Wait for OpenCode Task to return. There is no MCP wait loop.
 4. Verify completed candidates with `search_run_verifier(run_id, candidate_id, "process")` (without `agent_session_id`) to confirm the final score.
 5. Start more sessions when candidate budget remains.
 6. Select, report, and promote only through runtime APIs.

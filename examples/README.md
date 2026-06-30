@@ -15,7 +15,7 @@ Before requesting a follow-up batch, the host can call `search_list_history(run_
 
 `strategy.worker_mode` is always `agent-session-pool`. Candidate execution always goes through an OpenCode Task launched from a runtime context handle: call `search_start_agent_session(run_id, candidate_id, directive)`, launch the configured subagent with the returned `launch` payload, then bind the Task `metadata.sessionId` with `search_bind_opencode_session`.
 
-Subagents run until their OpenCode step cap hits or the user interrupts them. There are no per-session or run-level time deadlines. For OpenCode, start OpenCode with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` and launch candidate subagents with `background: true` whenever `max_parallel > 1`.
+Subagents run until their OpenCode step cap hits or the user interrupts them. There are no per-session or run-level time deadlines. Launch candidate subagents as foreground OpenCode Task calls and wait for each Task to return before binding, verifying, continuing, or reporting.
 
 ## Step Tiers
 
@@ -44,7 +44,7 @@ Each `SearchSpec` must include an explicit `budget`; there are no runtime defaul
 ```
 
 - `max_candidates`: total candidate workspaces allowed for the run. Enforced by `search_plan_next` / `search_start_batch`.
-- `max_parallel`: OpenCode-side concurrency budget. The main agent must not launch more concurrent Tasks than this value.
+- `max_parallel`: batch planning hint. The runtime records it in the spec, but Task calls are foreground and the runtime does not supervise workers.
 - `max_tokens`: optional worker-level cap.
 
 Freeze the matching evaluator as the verifier artifact:
@@ -90,10 +90,10 @@ Notes:
 
 ## Running an example
 
-Start OpenCode (must set the env var when `max_parallel > 1`):
+Start OpenCode:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
+opencode
 ```
 
 Then paste a plain-language prompt into the Build agent. The host loads the `search` skill automatically based on description match — there is no `/search` slash command.
@@ -124,19 +124,19 @@ This is the fork-style smoke test for the current implementation: it continues t
 ```
 Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash (15 step cap). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
-Batch 1 (c001, c002 in parallel):
+Batch 1 (c001, c002):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
   - c002: square grid with shrink-to-fit (start uniform, iteratively shrink radii to remove overlaps and maximize sum)
 
 Wait for both to finish, run run_verifier on each, then plan_next(k=2) → start_batch for batch 2.
 
-Batch 2 (c003, c004 in parallel):
+Batch 2 (c003, c004):
   - c003: concentric rings with optimized ring radii (try 1+6+12+7 or 1+8+16+1 type layouts, tune ring radii)
   - c004: boundary-hugging approach (pack circles along the perimeter first, then fill center)
 
 After both batches terminate, run run_verifier on c003 and c004 yourself (no agent_session_id, auto-attribute), then select across all 4 candidates and report.
 
-For each Task: use the runtime launch payload, then bind the returned Task metadata.sessionId. Do not hard-code run_id/candidate_id/workspace. Use background: true for each Task (max_parallel=2 > 1).
+For each Task: use the runtime launch payload, then bind the returned Task metadata.sessionId. Do not hard-code run_id/candidate_id/workspace.
 
 Report at the end: run_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
 ```
@@ -148,19 +148,19 @@ Same fixture as above but the spec uses the `random` strategy so batch 2 derives
 ```
 Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
-Batch 1 (c001, c002 in parallel — random bootstrap, both derive from source):
+Batch 1 (c001, c002 — random bootstrap, both derive from source):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
   - c002: square grid with shrink-to-fit (start uniform, iteratively shrink radii to remove overlaps and maximize sum)
 
 Wait for both to finish, run run_verifier on each, then plan_next(k=2) → start_batch for batch 2. The runtime will randomly pick one of {c001, c002} as the parent; batch 2 workspaces are copied from that parent.
 
-Batch 2 (c003, c004 in parallel — both mutate the runtime-picked parent):
+Batch 2 (c003, c004 — both mutate the runtime-picked parent):
   - c003: concentric rings with optimized ring radii (try 1+6+12+7 or 1+8+16+1 type layouts, tune ring radii)
   - c004: boundary-hugging approach (pack circles along the perimeter first, then fill center)
 
 After both batches terminate, run run_verifier on c003 and c004 yourself (no agent_session_id, auto-attribute), then select across all 4 candidates and report. Report strategy_trace.parent_candidate_id from the batch 2 plan so the random pick is visible.
 
-For each Task: use the runtime launch payload, then bind the returned Task metadata.sessionId. Do not hard-code run_id/candidate_id/workspace. Use background: true for each Task (max_parallel=2 > 1).
+For each Task: use the runtime launch payload, then bind the returned Task metadata.sessionId. Do not hard-code run_id/candidate_id/workspace.
 
 Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
 ```
@@ -174,12 +174,12 @@ Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_par
 ### signal_processing — multi-batch, AnySearchAgent
 
 ```
-Load examples/signal_processing_search_spec.json (max_candidates=8, max_parallel=4, AnySearchAgent 50 steps). Freeze tests/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for OpenCode Task completion, then plan + start the next 4 after slots free. Report the best score after both batches.
+Load examples/signal_processing_search_spec.json (max_candidates=8, max_parallel=4, AnySearchAgent 50 steps). Freeze tests/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for each OpenCode Task to return, then plan + start the next 4. Report the best score after both batches.
 ```
 
 ## SWE-bench Style Fixture
 
-`swe_bench_20212_search_spec.json` wraps a SWE-bench bug fix (`sympy__sympy-20212`) instead of a multi-batch optimization. The candidate's job is to patch `evaluate_power` in `tests/fixtures/swe_bench_20212/initial_program.py` so that `evaluate_power(ZERO, NEG_INFINITY)` returns `COMPLEX_INFINITY`. See `tests/fixtures/swe_bench_20212/README.md` for the bug background and the local verification recipe (no sympy or docker required).
+`swe_bench_20212_search_spec.json` wraps a SWE-bench bug fix (`sympy__sympy-20212`) instead of a multi-batch optimization. The candidate's job is to patch `evaluate_power` in `tests/fixtures/swe_bench_20212/initial_program.py` so that `evaluate_power(ZERO, NEG_INFINITY)` returns `COMPLEX_INFINITY`. See `tests/fixtures/swe_bench_20212/README.md` for the bug context and the local verification recipe (no sympy or docker required).
 
 ```
 Load examples/swe_bench_20212_search_spec.json. Freeze tests/fixtures/swe_bench_20212/evaluator.py. Request 4 candidates. After submitting and verifying them, inspect summaries and FAIL_TO_PASS / PASS_TO_PASS results. Stop after report generation and do not promote.

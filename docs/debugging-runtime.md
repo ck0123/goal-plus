@@ -14,7 +14,7 @@ OpenCode process
        └─ .search/  ← runtime-owned durable state (this project)
 ```
 
-The runtime owns specs, plans, candidate workspaces, iteration history, verifier scoring, reports, and promotion patches. OpenCode owns subagent lifecycle — start, run, step cap, stop/interrupt, completion notification. The MCP runtime does not maintain lifecycle status, host-sync state, or process cancellation. Debugging lifecycle state belongs in OpenCode; debugging candidate state belongs in `.search/`.
+The runtime owns specs, plans, candidate workspaces, iteration history, verifier scoring, reports, and promotion patches. OpenCode owns subagent lifecycle — start, run, step cap, stop/interrupt, Task return. The MCP runtime does not maintain lifecycle status, host-sync state, or process cancellation. Debugging lifecycle state belongs in OpenCode; debugging candidate state belongs in `.search/`.
 
 ## `.search/` Layout
 

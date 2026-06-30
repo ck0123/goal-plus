@@ -848,7 +848,6 @@ class FileSearchRuntime:
                 f"candidate_id={candidate_id}; "
                 f"idea: {one_paragraph_idea}"
             ),
-            "background_required": frozen.spec.budget.max_parallel > 1,
         }
 
     def _build_continue_launch_payload(
@@ -884,7 +883,6 @@ class FileSearchRuntime:
                 "before editing; continue the same candidate and workspace; "
                 f"directive: {directive_text}"
             ),
-            "background_required": frozen.spec.budget.max_parallel > 1,
         }
 
     def _next_plan_id(self, run: RunRecord) -> str:
@@ -1372,7 +1370,7 @@ class FileSearchRuntime:
         ]
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
-                f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed/background agent session."
+                f"Use subagent_type={plan.worker_policy['subagent_type']!r} for the managed agent session."
             )
         instructions.extend(proposal.instructions)
 

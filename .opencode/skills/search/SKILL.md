@@ -10,18 +10,16 @@ argument-hint: >
 
 # Agentic Search Skill
 
-This skill runs Search Mode with isolated candidate workspaces, frozen verifier execution, iteration scoring, and OpenCode-native subagent lifecycle. The MCP runtime is not a process supervisor — OpenCode owns the actual `Task` lifecycle, step cap, and completion notification. The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion patches.
+This skill runs Search Mode with isolated candidate workspaces, frozen verifier execution, iteration scoring, and OpenCode-native subagent lifecycle. The MCP runtime is not a process supervisor — OpenCode owns the actual `Task` lifecycle, step cap, and return value. The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion patches.
 
-## OpenCode Host Requirement
+## OpenCode Host Notes
 
-For `agent-session-pool` with `max_parallel > 1`, OpenCode must expose background subagents. Start OpenCode with one of:
+Run OpenCode normally:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
+opencode
+opencode run --command search "<prompt>"
 ```
-
-`OPENCODE_EXPERIMENTAL=true` also enables the same flag. This environment variable belongs to the OpenCode process itself, not to the MCP server subprocess configured in `opencode.json`.
 
 OpenCode `Task` has no `timeout` parameter. Subagents run until their OpenCode step cap (15/50/100/150 depending on `worker_agent_type`) hits or the user interrupts the run. There are no per-session or run-level time deadlines in this runtime. Do not pass or invent a Task-level timeout.
 
@@ -59,7 +57,6 @@ There are no MCP `wait`, `abort`, `finish`, `submit`, observation, status, or ho
 4. Subagents self-verify via `search_run_verifier` with their own `agent_session_id`. After OpenCode Task returns, call `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 5. Do not promote by manually copying files. Use `search_promote`; it exports a patch/report.
 6. If a candidate touches denied files or files outside the edit surface, run verifier anyway and let the runtime mark it failed.
-7. For `max_parallel > 1`, Task must use `background: true`. The main agent must be able to wake, inspect, or start more work.
 
 ## SearchSpec
 
@@ -107,7 +104,7 @@ Minimum shape:
 }
 ```
 
-`max_candidates` is enforced by the runtime. `max_parallel` is the OpenCode-side concurrency budget — the runtime does not gate session creation on it (OpenCode is the process supervisor); the main agent must not launch more concurrent Tasks than `max_parallel`. There are no time-based budgets. Subagents run until their OpenCode step cap hits or the user interrupts. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
+`max_candidates` is enforced by the runtime. `max_parallel` is a batch planning hint — the runtime does not gate session creation on it and does not supervise Task lifecycle. There are no time-based budgets. Subagents run until their OpenCode step cap hits or the user interrupts. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
 
 `strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values are rejected at parse time — fix the spec instead of relying on normalization.
 
@@ -179,24 +176,21 @@ If you switch the spec to a builtin that produces fixed work orders (`independen
 
 For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 
-1. For each candidate you want to dispatch, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive)`. The response includes a `launch` payload: `subagent_type`, `description`, `prompt`, `background_required`. Use those fields verbatim in the OpenCode Task call below.
-2. Launch the subagent with `Task(subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt, background=launch.background_required)`. The `launch.prompt` is the only prompt string the worker needs. Do not append or hard-code `run_id` / workspace paths into the prompt — the worker derives those from `search_get_agent_context`.
-3. **If `budget.max_parallel == 1`**, foreground Task is fine — main blocks on the worker, no supervisor loop needed. Skip to step 6 when Task returns.
-4. **If `budget.max_parallel > 1`**, Task must include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process). Launch all Tasks in the same model turn as their `search_start_agent_session` calls.
-5. Wait for OpenCode Task completion or notification. There is no MCP wait call — OpenCode tells you when a Task returns.
-6. When a first-time Task returns, bind the runtime session to the OpenCode session id: `search-runtime_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
-7. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
-8. If the same candidate should keep working in the same OpenCode context, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt, background=launch.background_required)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
-9. If candidate budget remains and you want new candidates, plan and start the next batch.
+1. For each candidate you want to dispatch, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive)`. The response includes a `launch` payload: `subagent_type`, `description`, and `prompt`. Use those fields verbatim in the OpenCode Task call below.
+2. Launch the subagent with `Task(subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. The `launch.prompt` is the only prompt string the worker needs. Do not append or hard-code `run_id` / workspace paths into the prompt — the worker derives those from `search_get_agent_context`.
+3. Wait for the OpenCode Task to return. There is no MCP wait call.
+4. When a first-time Task returns, bind the runtime session to the OpenCode session id: `search-runtime_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
+5. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
+6. If the same candidate should keep working in the same OpenCode context, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
+7. If candidate budget remains and you want new candidates, plan and start the next batch.
 
 Hard host rules:
 
-- For `max_parallel > 1`, Task input must include `background: true`. A normal OpenCode `Task` call without `background` blocks the main agent and prevents parallel supervision.
-- For `max_parallel == 1`, foreground Task is acceptable — there is nothing else to wait on.
+- OpenCode Task calls are foreground calls. The main agent waits for each Task to return before binding, verifying, continuing, reporting, or promoting.
+- `max_parallel` describes the intended worker pool size for planning, but this runtime does not provide an MCP wait loop or lifecycle supervisor.
 - There is no supported `timeout` field on Task. Subagents run until their step cap or until the user interrupts.
 - The Task prompt must not hard-code `run_id`, `candidate_id`, or workspace paths for the worker to use. The worker must derive them from `search_get_agent_context(agent_session_id)`. The `candidate_id` in the launch description/prompt is a label for OpenCode UI mapping only — context is authoritative.
 - `search_continue_agent_session` is only for continuing the same runtime `agent_session_id` after `search_bind_opencode_session`. Do not use it to branch into a new direction that needs a different candidate workspace.
-- Do not launch foreground Task calls "to see if they block". If foreground Task is the only available subagent mechanism, do not use `agent-session-pool` subagents for that run.
 - Stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool.
 
 Multi-batch sketch:
@@ -216,11 +210,9 @@ while budget_remaining:
       subagent_type=session.launch.subagent_type,
       description=session.launch.description,
       prompt=session.launch.prompt,
-      background=session.launch.background_required,
     )
     search_bind_opencode_session(session.agent_session_id, result.metadata.sessionId)
 
-  # Wait for OpenCode Task completion. There is no MCP wait loop.
   for task in tasks:
     search_run_verifier(run_id, task.candidate_id, "process")  # main final confirm
 
@@ -231,7 +223,6 @@ while budget_remaining:
     subagent_type=continued.launch.subagent_type,
     description=continued.launch.description,
     prompt=continued.launch.prompt,
-    background=continued.launch.background_required,
   )
 ```
 
@@ -291,4 +282,4 @@ For a quick runtime smoke test, load `examples/k_module_search_spec.json`, freez
 
 ## Multi-Batch Examples
 
-The bundled `circle_packing` and `signal_processing` specs use `agent-session-pool`. For `max_parallel=2` and 4 total subagents, plan/start 2 candidates, launch them as background Tasks, wait for Task completion, then plan/start the next 2. At run budget exhaustion, stop launching new Tasks and report the best candidates. There is no MCP abort step before reporting.
+The bundled `circle_packing` and `signal_processing` specs use `agent-session-pool`. For `max_parallel=2` and 4 total subagents, plan/start candidates in batches and launch each OpenCode Task as a foreground call. At run budget exhaustion, stop launching new Tasks and report the best candidates. There is no MCP abort step before reporting.

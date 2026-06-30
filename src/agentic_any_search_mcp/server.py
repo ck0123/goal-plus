@@ -87,9 +87,9 @@ def create_mcp(
     ) -> dict[str, Any]:
         """Bind a runtime agent session to the OpenCode Task session id.
 
-        Call this after Task returns (or after a background Task reports its
-        metadata) using the Task result's `metadata.sessionId`. This enables
-        later continuation with `search_continue_agent_session`.
+        Call this after Task returns using the Task result's
+        `metadata.sessionId`. This enables later continuation with
+        `search_continue_agent_session`.
         """
         return tools.search_bind_opencode_session(
             agent_session_id,

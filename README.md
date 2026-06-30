@@ -6,7 +6,7 @@ The goal of V0 is not to control one specific coding agent. The runtime exposes 
 
 Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract. See `examples/README.md` for the full strategy comparison table.
 
-Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The host dispatches one OpenCode Task per candidate via `search_start_agent_session`, binds the returned Task `metadata.sessionId` with `search_bind_opencode_session`, and can later continue the same node with `search_continue_agent_session`. OpenCode owns Task lifecycle and completion notification; the runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is the OpenCode-side concurrency budget and must be respected by the main agent when launching Tasks. `strategy.worker_agent_type` tells OpenCode which `subagent_type` to launch; bundled examples use `AnySearchAgent`, an autoresearch-style looper that self-iterates inside its workspace and self-verifies through `search_run_verifier`. `strategy.worker_agent_type` can be set to `AnySearchAgent` (default, 50 steps), `AnySearchAgentFlash` (15), `AnySearchAgentDeep` (100), or `AnySearchAgentExtraDeep` (150). The step cap is enforced by OpenCode per Task invocation.
+Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The host dispatches one foreground OpenCode Task per candidate via `search_start_agent_session`, binds the returned Task `metadata.sessionId` with `search_bind_opencode_session`, and can later continue the same node with `search_continue_agent_session`. OpenCode owns Task lifecycle and return values; the runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is a batch planning hint; the runtime does not provide a wait loop or lifecycle supervisor. `strategy.worker_agent_type` tells OpenCode which `subagent_type` to launch; bundled examples use `AnySearchAgent`, an autoresearch-style looper that self-iterates inside its workspace and self-verifies through `search_run_verifier`. `strategy.worker_agent_type` can be set to `AnySearchAgent` (default, 50 steps), `AnySearchAgentFlash` (15), `AnySearchAgentDeep` (100), or `AnySearchAgentExtraDeep` (150). The step cap is enforced by OpenCode per Task invocation.
 
 ## Getting Started
 
@@ -105,7 +105,7 @@ agentic-any-search-mcp --root .search
 Then run the toy search from the OpenCode TUI:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
+opencode
 ```
 
 Inside OpenCode:
@@ -117,10 +117,10 @@ Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_probl
 For a headless command-line run:
 
 ```bash
-OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
 ```
 
-The environment variable must be set on the OpenCode process. It exposes `Task(background=true)`, which is required for parallel `agent-session-pool` runs. OpenCode `Task` does not currently expose a `timeout` parameter; subagents run until their OpenCode step cap hits or the user interrupts them.
+OpenCode `Task` does not currently expose a `timeout` parameter; subagents run until their OpenCode step cap hits or the user interrupts them. The MCP runtime does not provide wait or abort tools.
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 

@@ -24,7 +24,7 @@ The current codebase still exposes a supervisor model where the MCP runtime pret
 
 This creates two sources of truth:
 
-- OpenCode owns the actual `Task` process, child session, background job, step cap, and completion notification.
+- OpenCode owns the actual `Task` process, child session, step cap, and return value.
 - The Python MCP runtime owns a duplicate `AgentSessionRecord.status` state machine.
 
 The duplicate state is unreliable. Example failure: OpenCode stops a child session after step cap, but MCP state remains `RUNNING` unless the worker remembered to call a finish tool or the runtime observes sqlite. The sqlite sync workaround is also wrong as the main design because it requires the external MCP process to reverse-engineer OpenCode internals.
@@ -37,7 +37,7 @@ The corrected design is:
 - A subagent only needs two MCP calls:
   - `search_get_agent_context(agent_session_id)`
   - `search_run_verifier(run_id, candidate_id, scope="process", agent_session_id=agent_session_id)`
-- Main agent uses OpenCode `Task` lifecycle/notifications to know when workers finish. It does not call MCP `wait`.
+- Main agent uses OpenCode `Task` return values to know when workers finish. It does not call MCP `wait`.
 
 ## 2. Ground Truth From OpenCode
 
@@ -46,17 +46,13 @@ The implementation plan depends on these OpenCode facts already verified in `/Us
 - `packages/opencode/src/tool/task.ts`
   - `TaskTool` creates a child session with `parentID: ctx.sessionID`.
   - Task metadata contains `parentSessionId` and `sessionId`.
-  - Background task id is the child session id.
-  - Completion is injected back into the parent session by `notifyBackgroundResult`.
-- `packages/core/src/background-job.ts`
-  - `BackgroundJob.Service` has `list/get/start/extend/wait/promote/cancel`.
-  - It is explicitly process-local and not durable.
+  - Task metadata contains the child `sessionId`.
 - `packages/opencode/src/session/status.ts`
   - `/session/status` is only `busy/idle/retry`; it is not a durable completed/error ledger.
 - `packages/opencode/src/mcp/catalog.ts`
-  - OpenCode's MCP client calls external MCP tools with only model-supplied `arguments`; it does not automatically pass OpenCode's parent session or background job objects to the MCP server.
+  - OpenCode's MCP client calls external MCP tools with only model-supplied `arguments`; it does not automatically pass OpenCode's parent session or Task lifecycle objects to the MCP server.
 
-Conclusion: use OpenCode's native Task/background result as the lifecycle signal inside the main agent. Do not rebuild lifecycle observation in the Python MCP server.
+Conclusion: use OpenCode's native Task return as the lifecycle signal inside the main agent. Do not rebuild lifecycle observation in the Python MCP server.
 
 ## 3. Target Flow
 
@@ -73,7 +69,6 @@ Main:
     search_start_agent_session(run_id, candidate_id, directive?) -> AgentSessionRecord
     Task(
       subagent_type=<plan.worker_policy.worker_agent_type or AnySearchAgent>,
-      background=true when max_parallel > 1,
       description=<launch.description from start_agent_session>,
       prompt=<launch.prompt from start_agent_session>
     )
@@ -98,8 +93,7 @@ Important:
 - There is no MCP abort for subagent processes.
 - There is no MCP finish/finalize call.
 - Main must not start a session and then wait on MCP. The real worker is the OpenCode `Task` call.
-- For `max_parallel == 1`, foreground Task is acceptable because there is no parallel pool to supervise.
-- For `max_parallel > 1`, Task must use `background=true`; OpenCode must be started with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`.
+- Task calls are foreground calls. `max_parallel` remains a planning hint, not a runtime lifecycle feature.
 
 ### 3.2 Subagent Flow
 
@@ -222,7 +216,6 @@ Notes:
   - `subagent_type`
   - `description`
   - `prompt`
-  - `background_required`
 
 ### 5.3 Simplify `RunRecord`
 
@@ -346,13 +339,12 @@ launch = {
         f"candidate_id={candidate_id}; "
         f"idea: {one_paragraph_directive_or_task_intent}"
     ),
-    "background_required": frozen.spec.budget.max_parallel > 1,
 }
 ```
 
 Discussion:
 
-- Earlier docs said never include `candidate_id` in prompt. That rule was to prevent the worker from trusting prompt-supplied ids. In the new plan the worker still must derive authoritative `run_id/candidate_id/workspace` from `search_get_agent_context`; including `candidate_id` in the prompt/description is only for the main agent and OpenCode UI to map Task completion back to the candidate.
+- Earlier docs said never include `candidate_id` in prompt. That rule was to prevent the worker from trusting prompt-supplied ids. In the new plan the worker still must derive authoritative `run_id/candidate_id/workspace` from `search_get_agent_context`; including `candidate_id` in the prompt/description is only for the main agent and OpenCode UI to map Task return back to the candidate.
 - Tool descriptions and subagent prompts must say: prompt identifiers are labels only; context is authoritative.
 
 7. Write `AgentSessionRecord`.
@@ -538,7 +530,7 @@ Must say:
 - MCP does not supervise subagent lifecycle.
 - `search_start_agent_session` creates a context/provenance handle and returns Task launch fields.
 - Main launches OpenCode Task immediately with those launch fields.
-- Main waits for OpenCode Task completion/notification, not MCP wait.
+- Main waits for OpenCode Task return, not MCP wait.
 - Subagent has exactly two MCP calls:
   - `search_get_agent_context`
   - `search_run_verifier`
@@ -569,7 +561,7 @@ Rewrite the orchestrator bullets:
 - plan/start batches
 - call `search_start_agent_session`
 - copy returned launch payload into Task
-- use OpenCode Task completion
+- use OpenCode Task return
 - final-verify completed candidate
 - no MCP wait/status/abort/finalize
 
@@ -609,7 +601,7 @@ New sections:
    - start_agent_session creates launch payload
    - OpenCode Task starts worker
    - subagent context + verifier loop
-   - OpenCode Task completion
+   - OpenCode Task return
    - main final verify/select/report
 3. What subagent sees:
    - context fields
@@ -623,7 +615,6 @@ New sections:
 5. Removed APIs:
    - list deleted tools and say they are intentionally absent.
 6. Constraints:
-   - background flag required for parallel Task
    - no Task timeout
    - no MCP process cancellation
    - main must use OpenCode Task result as completion signal
@@ -646,7 +637,7 @@ Update:
 
 - command has no `--opencode-db`
 - expected MCP tools list has only 13 tools
-- agent session section uses OpenCode Task completion
+- agent session section uses OpenCode Task return
 - no supervisor wait loop
 - no abort-all before report
 - no sqlite troubleshooting
@@ -660,7 +651,7 @@ Update:
 - no `search_wait_agent_events`
 - no `search_list_agent_status`
 - no sqlite troubleshooting
-- example sequence uses OpenCode Task completion.
+- example sequence uses OpenCode Task return.
 
 ### 11.5 `docs/debugging-runtime.md`
 
@@ -912,6 +903,6 @@ OpenCode is the process supervisor:
 - run subagent
 - enforce step cap
 - stop/interrupt Task
-- return/inject Task completion
+- return Task result
 
 If a future agent tries to reintroduce `wait_agent_events`, status heartbeat, finalize, abort, or sqlite host sync, that is a regression against this plan.

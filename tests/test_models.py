@@ -118,7 +118,6 @@ def test_agent_session_record_is_context_handle_with_required_candidate() -> Non
             "subagent_type": "AnySearchAgent",
             "description": "c001 try one direction",
             "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: try one direction",
-            "background_required": False,
         },
         counters={"verifier_runs": 0},
     )
