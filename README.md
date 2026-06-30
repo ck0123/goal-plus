@@ -124,7 +124,7 @@ The environment variable must be set on the OpenCode process. It exposes `Task(b
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 
-Additional bundled specs are listed in [examples/README.md](examples/README.md), including a same-session continuation smoke test and multi-batch `circle_packing` / `signal_processing` scenarios.
+Additional bundled specs are listed in [examples/README.md](examples/README.md), including a `circle_packing` fork-style continuation smoke test and multi-batch `circle_packing` / `signal_processing` scenarios.
 
 ## Installation Notes
 

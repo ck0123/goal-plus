@@ -98,25 +98,25 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 
 Then paste a plain-language prompt into the Build agent. The host loads the `search` skill automatically based on description match — there is no `/search` slash command.
 
-### k_module — same-session continuation smoke test
+### circle_packing — fork-style continuation smoke test
 
 Use this when you want to verify the "subagent finished, then main starts it again from the same node" path:
 
 ```
-Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py.
+Load examples/circle_packing_search_spec.json and freeze tests/fixtures/circle_packing/evaluator.py.
 
-Run one candidate and then continue the same OpenCode session:
+Run one circle_packing candidate and then continue the same OpenCode session:
   1. freeze_spec → create → plan_next(k=1) → start_batch
   2. call search_start_agent_session for c001
-  3. launch Task with session.launch
+  3. launch Task with session.launch; use a directive like "build a hexagonal or staggered lattice, then tune radii to improve total packed area"
   4. when Task returns, call search_bind_opencode_session(session.agent_session_id, Task metadata.sessionId)
   5. run search_run_verifier(run_id, "c001", "process") from the main agent
-  6. call search_continue_agent_session(session.agent_session_id, directive="continue the same candidate once; do not fork")
+  6. call search_continue_agent_session(session.agent_session_id, directive="continue the same circle_packing candidate from the current workspace; tune radii and repair overlaps; do not create a new candidate")
   7. launch Task again with task_id=continued.launch.task_id and the rest of continued.launch
   8. when Task returns, run search_run_verifier(run_id, "c001", "process") again
   9. call search_list_history and search_report
 
-Do not create a second agent session for c001. Do not fork. Report run_id, agent_session_id, opencode_session_id, both verifier scores, and report path.
+This is the fork-style smoke test for the current implementation: it continues the same OpenCode session with Task task_id instead of using OpenCode Session.fork. Do not create a second agent session for c001. Report run_id, agent_session_id, opencode_session_id, both verifier scores, score delta, and report path.
 ```
 
 ### circle_packing — two batches, AnySearchAgentFlash
