@@ -27,6 +27,8 @@ def test_create_mcp_registers_only_opencode_native_tools(tmp_path: Path) -> None
         "search_plan_next",
         "search_start_batch",
         "search_start_agent_session",
+        "search_bind_opencode_session",
+        "search_continue_agent_session",
         "search_get_agent_context",
         "search_run_verifier",
         "search_list_iterations",
@@ -48,6 +50,17 @@ def test_start_agent_session_returns_launch_payload(tmp_path: Path) -> None:
     # The legacy admission parameters (budget, visibility_mode) are gone.
     assert "budget" not in properties
     assert "visibility_mode" not in properties
+
+
+def test_continue_agent_session_exposes_task_id_launch_payload(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+
+    assert "agent_session_id" in tools["search_bind_opencode_session"].parameters["properties"]
+    assert "opencode_session_id" in tools["search_bind_opencode_session"].parameters["properties"]
+    assert "agent_session_id" in tools["search_continue_agent_session"].parameters["properties"]
+    assert "directive" in tools["search_continue_agent_session"].parameters["properties"]
 
 
 def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
@@ -92,6 +105,12 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return []
 
         def search_start_agent_session(self, *args, **kwargs):
+            return {}
+
+        def search_bind_opencode_session(self, *args, **kwargs):
+            return {}
+
+        def search_continue_agent_session(self, *args, **kwargs):
             return {}
 
         def search_get_agent_context(self, *args, **kwargs):

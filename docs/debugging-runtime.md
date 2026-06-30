@@ -34,11 +34,11 @@ The runtime owns specs, plans, candidate workspaces, iteration history, verifier
     │   ├── .git/                                 # agent's git history (autoresearch loop)
     │   ├── .tmp/results.tsv                      # iteration log: commit \t <metric_name> \t status \t hypothesis
     │   └── <allowed_files>
-    ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate binding, launch payload, counters
+    ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate/OpenCode binding, launch payload, counters
     └── report.md / promotion/                    # final outputs
 ```
 
-There is no `agent_events/` or `observations/` directory. The session record carries `launch` (the OpenCode Task fields), `directive`, and `counters.verifier_runs`.
+There is no `agent_events/` or `observations/` directory. The session record carries optional `opencode_session_id`, `launch` (the OpenCode Task fields), `directive`, and `counters.verifier_runs`.
 
 ## Quick Diagnostic Queries
 
@@ -150,6 +150,12 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
 - **Look at**: `agent_sessions/<id>.json` `counters.verifier_runs` vs `candidates/<id>/candidate.json` `iterations` length
 - **Cause**: They should always match (every run_verifier call appends an iteration). If they don't, the subagent called `run_verifier` against a different candidate_id, or the main agent called it without `agent_session_id`.
 - **Verification**: Check the iteration's `agent_session_id` field — it tells you which session (if any) the verifier call was attributed to.
+
+### Same-session continuation is unavailable
+
+- **Look at**: `agent_sessions/<id>.json` `opencode_session_id`
+- **Cause**: Main agent did not call `search_bind_opencode_session` with the Task `metadata.sessionId`.
+- **Verification**: `search_continue_agent_session` should return a launch payload containing `task_id`; without a binding it raises an error.
 
 ### Subagent is still running but I want to stop it
 

@@ -29,6 +29,8 @@ def test_search_skill_is_slash_command_ready() -> None:
 
     assert "name: search" in skill
     assert "search-runtime_search_freeze_spec" in skill
+    assert "search-runtime_search_bind_opencode_session" in skill
+    assert "search-runtime_search_continue_agent_session" in skill
     assert "Do not start candidate execution before" in skill
     assert "k_module" in skill
 
@@ -42,6 +44,8 @@ def test_search_skill_requires_opencode_background_subagents() -> None:
     combined = skill + "\n" + orchestrator
     assert "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true" in combined
     assert "background: true" in combined
+    assert "Task(task_id=launch.task_id" in combined
+    assert "metadata.sessionId" in combined
     assert "no `timeout` parameter" in combined
 
 

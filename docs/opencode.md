@@ -170,6 +170,8 @@ search-runtime_search_list_history
 search-runtime_search_plan_next
 search-runtime_search_start_batch
 search-runtime_search_start_agent_session
+search-runtime_search_bind_opencode_session
+search-runtime_search_continue_agent_session
 search-runtime_search_get_agent_context
 search-runtime_search_run_verifier
 search-runtime_search_list_iterations
@@ -187,10 +189,12 @@ The autonomous-search control plane represents each long-running subagent as an 
 1. Main agent creates candidate workspaces with `search_start_batch`.
 2. Main agent calls `search_start_agent_session(run_id, candidate_id, directive)` to obtain a context handle plus a `launch` payload (`subagent_type`, `description`, `prompt`, `background_required`).
 3. Main agent launches the OpenCode Task using the launch payload verbatim. For `max_parallel > 1`, include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process).
-4. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace and self-score with `search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are those two.
-5. Main agent waits for OpenCode Task completion or notification. There is no MCP wait loop.
-6. After a Task returns, the main agent runs `search_run_verifier(run_id, candidate_id, "process")` to confirm the current best workspace state.
-7. When the run budget is exhausted, the main agent stops launching new Tasks and reports the best candidates. Stopping a running subagent is an OpenCode/user interruption concern; there is no MCP abort.
+4. When Task metadata is available, main agent calls `search_bind_opencode_session(agent_session_id, opencode_session_id=<Task metadata.sessionId>)`.
+5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace and self-score with `search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are those two.
+6. Main agent waits for OpenCode Task completion or notification. There is no MCP wait loop.
+7. After a Task returns, the main agent runs `search_run_verifier(run_id, candidate_id, "process")` to confirm the current best workspace state.
+8. To continue the same candidate/node, main agent calls `search_continue_agent_session(agent_session_id, directive?)` and launches `Task(task_id=launch.task_id, ...)`. This reuses the same OpenCode session and candidate workspace; it is not fork/branch creation.
+9. When the run budget is exhausted, the main agent stops launching new Tasks and reports the best candidates. Stopping a running subagent is an OpenCode/user interruption concern; there is no MCP abort.
 
 The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion. OpenCode owns the actual subagent lifecycle (start, step cap, stop/interrupt, completion notification). The runtime does not maintain lifecycle status, host-sync state, or process cancellation.
 

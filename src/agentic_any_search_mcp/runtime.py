@@ -425,6 +425,92 @@ class FileSearchRuntime:
         self._write_agent_session(session)
         return session
 
+    def bind_opencode_session(
+        self,
+        agent_session_id: str,
+        opencode_session_id: str,
+    ) -> AgentSessionRecord:
+        """Bind a runtime agent session to the OpenCode session created by Task.
+
+        The runtime cannot observe OpenCode's Task return value by itself, so
+        the main agent records the returned `metadata.sessionId` here. This
+        mapping is what lets a later turn continue the same OpenCode session
+        via Task(task_id=...).
+        """
+        session = self._load_agent_session_by_id(agent_session_id)
+        bound_id = opencode_session_id.strip()
+        if not bound_id:
+            raise ValueError("opencode_session_id must be non-empty")
+        if session.opencode_session_id and session.opencode_session_id != bound_id:
+            raise ValueError(
+                "agent session is already bound to a different OpenCode session"
+            )
+
+        updated = session.model_copy(
+            update={
+                "opencode_session_id": bound_id,
+                "updated_at": utc_timestamp(),
+            }
+        )
+        self._write_agent_session(updated)
+        return updated
+
+    def continue_agent_session(
+        self,
+        agent_session_id: str,
+        directive: dict[str, Any] | str | None = None,
+    ) -> AgentSessionRecord:
+        """Return an OpenCode Task launch payload that continues a prior session.
+
+        This is not a fork and does not create a new candidate workspace. It
+        reuses the existing runtime agent_session_id, candidate_id, workspace,
+        and the bound OpenCode session id as Task's `task_id`.
+        """
+        session = self._load_agent_session_by_id(agent_session_id)
+        if not session.opencode_session_id:
+            raise RuntimeError(
+                "agent session has no bound OpenCode session id; call "
+                "search_bind_opencode_session with Task metadata.sessionId first"
+            )
+
+        run = self._load_run(session.run_id)
+        if run.state not in {
+            RunState.RUNNING,
+            RunState.WAITING_FOR_WORKERS,
+            RunState.SELECTING,
+        }:
+            raise RuntimeError(f"cannot continue agent session from state {run.state}")
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        candidate_record = self._load_candidate_record(
+            session.run_id,
+            session.candidate_id,
+        )
+        if candidate_record.status not in {"created", "evaluated"}:
+            raise RuntimeError(
+                f"cannot continue candidate in status {candidate_record.status}"
+            )
+
+        normalized_directive = (
+            session.directive
+            if directive is None
+            else self._normalize_main_directive(directive)
+        )
+        launch = self._build_continue_launch_payload(
+            frozen=frozen,
+            session=session,
+            directive=normalized_directive,
+        )
+        updated = session.model_copy(
+            update={
+                "updated_at": utc_timestamp(),
+                "directive": normalized_directive,
+                "workspace": candidate_record.task.workspace,
+                "launch": launch,
+            }
+        )
+        self._write_agent_session(updated)
+        return updated
+
     def get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
         """Subagent first call. Returns the authoritative ids, workspace, and
         candidate context. The subagent must treat prompt-supplied ids as
@@ -668,13 +754,18 @@ class FileSearchRuntime:
                     "",
                     "## Agent Sessions",
                     "",
-                    "| Session | Candidate | Verifier Runs | Created | Updated |",
-                    "|---|---|---:|---|---|",
+                    (
+                        "| Session | OpenCode Session | Candidate | Verifier Runs | "
+                        "Created | Updated |"
+                    ),
+                    "|---|---|---|---:|---|---|",
                 ]
             )
             for session in agent_sessions:
                 lines.append(
-                    f"| `{session.agent_session_id}` | `{session.candidate_id or ''}` | "
+                    f"| `{session.agent_session_id}` | "
+                    f"{self._markdown_cell(session.opencode_session_id or '')} | "
+                    f"`{session.candidate_id or ''}` | "
                     f"{session.counters.get('verifier_runs', 0)} | "
                     f"{session.created_at} | {session.updated_at} |"
                 )
@@ -756,6 +847,42 @@ class FileSearchRuntime:
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "
                 f"idea: {one_paragraph_idea}"
+            ),
+            "background_required": frozen.spec.budget.max_parallel > 1,
+        }
+
+    def _build_continue_launch_payload(
+        self,
+        frozen: FrozenSpec,
+        session: AgentSessionRecord,
+        directive: dict[str, Any],
+    ) -> dict[str, Any]:
+        worker_agent_type = frozen.spec.strategy.worker_agent_type or "AnySearchAgent"
+        if directive.get("goal"):
+            short_intent = str(directive["goal"])
+        else:
+            short_intent = "continue same candidate"
+
+        if directive:
+            directive_text = "; ".join(
+                f"{key}: {value}" for key, value in directive.items()
+            )
+        else:
+            directive_text = (
+                "continue improving the same candidate from its current workspace state"
+            )
+
+        return {
+            "task_id": session.opencode_session_id,
+            "subagent_type": worker_agent_type,
+            "description": f"{session.candidate_id} continue {short_intent}",
+            "prompt": (
+                "continue_existing_agent_session=true; "
+                f"agent_session_id={session.agent_session_id}; "
+                f"candidate_id={session.candidate_id}; "
+                "refresh authoritative runtime context with search_get_agent_context "
+                "before editing; continue the same candidate and workspace; "
+                f"directive: {directive_text}"
             ),
             "background_required": frozen.spec.budget.max_parallel > 1,
         }
@@ -1679,6 +1806,7 @@ class FileSearchRuntime:
             {
                 "agent_session_id": session.agent_session_id,
                 "candidate_id": session.candidate_id,
+                "opencode_session_id": session.opencode_session_id,
                 "created_at": session.created_at,
                 "updated_at": session.updated_at,
                 "directive": session.directive,

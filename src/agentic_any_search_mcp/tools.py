@@ -65,6 +65,26 @@ class SearchTools:
             directive=directive,
         ).model_dump(mode="json")
 
+    def search_bind_opencode_session(
+        self,
+        agent_session_id: str,
+        opencode_session_id: str,
+    ) -> dict[str, Any]:
+        return self.runtime.bind_opencode_session(
+            agent_session_id=agent_session_id,
+            opencode_session_id=opencode_session_id,
+        ).model_dump(mode="json")
+
+    def search_continue_agent_session(
+        self,
+        agent_session_id: str,
+        directive: dict[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.continue_agent_session(
+            agent_session_id=agent_session_id,
+            directive=directive,
+        ).model_dump(mode="json")
+
     def search_get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
         return self.runtime.get_agent_context(agent_session_id)
 

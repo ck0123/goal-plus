@@ -81,6 +81,36 @@ def create_mcp(
         return tools.search_start_agent_session(run_id, candidate_id, directive)
 
     @mcp.tool()
+    def search_bind_opencode_session(
+        agent_session_id: str,
+        opencode_session_id: str,
+    ) -> dict[str, Any]:
+        """Bind a runtime agent session to the OpenCode Task session id.
+
+        Call this after Task returns (or after a background Task reports its
+        metadata) using the Task result's `metadata.sessionId`. This enables
+        later continuation with `search_continue_agent_session`.
+        """
+        return tools.search_bind_opencode_session(
+            agent_session_id,
+            opencode_session_id,
+        )
+
+    @mcp.tool()
+    def search_continue_agent_session(
+        agent_session_id: str,
+        directive: dict[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        """Return launch fields for continuing the same OpenCode subagent session.
+
+        Requires a prior `search_bind_opencode_session`. The returned
+        `launch.task_id` must be passed to OpenCode Task as `task_id`, so the
+        worker continues the same session, candidate, and workspace instead of
+        creating or forking a new one.
+        """
+        return tools.search_continue_agent_session(agent_session_id, directive)
+
+    @mcp.tool()
     def search_get_agent_context(agent_session_id: str) -> dict[str, Any]:
         """Subagent first call. Authoritative ids and workspace.
 

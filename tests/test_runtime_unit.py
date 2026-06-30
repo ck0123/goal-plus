@@ -226,6 +226,89 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     assert session.launch["background_required"] is False
 
 
+def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(
+        run_id,
+        task.candidate_id,
+        {"goal": "try one concrete variant"},
+    )
+
+    bound = runtime.bind_opencode_session(
+        session.agent_session_id,
+        " opencode_session_001 ",
+    )
+    assert bound.opencode_session_id == "opencode_session_001"
+
+    repeated = runtime.bind_opencode_session(
+        session.agent_session_id,
+        "opencode_session_001",
+    )
+    assert repeated.opencode_session_id == "opencode_session_001"
+
+    continued = runtime.continue_agent_session(
+        session.agent_session_id,
+        {"goal": "keep improving the same node"},
+    )
+
+    assert continued.agent_session_id == session.agent_session_id
+    assert continued.candidate_id == task.candidate_id
+    assert continued.workspace == task.workspace
+    assert continued.opencode_session_id == "opencode_session_001"
+    assert continued.directive == {"goal": "keep improving the same node"}
+    assert continued.launch["task_id"] == "opencode_session_001"
+    assert continued.launch["subagent_type"] == "AnySearchAgent"
+    assert continued.launch["background_required"] is False
+    assert continued.agent_session_id in continued.launch["prompt"]
+    assert task.candidate_id in continued.launch["prompt"]
+    assert "search_get_agent_context" in continued.launch["prompt"]
+    assert str(task.workspace) not in continued.launch["prompt"]
+
+    context = runtime.get_agent_context(session.agent_session_id)
+    assert context["candidate_id"] == task.candidate_id
+    assert context["workspace"] == str(task.workspace)
+
+    history = runtime.list_history(run_id)
+    candidate = history["candidates"][0]
+    assert candidate["agent_sessions"][0]["opencode_session_id"] == "opencode_session_001"
+
+    report = runtime.report(run_id).read_text(encoding="utf-8")
+    assert "OpenCode Session" in report
+    assert "opencode_session_001" in report
+
+    with pytest.raises(ValueError, match="different OpenCode session"):
+        runtime.bind_opencode_session(session.agent_session_id, "opencode_session_002")
+
+
+def test_continue_agent_session_requires_bound_opencode_session(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    with pytest.raises(RuntimeError, match="no bound OpenCode session id"):
+        runtime.continue_agent_session(session.agent_session_id)
+
+
 def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path) -> None:
     """With max_parallel=1, the runtime must not refuse to start sessions
     for additional candidates. OpenCode/main-agent is responsible for not

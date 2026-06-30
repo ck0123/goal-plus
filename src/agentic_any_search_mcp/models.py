@@ -285,6 +285,7 @@ class AgentSessionRecord(SearchModel):
     agent_session_id: str
     run_id: str
     candidate_id: str
+    opencode_session_id: str | None = None
     created_at: str
     updated_at: str
     directive: dict[str, Any] = Field(default_factory=dict)

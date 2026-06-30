@@ -118,6 +118,22 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         )
     ]
     runtime.start_agent_session.return_value = agent_session
+    bound_session = agent_session.model_copy(
+        update={"opencode_session_id": "opencode_session_001"}
+    )
+    continued_session = bound_session.model_copy(
+        update={
+            "launch": {
+                "task_id": "opencode_session_001",
+                "subagent_type": "AnySearchAgent",
+                "description": "c001 continue try one",
+                "prompt": "continue_existing_agent_session=true; agent_session_id=agent_001",
+                "background_required": True,
+            }
+        }
+    )
+    runtime.bind_opencode_session.return_value = bound_session
+    runtime.continue_agent_session.return_value = continued_session
     runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
     runtime.run_verifier.return_value = ScoreReport(
         run_id="run_1",
@@ -160,6 +176,15 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "c001",
         {"goal": "try one"},
     )["agent_session_id"] == "agent_001"
+    assert tools.search_bind_opencode_session(
+        "agent_001",
+        "opencode_session_001",
+    )["opencode_session_id"] == "opencode_session_001"
+    continued = tools.search_continue_agent_session(
+        "agent_001",
+        {"goal": "continue same node"},
+    )
+    assert continued["launch"]["task_id"] == "opencode_session_001"
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_run_verifier(
@@ -188,6 +213,14 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         run_id="run_1",
         candidate_id="c001",
         directive={"goal": "try one"},
+    )
+    runtime.bind_opencode_session.assert_called_once_with(
+        agent_session_id="agent_001",
+        opencode_session_id="opencode_session_001",
+    )
+    runtime.continue_agent_session.assert_called_once_with(
+        agent_session_id="agent_001",
+        directive={"goal": "continue same node"},
     )
 
 

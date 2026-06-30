@@ -72,7 +72,7 @@ Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-sea
 
 `CandidateTask` is produced by `search_start_batch`. It contains the candidate workspace path, allowed/denied files, candidate lineage, plan metadata, and local instructions.
 
-`AgentSessionRecord` is produced by `search_start_agent_session`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, workspace, directive, launch payload (subagent_type/description/prompt/background_required), and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to OpenCode.
+`AgentSessionRecord` is produced by `search_start_agent_session`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, optional opencode_session_id, workspace, directive, launch payload (subagent_type/description/prompt/background_required, plus task_id for continuation), and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to OpenCode.
 
 `IterationRecord` is produced by every `search_run_verifier` call. It records the iteration number, agent_session_id (or None for main final verify), score, failure_class, changed files, and metrics. There is no separate submit step.
 
@@ -102,6 +102,9 @@ search_start_agent_session  (returns launch payload)
 OpenCode Task runs subagent using launch payload
   |
   v
+search_bind_opencode_session  (records Task metadata.sessionId)
+  |
+  v
 subagent calls search_get_agent_context
   |
   v
@@ -112,6 +115,12 @@ OpenCode reports Task completion to Main
   |
   v
 Main calls search_run_verifier (final confirm, no agent_session_id)
+  |
+  v
+search_continue_agent_session  (optional same OpenCode session/node)
+  |
+  v
+OpenCode Task runs with task_id=launch.task_id
   |
   v
 search_plan_next  (optional follow-up batch)

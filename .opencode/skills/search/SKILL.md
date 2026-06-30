@@ -38,6 +38,8 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_plan_next` | `search-runtime_search_plan_next` |
 | `search_start_batch` | `search-runtime_search_start_batch` |
 | `search_start_agent_session` | `search-runtime_search_start_agent_session` |
+| `search_bind_opencode_session` | `search-runtime_search_bind_opencode_session` |
+| `search_continue_agent_session` | `search-runtime_search_continue_agent_session` |
 | `search_get_agent_context` | `search-runtime_search_get_agent_context` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
 | `search_list_iterations` | `search-runtime_search_list_iterations` |
@@ -182,8 +184,10 @@ For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 3. **If `budget.max_parallel == 1`**, foreground Task is fine — main blocks on the worker, no supervisor loop needed. Skip to step 6 when Task returns.
 4. **If `budget.max_parallel > 1`**, Task must include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process). Launch all Tasks in the same model turn as their `search_start_agent_session` calls.
 5. Wait for OpenCode Task completion or notification. There is no MCP wait call — OpenCode tells you when a Task returns.
-6. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
-7. If candidate budget remains, plan and start the next batch.
+6. When a first-time Task returns, bind the runtime session to the OpenCode session id: `search-runtime_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
+7. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
+8. If the same candidate should keep working in the same OpenCode context, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt, background=launch.background_required)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
+9. If candidate budget remains and you want new candidates, plan and start the next batch.
 
 Hard host rules:
 
@@ -191,6 +195,7 @@ Hard host rules:
 - For `max_parallel == 1`, foreground Task is acceptable — there is nothing else to wait on.
 - There is no supported `timeout` field on Task. Subagents run until their step cap or until the user interrupts.
 - The Task prompt must not hard-code `run_id`, `candidate_id`, or workspace paths for the worker to use. The worker must derive them from `search_get_agent_context(agent_session_id)`. The `candidate_id` in the launch description/prompt is a label for OpenCode UI mapping only — context is authoritative.
+- `search_continue_agent_session` is only for continuing the same runtime `agent_session_id` after `search_bind_opencode_session`. Do not use it to branch into a new direction that needs a different candidate workspace.
 - Do not launch foreground Task calls "to see if they block". If foreground Task is the only available subagent mechanism, do not use `agent-session-pool` subagents for that run.
 - Stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool.
 
@@ -207,16 +212,27 @@ while budget_remaining:
 
   for task in tasks:
     session = search_start_agent_session(run_id, task.candidate_id, directive)
-    Task(
+    result = Task(
       subagent_type=session.launch.subagent_type,
       description=session.launch.description,
       prompt=session.launch.prompt,
       background=session.launch.background_required,
     )
+    search_bind_opencode_session(session.agent_session_id, result.metadata.sessionId)
 
   # Wait for OpenCode Task completion. There is no MCP wait loop.
   for task in tasks:
     search_run_verifier(run_id, task.candidate_id, "process")  # main final confirm
+
+  # Optional same-node continuation when a completed session is still promising.
+  continued = search_continue_agent_session(session.agent_session_id, directive)
+  Task(
+    task_id=continued.launch.task_id,
+    subagent_type=continued.launch.subagent_type,
+    description=continued.launch.description,
+    prompt=continued.launch.prompt,
+    background=continued.launch.background_required,
+  )
 ```
 
 ### Step 6: Subagent Autoresearch Contract

@@ -101,7 +101,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 Then send:
 
 ```text
-Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test with 4 candidates end-to-end (freeze_spec → create → plan_next → start_batch → start_agent_session → Task → verify → select → report).
+Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test with 4 candidates end-to-end (freeze_spec → create → plan_next → start_batch → start_agent_session → Task → bind_opencode_session → verify → select → report).
 ```
 
 The skill should guide the host agent through this sequence:
@@ -112,11 +112,12 @@ The skill should guide the host agent through this sequence:
 4. Call `search-runtime_search_plan_next` with `requested_k=4`.
 5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
 6. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim. For `budget.max_parallel == 1`, foreground Task is acceptable; otherwise use `background: true`.
-7. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
-8. After OpenCode Task completion, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
-9. Call `search-runtime_search_select`.
-10. Call `search-runtime_search_report`.
-11. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+7. When Task metadata is available, call `search-runtime_search_bind_opencode_session` with the runtime `agent_session_id` and Task `metadata.sessionId`.
+8. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
+9. After OpenCode Task completion, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
+10. Call `search-runtime_search_select`.
+11. Call `search-runtime_search_report`.
+12. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
 
 There is no batch-shortcut tool. Call `search_plan_next` followed by `search_start_batch`.
 
@@ -165,7 +166,7 @@ If agent sessions are used:
 .search/runs/<run_id>/agent_sessions/<agent_session_id>.json
 ```
 
-The session file stores candidate linkage, workspace, launch payload, directive, and a `verifier_runs` counter. There is no event queue or observation store; OpenCode owns lifecycle state.
+The session file stores candidate linkage, optional `opencode_session_id`, workspace, launch payload, directive, and a `verifier_runs` counter. There is no event queue or observation store; OpenCode owns lifecycle state.
 
 After verification and reporting:
 
