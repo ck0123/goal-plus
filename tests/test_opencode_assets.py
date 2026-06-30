@@ -43,7 +43,6 @@ def test_search_skill_requires_opencode_background_subagents() -> None:
     assert "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true" in combined
     assert "background: true" in combined
     assert "no `timeout` parameter" in combined
-    assert "MCP server subprocess" in combined
 
 
 def test_subagent_contract_derives_identifiers_from_context() -> None:
@@ -61,6 +60,7 @@ def test_subagent_contract_derives_identifiers_from_context() -> None:
     assert "context.candidate_id" in combined
     assert "context.workspace" in combined
     assert "search_get_agent_context" in combined
+    assert "The only required MCP calls" in combined
 
 
 def test_k_module_example_spec_is_valid_json() -> None:
@@ -127,3 +127,55 @@ def test_any_search_agent_tier_has_expected_step_cap(
     text = (ROOT / ".opencode" / "agents" / agent_file).read_text(encoding="utf-8")
     assert f"steps: {expected_steps}" in text
     assert "mode: subagent" in text
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        ".opencode/skills/search/SKILL.md",
+        ".opencode/agents/AnySearchAgent.md",
+        ".opencode/agents/AnySearchAgentDeep.md",
+        ".opencode/agents/AnySearchAgentExtraDeep.md",
+        ".opencode/agents/AnySearchAgentFlash.md",
+        ".opencode/agents/search-orchestrator.md",
+        "docs/flow-view.md",
+        "docs/design.md",
+        "docs/opencode.md",
+        "docs/toy-example.md",
+        "docs/debugging-runtime.md",
+    ],
+)
+def test_deleted_lifecycle_apis_are_absent_from_opencode_assets(
+    relative_path: str,
+) -> None:
+    """The old lifecycle/observation/sqlite APIs must not appear anywhere
+    an agent could rediscover them. Only the plan file and this test may
+    mention them."""
+    text = (ROOT / relative_path).read_text(encoding="utf-8")
+    forbidden = [
+        "search_wait_agent_events",
+        "search_finish_agent_session",
+        "search_update_agent_status",
+        "search_list_agent_status",
+        "search_abort_agent_session",
+        "search_abort_all_agent_sessions",
+        "search_publish_observation",
+        "search_list_observations",
+        "search_submit_candidate",
+        "search_next_batch",
+        "--opencode-db",
+        "opencode_db_path",
+        "sync_host_agent_sessions",
+        "host sync",
+        "sqlite",
+    ]
+    for token in forbidden:
+        assert token not in text, f"{relative_path} mentions deleted API: {token}"
+
+
+def test_subagent_only_two_mcp_calls_documented() -> None:
+    """The subagent prompt contract must restrict the subagent to the two
+    MCP calls it is allowed to make."""
+    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(encoding="utf-8")
+    assert "search_get_agent_context" in agent
+    assert "search_run_verifier" in agent

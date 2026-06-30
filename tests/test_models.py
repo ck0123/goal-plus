@@ -6,12 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_any_search_mcp.models import (
-    AgentObservation,
-    AgentSessionBudget,
     AgentSessionRecord,
-    AgentSessionStatus,
-    AgentSessionWaitResult,
-    ArtifactBundle,
     Budget,
     CandidateRecord,
     CandidateProposal,
@@ -59,16 +54,9 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
 
 
-def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
+def test_search_spec_requires_structured_strategy() -> None:
     data = valid_spec_dict()
-    data["strategy"] = "evolve"
-    spec = SearchSpec.model_validate(data)
-    assert spec.strategy.name == "evolve"
-
-    data = valid_spec_dict()
-    data["strategy"] = {
-        "name": "agent_guided",
-        "history_policy": {"scope": "top_n", "top_n": 3}}
+    data["strategy"] = {"name": "agent_guided", "history_policy": {"scope": "top_n", "top_n": 3}}
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.name == "agent_guided"
     assert spec.strategy.history_policy.top_n == 3
@@ -83,21 +71,16 @@ def test_search_spec_accepts_legacy_and_structured_strategy() -> None:
     assert spec.strategy.worker_mode == "agent-session-pool"
     assert spec.strategy.worker_agent_type == "AnySearchAgent"
 
-    data = valid_spec_dict()
-    data["strategy"] = {
-        "name": "independent_branches",
-        "worker_mode": "sub-agent-search-dispatch"}
-    spec = SearchSpec.model_validate(data)
-    assert spec.strategy.worker_mode == "agent-session-pool"
+    legacy_string = valid_spec_dict()
+    legacy_string["strategy"] = "evolve"
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(legacy_string)
 
-    # All retired worker_mode values normalize to agent-session-pool.
-    for retired in ("main-agent-search-direct", "auto"):
+    for retired in ("sub-agent-search-dispatch", "main-agent-search-direct", "auto"):
         data = valid_spec_dict()
-        data["strategy"] = {
-            "name": "independent_branches",
-            "worker_mode": retired}
-        spec = SearchSpec.model_validate(data)
-        assert spec.strategy.worker_mode == "agent-session-pool"
+        data["strategy"] = {"name": "independent_branches", "worker_mode": retired}
+        with pytest.raises(ValidationError):
+            SearchSpec.model_validate(data)
 
 
 def test_strategy_plan_models_capture_proposal_contract() -> None:
@@ -109,7 +92,7 @@ def test_strategy_plan_models_capture_proposal_contract() -> None:
         planned_k=2,
         remaining_budget=2,
         requires_agent_proposals=True,
-        proposal_contract={"count": 2, "must_reference_one_of": ["c001"]},
+        proposal_contract={"count": 2, "must_reference_one_of": ["c001"]},  # type: ignore[arg-type]
         created_at="2026-06-24T00:00:00Z",
     )
     proposal = CandidateProposal(
@@ -118,43 +101,40 @@ def test_strategy_plan_models_capture_proposal_contract() -> None:
         expected_tradeoff="higher score with more risk",
     )
 
-    assert plan.proposal_contract.count == 2
+    assert plan.proposal_contract.count == 2  # type: ignore[union-attr]
     assert proposal.parent_candidate_ids == ["c001"]
 
 
-def test_agent_session_models_capture_budget_events_and_observations() -> None:
-    budget = AgentSessionBudget(
-        stale_after_seconds=90,
-    )
+def test_agent_session_record_is_context_handle_with_required_candidate() -> None:
     session = AgentSessionRecord(
         agent_session_id="agent_001",
         run_id="run_1",
+        candidate_id="c001",
         created_at="2026-06-24T00:00:00Z",
         updated_at="2026-06-24T00:00:00Z",
-        last_heartbeat_at="2026-06-24T00:00:00Z",
-        status=AgentSessionStatus.RUNNING,
-        budget=budget,
+        workspace=Path("/tmp/c001"),
         directive={"goal": "try one direction"},
+        launch={
+            "subagent_type": "AnySearchAgent",
+            "description": "c001 try one direction",
+            "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: try one direction",
+            "background_required": False,
+        },
+        counters={"verifier_runs": 0},
     )
-    observation = AgentObservation(
-        observation_id="obs_000001",
-        run_id="run_1",
-        agent_session_id="agent_001",
-        created_at="2026-06-24T00:01:00Z",
-        summary="corner cases look weak",
-        tags=["layout"],
-    )
-    wait = AgentSessionWaitResult(
-        run_id="run_1",
-        poll_window_expired=True,
-        sessions=[session],
-        active_count=1,
-        max_concurrent_agents=2,
-    )
+    assert session.candidate_id == "c001"
+    assert session.launch["subagent_type"] == "AnySearchAgent"
 
-    assert session.status == "running"
-    assert observation.visibility == "observations"
-    assert wait.sessions[0].agent_session_id == "agent_001"
+    # candidate_id is now required - a subagent session without a candidate
+    # has no useful role in this runtime.
+    with pytest.raises(ValidationError):
+        AgentSessionRecord(  # type: ignore[call-arg]
+            agent_session_id="agent_002",
+            run_id="run_1",
+            created_at="2026-06-24T00:00:00Z",
+            updated_at="2026-06-24T00:00:00Z",
+            workspace=Path("/tmp/c001"),
+        )
 
 
 def test_search_spec_rejects_invalid_budget_and_blank_source_path() -> None:
@@ -177,7 +157,7 @@ def test_models_reject_extra_fields() -> None:
         SearchSpec.model_validate(data)
 
 
-def test_candidate_record_requires_artifact_candidate_match() -> None:
+def test_candidate_record_rejects_submitted_status() -> None:
     task = CandidateTask(
         run_id="run_1",
         candidate_id="c001",
@@ -186,12 +166,28 @@ def test_candidate_record_requires_artifact_candidate_match() -> None:
         allowed_files=["initial_program.py"],
         denied_files=["evaluator.py"],
     )
-    artifact = ArtifactBundle(candidate_id="c002", status="patch_ready")
 
     with pytest.raises(ValidationError):
         CandidateRecord(
             candidate_id="c001",
-            status="submitted",
+            status="submitted",  # type: ignore[arg-type]
             task=task,
-            artifact=artifact,
+        )
+
+
+def test_candidate_record_accepts_created_and_evaluated() -> None:
+    task = CandidateTask(
+        run_id="run_1",
+        candidate_id="c001",
+        hypothesis="try one",
+        workspace=Path("/tmp/c001"),
+        allowed_files=["initial_program.py"],
+        denied_files=["evaluator.py"],
+    )
+
+    for status in ("created", "evaluated", "failed"):
+        CandidateRecord(
+            candidate_id="c001",
+            status=status,
+            task=task,
         )

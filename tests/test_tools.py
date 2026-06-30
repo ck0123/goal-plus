@@ -4,12 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from agentic_any_search_mcp.models import (
-    AgentObservation,
-    AgentSessionBudget,
-    AgentSessionEvent,
     AgentSessionRecord,
-    AgentSessionWaitResult,
-    ArtifactBundle,
     CandidateProposal,
     CandidateTask,
     FrozenSpec,
@@ -20,6 +15,7 @@ from agentic_any_search_mcp.models import (
     SearchSpec,
     StrategySpec,
     VerifierResult,
+    VerifierRole,
 )
 from agentic_any_search_mcp.tools import SearchTools
 
@@ -76,15 +72,19 @@ def test_search_freeze_spec_converts_input_and_serializes_output() -> None:
 
 def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime = Mock()
-    agent_budget = AgentSessionBudget(stale_after_seconds=90)
     agent_session = AgentSessionRecord(
         agent_session_id="agent_001",
         run_id="run_1",
         candidate_id="c001",
         created_at="2026-06-24T00:00:00Z",
         updated_at="2026-06-24T00:00:00Z",
-        last_heartbeat_at="2026-06-24T00:00:00Z",
-        budget=agent_budget,
+        workspace=Path("/tmp/c001"),
+        launch={
+            "subagent_type": "AnySearchAgent",
+            "description": "c001 try one",
+            "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: try one",
+            "background_required": True,
+        },
     )
     runtime.create_run.return_value = "run_1"
     runtime.status.return_value = RunSummary(
@@ -92,7 +92,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         state=RunState.RUNNING,
         frozen_spec_id="spec_123",
         candidates_total=0,
-        candidates_running=0,
         candidates_evaluated=0,
     )
     runtime.list_history.return_value = {
@@ -118,52 +117,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             denied_files=["evaluator.py"],
         )
     ]
-    runtime.next_batch.return_value = [
-        CandidateTask(
-            run_id="run_1",
-            candidate_id="c001",
-            hypothesis="try",
-            workspace=Path("/tmp/c001"),
-            allowed_files=["initial_program.py"],
-            denied_files=["evaluator.py"],
-        )
-    ]
     runtime.start_agent_session.return_value = agent_session
     runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
-    runtime.update_agent_status.return_value = agent_session.model_copy(update={"phase": "implementing"})
-    runtime.list_agent_status.return_value = [agent_session]
-    runtime.finish_agent_session.return_value = agent_session.model_copy(update={"status": "completed"})
-    runtime.abort_agent_session.return_value = agent_session.model_copy(update={"status": "aborted"})
-    runtime.abort_all_agent_sessions.return_value = [agent_session.model_copy(update={"status": "aborted"})]
-    runtime.publish_observation.return_value = AgentObservation(
-        observation_id="obs_000001",
-        run_id="run_1",
-        agent_session_id="agent_001",
-        created_at="2026-06-24T00:00:01Z",
-        summary="found one issue",
-    )
-    runtime.list_observations.return_value = [
-        {
-            "observation_id": "obs_000001",
-            "summary": "found one issue",
-        }
-    ]
-    runtime.wait_agent_events.return_value = AgentSessionWaitResult(
-        run_id="run_1",
-        poll_window_expired=False,
-        events=[
-            AgentSessionEvent(
-                event_id="event_000001",
-                run_id="run_1",
-                agent_session_id="agent_001",
-                type="agent_completed",
-                created_at="2026-06-24T00:00:02Z",
-            )
-        ],
-        sessions=[agent_session],
-        active_count=0,
-        max_concurrent_agents=2,
-    )
     runtime.run_verifier.return_value = ScoreReport(
         run_id="run_1",
         candidate_id="c001",
@@ -173,7 +128,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         verifier_results=[
             VerifierResult(
                 name="score",
-                role="ranking_signal",
+                role=VerifierRole.RANKING_SIGNAL,
                 passed=True,
                 score=1.0,
             )
@@ -204,21 +159,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "run_1",
         "c001",
         {"goal": "try one"},
-        {},
     )["agent_session_id"] == "agent_001"
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
-    assert tools.search_update_agent_status(
-        "agent_001",
-        "implementing",
-        current_goal="patch",
-    )["phase"] == "implementing"
-    assert tools.search_list_agent_status("run_1")[0]["agent_session_id"] == "agent_001"
-    assert tools.search_finish_agent_session("agent_001")["status"] == "completed"
-    assert tools.search_abort_agent_session("agent_001", "stop")["status"] == "aborted"
-    assert tools.search_abort_all_agent_sessions("run_1", "stop")["aborted"] == 1
-    assert tools.search_publish_observation("agent_001", "found one issue")["observation_id"] == "obs_000001"
-    assert tools.search_list_observations("run_1")[0]["summary"] == "found one issue"
-    assert tools.search_wait_agent_events("run_1", timeout_seconds=0)["events"][0]["type"] == "agent_completed"
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_run_verifier(
         "run_1", "c001", agent_session_id="agent_001"
@@ -238,14 +180,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
     assert tools.search_promote("run_1", "c001") == {"artifact_path": "/tmp/c001.patch"}
 
-    submit_result = tools.search_submit_candidate(
-        "run_1",
-        "c001",
-        {"candidate_id": "c001", "status": "patch_ready"},
-    )
-    artifact = runtime.submit_candidate.call_args.kwargs["artifact"]
-    assert submit_result == {"accepted": True}
-    assert isinstance(artifact, ArtifactBundle)
     proposal_arg = runtime.start_batch.call_args.args[2][0]
     assert isinstance(proposal_arg, CandidateProposal)
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
@@ -254,6 +188,21 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         run_id="run_1",
         candidate_id="c001",
         directive={"goal": "try one"},
-        budget={},
-        visibility_mode="observations",
     )
+
+
+def test_search_tools_expose_no_lifecycle_methods() -> None:
+    runtime = Mock()
+    tools = SearchTools(runtime)
+    for deleted in (
+        "search_update_agent_status",
+        "search_list_agent_status",
+        "search_finish_agent_session",
+        "search_abort_agent_session",
+        "search_abort_all_agent_sessions",
+        "search_publish_observation",
+        "search_list_observations",
+        "search_wait_agent_events",
+        "search_submit_candidate",
+    ):
+        assert not hasattr(tools, deleted), f"SearchTools should not expose {deleted}"

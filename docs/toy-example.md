@@ -101,7 +101,7 @@ OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 Then send:
 
 ```text
-Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test with 4 candidates end-to-end (freeze_spec → create → plan_next → start_batch → start sessions → verify → select → report).
+Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test with 4 candidates end-to-end (freeze_spec → create → plan_next → start_batch → start_agent_session → Task → verify → select → report).
 ```
 
 The skill should guide the host agent through this sequence:
@@ -111,15 +111,14 @@ The skill should guide the host agent through this sequence:
 3. Call `search-runtime_search_create`.
 4. Call `search-runtime_search_plan_next` with `requested_k=4`.
 5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-6. Follow the returned `worker_policy`. Call `search-runtime_search_start_agent_session` for each candidate, launch the configured subagent (e.g. `AnySearchAgent`) with `agent_session_id`, and supervise with `search-runtime_search_wait_agent_events`. For `budget.max_parallel == 1`, foreground Task is acceptable; otherwise use `background: true`.
-7. Edit only `initial_program.py` inside each candidate workspace.
-8. Call `search-runtime_search_submit_candidate` for each candidate.
-9. Call `search-runtime_search_run_verifier` for each candidate.
-10. Call `search-runtime_search_select`.
-11. Call `search-runtime_search_report`.
-12. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+6. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim. For `budget.max_parallel == 1`, foreground Task is acceptable; otherwise use `background: true`.
+7. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
+8. After OpenCode Task completion, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
+9. Call `search-runtime_search_select`.
+10. Call `search-runtime_search_report`.
+11. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
 
-`search-runtime_search_next_batch(run_id, 4)` is still available as a compatibility shortcut for this default independent strategy; it performs the plan/start sequence internally.
+There is no batch-shortcut tool. Call `search_plan_next` followed by `search_start_batch`.
 
 ## 6. Run Headless
 
@@ -164,11 +163,9 @@ If agent sessions are used:
 
 ```text
 .search/runs/<run_id>/agent_sessions/<agent_session_id>.json
-.search/runs/<run_id>/agent_events/<event_id>.json
-.search/runs/<run_id>/observations/<observation_id>.json
 ```
 
-The session file stores candidate linkage, budget, status, heartbeat, summary, and counters. Event files drive supervisor wakeups.
+The session file stores candidate linkage, workspace, launch payload, directive, and a `verifier_runs` counter. There is no event queue or observation store; OpenCode owns lifecycle state.
 
 After verification and reporting:
 
@@ -201,10 +198,10 @@ The report should show the selected candidate with score `1.0` and no denied-fil
 
 `ModuleNotFoundError: fastmcp`: run `python -m pip install -e ".[dev]"` in the Python environment used by OpenCode.
 
-`candidate must be submitted before verification`: the host skipped `search-runtime_search_submit_candidate`; submit the candidate artifact first.
-
 `EditSurfaceViolation`: a candidate changed a denied file or a file outside `edit_surface.allow`; keep the failure in the report and create a new candidate.
 
 `FrozenVerifierModified`: a candidate changed `evaluator.py`; this is an anti-cheat failure by design.
+
+`subagent still running after I asked it to stop`: stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool. Stop the Task from OpenCode and let the user interrupt.
 
 Need a clean run: remove `.search/` if you do not need previous runtime state.

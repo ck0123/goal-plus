@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.models import ArtifactBundle, CandidateProposal, SearchSpec
+from agentic_any_search_mcp.models import CandidateProposal, SearchSpec
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
@@ -56,159 +56,17 @@ class SearchTools:
     def search_start_agent_session(
         self,
         run_id: str,
-        candidate_id: str | None = None,
+        candidate_id: str,
         directive: dict[str, Any] | str | None = None,
-        budget: dict[str, Any] | None = None,
-        visibility_mode: str = "observations",
     ) -> dict[str, Any]:
         return self.runtime.start_agent_session(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
-            budget=budget,
-            visibility_mode=visibility_mode,
         ).model_dump(mode="json")
 
     def search_get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
         return self.runtime.get_agent_context(agent_session_id)
-
-    def search_update_agent_status(
-        self,
-        agent_session_id: str,
-        phase: str,
-        current_goal: str = "",
-        last_action: str = "",
-        next_step: str = "",
-        blockers: list[str] | None = None,
-        status: str | None = None,
-        heartbeat: bool = True,
-    ) -> dict[str, Any]:
-        session = self.runtime.update_agent_status(
-            agent_session_id=agent_session_id,
-            phase=phase,
-            current_goal=current_goal,
-            last_action=last_action,
-            next_step=next_step,
-            blockers=blockers,
-            status=status,
-            heartbeat=heartbeat,
-        )
-        return self._agent_session_ack(session)
-
-    def search_list_agent_status(
-        self,
-        run_id: str,
-        include_stale: bool = True,
-    ) -> list[dict[str, Any]]:
-        return [
-            session.model_dump(mode="json")
-            for session in self.runtime.list_agent_status(run_id, include_stale=include_stale)
-        ]
-
-    @staticmethod
-    def _agent_session_ack(session: Any) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "agent_session_id": session.agent_session_id,
-            "run_id": session.run_id,
-            "candidate_id": session.candidate_id,
-            "status": session.status,
-            "phase": session.phase,
-            "updated_at": session.updated_at,
-        }
-
-    def search_finish_agent_session(
-        self,
-        agent_session_id: str,
-        status: str = "completed",
-        summary: str = "",
-        result: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self.runtime.finish_agent_session(
-            agent_session_id=agent_session_id,
-            status=status,
-            summary=summary,
-            result=result,
-        ).model_dump(mode="json")
-
-    def search_abort_agent_session(
-        self,
-        agent_session_id: str,
-        reason: str = "",
-    ) -> dict[str, Any]:
-        return self.runtime.abort_agent_session(agent_session_id, reason).model_dump(mode="json")
-
-    def search_abort_all_agent_sessions(
-        self,
-        run_id: str,
-        reason: str = "",
-    ) -> dict[str, Any]:
-        sessions = self.runtime.abort_all_agent_sessions(run_id, reason)
-        return {
-            "aborted": len(sessions),
-            "sessions": [session.model_dump(mode="json") for session in sessions],
-        }
-
-    def search_publish_observation(
-        self,
-        agent_session_id: str,
-        summary: str,
-        evidence: str = "",
-        next_ideas: list[str] | None = None,
-        tags: list[str] | None = None,
-        visibility: str = "observations",
-    ) -> dict[str, Any]:
-        return self.runtime.publish_observation(
-            agent_session_id=agent_session_id,
-            summary=summary,
-            evidence=evidence,
-            next_ideas=next_ideas,
-            tags=tags,
-            visibility=visibility,
-        ).model_dump(mode="json")
-
-    def search_list_observations(
-        self,
-        run_id: str,
-        visibility: str | None = None,
-        tags: list[str] | None = None,
-        top_n: int = 20,
-    ) -> list[dict[str, Any]]:
-        return self.runtime.list_observations(
-            run_id=run_id,
-            visibility=visibility,
-            tags=tags,
-            top_n=top_n,
-        )
-
-    def search_wait_agent_events(
-        self,
-        run_id: str,
-        timeout_seconds: int = 300,
-        wake_on: list[str] | None = None,
-        since_event_id: str | None = None,
-        return_when_all_idle: bool = True,
-    ) -> dict[str, Any]:
-        return self.runtime.wait_agent_events(
-            run_id=run_id,
-            timeout_seconds=timeout_seconds,
-            wake_on=wake_on,
-            since_event_id=since_event_id,
-            return_when_all_idle=return_when_all_idle,
-        ).model_dump(mode="json")
-
-    def search_submit_candidate(
-        self,
-        run_id: str,
-        candidate_id: str,
-        artifact: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.runtime.submit_candidate(
-            run_id=run_id,
-            candidate_id=candidate_id,
-            artifact=ArtifactBundle.model_validate(artifact),
-        )
-        return {"accepted": True}
 
     def search_run_verifier(
         self,

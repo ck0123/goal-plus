@@ -57,7 +57,11 @@ All scopes should configure the same installed command:
   "mcp": {
     "search-runtime": {
       "type": "local",
-      "command": ["agentic-any-search-mcp", "--root", ".search"],
+      "command": [
+        "agentic-any-search-mcp",
+        "--root",
+        ".search"
+      ],
       "cwd": ".",
       "timeout": 300000,
       "enabled": true
@@ -108,7 +112,7 @@ For headless runs, use the same environment:
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
 ```
 
-Current OpenCode `Task` exposes `background: true` behind this flag, but it does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or you abort them via MCP; there are no per-session or run-level time deadlines.
+Current OpenCode `Task` exposes `background: true` behind this flag, but it does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or the user interrupts the run; there are no per-session or run-level time deadlines, and there is no MCP abort tool.
 
 ## Verify MCP Connectivity
 
@@ -156,7 +160,7 @@ Expected behavior:
 
 ## Tool Prefix
 
-OpenCode prefixes MCP tool names by server name. With `search-runtime`, tools appear as:
+OpenCode prefixes MCP tool names by server name. With `search-runtime`, the only tools are:
 
 ```text
 search-runtime_search_freeze_spec
@@ -165,39 +169,30 @@ search-runtime_search_status
 search-runtime_search_list_history
 search-runtime_search_plan_next
 search-runtime_search_start_batch
-search-runtime_search_next_batch
 search-runtime_search_start_agent_session
 search-runtime_search_get_agent_context
-search-runtime_search_update_agent_status
-search-runtime_search_list_agent_status
-search-runtime_search_finish_agent_session
-search-runtime_search_abort_agent_session
-search-runtime_search_abort_all_agent_sessions
-search-runtime_search_publish_observation
-search-runtime_search_list_observations
-search-runtime_search_wait_agent_events
-search-runtime_search_submit_candidate
 search-runtime_search_run_verifier
+search-runtime_search_list_iterations
 search-runtime_search_select
 search-runtime_search_report
 search-runtime_search_promote
 ```
 
+There are no wait, abort, finish, submit, observation, status, or host-sync tools.
+
 ## Agent Session Pool
 
-The autonomous-search control plane represents each long-running subagent as an agent session:
+The autonomous-search control plane represents each long-running subagent as an OpenCode Task launched from an MCP context handle:
 
 1. Main agent creates candidate workspaces with `search_start_batch`.
-2. Main agent starts sessions with `search_start_agent_session(run_id, candidate_id, directive, budget)`.
-3. Runtime enforces `budget.max_parallel` as the active session pool size; attempts above the pool fail instead of relying on prompt discipline.
-4. Main agent launches `AnySearchAgent` with the returned `agent_session_id` through an OpenCode Task call with `background: true`, which returns control immediately. Do not use foreground long-running Task calls. If the host cannot launch background/managed tasks, use direct candidate work or stop instead of pretending the run is supervised.
-5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace. They may call `search_update_agent_status` sparingly after meaningful progress or when blocked, but should not do status heartbeats before the first file read. Shared findings can be published with `search_publish_observation`.
-6. The supervisor loop calls `search_wait_agent_events(run_id, timeout_seconds=300, since_event_id=<last_event_id>)` and feeds the returned `last_event_id` into the next wait call.
-   It returns when a session completes/fails/blocks/aborts, or when the poll window expires (`poll_window_expired=True`) with a status snapshot.
-7. Completed sessions are finalized with `search_finish_agent_session`; stuck sessions are stopped with `search_abort_agent_session`.
-8. When the run budget is exhausted, call `search_abort_all_agent_sessions` and summarize/verify the best submitted candidates.
+2. Main agent calls `search_start_agent_session(run_id, candidate_id, directive)` to obtain a context handle plus a `launch` payload (`subagent_type`, `description`, `prompt`, `background_required`).
+3. Main agent launches the OpenCode Task using the launch payload verbatim. For `max_parallel > 1`, include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process).
+4. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace and self-score with `search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are those two.
+5. Main agent waits for OpenCode Task completion or notification. There is no MCP wait loop.
+6. After a Task returns, the main agent runs `search_run_verifier(run_id, candidate_id, "process")` to confirm the current best workspace state.
+7. When the run budget is exhausted, the main agent stops launching new Tasks and reports the best candidates. Stopping a running subagent is an OpenCode/user interruption concern; there is no MCP abort.
 
-The runtime owns durable pool, event, and observation state. Hard process/session cancellation still requires the host adapter to wire `search_abort_agent_session` to OpenCode's native abort for the child session; the MCP state transition is the control-plane source of truth.
+The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion. OpenCode owns the actual subagent lifecycle (start, step cap, stop/interrupt, completion notification). The runtime does not maintain lifecycle status, host-sync state, or process cancellation.
 
 For the full walkthrough, see [toy-example.md](toy-example.md).
 

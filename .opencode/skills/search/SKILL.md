@@ -1,7 +1,7 @@
 ---
 name: search
 description: >
-  Run MCP-controlled Search Mode for measurable multi-candidate coding tasks.
+  Run Agentic Search for measurable multi-candidate coding tasks.
   Use when the user asks to try several candidate fixes,
   optimizations, or configurations under a frozen verifier.
 argument-hint: >
@@ -10,22 +10,20 @@ argument-hint: >
 
 # Agentic Search Skill
 
-This skill runs Search Mode with MCP-owned state, isolated candidate workspaces, verifier execution, durable agent sessions, and a supervisor wait/abort loop.
-
-The old worker-dispatch flow is retired and is not part of the MCP tool surface. Long-running subagents must be represented by `search_start_agent_session` and supervised with `search_wait_agent_events`.
+This skill runs Search Mode with isolated candidate workspaces, frozen verifier execution, iteration scoring, and OpenCode-native subagent lifecycle. The MCP runtime is not a process supervisor — OpenCode owns the actual `Task` lifecycle, step cap, and completion notification. The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion patches.
 
 ## OpenCode Host Requirement
 
-For `agent-session-pool`, OpenCode must expose background subagents. Start OpenCode with one of:
+For `agent-session-pool` with `max_parallel > 1`, OpenCode must expose background subagents. Start OpenCode with one of:
 
 ```bash
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode
 OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true opencode run --command search "<prompt>"
 ```
 
-`OPENCODE_EXPERIMENTAL=true` also enables the same flag. This environment variable belongs to the OpenCode process itself, not only to the MCP server subprocess configured in `opencode.json`.
+`OPENCODE_EXPERIMENTAL=true` also enables the same flag. This environment variable belongs to the OpenCode process itself, not to the MCP server subprocess configured in `opencode.json`.
 
-OpenCode `Task` has no `timeout` parameter. Subagents run until their OpenCode step cap (15/50/100/150 depending on `worker_agent_type`) hits or until you abort them via `search_abort_agent_session` / `search_abort_all_agent_sessions`. There are no per-session or run-level time deadlines in the runtime. Do not pass or invent a Task-level timeout.
+OpenCode `Task` has no `timeout` parameter. Subagents run until their OpenCode step cap (15/50/100/150 depending on `worker_agent_type`) hits or the user interrupts the run. There are no per-session or run-level time deadlines in this runtime. Do not pass or invent a Task-level timeout.
 
 ## Tool Names In OpenCode
 
@@ -41,32 +39,25 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_start_batch` | `search-runtime_search_start_batch` |
 | `search_start_agent_session` | `search-runtime_search_start_agent_session` |
 | `search_get_agent_context` | `search-runtime_search_get_agent_context` |
-| `search_update_agent_status` | `search-runtime_search_update_agent_status` |
-| `search_list_agent_status` | `search-runtime_search_list_agent_status` |
-| `search_finish_agent_session` | `search-runtime_search_finish_agent_session` |
-| `search_abort_agent_session` | `search-runtime_search_abort_agent_session` |
-| `search_abort_all_agent_sessions` | `search-runtime_search_abort_all_agent_sessions` |
-| `search_publish_observation` | `search-runtime_search_publish_observation` |
-| `search_list_observations` | `search-runtime_search_list_observations` |
-| `search_wait_agent_events` | `search-runtime_search_wait_agent_events` |
-| `search_submit_candidate` | `search-runtime_search_submit_candidate` |
 | `search_run_verifier` | `search-runtime_search_run_verifier` |
 | `search_list_iterations` | `search-runtime_search_list_iterations` |
 | `search_select` | `search-runtime_search_select` |
 | `search_report` | `search-runtime_search_report` |
 | `search_promote` | `search-runtime_search_promote` |
 
-If these tools are unavailable, stop and report that the MCP server is not connected. Do not simulate runtime state in chat.
+If any of these tools are unavailable, stop and report that the MCP server is not connected. Do not simulate runtime state in chat.
+
+There are no MCP `wait`, `abort`, `finish`, `submit`, observation, status, or host-sync tools. Stopping a running subagent is an OpenCode/user interruption concern, not an MCP call.
 
 ## Required Discipline
 
 1. Do not start candidate execution before freezing the SearchSpec and verifier artifacts.
 2. Do not modify verifier files during candidate execution.
 3. Do not edit the main source workspace while exploring candidates.
-4. Subagents self-verify via `search_run_verifier` with their own `agent_session_id`. After session termination, call `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
+4. Subagents self-verify via `search_run_verifier` with their own `agent_session_id`. After OpenCode Task returns, call `search_run_verifier` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 5. Do not promote by manually copying files. Use `search_promote`; it exports a patch/report.
-6. If a candidate touches denied files or files outside the edit surface, submit it anyway and let runtime mark it failed.
-7. For `agent-session-pool`, do not use foreground long-running Task calls. The main agent must be able to wake, inspect, start more work, request finalize, or abort.
+6. If a candidate touches denied files or files outside the edit surface, run verifier anyway and let the runtime mark it failed.
+7. For `max_parallel > 1`, Task must use `background: true`. The main agent must be able to wake, inspect, or start more work.
 
 ## SearchSpec
 
@@ -114,9 +105,9 @@ Minimum shape:
 }
 ```
 
-`max_candidates` and `max_parallel` are enforced by the runtime. There are no time-based budgets — subagents run until their OpenCode step cap hits or you abort them. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
+`max_candidates` is enforced by the runtime. `max_parallel` is the OpenCode-side concurrency budget — the runtime does not gate session creation on it (OpenCode is the process supervisor); the main agent must not launch more concurrent Tasks than `max_parallel`. There are no time-based budgets. Subagents run until their OpenCode step cap hits or the user interrupts. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
 
-`strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values `main-agent-search-direct`, `auto`, and `sub-agent-search-dispatch` are normalized to `agent-session-pool` at parse time, so legacy specs still load.
+`strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values are rejected at parse time — fix the spec instead of relying on normalization.
 
 `strategy.worker_agent_type` selects the OpenCode subagent variant, which fixes the per-session step cap:
 
@@ -140,6 +131,8 @@ Read enough files to identify:
 - process verifier command
 - promotion verifier command, if any
 - budget: `max_candidates`, `max_parallel`
+
+`spec.metric_name` becomes the column-2 header of every subagent's `results.tsv`, so pick a legible, domain-specific name (e.g. `val_bpb`, `pass@1`, `coverage`, `combined_score`). Avoid generic names like `score` — they defeat the purpose of a per-run metric column. `spec.metric_direction` (`minimize`/`maximize`) is what the subagent uses to decide whether an iteration improved.
 
 For bundled examples, load the matching JSON file from `examples/`. If the user gives extra budget instructions, modify the spec object before freezing.
 
@@ -180,78 +173,66 @@ The default strategy is `agent_guided`, so `plan.requires_agent_proposals` is `t
 
 If you switch the spec to a builtin that produces fixed work orders (`independent_branches`, `evolve`, `mcts`, `random`), `plan.requires_agent_proposals` is `false` and `search_start_batch` must be called without proposals.
 
-### Step 5: Dispatch Autoresearcher Sessions
+### Step 5: Launch OpenCode Task Workers
 
 For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 
-1. Start at most `budget.max_parallel` sessions.
-2. For each candidate, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive, budget)` to get `agent_session_id`.
-3. Launch the subagent with `Task(subagent_type="AnySearchAgent", prompt="<agent_session_id>; candidate idea: <one paragraph>")`. **This is the actual worker launch — `search_start_agent_session` only registers an MCP-side session record; without a matching `Task` call, no worker process runs, the session stays idle, and `search_wait_agent_events` returns with `poll_window_expired=True` and zero real work done.** Call Task in the **same model turn** as the `search_start_agent_session` that produced the `agent_session_id`, never in a later turn — otherwise the host will already be blocked in `wait_agent_events` while no worker exists.
-4. **If `budget.max_parallel == 1`**, foreground Task is fine — main blocks on the worker, no supervisor loop needed. Skip to step 7 when it returns.
-5. **If `budget.max_parallel > 1`**, Task must include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process). No `timeout` field exists on Task; the MCP supervisor loop polls for terminal events and you abort when you want to stop.
-6. Each AnySearchAgent runs an autoresearch-style loop inside its workspace: it self-iterates, calls `search_run_verifier` with its own `agent_session_id`, tracks git commits, and maintains a local `results.tsv`. You do not supervise iteration-level progress.
-7. For parallel runs, enter a supervisor loop with `search-runtime_search_wait_agent_events(run_id, timeout_seconds=<poll window>, since_event_id=<last seen>)` to wake on terminal events.
-8. When a session terminates (completed / failed / aborted), run `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself to confirm the final score.
-9. If slots free and candidate budget remains, plan and start the next batch. Read `search-runtime_search_list_observations(run_id, top_n=20)` to inform the next plan when useful.
-10. When you want to stop the run, call `search-runtime_search_abort_all_agent_sessions(run_id)` before reporting.
+1. For each candidate you want to dispatch, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive)`. The response includes a `launch` payload: `subagent_type`, `description`, `prompt`, `background_required`. Use those fields verbatim in the OpenCode Task call below.
+2. Launch the subagent with `Task(subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt, background=launch.background_required)`. The `launch.prompt` is the only prompt string the worker needs. Do not append or hard-code `run_id` / workspace paths into the prompt — the worker derives those from `search_get_agent_context`.
+3. **If `budget.max_parallel == 1`**, foreground Task is fine — main blocks on the worker, no supervisor loop needed. Skip to step 6 when Task returns.
+4. **If `budget.max_parallel > 1`**, Task must include `background: true` (requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` on the OpenCode process). Launch all Tasks in the same model turn as their `search_start_agent_session` calls.
+5. Wait for OpenCode Task completion or notification. There is no MCP wait call — OpenCode tells you when a Task returns.
+6. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
+7. If candidate budget remains, plan and start the next batch.
 
-Hard host rule:
+Hard host rules:
 
-- For `max_parallel > 1`, Task input must include `background: true`. A normal OpenCode `Task` call without `background` blocks the main agent and prevents supervision.
-- For `max_parallel == 1`, foreground Task is acceptable — there is nothing else to wait on, and the supervisor loop would be pure overhead.
-- There is no supported `timeout` field on Task; the supervisor loop polls and you abort explicitly when you want to stop.
-- The Task prompt must not hard-code `run_id`, `candidate_id`, or workspace paths for the worker to use. The worker must derive them from `search_get_agent_context(agent_session_id)`. Human-readable candidate ideas are fine; authoritative identifiers and paths come only from MCP context.
-- Seeing `AnySearchAgent Task — ...` followed by worker tool activity, with no immediate `search_wait_agent_events` call from the main agent, means the main agent is blocked in foreground Task execution. This is fine for `max_parallel == 1` and a bug for `max_parallel > 1`.
+- For `max_parallel > 1`, Task input must include `background: true`. A normal OpenCode `Task` call without `background` blocks the main agent and prevents parallel supervision.
+- For `max_parallel == 1`, foreground Task is acceptable — there is nothing else to wait on.
+- There is no supported `timeout` field on Task. Subagents run until their step cap or until the user interrupts.
+- The Task prompt must not hard-code `run_id`, `candidate_id`, or workspace paths for the worker to use. The worker must derive them from `search_get_agent_context(agent_session_id)`. The `candidate_id` in the launch description/prompt is a label for OpenCode UI mapping only — context is authoritative.
 - Do not launch foreground Task calls "to see if they block". If foreground Task is the only available subagent mechanism, do not use `agent-session-pool` subagents for that run.
+- Stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool.
 
-Supervisor loop sketch:
+Multi-batch sketch:
 
 ```text
-last_event_id = null
-pending_candidates = [...]
-while pending_candidates or active_sessions:
-  while pending_candidates and active_count < max_parallel:
-    session = search_start_agent_session(...)
-    Task(subagent_type="AnySearchAgent", background=true,
-         prompt=f"agent_session_id={session.agent_session_id}; {idea}")
-    active_count += 1
+while budget_remaining:
+  plan = search_plan_next(run_id, requested_k=k)
+  if plan.requires_agent_proposals:
+    proposals = author_proposals(plan)
+    tasks = search_start_batch(run_id, plan.plan_id, proposals=proposals)
+  else:
+    tasks = search_start_batch(run_id, plan.plan_id)
 
-  wait = search_wait_agent_events(run_id, timeout_seconds=300, since_event_id=last_event_id)
-  last_event_id = wait.last_event_id
+  for task in tasks:
+    session = search_start_agent_session(run_id, task.candidate_id, directive)
+    Task(
+      subagent_type=session.launch.subagent_type,
+      description=session.launch.description,
+      prompt=session.launch.prompt,
+      background=session.launch.background_required,
+    )
 
-  for terminal event in wait.events:
-    search_run_verifier(run_id, event.candidate_id, "process")  # main-side final confirm
-    active_count = wait.active_count
-
-  if not pending_candidates and budget_remaining and active_count == 0:
-    observations = search_list_observations(run_id, top_n=20)
-    plan = search_plan_next(run_id, requested_k=k)
-    if plan.requires_agent_proposals:
-      proposals = author_proposals(plan)  # read official_history + proposal_contract, write planned_k proposals
-      tasks = search_start_batch(run_id, plan.plan_id, proposals=proposals)
-    else:
-      tasks = search_start_batch(run_id, plan.plan_id)
-    pending_candidates = [t.candidate_id for t in tasks]
-
-  if wait.poll_window_expired:
-    inspect search_list_agent_status(run_id)
-    nudge, abort, or keep waiting based on whether peers are heartbeating
+  # Wait for OpenCode Task completion. There is no MCP wait loop.
+  for task in tasks:
+    search_run_verifier(run_id, task.candidate_id, "process")  # main final confirm
 ```
 
 ### Step 6: Subagent Autoresearch Contract
 
-The subagent receives only `agent_session_id` and a candidate idea. It then:
+The subagent receives only `agent_session_id` and a candidate idea (from `launch.prompt`). It then:
 
-1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, `observations`, and `iterations` (its own previous attempts).
-2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate `submit_candidate` step is needed.
-3. Maintains `workspace/.tmp/results.tsv` as its private iteration log.
-4. Calls `search-runtime_search_finish_agent_session(agent_session_id, status, summary, result)` when done, with the best score and iteration count.
+1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `iterations` (its own previous attempts). The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
+2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate submit step exists.
+3. Maintains `workspace/.tmp/results.tsv` as its private iteration log. Header is `commit \t <metric_name> \t status \t hypothesis`, where `<metric_name>` is the literal value of `context.metric_name` (set by the main agent at freeze time). Commit-first: each iteration is `git commit`-ed before `search_run_verifier` so every row carries a real 7-char short hash; `discard` rows are rolled back with `git reset --hard HEAD~1`, but the hash stays recoverable via git reflog (`git checkout <hash>` still works).
+4. Ends with the best workspace state checked out and a concise text summary that includes `agent_session_id`, `candidate_id`, best score/metric, best commit hash, changed files, and a short description. This final answer is for OpenCode/main-agent mapping only; no MCP finalize call exists.
 
 You do not pass numeric score targets, baseline scores, or local-verification requests in the worker prompt. The worker reads its own verifier output and decides next steps.
 
 ### Step 7: Verify, Select, Report
 
-For every submitted candidate:
+For every candidate Task that returned:
 
 ```text
 search-runtime_search_run_verifier(run_id, candidate_id, "process")
@@ -284,15 +265,14 @@ Promotion exports a patch and should not directly mutate the main source workspa
 | MCP tools unavailable | Tell the user the `search-runtime` MCP server is not connected; do not proceed |
 | Freeze fails | Fix spec paths/artifacts, then retry freeze |
 | Candidate workspace missing | Call status/report; do not recreate by hand |
-| Pool is full | Wait for events or abort/finalize sessions; do not exceed `max_parallel` |
 | Verifier fails | Keep the failure in report; do not edit verifier |
 | No passing candidates | Report scores and failure classes; ask whether to run another batch |
-| User wants to stop | Call `search-runtime_search_abort_all_agent_sessions(run_id)` to cancel all active sessions; no separate run-level abort tool exists |
+| User wants to stop | Stop launching new Tasks and let OpenCode interrupt running Tasks; there is no MCP abort |
 
 ## k_module Smoke Pattern
 
-For a quick runtime smoke test, load `examples/k_module_search_spec.json`, freeze `tests/fixtures/k_module_problem/evaluator.py`, create 4 candidates, submit deterministic edits, verify, select, and report. This is a control-plane test, not a proof of search quality.
+For a quick runtime smoke test, load `examples/k_module_search_spec.json`, freeze `tests/fixtures/k_module_problem/evaluator.py`, create 4 candidates, dispatch deterministic edits, verify, select, and report. This is a control-plane test, not a proof of search quality.
 
 ## Multi-Batch Examples
 
-The bundled `circle_packing` and `signal_processing` specs use `agent-session-pool`. For `max_parallel=2` and 4 total subagents, plan/start 2 candidates first, supervise them through the wait loop, then plan/start the next 2 after slots free. At run budget exhaustion, abort active sessions and report the best submitted candidates.
+The bundled `circle_packing` and `signal_processing` specs use `agent-session-pool`. For `max_parallel=2` and 4 total subagents, plan/start 2 candidates, launch them as background Tasks, wait for Task completion, then plan/start the next 2. At run budget exhaustion, stop launching new Tasks and report the best candidates. There is no MCP abort step before reporting.

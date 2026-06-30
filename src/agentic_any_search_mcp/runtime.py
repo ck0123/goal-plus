@@ -9,7 +9,6 @@ import os
 import random
 import shutil
 import subprocess
-import sys
 import time
 import uuid
 from fnmatch import fnmatch
@@ -17,14 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from agentic_any_search_mcp.models import (
-    AgentObservation,
-    AgentSessionBudget,
-    AgentSessionEvent,
-    AgentSessionPhase,
     AgentSessionRecord,
-    AgentSessionStatus,
-    AgentSessionWaitResult,
-    ArtifactBundle,
     CandidateRecord,
     CandidateProposal,
     CandidateTask,
@@ -40,11 +32,9 @@ from agentic_any_search_mcp.models import (
     SearchPlan,
     SearchSpec,
     StrategySpec,
-    TERMINAL_AGENT_SESSION_STATUSES,
     VerifierCommand,
     VerifierResult,
     VerifierRole,
-    VisibilityMode,
 )
 
 
@@ -152,7 +142,10 @@ def relative_artifact_path(source_root: Path, artifact_path: Path) -> str:
 
 
 class FileSearchRuntime:
-    def __init__(self, root_dir: Path | str = ".search") -> None:
+    def __init__(
+        self,
+        root_dir: Path | str = ".search",
+    ) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.specs_dir = self.root_dir / "specs"
         self.runs_dir = self.root_dir / "runs"
@@ -210,21 +203,17 @@ class FileSearchRuntime:
         (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "agent_sessions").mkdir(parents=True, exist_ok=True)
-        (self._run_dir(run_id) / "agent_events").mkdir(parents=True, exist_ok=True)
-        (self._run_dir(run_id) / "observations").mkdir(parents=True, exist_ok=True)
         return run_id
 
     def status(self, run_id: str) -> RunSummary:
         run = self._load_run(run_id)
         records = self._load_candidate_records(run_id)
-        running = sum(1 for record in records if record.status in {"created", "submitted"})
         evaluated = sum(1 for record in records if record.status == "evaluated")
         return RunSummary(
             run_id=run.run_id,
             state=run.state,
             frozen_spec_id=run.frozen_spec_id,
             candidates_total=len(records),
-            candidates_running=running,
             candidates_evaluated=evaluated,
             best_candidate_id=run.best_candidate_id,
             best_score=run.best_score,
@@ -391,394 +380,74 @@ class FileSearchRuntime:
 
         return tasks
 
-    def next_batch(self, run_id: str, k: int) -> list[CandidateTask]:
-        if k <= 0:
-            raise ValueError("k must be > 0")
-
-        plan = self.plan_next(run_id, k)
-        if plan.requires_agent_proposals:
-            raise RuntimeError(
-                "current strategy requires proposals; call search_plan_next and search_start_batch"
-            )
-        return self.start_batch(run_id, plan.plan_id)
-
     def start_agent_session(
         self,
         run_id: str,
-        candidate_id: str | None = None,
+        candidate_id: str,
         directive: dict[str, Any] | str | None = None,
-        budget: dict[str, Any] | None = None,
-        visibility_mode: str = "observations",
     ) -> AgentSessionRecord:
+        """Create a context/provenance handle for a candidate and return the
+        OpenCode Task launch fields. Does not start a worker and does not track
+        lifecycle state. The main agent must launch the worker via OpenCode Task
+        using the returned ``launch`` payload.
+        """
         run = self._load_run(run_id)
         if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
             raise RuntimeError(f"cannot start agent session from state {run.state}")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
 
-        active_count = self._active_agent_session_count(run_id)
-        if active_count >= frozen.spec.budget.max_parallel:
-            raise RuntimeError("agent session pool is full")
-
-        candidate_record: CandidateRecord | None = None
-        workspace: Path | None = None
-        if candidate_id is not None:
-            candidate_record = self._load_candidate_record(run_id, candidate_id)
-            workspace = candidate_record.task.workspace
-
-        requested_budget = dict(budget or {})
-        session_budget = AgentSessionBudget(
-            stale_after_seconds=requested_budget.get("stale_after_seconds", 90),
-        )
+        candidate_record = self._load_candidate_record(run_id, candidate_id)
+        workspace = candidate_record.task.workspace
 
         agent_session_id = self._make_agent_session_id(run_id, run.next_agent_session_index)
         run.next_agent_session_index += 1
         now = utc_timestamp()
+        normalized_directive = self._normalize_main_directive(directive)
+        launch = self._build_launch_payload(
+            frozen=frozen,
+            candidate_id=candidate_id,
+            agent_session_id=agent_session_id,
+            directive=normalized_directive,
+            candidate_record=candidate_record,
+        )
         session = AgentSessionRecord(
             agent_session_id=agent_session_id,
             run_id=run_id,
             candidate_id=candidate_id,
             created_at=now,
             updated_at=now,
-            last_heartbeat_at=now,
-            status=AgentSessionStatus.RUNNING.value,
-            phase=AgentSessionPhase.PROBING.value,
-            visibility_mode=VisibilityMode(visibility_mode),
-            directive=self._normalize_main_directive(directive),
+            directive=normalized_directive,
             workspace=workspace,
-            budget=session_budget,
-            current_goal=self._normalize_main_directive(directive).get("goal", ""),
+            launch=launch,
+            counters={},
         )
         self._write_run(run)
         self._write_agent_session(session)
-        self._append_agent_event(
-            run_id,
-            "agent_started",
-            agent_session_id,
-            {
-                "candidate_id": candidate_id,
-                "active_count": active_count + 1,
-                "max_concurrent_agents": frozen.spec.budget.max_parallel,
-            },
-        )
         return session
 
     def get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
+        """Subagent first call. Returns the authoritative ids, workspace, and
+        candidate context. The subagent must treat prompt-supplied ids as
+        labels only and rely on this response as the source of truth.
+        """
         session = self._load_agent_session_by_id(agent_session_id)
         run = self._load_run(session.run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
-        candidate_record = (
-            self._load_candidate_record(session.run_id, session.candidate_id)
-            if session.candidate_id
-            else None
-        )
+        candidate_record = self._load_candidate_record(session.run_id, session.candidate_id)
         return {
             "agent_session_id": session.agent_session_id,
             "run_id": session.run_id,
             "candidate_id": session.candidate_id,
-            "status": session.status,
-            "phase": session.phase,
-            "visibility_mode": session.visibility_mode,
             "directive": session.directive,
-            "budget": session.budget.model_dump(mode="json"),
-            "workspace": str(session.workspace) if session.workspace else None,
+            "workspace": str(session.workspace),
             "objective": frozen.spec.objective,
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
-            "candidate_task": candidate_record.task.model_dump(mode="json") if candidate_record else None,
+            "candidate_task": candidate_record.task.model_dump(mode="json"),
             "history": self.list_history(session.run_id, top_n=5, sort_by="score"),
-            "peer_status": [
-                peer.model_dump(mode="json")
-                for peer in self.list_agent_status(session.run_id)
-                if peer.agent_session_id != session.agent_session_id
-            ],
-            "observations": self.list_observations(session.run_id, top_n=20),
-            "iterations": (
-                self.list_iterations(session.run_id, session.candidate_id)
-                if session.candidate_id
-                else []
-            ),
+            "iterations": self.list_iterations(session.run_id, session.candidate_id),
         }
-
-    def update_agent_status(
-        self,
-        agent_session_id: str,
-        phase: str,
-        current_goal: str = "",
-        last_action: str = "",
-        next_step: str = "",
-        blockers: list[str] | None = None,
-        status: str | None = None,
-        heartbeat: bool = True,
-    ) -> AgentSessionRecord:
-        session = self._load_agent_session_by_id(agent_session_id)
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            raise RuntimeError(f"cannot update terminal agent session {agent_session_id}")
-
-        now = utc_timestamp()
-        next_phase = AgentSessionPhase(phase)
-        if status is not None:
-            next_status = AgentSessionStatus(status).value
-        elif next_phase == AgentSessionPhase.BLOCKED:
-            next_status = AgentSessionStatus.BLOCKED.value
-        elif session.status == AgentSessionStatus.BLOCKED.value and next_phase != AgentSessionPhase.BLOCKED:
-            next_status = AgentSessionStatus.RUNNING.value
-        else:
-            next_status = session.status
-
-        updated = session.model_copy(
-            update={
-                "phase": next_phase.value,
-                "status": next_status,
-                "current_goal": current_goal,
-                "last_action": last_action,
-                "next_step": next_step,
-                "blockers": blockers or [],
-                "updated_at": now,
-                "last_heartbeat_at": now if heartbeat else session.last_heartbeat_at,
-            }
-        )
-        self._write_agent_session(updated)
-        self._append_agent_event(
-            session.run_id,
-            "agent_blocked" if next_status == AgentSessionStatus.BLOCKED.value else "agent_status_updated",
-            agent_session_id,
-            {
-                "phase": next_phase.value,
-                "status": next_status,
-                "current_goal": current_goal,
-                "last_action": last_action,
-                "next_step": next_step,
-                "blockers": blockers or [],
-            },
-        )
-        return updated
-
-    def list_agent_status(self, run_id: str, include_stale: bool = True) -> list[AgentSessionRecord]:
-        sessions = self._load_agent_sessions(run_id)
-        if include_stale:
-            return sessions
-        return [session for session in sessions if not self._agent_session_is_stale(session)]
-
-    def finish_agent_session(
-        self,
-        agent_session_id: str,
-        status: str = "completed",
-        summary: str = "",
-        result: dict[str, Any] | None = None,
-    ) -> AgentSessionRecord:
-        if status not in {"completed", "failed"}:
-            raise ValueError("finish status must be 'completed' or 'failed'")
-        session = self._load_agent_session_by_id(agent_session_id)
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            return session
-        now = utc_timestamp()
-        next_status = AgentSessionStatus(status)
-        updated = session.model_copy(
-            update={
-                "status": next_status.value,
-                "phase": AgentSessionPhase.IDLE.value,
-                "summary": summary,
-                "result": result or {},
-                "updated_at": now,
-                "last_heartbeat_at": now,
-            }
-        )
-        self._write_agent_session(updated)
-        self._append_agent_event(
-            session.run_id,
-            "agent_completed" if next_status == AgentSessionStatus.COMPLETED else "agent_failed",
-            agent_session_id,
-            {"summary": summary, "result": result or {}},
-        )
-        return updated
-
-    def abort_agent_session(self, agent_session_id: str, reason: str = "") -> AgentSessionRecord:
-        session = self._load_agent_session_by_id(agent_session_id)
-        return self._abort_agent_session_record(session, reason)
-
-    def _abort_agent_session_record(
-        self,
-        session: AgentSessionRecord,
-        reason: str = "",
-    ) -> AgentSessionRecord:
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            return session
-        now = utc_timestamp()
-        updated = session.model_copy(
-            update={
-                "status": AgentSessionStatus.ABORTED.value,
-                "phase": AgentSessionPhase.IDLE.value,
-                "summary": reason,
-                "updated_at": now,
-                "last_heartbeat_at": now,
-            }
-        )
-        self._write_agent_session(updated)
-        self._append_agent_event(
-            session.run_id,
-            "agent_aborted",
-            session.agent_session_id,
-            {"reason": reason},
-        )
-        return updated
-
-    def abort_all_agent_sessions(self, run_id: str, reason: str = "") -> list[AgentSessionRecord]:
-        aborted: list[AgentSessionRecord] = []
-        for session in self._load_agent_sessions(run_id):
-            if session.status not in TERMINAL_AGENT_SESSION_STATUSES:
-                aborted.append(self._abort_agent_session_record(session, reason))
-        return aborted
-
-    def publish_observation(
-        self,
-        agent_session_id: str,
-        summary: str,
-        evidence: str = "",
-        next_ideas: list[str] | None = None,
-        tags: list[str] | None = None,
-        visibility: str = "observations",
-    ) -> AgentObservation:
-        session = self._load_agent_session_by_id(agent_session_id)
-        run = self._load_run(session.run_id)
-        observation_id = f"obs_{run.next_observation_index:06d}"
-        run.next_observation_index += 1
-        observation = AgentObservation(
-            observation_id=observation_id,
-            run_id=session.run_id,
-            agent_session_id=agent_session_id,
-            created_at=utc_timestamp(),
-            summary=summary,
-            evidence=evidence,
-            next_ideas=next_ideas or [],
-            tags=tags or [],
-            visibility=VisibilityMode(visibility),
-        )
-        self._write_run(run)
-        self._write_observation(observation)
-        self._append_agent_event(
-            session.run_id,
-            "observation_published",
-            agent_session_id,
-            {"observation_id": observation_id, "summary": summary, "tags": tags or []},
-        )
-        return observation
-
-    def list_observations(
-        self,
-        run_id: str,
-        visibility: str | None = None,
-        tags: list[str] | None = None,
-        top_n: int = 20,
-    ) -> list[dict[str, Any]]:
-        if top_n <= 0:
-            raise ValueError("top_n must be > 0")
-        observations = self._load_observations(run_id)
-        if visibility is not None:
-            mode = VisibilityMode(visibility).value
-            observations = [obs for obs in observations if obs.visibility == mode]
-        if tags:
-            required = set(tags)
-            observations = [obs for obs in observations if required.intersection(obs.tags)]
-        return [obs.model_dump(mode="json") for obs in observations[-top_n:]]
-
-    def wait_agent_events(
-        self,
-        run_id: str,
-        timeout_seconds: int = 300,
-        wake_on: list[str] | None = None,
-        since_event_id: str | None = None,
-        return_when_all_idle: bool = True,
-    ) -> AgentSessionWaitResult:
-        if timeout_seconds < 0:
-            raise ValueError("timeout_seconds must be >= 0")
-        wake_set = set(
-            wake_on
-            or [
-                "agent_completed",
-                "agent_failed",
-                "agent_blocked",
-                "agent_aborted",
-            ]
-        )
-        deadline = time.time() + timeout_seconds
-        while True:
-            event_log = self._load_agent_events(run_id)
-            events = [
-                event
-                for event in event_log
-                if event.type in wake_set
-                and (since_event_id is None or event.event_id > since_event_id)
-            ]
-            active_count = self._active_agent_session_count(run_id)
-            all_idle = active_count == 0 and len(self._load_agent_sessions(run_id)) > 0
-            should_return = (
-                events
-                or timeout_seconds == 0
-                or time.time() >= deadline
-                or (return_when_all_idle and all_idle)
-            )
-            if should_return:
-                sessions = self._load_agent_sessions(run_id)
-                frozen = self._load_frozen_spec(self._load_run(run_id).frozen_spec_id)
-                poll_expired = not events and not (return_when_all_idle and all_idle)
-                return AgentSessionWaitResult(
-                    run_id=run_id,
-                    poll_window_expired=poll_expired,
-                    last_event_id=event_log[-1].event_id if event_log else since_event_id,
-                    events=events,
-                    sessions=sessions,
-                    active_count=active_count,
-                    max_concurrent_agents=frozen.spec.budget.max_parallel,
-                )
-            time.sleep(min(0.5, max(0.0, deadline - time.time())))
-
-    def submit_candidate(
-        self,
-        run_id: str,
-        candidate_id: str,
-        artifact: ArtifactBundle,
-    ) -> None:
-        run = self._load_run(run_id)
-        frozen = self._load_frozen_spec(run.frozen_spec_id)
-        record = self._load_candidate_record(run_id, candidate_id)
-        if artifact.candidate_id != candidate_id:
-            raise ValueError("artifact candidate_id does not match candidate_id")
-        worker_policy = self._worker_policy(frozen.spec.strategy)
-        if worker_policy["requires_agent_session"] and not artifact.agent_session_id:
-            raise ValueError(
-                "candidate artifact must include agent_session_id for worker_mode=agent-session-pool"
-            )
-        if artifact.agent_session_id:
-            session = self._load_agent_session_by_id(artifact.agent_session_id, run_id=run_id)
-            if session.run_id != run_id or session.candidate_id != candidate_id:
-                raise ValueError("artifact agent_session_id does not belong to this candidate")
-            if session.status in {
-                AgentSessionStatus.ABORTED.value,
-            }:
-                raise RuntimeError(
-                    f"cannot submit artifact from {session.status} agent session"
-                )
-
-        detected_changed = self._detect_changed_files(Path(run.source_path), record.task.workspace)
-        touched_denied = any(
-            path_matches(path, frozen.spec.edit_surface.deny) for path in detected_changed
-        )
-        outside_allowed = any(
-            not path_matches(path, frozen.spec.edit_surface.allow) for path in detected_changed
-        )
-        if (
-            frozen.spec.edit_surface.max_file_changes is not None
-            and len(detected_changed) > frozen.spec.edit_surface.max_file_changes
-        ):
-            outside_allowed = True
-
-        record.status = "submitted"
-        record.artifact = artifact
-        record.detected_changed_files = detected_changed
-        record.touched_denied_files = touched_denied
-        record.changed_outside_allowed = outside_allowed
-        self._write_candidate_record(run_id, record)
 
     def run_verifier(
         self,
@@ -787,41 +456,25 @@ class FileSearchRuntime:
         scope: Literal["process", "promotion"] = "process",
         agent_session_id: str | None = None,
     ) -> ScoreReport:
+        """Subagent self-score with ``agent_session_id``; main final verify
+        without it. Records an IterationReport for each call.
+        """
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
-        if record.status not in {"created", "submitted", "evaluated"}:
+        if record.status not in {"created", "evaluated"}:
             raise RuntimeError(
                 f"cannot verify candidate in status {record.status}"
             )
 
-        session = None
-        if not agent_session_id:
-            # Auto-attribute to the unique session for this candidate.
-            # Subagents often call run_verifier without passing agent_session_id
-            # even when instructed to; this fallback makes the counter work
-            # without relying on prompt adherence. Includes terminal sessions
-            # because the OS process often outlives the MCP session deadline
-            # (MCP abort doesn't kill the OS process).
-            sessions_for_candidate = [
-                s for s in self._load_agent_sessions(run_id)
-                if s.candidate_id == candidate_id
-            ]
-            if len(sessions_for_candidate) == 1:
-                agent_session_id = sessions_for_candidate[0].agent_session_id
+        session: AgentSessionRecord | None = None
         if agent_session_id:
             session = self._load_agent_session_by_id(agent_session_id, run_id=run_id)
             if session.candidate_id != candidate_id:
                 raise ValueError(
-                    "artifact agent_session_id does not belong to this candidate"
+                    "agent_session_id does not belong to this candidate"
                 )
-            # Note: we no longer reject terminal sessions. The OS process
-            # outlives MCP timeout, so verify calls from terminal sessions
-            # still need to be recorded for audit. Counter increment on
-            # terminal sessions is a no-op (skip the finalize trigger).
 
-        # Detect workspace changes here so every iteration captures the edit surface
-        # state (was previously done in submit_candidate).
         detected_changed = self._detect_changed_files(
             Path(run.source_path), record.task.workspace
         )
@@ -894,8 +547,12 @@ class FileSearchRuntime:
             self._write_run(run)
 
             if session is not None and agent_session_id is not None:
+                session.counters["verifier_runs"] = session.counters.get("verifier_runs", 0) + 1
                 updated = session.model_copy(
-                    update={"updated_at": utc_timestamp()}
+                    update={
+                        "updated_at": utc_timestamp(),
+                        "counters": session.counters,
+                    }
                 )
                 self._write_agent_session(updated)
 
@@ -920,7 +577,7 @@ class FileSearchRuntime:
             raise RuntimeError("no verified candidates available for selection")
 
         reverse = frozen.spec.metric_direction == "maximize"
-        selected = sorted(scored, key=lambda r: r.score_report.aggregate_score, reverse=reverse)[0]
+        selected = sorted(scored, key=lambda r: r.score_report.aggregate_score, reverse=reverse)[0]  # type: ignore[union-attr,return-value]
         run.state = RunState.READY_TO_PROMOTE
         run.selected_candidate_id = selected.candidate_id
         run.best_candidate_id = selected.candidate_id
@@ -1011,15 +668,15 @@ class FileSearchRuntime:
                     "",
                     "## Agent Sessions",
                     "",
-                    "| Session | Candidate | Status | Phase | Summary |",
-                    "|---|---|---|---|---|",
+                    "| Session | Candidate | Verifier Runs | Created | Updated |",
+                    "|---|---|---:|---|---|",
                 ]
             )
             for session in agent_sessions:
                 lines.append(
                     f"| `{session.agent_session_id}` | `{session.candidate_id or ''}` | "
-                    f"{session.status} | {session.phase} | "
-                    f"{self._markdown_cell(session.summary)} |"
+                    f"{session.counters.get('verifier_runs', 0)} | "
+                    f"{session.created_at} | {session.updated_at} |"
                 )
         lines.append("")
 
@@ -1052,10 +709,6 @@ class FileSearchRuntime:
             "configured_mode": strategy.worker_mode,
             "worker_agent_type": strategy.worker_agent_type,
             "subagent_type": strategy.worker_agent_type,
-            "collection_rule": (
-                "Collect or salvage a best-so-far artifact when your OpenCode step budget "
-                "is nearly exhausted; do not leave dispatched candidates unsubmitted."
-            ),
             "directive_rule": (
                 "Worker directives should describe the candidate idea and deliverable, not score "
                 "targets or baseline scores. Workers must treat any score target in a directive as "
@@ -1063,15 +716,48 @@ class FileSearchRuntime:
             ),
             "requires_agent_session": True,
             "direct_edit_allowed": False,
-            "supervisor_tools": [
-                "search_start_agent_session",
-                "search_wait_agent_events",
-                "search_abort_agent_session",
-                "search_abort_all_agent_sessions",
-            ],
             "reason": (
-                "worker_mode=agent-session-pool requires durable agent sessions and supervisor wait/abort control"
+                "worker_mode=agent-session-pool requires the main agent to launch OpenCode "
+                "Task workers using the launch payload from search_start_agent_session."
             ),
+        }
+
+    def _build_launch_payload(
+        self,
+        frozen: FrozenSpec,
+        candidate_id: str,
+        agent_session_id: str,
+        directive: dict[str, Any],
+        candidate_record: CandidateRecord,
+    ) -> dict[str, Any]:
+        worker_agent_type = frozen.spec.strategy.worker_agent_type or "AnySearchAgent"
+        proposal = candidate_record.task.proposal
+        if directive.get("goal"):
+            short_intent = str(directive["goal"])
+        elif proposal is not None and proposal.intent:
+            short_intent = proposal.intent
+        else:
+            short_intent = candidate_record.task.hypothesis
+
+        if directive:
+            idea_lines = [f"{key}: {value}" for key, value in directive.items()]
+        elif proposal is not None and proposal.intent:
+            idea_lines = [proposal.intent]
+            if proposal.expected_tradeoff:
+                idea_lines.append(f"expected_tradeoff: {proposal.expected_tradeoff}")
+        else:
+            idea_lines = [candidate_record.task.hypothesis]
+        one_paragraph_idea = "; ".join(idea_lines)
+
+        return {
+            "subagent_type": worker_agent_type,
+            "description": f"{candidate_id} {short_intent}",
+            "prompt": (
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                f"idea: {one_paragraph_idea}"
+            ),
+            "background_required": frozen.spec.budget.max_parallel > 1,
         }
 
     def _next_plan_id(self, run: RunRecord) -> str:
@@ -1552,11 +1238,10 @@ class FileSearchRuntime:
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
             "You may git init, git add, git commit, git reset, git restore, and git checkout INSIDE this workspace to advance and revert iterations.",
             "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
-            "Candidate execution must be tracked by search_start_agent_session.",
-            "Candidate artifacts must include the producing agent_session_id.",
+            "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
             "Iterate freely within your OpenCode step budget; each run_verifier call records an iteration. When steps run out OpenCode will ask you to summarize and stop.",
             "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed.",
-            "Maintain an iteration log (workspace/.tmp/results.tsv or similar) recording each attempt's hypothesis, score, and outcome.",
+            "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). Commit each iteration before verifying so the commit hash is real; on discard, reset with git reset --hard HEAD~1 (the discarded hash stays recoverable via git reflog).",
         ]
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
@@ -1915,7 +1600,6 @@ class FileSearchRuntime:
 
     def _history_candidate_payload(self, record: CandidateRecord, metric_name: str) -> dict[str, Any]:
         score_report = record.score_report
-        artifact = record.artifact
         metrics: dict[str, Any] = {}
         verifier_summaries: list[dict[str, Any]] = []
         failure_classes: list[str] = []
@@ -1970,11 +1654,10 @@ class FileSearchRuntime:
                 record.task.run_id,
                 record.candidate_id,
             ),
-            "artifact_agent_session_id": artifact.agent_session_id if artifact else None,
-            "summary": artifact.summary if artifact else "",
-            "next_ideas": artifact.next_ideas if artifact else [],
-            "risk_notes": artifact.risk_notes if artifact else [],
-            "artifact_status": artifact.status if artifact else None,
+            "summary": "",
+            "next_ideas": [],
+            "risk_notes": [],
+            "artifact_status": None,
             "changed_files": record.detected_changed_files,
             "touched_denied_files": record.touched_denied_files,
             "changed_outside_allowed": record.changed_outside_allowed,
@@ -1996,12 +1679,10 @@ class FileSearchRuntime:
             {
                 "agent_session_id": session.agent_session_id,
                 "candidate_id": session.candidate_id,
-                "status": session.status,
-                "phase": session.phase,
                 "created_at": session.created_at,
                 "updated_at": session.updated_at,
                 "directive": session.directive,
-                "summary": session.summary,
+                "verifier_runs": session.counters.get("verifier_runs", 0),
             }
             for session in self._load_agent_sessions(run_id)
             if session.candidate_id == candidate_id
@@ -2070,85 +1751,6 @@ class FileSearchRuntime:
     def _agent_session_dir(self, run_id: str) -> Path:
         return self._run_dir(run_id) / "agent_sessions"
 
-    def _agent_event_dir(self, run_id: str) -> Path:
-        return self._run_dir(run_id) / "agent_events"
-
-    def _observation_dir(self, run_id: str) -> Path:
-        return self._run_dir(run_id) / "observations"
-
-    def _active_agent_session_count(self, run_id: str) -> int:
-        return len(
-            [
-                session
-                for session in self._load_agent_sessions(run_id)
-                if session.status not in TERMINAL_AGENT_SESSION_STATUSES
-                and session.status != AgentSessionStatus.QUEUED.value
-            ]
-        )
-
-    def _agent_session_is_stale(self, session: AgentSessionRecord) -> bool:
-        if session.status in TERMINAL_AGENT_SESSION_STATUSES:
-            return False
-        return time.time() - parse_utc_timestamp(session.last_heartbeat_at) > session.budget.stale_after_seconds
-
-    def _append_agent_event(
-        self,
-        run_id: str,
-        event_type: str,
-        agent_session_id: str | None,
-        payload: dict[str, Any] | None = None,
-        *,
-        dedupe_type: bool = False,
-    ) -> AgentSessionEvent:
-        if dedupe_type:
-            existing = [
-                event
-                for event in self._load_agent_events(run_id)
-                if event.type == event_type and event.agent_session_id == agent_session_id
-            ]
-            if existing:
-                return existing[-1]
-        run = self._load_run(run_id)
-        event = AgentSessionEvent(
-            event_id=f"event_{run.next_agent_event_index:06d}",
-            run_id=run_id,
-            agent_session_id=agent_session_id,
-            type=event_type,
-            created_at=utc_timestamp(),
-            payload=payload or {},
-        )
-        run.next_agent_event_index += 1
-        self._write_run(run)
-        self._write_agent_event(event)
-        return event
-
-    def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
-        return FrozenSpec.model_validate(load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json"))
-
-    def _load_run(self, run_id: str) -> RunRecord:
-        return RunRecord.model_validate(load_json(self._run_dir(run_id) / "run.json"))
-
-    def _write_run(self, run: RunRecord) -> None:
-        write_json(self._run_dir(run.run_id) / "run.json", run.model_dump(mode="json"))
-
-    def _load_plan(self, run_id: str, plan_id: str) -> SearchPlan:
-        return SearchPlan.model_validate(load_json(self._plan_dir(run_id) / f"{plan_id}.json"))
-
-    def _write_plan(self, plan: SearchPlan) -> None:
-        write_json(
-            self._plan_dir(plan.run_id) / f"{plan.plan_id}.json",
-            plan.model_dump(mode="json"),
-        )
-
-    def _load_plans(self, run_id: str) -> list[SearchPlan]:
-        plan_dir = self._plan_dir(run_id)
-        if not plan_dir.exists():
-            return []
-        return [
-            SearchPlan.model_validate(load_json(path))
-            for path in sorted(plan_dir.glob("plan_*.json"))
-        ]
-
     @staticmethod
     def _make_agent_session_id(run_id: str, index: int) -> str:
         run_suffix = run_id.removeprefix("run_")
@@ -2193,34 +1795,31 @@ class FileSearchRuntime:
             for path in sorted(session_dir.glob("agent_*.json"))
         ]
 
-    def _write_agent_event(self, event: AgentSessionEvent) -> None:
+    def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
+        return FrozenSpec.model_validate(load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json"))
+
+    def _load_run(self, run_id: str) -> RunRecord:
+        return RunRecord.model_validate(load_json(self._run_dir(run_id) / "run.json"))
+
+    def _write_run(self, run: RunRecord) -> None:
+        write_json(self._run_dir(run.run_id) / "run.json", run.model_dump(mode="json"))
+
+    def _load_plan(self, run_id: str, plan_id: str) -> SearchPlan:
+        return SearchPlan.model_validate(load_json(self._plan_dir(run_id) / f"{plan_id}.json"))
+
+    def _write_plan(self, plan: SearchPlan) -> None:
         write_json(
-            self._agent_event_dir(event.run_id) / f"{event.event_id}.json",
-            event.model_dump(mode="json"),
+            self._plan_dir(plan.run_id) / f"{plan.plan_id}.json",
+            plan.model_dump(mode="json"),
         )
 
-    def _load_agent_events(self, run_id: str) -> list[AgentSessionEvent]:
-        event_dir = self._agent_event_dir(run_id)
-        if not event_dir.exists():
+    def _load_plans(self, run_id: str) -> list[SearchPlan]:
+        plan_dir = self._plan_dir(run_id)
+        if not plan_dir.exists():
             return []
         return [
-            AgentSessionEvent.model_validate(load_json(path))
-            for path in sorted(event_dir.glob("event_*.json"))
-        ]
-
-    def _write_observation(self, observation: AgentObservation) -> None:
-        write_json(
-            self._observation_dir(observation.run_id) / f"{observation.observation_id}.json",
-            observation.model_dump(mode="json"),
-        )
-
-    def _load_observations(self, run_id: str) -> list[AgentObservation]:
-        observation_dir = self._observation_dir(run_id)
-        if not observation_dir.exists():
-            return []
-        return [
-            AgentObservation.model_validate(load_json(path))
-            for path in sorted(observation_dir.glob("obs_*.json"))
+            SearchPlan.model_validate(load_json(path))
+            for path in sorted(plan_dir.glob("plan_*.json"))
         ]
 
     def _load_candidate_record(self, run_id: str, candidate_id: str) -> CandidateRecord:

@@ -4,15 +4,17 @@ How to inspect a running or finished search — what the agents are doing, what 
 
 For the general OpenCode inspection technique (SQLite DB, log files), see the `inspecting-opencode-runs` skill. This doc covers the project-specific surface.
 
-## Three Layers of State
+## Two Layers of State
 
 ```
 OpenCode process
-  ├─ SQLite DB (~/.local/share/opencode/opencode.db)   ← agent actions, tool calls, bash cmds
+  ├─ SQLite DB (~/.local/share/opencode/opencode.db)   ← agent actions, tool calls, bash cmds, child-session lifecycle
   ├─ Log file  (~/.local/share/opencode/log/opencode.log) ← permission decisions, errors
   └─ MCP server subprocess
        └─ .search/  ← runtime-owned durable state (this project)
 ```
+
+The runtime owns specs, plans, candidate workspaces, iteration history, verifier scoring, reports, and promotion patches. OpenCode owns subagent lifecycle — start, run, step cap, stop/interrupt, completion notification. The MCP runtime does not maintain lifecycle status, host-sync state, or process cancellation. Debugging lifecycle state belongs in OpenCode; debugging candidate state belongs in `.search/`.
 
 ## `.search/` Layout
 
@@ -30,12 +32,13 @@ OpenCode process
     │   └── logs/<verifier_name>.log              # verifier stdout/stderr per call
     ├── workspace/<candidate_id>/                 # the agent's editable workspace
     │   ├── .git/                                 # agent's git history (autoresearch loop)
-    │   ├── .tmp/results.tsv                      # agent's private iteration log
+    │   ├── .tmp/results.tsv                      # iteration log: commit \t <metric_name> \t status \t hypothesis
     │   └── <allowed_files>
-    ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: status, phase, counters, heartbeat
-    ├── agent_events/<event_id>.json              # AgentSessionEvent: lifecycle + supervisor wakeups
-    └── observations/<observation_id>.json        # cross-session shared findings
+    ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate binding, launch payload, counters
+    └── report.md / promotion/                    # final outputs
 ```
+
+There is no `agent_events/` or `observations/` directory. The session record carries `launch` (the OpenCode Task fields), `directive`, and `counters.verifier_runs`.
 
 ## Quick Diagnostic Queries
 
@@ -48,19 +51,6 @@ import json
 d = json.load(open('$RUN/run.json'))
 print(f\"state={d['state']} candidates={d['candidates_total']}/{d.get('candidates_evaluated',0)} evaluated best={d.get('best_candidate_id')}/{d.get('best_score')}\")
 "
-```
-
-### All session states
-
-```bash
-for f in $RUN/agent_sessions/*.json; do
-  python3 -c "
-import json
-d = json.load(open('$f'))
-print(f\"{d['candidate_id']}: status={d['status']} phase={d['phase']} \"
-      f\"heartbeat={d['last_heartbeat_at']}\")
-"
-done
 ```
 
 ### Iteration history per candidate
@@ -93,6 +83,26 @@ find $RUN/workspace -name ".git" -execdir sh -c 'echo "=== $(pwd) ===" && git lo
 find $RUN/workspace -name "results.tsv" -exec sh -c 'echo "=== $1 ===" && cat "$1"' _ {} \;
 ```
 
+Columns (tab-separated, autoresearch-aligned):
+
+| col | name | meaning |
+|---|---|---|
+| 1 | `commit` | 7-char git short hash of the iteration's commit (commit-first: committed before verify) |
+| 2 | `<metric_name>` | the frozen `spec.metric_name` literal (e.g. `combined_score`, `val_bpb`) — set by the main agent at freeze time |
+| 3 | `status` | `keep` (improved, per `metric_direction`) or `discard` (regressed / verifier crash) |
+| 4 | `hypothesis` | short description of what this iteration tried |
+
+Example:
+
+```
+commit	combined_score	status	hypothesis
+a1b2c3d	0.682	keep	baseline (concentric rings)
+b2c3d4e	0.949	keep	hex lattice [5,4,5,4,5,3] s=0.1875
+c3d4e5f	0.651	discard	switch to rectangular grid (regressed)
+```
+
+`discard` rows still carry a real commit hash; the commit was reset off the branch but remains in git reflog (~30 days), so `git -C <workspace> checkout <hash>` recovers any discarded experiment.
+
 ## Live Monitoring
 
 ```bash
@@ -111,39 +121,17 @@ print(f\\\"{d['candidate_id']}: {len(iters)} iters, scores={[i['score'] for i in
 
 ## Checking OpenCode Step Count
 
-The MCP runtime does not track agent steps — OpenCode enforces the per-agent `steps` cap (defined in each `.opencode/agents/*.md` frontmatter) and you read the live count from the SQLite DB.
+OpenCode enforces the per-agent `steps` cap (defined in each `.opencode/agents/*.md` frontmatter). Step count lives in OpenCode's session inspection tools (see the `inspecting-opencode-runs` skill), not in `.search/`. The runtime does not sync host state into MCP records.
 
-### Step count for a session
-
-```bash
-sqlite3 ~/.local/share/opencode/opencode.db \
-  "SELECT count(*) FROM part
-   WHERE session_id='<SID>'
-     AND json_extract(data, '\$.type')='step-start';"
-```
-
-### All recent subagent sessions with step usage
-
-```bash
-sqlite3 ~/.local/share/opencode/opencode.db \
-  "SELECT s.id, s.title, count(p.id) as step_starts
-   FROM session s
-   LEFT JOIN part p ON p.session_id = s.id
-     AND json_extract(p.data, '\$.type')='step-start'
-   WHERE s.agent='AnySearchAgent'
-   GROUP BY s.id
-   ORDER BY s.time_created DESC LIMIT 10;"
-```
-
-When the step cap is reached OpenCode injects a system prompt instructing the agent to summarize and stop — the session ends cleanly without a hard kill.
+When the step cap is reached OpenCode injects a system prompt instructing the agent to summarize and stop. Tools may be disabled during that final summary. OpenCode then notifies the main agent that the Task returned; the main agent runs `search_run_verifier` (without `agent_session_id`) to record the final score.
 
 ## Common Failure Modes
 
-### Agent marked "stale - no progress in background task"
+### Subagent appears idle in OpenCode but no iteration history
 
-- **Look at**: `agent_sessions/<id>.json` `last_heartbeat_at` vs `updated_at`
-- **Cause**: Agent didn't call `search_update_agent_status`. Common when the agent is deep in bash work and skips heartbeats. (The runtime no longer tracks step/tool counters — only `verifier_runs` is auto-incremented inside `run_verifier`.)
-- **Verification**: Cross-reference with OpenCode SQLite — `tool` count for the session. If bash count is high but heartbeat is stale, agent was busy but didn't tell MCP.
+- **Look at**: `.search/runs/<run_id>/candidates/<id>/candidate.json` `iterations` and OpenCode SQLite `session` / `part` rows containing the `agent_session_id`.
+- **Cause**: The subagent never called `search_run_verifier`. Inspect OpenCode SQLite for what it actually did (bash commands, tool calls).
+- **Verification**: Confirm the OpenCode child session exists and ran to step cap or self-decision. The runtime only records what verifier calls actually happened.
 
 ### Agent ran evaluator via bash (MCP bypass)
 
@@ -157,16 +145,16 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
 - **Cause**: Agent didn't trust MCP path, or prompt was unclear about MCP being the official scorer
 - **Verification**: Look at bash command contents — if `python evaluator.py` appears, agent bypassed MCP
 
-### Candidate has 0 iterations but session shows activity
+### Candidate has 0 iterations but launch payload exists
 
 - **Look at**: `agent_sessions/<id>.json` `counters.verifier_runs` vs `candidates/<id>/candidate.json` `iterations` length
-- **Cause**: They should always match (every run_verifier call appends an iteration). If they don't, runtime state is inconsistent — check for exceptions in `agent_events/`.
+- **Cause**: They should always match (every run_verifier call appends an iteration). If they don't, the subagent called `run_verifier` against a different candidate_id, or the main agent called it without `agent_session_id`.
+- **Verification**: Check the iteration's `agent_session_id` field — it tells you which session (if any) the verifier call was attributed to.
 
-### Session status is "aborted" but workspace files keep changing
+### Subagent is still running but I want to stop it
 
-- **Look at**: `agent_sessions/<id>.json` `updated_at` vs workspace file mtimes
-- **Cause**: MCP `abort` only marks state; it doesn't kill the OS process. OpenCode's Task background process keeps running until it finishes or OpenCode itself kills it.
-- **Implication**: The runtime's view (aborted) and reality (still running) can diverge. Trust the workspace mtimes + SQLite for "is it actually doing work?"
+- **Cause**: Stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool.
+- **Action**: Interrupt the OpenCode Task from the OpenCode UI or kill the OpenCode child session directly. The runtime does not need to be notified.
 
 ### Verifier fails with "EditSurfaceViolation"
 
@@ -182,22 +170,18 @@ These tools are safe to call anytime — they're read-only:
 |---|---|
 | `search_status(run_id)` | Run state, candidate counts, best score |
 | `search_list_history(run_id, top_n, sort_by)` | Top candidates by score |
-| `search_list_agent_status(run_id)` | All session states + counters |
 | `search_list_iterations(run_id, candidate_id)` | Full iteration history for a candidate |
-| `search_list_observations(run_id)` | Cross-session shared findings |
 | `search_get_agent_context(agent_session_id)` | What a specific subagent sees (including its own iterations) |
 
 ## Cross-Referencing Layers
 
-When something goes wrong, cross-reference all three layers:
+When something goes wrong, cross-reference both layers:
 
-1. **OpenCode SQLite** — what the agent *did* (tool calls, bash commands, messages)
-2. **OpenCode log** — what the host *permitted* (permission decisions, errors)
-3. **`.search/` runtime state** — what the runtime *recorded* (scores, iterations, events)
+1. **OpenCode SQLite** — what the agent *did* (tool calls, bash commands, messages) and what the *lifecycle* did (start, step cap, stop)
+2. **`.search/` runtime state** — what the runtime *recorded* (scores, iterations, verifier logs)
 
-Example: "session aborted as stale"
-- SQLite shows: agent called `bash: 8`, `search_run_verifier: 0`
-- Log shows: no errors, all permissions allowed
-- Runtime shows: `counters.verifier_runs=0`, `last_heartbeat_at` unchanged for 5 min
+Example: "OpenCode child session finished but the candidate shows no score"
+- SQLite shows: matching OpenCode child session has equal `step-start` / `step-finish` counts and the agent never called `search_run_verifier`
+- Runtime shows: `candidate.json` with empty `iterations`
 
-→ Diagnosis: Agent was doing bash work (probably running evaluator directly), never told MCP it was alive, supervisor marked stale. Fix: ensure AnySearchAgent prompt clearly says MCP verifier is the official scorer; consider switching to a larger step tier.
+→ Diagnosis: the subagent did not self-score. Have the main agent run `search_run_verifier(run_id, candidate_id, "process")` (without `agent_session_id`) to record the final score against the workspace state the subagent left behind.

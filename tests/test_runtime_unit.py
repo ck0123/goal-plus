@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.models import ArtifactBundle, CandidateProposal, SearchSpec
+from agentic_any_search_mcp.models import CandidateProposal, SearchSpec
 from agentic_any_search_mcp.runtime import (
     FileSearchRuntime,
     canonical_json,
@@ -72,7 +72,7 @@ def spec_with_strategy(
     return SearchSpec.model_validate(data)
 
 
-def create_submitted_candidate(
+def create_candidate(
     runtime: FileSearchRuntime,
     project: Path,
     *,
@@ -80,17 +80,8 @@ def create_submitted_candidate(
 ) -> tuple[str, str, Path]:
     frozen = runtime.freeze_spec(spec_for(project, direction=direction), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
-    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-    runtime.submit_candidate(
-        run_id,
-        task.candidate_id,
-        ArtifactBundle(
-            candidate_id=task.candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-        ),
-    )
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
     return run_id, task.candidate_id, task.workspace
 
 
@@ -142,20 +133,6 @@ def test_freeze_spec_is_stable_and_copies_verifier(tmp_path: Path) -> None:
     assert Path(first.frozen_verifier_paths["evaluator.py"]).exists()
 
 
-def test_next_batch_honors_budget_and_rejects_invalid_k(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    with pytest.raises(ValueError):
-        runtime.next_batch(run_id, 0)
-
-    tasks = runtime.next_batch(run_id, 10)
-    assert [task.candidate_id for task in tasks] == ["c001", "c002"]
-    assert runtime.next_batch(run_id, 1) == []
-
-
 def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -171,7 +148,7 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     assert plan.planned_k == 2
     assert [task.candidate_id for task in tasks] == ["c001", "c002"]
     assert tasks[0].plan_id == "plan_001"
-    assert tasks[0].proposal.intent == "Independent candidate c001"
+    assert tasks[0].proposal.intent == "Independent candidate c001"  # type: ignore[union-attr]
     assert (tasks[0].workspace / ".tmp").is_dir()
     assert any(".tmp" in instruction for instruction in tasks[0].instructions)
 
@@ -180,7 +157,7 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     assert saved_plan.started_candidate_ids == ["c001", "c002"]
 
 
-def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path: Path) -> None:
+def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
@@ -202,11 +179,9 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
     assert plan.worker_policy["requires_agent_session"] is True
     assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
     assert any(
-        "tracked by search_start_agent_session" in instruction
+        "Pass context.agent_session_id to search_run_verifier" in instruction
         for instruction in tasks[0].instructions
     )
-    assert any("agent_session_id" in instruction for instruction in tasks[0].instructions)
-    assert any("subagent_type='AnySearchAgent'" in instruction for instruction in tasks[0].instructions)
     assert any(
         "search_run_verifier" in instruction for instruction in tasks[0].instructions
     )
@@ -217,98 +192,98 @@ def test_agent_session_pool_mode_is_planned_and_required_for_submission(tmp_path
         "iteration log" in instruction for instruction in tasks[0].instructions
     )
 
-    with pytest.raises(ValueError, match="agent_session_id"):
-        runtime.submit_candidate(
-            run_id,
-            tasks[0].candidate_id,
-            ArtifactBundle(candidate_id=tasks[0].candidate_id, status="patch_ready"),
-        )
 
-    session = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "try worker"})
-    context = runtime.get_agent_context(session.agent_session_id)
-    assert context["candidate_task"]["candidate_id"] == tasks[0].candidate_id
-    runtime.submit_candidate(
-        run_id,
-        tasks[0].candidate_id,
-        ArtifactBundle(
-            candidate_id=tasks[0].candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-        ),
+def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
+        # max_parallel=1 -> background_required should be False
     )
-    record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
-    assert record.status == "submitted"
+    spec_data = spec.model_dump(mode="json")
+    spec_data["budget"]["max_parallel"] = 1
+    frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    session = runtime.start_agent_session(
+        run_id, tasks[0].candidate_id, {"goal": "try one concrete variant"},
+    )
+    assert session.candidate_id == tasks[0].candidate_id
+    assert session.workspace == tasks[0].workspace
+    assert session.agent_session_id.startswith("agent_")
+    assert session.launch["subagent_type"] == "AnySearchAgent"
+    assert tasks[0].candidate_id in session.launch["description"]
+    assert session.agent_session_id in session.launch["prompt"]
+    assert tasks[0].candidate_id in session.launch["prompt"]
+    assert session.launch["background_required"] is False
 
 
-
-def test_agent_session_pool_status_observation_and_wait_loop(tmp_path: Path) -> None:
+def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path) -> None:
+    """With max_parallel=1, the runtime must not refuse to start sessions
+    for additional candidates. OpenCode/main-agent is responsible for not
+    launching too many simultaneous Tasks."""
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec_data = spec_for(project, max_candidates=4).model_dump(mode="json")
-    spec_data["budget"]["max_parallel"] = 2
+    spec_data["budget"]["max_parallel"] = 1
     frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 3)
+    plan = runtime.plan_next(run_id, requested_k=3)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
 
     first = runtime.start_agent_session(
-        run_id,
-        tasks[0].candidate_id,
-        {"goal": "try first"},
-        budget={},
+        run_id, tasks[0].candidate_id, {"goal": "first"},
     )
-    second = runtime.start_agent_session(run_id, tasks[1].candidate_id, "try second")
+    second = runtime.start_agent_session(
+        run_id, tasks[1].candidate_id, {"goal": "second"},
+    )
+    third = runtime.start_agent_session(
+        run_id, tasks[2].candidate_id, {"goal": "third"},
+    )
 
-    run_suffix = run_id.removeprefix("run_")
-    assert first.agent_session_id == f"agent_{run_suffix}_001"
-    assert second.agent_session_id == f"agent_{run_suffix}_002"
-    assert runtime._active_agent_session_count(run_id) == 2
+    assert first.candidate_id == tasks[0].candidate_id
+    assert second.candidate_id == tasks[1].candidate_id
+    assert third.candidate_id == tasks[2].candidate_id
 
-    with pytest.raises(RuntimeError, match="pool is full"):
-        runtime.start_agent_session(run_id, tasks[2].candidate_id)
 
-    context = runtime.get_agent_context(first.agent_session_id)
-    assert context["agent_session_id"] == first.agent_session_id
+def test_get_agent_context_has_only_authoritative_worker_fields(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    session = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "iterate"})
+
+    context = runtime.get_agent_context(session.agent_session_id)
+    for forbidden in (
+        "status",
+        "phase",
+        "visibility_mode",
+        "budget",
+        "peer_status",
+        "observations",
+    ):
+        assert forbidden not in context, f"get_agent_context must not return {forbidden}"
     assert context["candidate_task"]["candidate_id"] == tasks[0].candidate_id
-    assert context["peer_status"][0]["agent_session_id"] == second.agent_session_id
-
-    updated = runtime.update_agent_status(
-        first.agent_session_id,
-        phase="implementing",
-        current_goal="edit initializer",
-        last_action="read workspace",
-        next_step="make one patch",
-    )
-    assert updated.phase == "implementing"
-    assert updated.current_goal == "edit initializer"
-
-    observation = runtime.publish_observation(
-        first.agent_session_id,
-        summary="first direction leaves gaps",
-        evidence="static inspection",
-        next_ideas=["seed corners"],
-        tags=["layout"],
-    )
-    observations = runtime.list_observations(run_id, tags=["layout"])
-    assert observations[0]["observation_id"] == observation.observation_id
-    assert observations[0]["next_ideas"] == ["seed corners"]
-
-    completed = runtime.finish_agent_session(second.agent_session_id, summary="second done")
-    assert completed.status == "completed"
-    wait = runtime.wait_agent_events(run_id, timeout_seconds=0)
-    assert wait.poll_window_expired is False
-    assert wait.last_event_id is not None
-    assert any(event.type == "agent_completed" for event in wait.events)
-    repeated_wait = runtime.wait_agent_events(
-        run_id,
-        timeout_seconds=0,
-        since_event_id=wait.last_event_id,
-    )
-    assert repeated_wait.events == []
-    assert repeated_wait.last_event_id == wait.last_event_id
-
-    third = runtime.start_agent_session(run_id, tasks[2].candidate_id)
-    assert third.agent_session_id == f"agent_{run_suffix}_003"
-    assert runtime._active_agent_session_count(run_id) == 2
+    assert "history" in context
+    assert "iterations" in context
 
 
 def test_agent_session_ids_are_unique_across_runs(tmp_path: Path) -> None:
@@ -318,8 +293,10 @@ def test_agent_session_ids_are_unique_across_runs(tmp_path: Path) -> None:
 
     first_run_id = runtime.create_run(frozen.frozen_spec_id)
     second_run_id = runtime.create_run(frozen.frozen_spec_id)
-    first_task = runtime.next_batch(first_run_id, 1)[0]
-    second_task = runtime.next_batch(second_run_id, 1)[0]
+    first_plan = runtime.plan_next(first_run_id, requested_k=1)
+    first_task = runtime.start_batch(first_run_id, first_plan.plan_id)[0]
+    second_plan = runtime.plan_next(second_run_id, requested_k=1)
+    second_task = runtime.start_batch(second_run_id, second_plan.plan_id)[0]
 
     first = runtime.start_agent_session(first_run_id, first_task.candidate_id)
     second = runtime.start_agent_session(second_run_id, second_task.candidate_id)
@@ -338,8 +315,10 @@ def test_legacy_agent_session_id_collision_is_not_silent(tmp_path: Path) -> None
 
     first_run_id = runtime.create_run(frozen.frozen_spec_id)
     second_run_id = runtime.create_run(frozen.frozen_spec_id)
-    first_task = runtime.next_batch(first_run_id, 1)[0]
-    second_task = runtime.next_batch(second_run_id, 1)[0]
+    first_plan = runtime.plan_next(first_run_id, requested_k=1)
+    second_plan = runtime.plan_next(second_run_id, requested_k=1)
+    first_task = runtime.start_batch(first_run_id, first_plan.plan_id)[0]
+    second_task = runtime.start_batch(second_run_id, second_plan.plan_id)[0]
     first = runtime.start_agent_session(first_run_id, first_task.candidate_id)
     second = runtime.start_agent_session(second_run_id, second_task.candidate_id)
 
@@ -350,150 +329,6 @@ def test_legacy_agent_session_id_collision_is_not_silent(tmp_path: Path) -> None
 
     with pytest.raises(RuntimeError, match="ambiguous agent_session_id"):
         runtime.get_agent_context("agent_001")
-
-
-def test_agent_session_abort_enforcement(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
-    session = runtime.start_agent_session(run_id, task.candidate_id)
-
-    timeout_wait = runtime.wait_agent_events(run_id, timeout_seconds=0, since_event_id="event_999999")
-    assert timeout_wait.poll_window_expired is True
-    assert timeout_wait.active_count == 1
-
-    aborted = runtime.abort_all_agent_sessions(run_id, "stop search")
-    assert [item.status for item in aborted] == ["aborted"]
-    assert runtime._active_agent_session_count(run_id) == 0
-    abort_wait = runtime.wait_agent_events(run_id, timeout_seconds=0)
-    assert any(event.type == "agent_aborted" for event in abort_wait.events)
-
-
-def test_submit_candidate_validates_agent_session_provenance(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
-        },
-        max_candidates=2,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
-    session = runtime.start_agent_session(run_id, tasks[0].candidate_id, "try one concrete variant")
-
-    with pytest.raises(ValueError, match="agent_session_id"):
-        runtime.submit_candidate(
-            run_id,
-            tasks[0].candidate_id,
-            ArtifactBundle(
-                candidate_id=tasks[0].candidate_id,
-                status="patch_ready",
-            ),
-        )
-
-    with pytest.raises(ValueError, match="does not belong"):
-        runtime.submit_candidate(
-            run_id,
-            tasks[1].candidate_id,
-            ArtifactBundle(
-                candidate_id=tasks[1].candidate_id,
-                status="patch_ready",
-                agent_session_id=session.agent_session_id,
-            ),
-        )
-
-    runtime.submit_candidate(
-        run_id,
-        tasks[0].candidate_id,
-        ArtifactBundle(
-            candidate_id=tasks[0].candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-            summary="implemented the dispatched idea",
-            next_ideas=["try a smaller mutation next"],
-        ),
-    )
-    record = runtime._load_candidate_record(run_id, tasks[0].candidate_id)
-    assert record.artifact.agent_session_id == session.agent_session_id
-
-
-def test_submit_candidate_rejects_aborted_agent_session(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
-    session = runtime.start_agent_session(run_id, task.candidate_id, "try one concrete variant")
-    runtime.abort_agent_session(session.agent_session_id, "deadline exceeded")
-
-    with pytest.raises(RuntimeError, match="aborted agent session"):
-        runtime.submit_candidate(
-            run_id,
-            task.candidate_id,
-            ArtifactBundle(
-                candidate_id=task.candidate_id,
-                status="patch_ready",
-                agent_session_id=session.agent_session_id,
-            ),
-        )
-
-
-def test_history_and_report_include_agent_sessions(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
-    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "document session"})
-    runtime.submit_candidate(
-        run_id,
-        task.candidate_id,
-        ArtifactBundle(
-            candidate_id=task.candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-            summary="session-aware candidate",
-            next_ideas=["inspect report linkage"],
-        ),
-    )
-    runtime.finish_agent_session(session.agent_session_id, summary="session completed")
-
-    history = runtime.list_history(run_id)
-    candidate = history["candidates"][0]
-    assert candidate["agent_sessions"][0]["agent_session_id"] == session.agent_session_id
-    assert candidate["artifact_agent_session_id"] == session.agent_session_id
-    assert candidate["next_ideas"] == ["inspect report linkage"]
-
-    report_path = runtime.report(run_id)
-    report = report_path.read_text(encoding="utf-8")
-    assert "## Agent Sessions" in report
-    assert session.agent_session_id in report
-    assert "session completed" in report
 
 
 def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) -> None:
@@ -523,7 +358,7 @@ def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) 
     assert first_tasks[0].base_candidate_id is None
 
     plan2 = runtime.plan_next(run_id, requested_k=1)
-    assert plan2.proposal_contract.must_reference_one_of == ["c001"]
+    assert plan2.proposal_contract.must_reference_one_of == ["c001"]  # type: ignore[union-attr]
     with pytest.raises(ValueError):
         runtime.start_batch(
             run_id,
@@ -567,21 +402,13 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
     spec = spec_with_strategy(project, {"name": "evolve"}, max_candidates=4)
     frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
+    plan = runtime.plan_next(run_id, 2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
     (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
 
     for task in tasks:
-        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-        runtime.submit_candidate(
-            run_id,
-            task.candidate_id,
-            ArtifactBundle(
-                candidate_id=task.candidate_id,
-                status="patch_ready",
-                agent_session_id=session.agent_session_id,
-            ),
-        )
+        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
 
     def fake_run(*args, **kwargs):
         cwd = Path(kwargs["cwd"])
@@ -639,21 +466,13 @@ def test_random_strategy_gen2_picks_scored_parent_with_seed(
     )
     frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
+    plan = runtime.plan_next(run_id, 2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
     (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
 
     for task in tasks:
-        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-        runtime.submit_candidate(
-            run_id,
-            task.candidate_id,
-            ArtifactBundle(
-                candidate_id=task.candidate_id,
-                status="patch_ready",
-                agent_session_id=session.agent_session_id,
-            ),
-        )
+        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
 
     def fake_run(*args, **kwargs):
         cwd = Path(kwargs["cwd"])
@@ -691,21 +510,13 @@ def test_random_strategy_gen2_without_seed_picks_scored_parent(
     spec = spec_with_strategy(project, {"name": "random"}, max_candidates=4)
     frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
+    plan = runtime.plan_next(run_id, 2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
     (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
 
     for task in tasks:
-        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-        runtime.submit_candidate(
-            run_id,
-            task.candidate_id,
-            ArtifactBundle(
-                candidate_id=task.candidate_id,
-                status="patch_ready",
-                agent_session_id=session.agent_session_id,
-            ),
-        )
+        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
 
     def fake_run(*args, **kwargs):
         cwd = Path(kwargs["cwd"])
@@ -786,304 +597,7 @@ def test_python_strategy_driver_can_return_standard_plan(
 
     assert plan.requires_agent_proposals is True
     assert plan.strategy_trace["custom"] == "unit"
-    assert plan.proposal_contract.count == 2
-
-
-def test_submit_candidate_detects_out_of_surface_changes(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
-    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "test"})
-    (task.workspace / "config.yaml").write_text("name: changed\n", encoding="utf-8")
-
-    runtime.submit_candidate(
-        run_id,
-        task.candidate_id,
-        ArtifactBundle(
-            candidate_id=task.candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-        ),
-    )
-    record = runtime._load_candidate_record(run_id, task.candidate_id)
-
-    assert record.detected_changed_files == ["config.yaml"]
-    assert record.touched_denied_files is True
-    assert record.changed_outside_allowed is True
-
-
-def test_submit_candidate_ignores_workspace_tmp_scratch(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    task = runtime.next_batch(run_id, 1)[0]
-    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "test"})
-    (task.workspace / ".tmp" / "prototype.py").write_text("print('scratch')\n", encoding="utf-8")
-
-    runtime.submit_candidate(
-        run_id,
-        task.candidate_id,
-        ArtifactBundle(
-            candidate_id=task.candidate_id,
-            status="patch_ready",
-            agent_session_id=session.agent_session_id,
-        ),
-    )
-    record = runtime._load_candidate_record(run_id, task.candidate_id)
-
-    assert record.detected_changed_files == []
-    assert record.touched_denied_files is False
-    assert record.changed_outside_allowed is False
-
-
-def test_run_verifier_parses_subprocess_metrics_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    run_id, candidate_id, workspace = create_submitted_candidate(runtime, project)
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout='debug line\n{"combined_score": 0.75, "valid": true}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-
-    report = runtime.run_verifier(run_id, candidate_id)
-
-    assert report.process_passed is True
-    assert report.aggregate_score == 0.75
-    assert calls[0][1]["cwd"] == workspace.resolve()
-    assert "PYTHONPATH" in calls[0][1]["env"]
-
-
-def test_run_verifier_handles_subprocess_timeout_with_mock(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    run_id, candidate_id, _workspace = create_submitted_candidate(runtime, project)
-
-    def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-
-    report = runtime.run_verifier(run_id, candidate_id)
-
-    assert report.process_passed is False
-    assert report.aggregate_score == 0.0
-    assert report.verifier_results[0].failure_class == "Timeout"
-
-
-def test_select_uses_metric_direction_for_minimize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2, direction="minimize"), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
-    for task in tasks:
-        session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-        runtime.submit_candidate(
-            run_id,
-            task.candidate_id,
-            ArtifactBundle(
-                candidate_id=task.candidate_id,
-                status="patch_ready",
-                agent_session_id=session.agent_session_id,
-            ),
-        )
-
-    def fake_run(*args, **kwargs):
-        cwd = Path(kwargs["cwd"])
-        score = 0.1 if cwd.name == "c002" else 0.9
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=f'{{"combined_score": {score}}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-    runtime.run_verifier(run_id, "c001")
-    runtime.run_verifier(run_id, "c002")
-
-    selection = runtime.select(run_id)
-
-    assert selection["selected_candidate_id"] == "c002"
-    assert selection["selected_score"] == 0.1
-
-
-def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-        },
-        max_candidates=2,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=2)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    session_for_c0 = runtime.start_agent_session(
-        run_id, tasks[0].candidate_id, {"goal": "c0"}
-    )
-    other_session = runtime.start_agent_session(
-        run_id, tasks[1].candidate_id, {"goal": "c1"}
-    )
-    runtime.submit_candidate(
-        run_id,
-        tasks[0].candidate_id,
-        ArtifactBundle(
-            candidate_id=tasks[0].candidate_id,
-            status="patch_ready",
-            agent_session_id=session_for_c0.agent_session_id,
-        ),
-    )
-
-    with pytest.raises(ValueError, match="agent_session_id does not belong"):
-        runtime.run_verifier(
-            run_id,
-            tasks[0].candidate_id,
-            agent_session_id=other_session.agent_session_id,
-        )
-
-
-def test_run_verifier_works_without_submit_and_records_iterations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=1)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    candidate_id = tasks[0].candidate_id
-    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
-
-    scores = [0.4, 0.7, 0.9]
-
-    def fake_run(*args, **kwargs):
-        score = scores.pop(0)
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-
-    for expected_score in [0.4, 0.7, 0.9]:
-        report = runtime.run_verifier(
-            run_id, candidate_id, agent_session_id=session.agent_session_id
-        )
-        assert report.aggregate_score == expected_score
-
-    record = runtime._load_candidate_record(run_id, candidate_id)
-    assert len(record.iterations) == 3
-    assert [it.score for it in record.iterations] == [0.4, 0.7, 0.9]
-    assert [it.iteration for it in record.iterations] == [1, 2, 3]
-    assert record.score_report.aggregate_score == 0.9
-
-
-def test_list_iterations_returns_all_records(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=1)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    candidate_id = tasks[0].candidate_id
-    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout='{"combined_score": 0.5, "valid": true}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
-    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
-
-    iterations = runtime.list_iterations(run_id, candidate_id)
-    assert len(iterations) == 2
-    assert iterations[0]["iteration"] == 1
-    assert iterations[1]["iteration"] == 2
-    assert all(it["agent_session_id"] == session.agent_session_id for it in iterations)
-
-
-def test_get_agent_context_returns_iterations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=1)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    candidate_id = tasks[0].candidate_id
-    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout='{"combined_score": 0.42, "valid": true}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
-
-    context = runtime.get_agent_context(session.agent_session_id)
-    assert "iterations" in context
-    assert len(context["iterations"]) == 1
-    assert context["iterations"][0]["iteration"] == 1
-    assert context["iterations"][0]["score"] == 0.42
-    assert context["iterations"][0]["agent_session_id"] == session.agent_session_id
+    assert plan.proposal_contract.count == 2  # type: ignore[union-attr]
 
 
 def test_run_verifier_records_edit_surface_violation_in_iteration(
@@ -1181,12 +695,9 @@ def test_list_iterations_empty_for_fresh_candidate(tmp_path: Path) -> None:
     assert iterations == []
 
 
-def test_run_verifier_auto_attributes_to_unique_active_session(
+def test_run_verifier_records_iteration_with_agent_session_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Subagent often forgets to pass agent_session_id. When the candidate
-    has exactly one active session, runtime should auto-attribute the call
-    so the counter increments."""
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
@@ -1204,56 +715,6 @@ def test_run_verifier_auto_attributes_to_unique_active_session(
     tasks = runtime.start_batch(run_id, plan.plan_id)
     candidate_id = tasks[0].candidate_id
     session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout='{"combined_score": 0.6, "valid": true}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-
-    # Call WITHOUT agent_session_id - should auto-attribute to the unique active session.
-    report = runtime.run_verifier(run_id, candidate_id)
-    assert report.aggregate_score == 0.6
-
-    record = runtime._load_candidate_record(run_id, candidate_id)
-    assert len(record.iterations) == 1
-    assert record.iterations[0].agent_session_id == session.agent_session_id
-
-    session_after = runtime._load_agent_session_by_id(session.agent_session_id)
-
-
-def test_run_verifier_auto_attributes_when_session_is_terminal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """OS process outlives MCP timeout. Subagent calls run_verifier after
-    its session is marked terminal. Auto-attribution must still find the
-    session and record provenance; counter increments but finalize is
-    not re-triggered."""
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=1)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    candidate_id = tasks[0].candidate_id
-    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
-
-    # Force the session into terminal state (simulating supervisor abort).
-    terminal = session.model_copy(update={"status": "aborted"})
-    runtime._write_agent_session(terminal)
 
     def fake_run(*args, **kwargs):
         return subprocess.CompletedProcess(
@@ -1264,190 +725,365 @@ def test_run_verifier_auto_attributes_when_session_is_terminal(
         )
 
     monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
-
-    # Should NOT raise even though session is terminal.
-    report = runtime.run_verifier(run_id, candidate_id)
-    assert report.aggregate_score == 0.7
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     record = runtime._load_candidate_record(run_id, candidate_id)
-    assert record.iterations[-1].agent_session_id == session.agent_session_id
+    it = record.iterations[-1]
+    assert it.agent_session_id == session.agent_session_id
 
-    # Counter still increments.
-    session_after = runtime._load_agent_session_by_id(session.agent_session_id)
-    # Status stays terminal - no state transition back.
-    assert session_after.status == "aborted"
+    refreshed = runtime._load_agent_session_by_id(session.agent_session_id, run_id=run_id)
+    assert refreshed.counters.get("verifier_runs") == 1
 
 
-def test_wait_agent_events_returns_immediately_when_all_agents_idle(
-    tmp_path: Path,
+def test_run_verifier_without_agent_session_id_is_main_final_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression test: when all dispatched subagents have finished (completed/
-    failed/aborted), wait_agent_events must return immediately without waiting
-    for the full timeout, even if since_event_id filters out all terminal events.
-    This prevents the supervisor from blocking for 300s after workers are done."""
-    import time
-
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
-
-    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
-    s2 = runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "worker2"})
-    assert runtime._active_agent_session_count(run_id) == 2
-
-    # Finish both workers immediately.
-    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
-    runtime.finish_agent_session(s2.agent_session_id, summary="done2")
-    assert runtime._active_agent_session_count(run_id) == 0
-
-    # Capture last event id, then call wait with a future since_event_id that
-    # filters out all terminal events (simulating the orchestrator loop where
-    # since_event_id is advanced to last_event_id after processing events).
-    all_events = runtime._load_agent_events(run_id)
-    last_terminal_event_id = all_events[-1].event_id
-
-    # With a large timeout, wait should return immediately (well under 1s)
-    # because all agents are idle.
-    t0 = time.monotonic()
-    result = runtime.wait_agent_events(
-        run_id,
-        timeout_seconds=300,
-        since_event_id=last_terminal_event_id,
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
     )
-    elapsed = time.monotonic() - t0
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
 
-    assert elapsed < 1.0, f"wait took {elapsed:.2f}s, expected <1s (did not wait for timeout)"
-    assert result.active_count == 0
-    # poll_window_expired is False because we returned due to all_idle, not timeout
-    assert result.poll_window_expired is False
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.6, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    # Main final verify call - no agent_session_id, no auto-attribution.
+    report = runtime.run_verifier(run_id, candidate_id)
+    assert report.aggregate_score == 0.6
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    it = record.iterations[-1]
+    assert it.agent_session_id is None
 
 
-def test_wait_agent_events_does_not_return_when_some_still_running(
-    tmp_path: Path,
+def test_removed_runtime_methods_are_absent() -> None:
+    """Defensive guardrail: lifecycle/observation methods must not be
+    reintroduced on the runtime."""
+    for name in (
+        "update_agent_status",
+        "list_agent_status",
+        "sync_host_agent_sessions",
+        "_observe_opencode_session",
+        "_finish_agent_session_from_host",
+        "_host_observation_reason",
+        "finish_agent_session",
+        "abort_agent_session",
+        "abort_all_agent_sessions",
+        "_abort_agent_session_record",
+        "publish_observation",
+        "list_observations",
+        "wait_agent_events",
+        "_active_agent_session_count",
+        "_append_agent_event",
+        "_write_agent_event",
+        "_load_agent_events",
+        "submit_candidate",
+        "next_batch",
+    ):
+        assert not hasattr(FileSearchRuntime, name), (
+            f"FileSearchRuntime.{name} should be removed"
+        )
+
+
+def test_constructor_does_not_accept_opencode_db_path() -> None:
+    import inspect
+
+    signature = inspect.signature(FileSearchRuntime.__init__)
+    assert "opencode_db_path" not in signature.parameters
+
+
+def test_run_verifier_parses_subprocess_metrics_with_mock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Wait must NOT return early if at least one agent is still active, even
-    if there are no new events. It should only return when there's a new event
-    or the timeout fires."""
-    import time
-
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    calls = []
 
-    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
-    s2 = runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "worker2"})
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='debug line\n{"combined_score": 0.75, "valid": true}\n',
+            stderr="",
+        )
 
-    # Only finish s1; s2 is still running.
-    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
-    assert runtime._active_agent_session_count(run_id) == 1
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
 
-    # Wait with short timeout and since_event_id that filters out s1's completion.
-    all_events = runtime._load_agent_events(run_id)
-    last_event_id = all_events[-1].event_id
+    report = runtime.run_verifier(run_id, candidate_id)
 
-    t0 = time.monotonic()
-    result = runtime.wait_agent_events(
-        run_id,
-        timeout_seconds=1,
-        since_event_id=last_event_id,
-    )
-    elapsed = time.monotonic() - t0
-
-    # Should have waited ~1s (timeout), not returned immediately
-    assert elapsed >= 0.9, f"wait returned early in {elapsed:.2f}s, expected ~1s timeout"
-    assert result.active_count == 1
-    assert result.poll_window_expired is True
+    assert report.process_passed is True
+    assert report.aggregate_score == 0.75
+    assert calls[0][1]["cwd"] == workspace.resolve()
+    assert "PYTHONPATH" in calls[0][1]["env"]
 
 
-def test_wait_agent_events_return_when_all_idle_can_be_disabled(
+def test_run_verifier_handles_subprocess_timeout_with_mock(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """return_when_all_idle=False restores the legacy behavior: only return on
-    new events or timeout, regardless of active_count."""
-    import time
-
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 1)
+    run_id, candidate_id, _workspace = create_candidate(runtime, project)
 
-    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
-    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
-    all_events = runtime._load_agent_events(run_id)
-    last_event_id = all_events[-1].event_id
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
 
-    # With return_when_all_idle=False, even though active_count==0, wait should
-    # block until timeout because since_event_id filters all events.
-    t0 = time.monotonic()
-    result = runtime.wait_agent_events(
-        run_id,
-        timeout_seconds=1,
-        since_event_id=last_event_id,
-        return_when_all_idle=False,
+    report = runtime.run_verifier(run_id, candidate_id)
+
+    assert report.process_passed is False
+    assert report.aggregate_score == 0.0
+    assert report.verifier_results[0].failure_class == "Timeout"
+
+
+def test_select_uses_metric_direction_for_minimize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2, direction="minimize"),
+        [project / "evaluator.py"],
     )
-    elapsed = time.monotonic() - t0
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    for task in tasks:
+        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
 
-    assert elapsed >= 0.9, f"wait returned early in {elapsed:.2f}s, expected ~1s timeout"
-    assert result.poll_window_expired is True
-    assert result.active_count == 0
+    def fake_run(*args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        score = 0.1 if cwd.name == "c002" else 0.9
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c002"
+    assert selection["selected_score"] == 0.1
 
 
-def test_wait_agent_events_returns_on_event_before_all_idle(tmp_path: Path) -> None:
-    """Wait should return as soon as a wake_on event arrives (e.g. one agent
-    completes), even if other agents are still running. This preserves the
-    incremental event-processing behavior of the orchestrator loop."""
-    import time
-
+def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    session_for_c0 = runtime.start_agent_session(
+        run_id, tasks[0].candidate_id, {"goal": "c0"}
+    )
+    other_session = runtime.start_agent_session(
+        run_id, tasks[1].candidate_id, {"goal": "c1"}
+    )
 
-    s1 = runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "worker1"})
-    s2 = runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "worker2"})
-    assert runtime._active_agent_session_count(run_id) == 2
-
-    # Finish only s1; s2 is still active.
-    runtime.finish_agent_session(s1.agent_session_id, summary="done1")
-
-    # Should return immediately on the agent_completed event for s1,
-    # without waiting for s2 or timeout.
-    t0 = time.monotonic()
-    result = runtime.wait_agent_events(run_id, timeout_seconds=300)
-    elapsed = time.monotonic() - t0
-
-    assert elapsed < 1.0, f"wait took {elapsed:.2f}s, expected <1s"
-    assert result.active_count == 1
-    assert any(e.type == "agent_completed" and e.agent_session_id == s1.agent_session_id for e in result.events)
-    assert result.poll_window_expired is False
+    with pytest.raises(ValueError, match="agent_session_id does not belong"):
+        runtime.run_verifier(
+            run_id,
+            tasks[0].candidate_id,
+            agent_session_id=other_session.agent_session_id,
+        )
 
 
-def test_wait_agent_events_timeout_zero_returns_immediately(tmp_path: Path) -> None:
-    """timeout_seconds=0 must return immediately with current state (poll),
-    regardless of active sessions. Backward compatibility."""
-    import time
-
+def test_run_verifier_works_without_session_and_records_iterations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(spec_for(project, max_candidates=2), [project / "evaluator.py"])
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    tasks = runtime.next_batch(run_id, 2)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
 
-    runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "w1"})
-    runtime.start_agent_session(run_id, tasks[1].candidate_id, {"goal": "w2"})
+    scores = [0.4, 0.7, 0.9]
 
-    t0 = time.monotonic()
-    result = runtime.wait_agent_events(run_id, timeout_seconds=0)
-    elapsed = time.monotonic() - t0
+    def fake_run(*args, **kwargs):
+        score = scores.pop(0)
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
+            stderr="",
+        )
 
-    assert elapsed < 0.5
-    assert result.active_count == 2
-    # No events generated yet, so poll_window_expired=True
-    assert result.poll_window_expired is True
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    for expected_score in [0.4, 0.7, 0.9]:
+        report = runtime.run_verifier(
+            run_id, candidate_id, agent_session_id=session.agent_session_id
+        )
+        assert report.aggregate_score == expected_score
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    assert len(record.iterations) == 3
+    assert [it.score for it in record.iterations] == [0.4, 0.7, 0.9]
+    assert [it.iteration for it in record.iterations] == [1, 2, 3]
+    assert record.score_report.aggregate_score == 0.9  # type: ignore[union-attr]
+
+
+def test_list_iterations_returns_all_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.5, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+
+    iterations = runtime.list_iterations(run_id, candidate_id)
+    assert len(iterations) == 2
+    assert iterations[0]["iteration"] == 1
+    assert iterations[1]["iteration"] == 2
+    assert all(it["agent_session_id"] == session.agent_session_id for it in iterations)
+
+
+def test_get_agent_context_returns_iterations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    candidate_id = tasks[0].candidate_id
+    session = runtime.start_agent_session(run_id, candidate_id, {"goal": "iterate"})
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.42, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
+
+    context = runtime.get_agent_context(session.agent_session_id)
+    assert "iterations" in context
+    assert len(context["iterations"]) == 1
+    assert context["iterations"][0]["iteration"] == 1
+    assert context["iterations"][0]["score"] == 0.42
+    assert context["iterations"][0]["agent_session_id"] == session.agent_session_id
+
+
+def test_history_and_report_include_agent_sessions(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgent",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "document session"})
+
+    history = runtime.list_history(run_id)
+    candidate = history["candidates"][0]
+    assert candidate["agent_sessions"][0]["agent_session_id"] == session.agent_session_id
+
+    report_path = runtime.report(run_id)
+    report = report_path.read_text(encoding="utf-8")
+    assert "## Agent Sessions" in report
+    assert session.agent_session_id in report
+
+
+def test_runtime_does_not_create_event_or_observation_dirs(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    runtime.start_agent_session(run_id, tasks[0].candidate_id, {"goal": "iterate"})
+
+    run_dir = runtime._run_dir(run_id)
+    assert not (run_dir / "agent_events").exists()
+    assert not (run_dir / "observations").exists()

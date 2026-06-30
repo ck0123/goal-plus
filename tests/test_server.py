@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import Mock
 
 from fastmcp import FastMCP
 
@@ -15,7 +14,7 @@ def test_create_mcp(tmp_path: Path) -> None:
     assert isinstance(mcp, FastMCP)
 
 
-def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
+def test_create_mcp_registers_only_opencode_native_tools(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
     tools = asyncio.run(mcp.get_tools())
@@ -29,43 +28,46 @@ def test_create_mcp_registers_expected_tools(tmp_path: Path) -> None:
         "search_start_batch",
         "search_start_agent_session",
         "search_get_agent_context",
-        "search_update_agent_status",
-        "search_list_agent_status",
-        "search_finish_agent_session",
-        "search_abort_agent_session",
-        "search_abort_all_agent_sessions",
-        "search_publish_observation",
-        "search_list_observations",
-        "search_wait_agent_events",
-        "search_submit_candidate",
         "search_run_verifier",
+        "search_list_iterations",
         "search_select",
         "search_report",
         "search_promote",
     }
 
 
-def test_start_agent_session_accepts_string_directive_and_budget(tmp_path: Path) -> None:
+def test_start_agent_session_returns_launch_payload(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
     tools = asyncio.run(mcp.get_tools())
     schema = tools["search_start_agent_session"].parameters
-    directive = schema["properties"]["directive"]
-    budget = schema["properties"]["budget"]
 
-    assert {"type": "string"} in directive["anyOf"]
-    assert {"type": "object", "additionalProperties": True} in budget["anyOf"]
+    properties = schema["properties"]
+    assert "candidate_id" in properties
+    assert "directive" in properties
+    # The legacy admission parameters (budget, visibility_mode) are gone.
+    assert "budget" not in properties
+    assert "visibility_mode" not in properties
+
+
+def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    schema = tools["search_run_verifier"].parameters
+
+    assert "agent_session_id" in schema["properties"]
 
 
 def test_create_mcp_constructs_runtime_with_configured_root(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    created_roots = []
+    created_runtimes = []
 
     class FakeRuntime:
         def __init__(self, root_dir):
-            created_roots.append(root_dir)
+            created_runtimes.append(root_dir)
 
     class FakeTools:
         def __init__(self, runtime):
@@ -95,35 +97,11 @@ def test_create_mcp_constructs_runtime_with_configured_root(
         def search_get_agent_context(self, *args, **kwargs):
             return {}
 
-        def search_update_agent_status(self, *args, **kwargs):
-            return {}
-
-        def search_list_agent_status(self, *args, **kwargs):
-            return []
-
-        def search_finish_agent_session(self, *args, **kwargs):
-            return {}
-
-        def search_abort_agent_session(self, *args, **kwargs):
-            return {}
-
-        def search_abort_all_agent_sessions(self, *args, **kwargs):
-            return {}
-
-        def search_publish_observation(self, *args, **kwargs):
-            return {}
-
-        def search_list_observations(self, *args, **kwargs):
-            return []
-
-        def search_wait_agent_events(self, *args, **kwargs):
-            return {}
-
-        def search_submit_candidate(self, *args, **kwargs):
-            return {}
-
         def search_run_verifier(self, *args, **kwargs):
             return {}
+
+        def search_list_iterations(self, *args, **kwargs):
+            return []
 
         def search_select(self, *args, **kwargs):
             return {}
@@ -140,4 +118,4 @@ def test_create_mcp_constructs_runtime_with_configured_root(
     mcp = create_mcp(tmp_path / "custom-search")
 
     assert isinstance(mcp, FastMCP)
-    assert created_roots == [tmp_path / "custom-search"]
+    assert created_runtimes == [tmp_path / "custom-search"]

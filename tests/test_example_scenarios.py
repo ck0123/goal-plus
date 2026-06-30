@@ -88,21 +88,13 @@ def test_two_round_examples_create_batches_and_verify_baseline(
             run_id,
             candidate_id,
             {"goal": f"verify baseline fixture path for {candidate_id}"},
-            {},
         )
         tools.search_get_agent_context(session["agent_session_id"])
-        tools.search_submit_candidate(
+        report = tools.search_run_verifier(
             run_id,
             candidate_id,
-            {
-                "candidate_id": candidate_id,
-                "agent_session_id": session["agent_session_id"],
-                "status": "patch_ready",
-                "summary": "baseline candidate",
-            },
+            agent_session_id=session["agent_session_id"],
         )
-        tools.search_finish_agent_session(session["agent_session_id"], summary="baseline submitted")
-        report = tools.search_run_verifier(run_id, candidate_id)
 
         assert report["process_passed"] is True
         assert report["aggregate_score"] is not None
@@ -114,7 +106,6 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert history["returned_candidates"] == min(4, expected["max_candidates"])
     assert history["sort_by"] == "score"
     assert history["candidates"][0]["score"] >= history["candidates"][1]["score"]
-    assert history["candidates"][0]["summary"] == "baseline candidate"
     assert metric_name in history["candidates"][0]["key_metrics"]
 
     created_history = tools.search_list_history(run_id, top_n=2, sort_by="created")

@@ -102,17 +102,7 @@ def create_run(tools: SearchTools, project: Path) -> tuple[str, list[dict]]:
 
 
 def submit(tools: SearchTools, run_id: str, candidate_id: str) -> None:
-    session = tools.search_start_agent_session(run_id, candidate_id, {"goal": "submit"})
-    tools.search_submit_candidate(
-        run_id,
-        candidate_id,
-        {
-            "candidate_id": candidate_id,
-            "agent_session_id": session["agent_session_id"],
-            "status": "patch_ready",
-            "summary": f"{candidate_id} ready",
-        },
-    )
+    tools.search_start_agent_session(run_id, candidate_id, {"goal": f"{candidate_id} ready"})
 
 
 def test_k_module_end_to_end_selects_best_without_changing_main_workspace(
@@ -176,7 +166,6 @@ def test_k_module_end_to_end_selects_best_without_changing_main_workspace(
     assert "c004" in report_text
     assert "1.0" in report_text
     assert "## Strategy Plans" in report_text
-    assert "c004 ready" in report_text
     assert "correct_modules=4" in report_text
 
     promoted = tools.search_promote(run_id, "c004")
