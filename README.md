@@ -4,7 +4,7 @@
 
 The goal of V0 is not to control one specific coding agent. The runtime exposes a generic MCP control plane, while the host agent uses a `/search` skill to follow a disciplined workflow: freeze the spec, ask the active strategy to plan the next batch, create isolated candidate workspaces, verify candidates through runtime-owned checks, select the best candidate, and export a promotion patch.
 
-Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract. See `examples/readme.md` for the full strategy comparison table.
+Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract. See `examples/README.md` for the full strategy comparison table.
 
 Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The host dispatches one OpenCode Task per candidate via `search_start_agent_session`, binds the returned Task `metadata.sessionId` with `search_bind_opencode_session`, and can later continue the same node with `search_continue_agent_session`. OpenCode owns Task lifecycle and completion notification; the runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is the OpenCode-side concurrency budget and must be respected by the main agent when launching Tasks. `strategy.worker_agent_type` tells OpenCode which `subagent_type` to launch; bundled examples use `AnySearchAgent`, an autoresearch-style looper that self-iterates inside its workspace and self-verifies through `search_run_verifier`. `strategy.worker_agent_type` can be set to `AnySearchAgent` (default, 50 steps), `AnySearchAgentFlash` (15), `AnySearchAgentDeep` (100), or `AnySearchAgentExtraDeep` (150). The step cap is enforced by OpenCode per Task invocation.
 
@@ -124,7 +124,7 @@ The environment variable must be set on the OpenCode process. It exposes `Task(b
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 
-Additional bundled specs are listed in [examples/readme.md](examples/readme.md), including a same-session continuation smoke test and multi-batch `circle_packing` / `signal_processing` scenarios.
+Additional bundled specs are listed in [examples/README.md](examples/README.md), including a same-session continuation smoke test and multi-batch `circle_packing` / `signal_processing` scenarios.
 
 ## Installation Notes
 
@@ -241,7 +241,7 @@ docs/
   toy-example.md                      # step-by-step k_module walkthrough
   opencode.md                         # OpenCode-specific reference
 examples/
-  readme.md                           # bundled example index
+  README.md                           # bundled example index
   k_module_search_spec.json           # single-round toy SearchSpec
   circle_packing_search_spec.json     # multi-batch geometric optimization SearchSpec
   signal_processing_search_spec.json  # multi-batch filtering algorithm SearchSpec
