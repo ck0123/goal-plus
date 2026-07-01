@@ -1,0 +1,37 @@
+# ST Final Report Schema
+
+Every ST prompt MUST end with the following instruction so the OpenCode main agent
+emits a machine-parseable report at the end of stdout.
+
+Append this block verbatim to each prompt file (after the scenario-specific body):
+
+```
+## ST Output Contract
+
+When the search is complete, output a fenced JSON block tagged `st_report` as the
+LAST thing in your final message. No prose after the block. The JSON MUST conform
+to this schema:
+
+- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | signal_processing_multi | swe_bench_20212
+- run_id: string           # search runtime run_id
+- candidates: array of { candidate_id: string, score: number|null, iterations: integer, status: string }
+- selected_candidate_id: string | null
+- best_score: number | null
+- report_path: string      # path to runtime-generated report.md inside the workspace
+- extra: object            # scenario-specific fields (see prompt body)
+
+If the run failed before producing a report, set scenario/run_id as known, leave
+candidates an empty array, selected_candidate_id null, best_score null, and put
+the failure reason in extra.error.
+```
+
+Scenario-specific `extra` fields:
+
+| scenario | extra fields |
+|---|---|
+| circle_packing_continue | `agent_session_id`, `opencode_session_id`, `verifier_scores: [number, number]`, `score_delta: number` |
+| circle_packing_two_batch | (none beyond defaults) |
+| circle_packing_random | `parent_candidate_id: string` (batch-2 parent from strategy_trace) |
+| k_module_smoke | (none) |
+| signal_processing_multi | `batches: integer` |
+| swe_bench_20212 | `fail_to_pass: array<string>`, `pass_to_pass: array<string>` |

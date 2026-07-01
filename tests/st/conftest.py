@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from .helpers.opencode_runner import OpenCodeRunner, find_opencode
+
+
+ROOT = Path(__file__).resolve().parents[2]
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
+
+
+def _run(cmd: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def _opencode_available() -> bool:
+    return find_opencode() is not None
+
+
+def _mcp_runtime_connected() -> tuple[bool, str]:
+    """Verify search-runtime MCP server shows up as connected in `opencode mcp list`."""
+    if not _opencode_available():
+        return False, "opencode binary not on PATH"
+    proc = _run(["opencode", "mcp", "list"], timeout=20)
+    if proc is None:
+        return False, "opencode mcp list timed out or failed to launch"
+    if proc.returncode != 0:
+        return False, f"opencode mcp list exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+    if not re.search(r"search-runtime.*connected", proc.stdout):
+        return False, (
+            "search-runtime MCP server not connected. "
+            "Check opencode.json in project root, or run: "
+            "opencode mcp add search-runtime --command 'agentic-any-search-mcp --root .search'"
+        )
+    return True, ""
+
+
+def _mcp_server_binary_available() -> tuple[bool, str]:
+    """Verify `agentic-any-search-mcp` (the MCP server entry point) is on PATH."""
+    path = shutil.which("agentic-any-search-mcp")
+    if path is None:
+        return False, (
+            "agentic-any-search-mcp binary not on PATH. "
+            "Install with: pip install -e . (from project root)"
+        )
+    return True, ""
+
+
+def _model_available(model: str) -> tuple[bool, str]:
+    """Verify the configured model appears in `opencode models` output."""
+    if not _opencode_available():
+        return False, "opencode not on PATH, cannot list models"
+    proc = _run(["opencode", "models"], timeout=20)
+    if proc is None:
+        return False, "opencode models timed out"
+    if proc.returncode != 0:
+        return False, f"opencode models exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+    # model is listed as provider/model, e.g. "deepseek/deepseek-v4-flash"
+    if model not in proc.stdout:
+        return False, (
+            f"model '{model}' not in `opencode models` output. "
+            "Set ST_OPENCODE_MODEL to a listed model, or configure the provider."
+        )
+    return True, ""
+
+
+def _fixtures_present() -> tuple[bool, str]:
+    """Verify the example specs and fixture evaluators referenced by prompts exist."""
+    missing = []
+    for rel in [
+        "examples/circle_packing_search_spec.json",
+        "examples/k_module_search_spec.json",
+        "examples/signal_processing_search_spec.json",
+        "examples/swe_bench_20212_search_spec.json",
+        "tests/fixtures/circle_packing/evaluator.py",
+        "tests/fixtures/k_module_problem/evaluator.py",
+        "tests/fixtures/signal_processing/evaluator.py",
+        "tests/fixtures/swe_bench_20212/evaluator.py",
+    ]:
+        if not (ROOT / rel).exists():
+            missing.append(rel)
+    if missing:
+        return False, f"missing fixture/spec files under {ROOT}: {missing}"
+    return True, ""
+
+
+def _st_selected(config: pytest.Config) -> bool:
+    return "st" in (config.getoption("-m") or "")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "st: system test that drives a real `opencode run` (slow, opt-in via `-m st`)",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Pre-flight checks for ST tests. Skip with a concrete reason if any check fails."""
+    if not any("st" in [m.name for m in item.iter_markers()] for item in items):
+        return
+
+    selected = _st_selected(config)
+
+    # Run all checks up front so we can report ALL failures, not just the first
+    checks: list[tuple[bool, str]] = []
+
+    if not selected:
+        # No need to run expensive checks if user didn't select ST
+        for item in items:
+            if "st" in [m.name for m in item.iter_markers()]:
+                item.add_marker(pytest.mark.skip(
+                    reason="ST tests not selected (use `-m st` to run)"
+                ))
+        return
+
+    opencode_ok = _opencode_available()
+    checks.append((opencode_ok, "opencode binary not on PATH"))
+
+    if opencode_ok:
+        mcp_ok, mcp_msg = _mcp_runtime_connected()
+        checks.append((mcp_ok, mcp_msg or "search-runtime MCP connected"))
+
+        binary_ok, binary_msg = _mcp_server_binary_available()
+        checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
+
+        model = os.environ.get("ST_OPENCODE_MODEL", DEFAULT_MODEL)
+        model_ok, model_msg = _model_available(model)
+        checks.append((model_ok, model_msg or f"model {model} available"))
+
+    fixtures_ok, fixtures_msg = _fixtures_present()
+    checks.append((fixtures_ok, fixtures_msg or "fixtures/specs present"))
+
+    failed = [msg for ok, msg in checks if not ok]
+    if failed:
+        reason = "ST pre-flight check failed: " + " | ".join(failed)
+        for item in items:
+            if "st" in [m.name for m in item.iter_markers()]:
+                item.add_marker(pytest.mark.skip(reason=reason))
+
+
+@pytest.fixture()
+def st_project_root(tmp_path: Path) -> Path:
+    """Temporary project root for an ST run.
+
+    The runtime writes under `.search/` inside this dir. The project's
+    opencode.json (referencing the search-runtime MCP server) is symlinked
+    so OpenCode picks it up without us copying anything.
+    """
+    project_root = tmp_path / "st_project"
+    project_root.mkdir(parents=True, exist_ok=True)
+
+    opencode_json = ROOT / "opencode.json"
+    if opencode_json.exists():
+        target = project_root / "opencode.json"
+        target.symlink_to(opencode_json)
+
+    return project_root
+
+
+@pytest.fixture()
+def st_log_dir(tmp_path: Path) -> Path:
+    log_dir = tmp_path / "st_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+@pytest.fixture()
+def opencode_runner(st_project_root: Path, st_log_dir: Path) -> OpenCodeRunner:
+    return OpenCodeRunner(
+        project_root=st_project_root,
+        log_dir=st_log_dir,
+        default_timeout=int(os.environ.get("ST_OPENCODE_TIMEOUT", "1800")),
+    )
+
+
+def load_prompt(scenario: str) -> str:
+    """Load a prompt template and render {{PROJECT_ROOT}} with the absolute repo path."""
+    path = PROMPTS_DIR / f"{scenario}.md"
+    assert path.exists(), f"prompt file missing: {path}"
+    text = path.read_text(encoding="utf-8")
+    return text.replace("{{PROJECT_ROOT}}", str(ROOT))

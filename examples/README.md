@@ -2,6 +2,27 @@
 
 The example specs are small local scenarios for exercising the Search MCP runtime.
 
+## Automated ST Coverage
+
+Each scenario prompt below has a paired system test under `tests/st/`. The tests
+drive `opencode run --command search "<prompt>"` in a temporary project root and
+parse a machine-readable JSON report from the main agent's final message.
+
+- Prompts: `tests/st/prompts/<scenario>.md`
+- Tests: `tests/st/test_st_scenarios.py`
+- Output contract: `tests/st/prompts/_schema.md`
+
+Run them with:
+
+```bash
+pytest -m st                       # all 6 scenarios
+pytest -m st -k k_module_smoke     # single scenario
+```
+
+Tests are skipped by default. They require `opencode` on PATH and the
+`search-runtime` MCP server connected (`opencode mcp list`).
+
+
 | Spec | Fixture | Worker | Layout |
 |---|---|---|---|
 | `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | `AnySearchAgentFlash` (15 steps) | 2 candidates, pool=2, single batch |
