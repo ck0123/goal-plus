@@ -1,0 +1,50 @@
+{
+  "objective": "fix SWE-bench sympy__sympy-20212: evaluate_power(ZERO, NEG_INFINITY) must return COMPLEX_INFINITY",
+  "metric_name": "combined_score",
+  "metric_direction": "maximize",
+  "source_path": "tests/st/fixtures/swe_bench_20212",
+  "edit_surface": {
+    "allow": [
+      "initial_program.py"
+    ],
+    "deny": [
+      "evaluator.py",
+      "config.yaml"
+    ]
+  },
+  "process_verifiers": [
+    {
+      "name": "swe_test_zero",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "-c",
+        "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+      ],
+      "timeout_seconds": 30
+    }
+  ],
+  "promotion_verifiers": [
+    {
+      "name": "evaluator_hash_check",
+      "role": "anti_cheat_gate",
+      "command": [
+        "search-runtime-internal",
+        "check-frozen-hashes"
+      ]
+    }
+  ],
+  "budget": {
+    "max_candidates": 4,
+    "max_parallel": 4
+  },
+  "strategy": {
+    "name": "independent_branches",
+    "worker_mode": "agent-session-pool",
+    "worker_agent_type": "AnySearchAgent"
+  },
+  "constraints": {
+    "suggested_batch_size": 4,
+    "task_summary": "Fix evaluate_power in initial_program.py so evaluate_power(ZERO, NEG_INFINITY) returns COMPLEX_INFINITY (issue 19572). Do not change behavior of any other input."
+  }
+}

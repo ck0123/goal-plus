@@ -1,4 +1,4 @@
-Load {{PROJECT_ROOT}}/examples/circle_packing_search_spec.json and freeze {{PROJECT_ROOT}}/tests/fixtures/circle_packing/evaluator.py.
+Load {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/spec.json and freeze {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/evaluator.py.
 
 Run one circle_packing candidate and then continue the same OpenCode session:
   1. freeze_spec → create → plan_next(k=1) → start_batch

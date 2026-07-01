@@ -83,22 +83,25 @@ def _model_available(model: str) -> tuple[bool, str]:
 
 
 def _fixtures_present() -> tuple[bool, str]:
-    """Verify the example specs and fixture evaluators referenced by prompts exist."""
+    """Verify the ST-local fixture specs and evaluators exist.
+
+    ST fixtures live under tests/st/fixtures/<scenario>/ and are independent
+    of examples/ and tests/fixtures/ — those are referenced by unit tests and
+    example docs, not by ST.
+    """
     missing = []
-    for rel in [
-        "examples/circle_packing_search_spec.json",
-        "examples/k_module_search_spec.json",
-        "examples/signal_processing_search_spec.json",
-        "examples/swe_bench_20212_search_spec.json",
-        "tests/fixtures/circle_packing/evaluator.py",
-        "tests/fixtures/k_module_problem/evaluator.py",
-        "tests/fixtures/signal_processing/evaluator.py",
-        "tests/fixtures/swe_bench_20212/evaluator.py",
+    for scenario in [
+        "circle_packing",
+        "k_module_problem",
+        "signal_processing",
+        "swe_bench_20212",
     ]:
-        if not (ROOT / rel).exists():
-            missing.append(rel)
+        for fname in ("spec.json", "evaluator.py", "initial_program.py", "config.yaml"):
+            rel = f"tests/st/fixtures/{scenario}/{fname}"
+            if not (ROOT / rel).exists():
+                missing.append(rel)
     if missing:
-        return False, f"missing fixture/spec files under {ROOT}: {missing}"
+        return False, f"missing ST fixture files under {ROOT}: {missing}"
     return True, ""
 
 

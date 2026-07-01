@@ -1,0 +1,50 @@
+{
+  "objective": "maximize causal signal filtering quality on deterministic non-stationary synthetic signals",
+  "metric_name": "overall_score",
+  "metric_direction": "maximize",
+  "source_path": "tests/st/fixtures/signal_processing",
+  "edit_surface": {
+    "allow": [
+      "initial_program.py"
+    ],
+    "deny": [
+      "evaluator.py",
+      "config.yaml"
+    ]
+  },
+  "process_verifiers": [
+    {
+      "name": "signal_processing_score",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "-c",
+        "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+      ],
+      "timeout_seconds": 30
+    }
+  ],
+  "promotion_verifiers": [
+    {
+      "name": "evaluator_hash_check",
+      "role": "anti_cheat_gate",
+      "command": [
+        "search-runtime-internal",
+        "check-frozen-hashes"
+      ]
+    }
+  ],
+  "budget": {
+    "max_candidates": 8,
+    "max_parallel": 4
+  },
+  "strategy": {
+    "name": "independent_branches",
+    "worker_mode": "agent-session-pool",
+    "worker_agent_type": "AnySearchAgent"
+  },
+  "constraints": {
+    "suggested_batch_size": 4,
+    "task_summary": "Implement process_signal(input_signal, window_size) as a causal filter that returns len(input_signal)-window_size+1 values."
+  }
+}

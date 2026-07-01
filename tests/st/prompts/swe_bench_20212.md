@@ -1,4 +1,4 @@
-Load {{PROJECT_ROOT}}/examples/swe_bench_20212_search_spec.json. Freeze {{PROJECT_ROOT}}/tests/fixtures/swe_bench_20212/evaluator.py. Request 4 candidates. After submitting and verifying them, inspect summaries and FAIL_TO_PASS / PASS_TO_PASS results. Stop after report generation and do not promote.
+Load {{PROJECT_ROOT}}/tests/st/fixtures/swe_bench_20212/spec.json. Freeze {{PROJECT_ROOT}}/tests/st/fixtures/swe_bench_20212/evaluator.py. Request 4 candidates. After submitting and verifying them, inspect summaries and FAIL_TO_PASS / PASS_TO_PASS results. Stop after report generation and do not promote.
 
 ## ST Output Contract
 
