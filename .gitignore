@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .search/
+.tmp/
 .opencode/node_modules/
 .opencode/package.json
 .opencode/package-lock.json

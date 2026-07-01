@@ -161,27 +161,37 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @pytest.fixture()
-def st_project_root(tmp_path: Path) -> Path:
-    """Temporary project root for an ST run.
+def st_project_root(request: pytest.FixtureRequest) -> Path:
+    """Temporary project root for an ST run, under <repo>/.tmp/st-runs/.
 
-    The runtime writes under `.search/` inside this dir. The project's
-    opencode.json (referencing the search-runtime MCP server) is symlinked
-    so OpenCode picks it up without us copying anything.
+    Uses the project-local .tmp/ instead of the system tmp_path, because some
+    environments restrict /tmp access or have small tmp partitions. Each
+    scenario gets its own subdirectory keyed by the test node id so parallel
+    runs don't collide.
     """
-    project_root = tmp_path / "st_project"
+    base = ROOT / ".tmp" / "st-runs"
+    base.mkdir(parents=True, exist_ok=True)
+    # Sanitize node id -> dir name (replace :: with _, strip param brackets)
+    node = request.node.name.replace("::", "_").replace("[", "_").replace("]", "")
+    project_root = base / node
     project_root.mkdir(parents=True, exist_ok=True)
 
     opencode_json = ROOT / "opencode.json"
     if opencode_json.exists():
         target = project_root / "opencode.json"
+        if target.exists() or target.is_symlink():
+            target.unlink()
         target.symlink_to(opencode_json)
 
     return project_root
 
 
 @pytest.fixture()
-def st_log_dir(tmp_path: Path) -> Path:
-    log_dir = tmp_path / "st_logs"
+def st_log_dir(request: pytest.FixtureRequest) -> Path:
+    base = ROOT / ".tmp" / "st-logs"
+    base.mkdir(parents=True, exist_ok=True)
+    node = request.node.name.replace("::", "_").replace("[", "_").replace("]", "")
+    log_dir = base / node
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 
