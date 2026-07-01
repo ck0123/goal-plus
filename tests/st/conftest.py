@@ -13,7 +13,6 @@ from .helpers.opencode_runner import OpenCodeRunner, find_opencode
 
 ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 
 
 def _run(cmd: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str] | None:
@@ -62,7 +61,12 @@ def _mcp_server_binary_available() -> tuple[bool, str]:
 
 
 def _model_available(model: str) -> tuple[bool, str]:
-    """Verify the configured model appears in `opencode models` output."""
+    """Verify the configured model appears in `opencode models` output.
+
+    Only called when the user explicitly sets ST_OPENCODE_MODEL. When unset,
+    we don't pass -m to opencode and skip this check entirely — opencode picks
+    its own default model.
+    """
     if not _opencode_available():
         return False, "opencode not on PATH, cannot list models"
     proc = _run(["opencode", "models"], timeout=20)
@@ -70,11 +74,10 @@ def _model_available(model: str) -> tuple[bool, str]:
         return False, "opencode models timed out"
     if proc.returncode != 0:
         return False, f"opencode models exited {proc.returncode}: {proc.stderr.strip()[:200]}"
-    # model is listed as provider/model, e.g. "deepseek/deepseek-v4-flash"
     if model not in proc.stdout:
         return False, (
-            f"model '{model}' not in `opencode models` output. "
-            "Set ST_OPENCODE_MODEL to a listed model, or configure the provider."
+            f"ST_OPENCODE_MODEL='{model}' not in `opencode models` output. "
+            "Unset ST_OPENCODE_MODEL to let opencode pick its default, or pick a listed model."
         )
     return True, ""
 
@@ -139,9 +142,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         binary_ok, binary_msg = _mcp_server_binary_available()
         checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
 
-        model = os.environ.get("ST_OPENCODE_MODEL", DEFAULT_MODEL)
-        model_ok, model_msg = _model_available(model)
-        checks.append((model_ok, model_msg or f"model {model} available"))
+        # Only verify model when user explicitly set ST_OPENCODE_MODEL; otherwise
+        # let opencode pick its own default and skip the check.
+        model = os.environ.get("ST_OPENCODE_MODEL")
+        if model:
+            model_ok, model_msg = _model_available(model)
+            checks.append((model_ok, model_msg or f"model {model} available"))
 
     fixtures_ok, fixtures_msg = _fixtures_present()
     checks.append((fixtures_ok, fixtures_msg or "fixtures/specs present"))

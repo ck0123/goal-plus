@@ -29,7 +29,9 @@ class OpenCodeRunner:
         self.project_root = project_root
         self.log_dir = log_dir
         self.default_timeout = default_timeout
-        self.model = model or os.environ.get("ST_OPENCODE_MODEL", "deepseek/deepseek-v4-flash")
+        # Only pass -m if the user explicitly set ST_OPENCODE_MODEL; otherwise
+        # let opencode pick its own default model.
+        self.model = model or os.environ.get("ST_OPENCODE_MODEL") or None
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_cmd(self, prompt: str) -> list[str]:
