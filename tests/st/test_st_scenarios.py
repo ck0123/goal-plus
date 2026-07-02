@@ -22,6 +22,7 @@ SCENARIOS = [
     "circle_packing_two_batch",
     "circle_packing_random",
     "k_module_smoke",
+    "k_module_then_circle_packing",
     "signal_processing_multi",
     "swe_bench_20212",
 ]
@@ -92,6 +93,38 @@ def _assert_k_module_smoke(report: StReport) -> None:
     )
 
 
+def _assert_k_module_then_circle_packing(report: StReport) -> None:
+    # Both runs must produce at least one candidate each.
+    run1_candidates = report.extra.get("run1_candidates", 0)
+    run2_candidates = report.extra.get("run2_candidates", 0)
+    assert run1_candidates >= 1, (
+        f"RUN_1 (k_module) should have >=1 candidate, got {run1_candidates}"
+    )
+    assert run2_candidates >= 1, (
+        f"RUN_2 (circle_packing) should have >=1 candidate, got {run2_candidates}"
+    )
+    # Top-level candidates/run_id come from RUN_2 (circle_packing).
+    assert len(report.candidates) >= 1, (
+        f"top-level candidates (from RUN_2) should be >=1, got {len(report.candidates)}"
+    )
+    # The whole point of this scenario: the two runs must not collide.
+    assert report.extra.get("run_ids_distinct") is True, (
+        "run_ids_distinct must be true — runtime leaked state across runs "
+        f"(RUN_1={report.extra.get('run1_run_id')}, "
+        f"RUN_2={report.extra.get('run2_run_id')})"
+    )
+    run1 = report.extra.get("run1_run_id")
+    run2 = report.extra.get("run2_run_id")
+    assert run1 and run2 and run1 != run2, (
+        f"run1_run_id and run2_run_id must both be non-empty and distinct: "
+        f"run1={run1!r}, run2={run2!r}"
+    )
+    # Top-level run_id should match RUN_2.
+    assert report.run_id == run2, (
+        f"top-level run_id {report.run_id!r} should match run2_run_id {run2!r}"
+    )
+
+
 def _assert_signal_processing_multi(report: StReport) -> None:
     # Spec asks for 8; link-level needs at least 2 batches worth progressing,
     # so require >=4 (half of budget=8) — if only 1 ran, batch loop broke.
@@ -124,6 +157,7 @@ SCENARIO_ASSERTIONS = {
     "circle_packing_two_batch": _assert_circle_packing_two_batch,
     "circle_packing_random": _assert_circle_packing_random,
     "k_module_smoke": _assert_k_module_smoke,
+    "k_module_then_circle_packing": _assert_k_module_then_circle_packing,
     "signal_processing_multi": _assert_signal_processing_multi,
     "swe_bench_20212": _assert_swe_bench_20212,
 }

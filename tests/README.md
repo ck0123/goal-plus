@@ -30,6 +30,7 @@ tests/
     │   ├── circle_packing_two_batch.md
     │   ├── circle_packing_random.md
     │   ├── k_module_smoke.md
+    │   ├── k_module_then_circle_packing.md
     │   ├── signal_processing_multi.md
     │   └── swe_bench_20212.md
     └── test_st_scenarios.py           # Parametrized ST cases
@@ -62,7 +63,10 @@ ST tests are skipped by default. Pass `-m st` to enable them.
 # Single scenario (smoke, ~2 min)
 pytest -m st -k k_module_smoke -v -s
 
-# All six scenarios (10-20 min)
+# Two-run isolation scenario (k_module then circle_packing, ~5-8 min)
+pytest -m st -k k_module_then_circle_packing -v -s
+
+# All seven scenarios (10-25 min)
 pytest -m st -v -s
 
 # Use a different model

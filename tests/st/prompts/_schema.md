@@ -12,7 +12,7 @@ When the search is complete, output a fenced JSON block tagged `st_report` as th
 LAST thing in your final message. No prose after the block. The JSON MUST conform
 to this schema:
 
-- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | signal_processing_multi | swe_bench_20212
+- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | k_module_then_circle_packing | signal_processing_multi | swe_bench_20212
 - run_id: string           # search runtime run_id
 - candidates: array of { candidate_id: string, score: number|null, iterations: integer, status: string }
 - selected_candidate_id: string | null
@@ -33,5 +33,6 @@ Scenario-specific `extra` fields:
 | circle_packing_two_batch | (none beyond defaults) |
 | circle_packing_random | `parent_candidate_id: string` (batch-2 parent from strategy_trace) |
 | k_module_smoke | (none) |
+| k_module_then_circle_packing | `run1_run_id: string`, `run1_candidates: integer`, `run1_best_score: number\|null`, `run2_run_id: string`, `run2_candidates: integer`, `run2_best_score: number\|null`, `run_ids_distinct: boolean` |
 | signal_processing_multi | `batches: integer` |
 | swe_bench_20212 | `fail_to_pass: array<string>`, `pass_to_pass: array<string>` |
