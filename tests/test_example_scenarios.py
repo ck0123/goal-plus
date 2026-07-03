@@ -28,6 +28,21 @@ EXAMPLE_SPECS = [
     ),
 ]
 
+SEARCH_MODE_SPECS = [
+    (
+        "search-mode/k_module_adaptevolve_search_spec.json",
+        "adaptevolve",
+        "python",
+        {"max_candidates": 1, "max_parallel": 1, "worker_agent_type": "AnySearchAgentFlash"},
+    ),
+    (
+        "search-mode/k_module_openevolve_search_spec.json",
+        "openevolve",
+        "builtin",
+        {"max_candidates": 2, "max_parallel": 1, "worker_agent_type": "AnySearchAgentFlash"},
+    ),
+]
+
 
 def load_expected(spec_name: str) -> dict:
     for name, _, _, expected in EXAMPLE_SPECS:
@@ -38,6 +53,27 @@ def load_expected(spec_name: str) -> dict:
 
 def load_example_spec(name: str) -> dict:
     return json.loads((ROOT / "examples" / name).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(("spec_name", "strategy_name", "driver", "expected"), SEARCH_MODE_SPECS)
+def test_search_mode_example_specs_are_valid(
+    spec_name: str,
+    strategy_name: str,
+    driver: str,
+    expected: dict,
+) -> None:
+    spec = load_example_spec(spec_name)
+    parsed = SearchSpec.model_validate(spec)
+
+    assert parsed.source_path == "tests/fixtures/k_module_problem"
+    assert parsed.metric_name == "combined_score"
+    assert parsed.strategy.name == strategy_name
+    assert parsed.strategy.driver == driver
+    assert parsed.strategy.worker_mode == "agent-session-pool"
+    assert parsed.strategy.worker_agent_type == expected["worker_agent_type"]
+    assert parsed.budget.max_candidates == expected["max_candidates"]
+    assert parsed.budget.max_parallel == expected["max_parallel"]
+    assert not Path(parsed.source_path).is_absolute()
 
 
 @pytest.mark.parametrize(("spec_name", "verifier_path", "metric_name", "expected"), EXAMPLE_SPECS)

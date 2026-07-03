@@ -1,0 +1,65 @@
+{
+  "objective": "maximize k-module pipeline configuration score with OpenEvolve-style parent sampling",
+  "metric_name": "combined_score",
+  "metric_direction": "maximize",
+  "source_path": "tests/fixtures/k_module_problem",
+  "edit_surface": {
+    "allow": [
+      "initial_program.py"
+    ],
+    "deny": [
+      "evaluator.py",
+      "config.yaml"
+    ]
+  },
+  "process_verifiers": [
+    {
+      "name": "k_module_score",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "-c",
+        "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+      ],
+      "timeout_seconds": 30
+    }
+  ],
+  "promotion_verifiers": [
+    {
+      "name": "evaluator_hash_check",
+      "role": "anti_cheat_gate",
+      "command": [
+        "search-runtime-internal",
+        "check-frozen-hashes"
+      ]
+    }
+  ],
+  "budget": {
+    "max_candidates": 2,
+    "max_parallel": 1
+  },
+  "strategy": {
+    "name": "openevolve",
+    "driver": "builtin",
+    "worker_mode": "agent-session-pool",
+    "worker_agent_type": "AnySearchAgentFlash",
+    "history_policy": {
+      "scope": "top_n",
+      "top_n": 5
+    },
+    "config": {
+      "seed": 1,
+      "archive_size": 5,
+      "num_inspirations": 2,
+      "exploration_ratio": 0.2,
+      "exploitation_ratio": 0.7,
+      "elite_selection_ratio": 0.1
+    }
+  },
+  "root_hypotheses": [
+    "baseline",
+    "fix loader",
+    "fix loader and preprocess",
+    "full target"
+  ]
+}

@@ -172,7 +172,7 @@ The default strategy is `agent_guided`, so `plan.requires_agent_proposals` is `t
 - For each proposal, decide which prior candidate(s) to build on and write `intent` (one short sentence on the mutation direction), `expected_tradeoff` (what improves / what risks regressing), `instructions` (concrete steps the worker should follow), and `parent_candidate_ids` / `base_candidate_id` (which workspace to derive from).
 - First batch (empty history): `must_reference_one_of` is empty, so proposals may set `base_candidate_id=null` and start from source. From the second batch on, every proposal must reference at least one official candidate.
 
-If you switch the spec to a builtin that produces fixed work orders (`independent_branches`, `evolve`, `mcts`, `random`) or to a Python planner such as `adaptevolve`, `plan.requires_agent_proposals` is `false` and `search_start_batch` must be called without proposals.
+If you switch the spec to a builtin that produces fixed work orders (`independent_branches`, `evolve`, `openevolve`, `mcts`, `random`) or to a Python planner such as `adaptevolve`, `plan.requires_agent_proposals` is `false` and `search_start_batch` must be called without proposals.
 
 ### Step 5: Launch OpenCode Task Workers
 

@@ -305,7 +305,9 @@ class FileSearchRuntime:
             plan = self._plan_custom_strategy(run, frozen, requested_k, planned_k, remaining)
         elif mode in {"agent", "agent_guided"}:
             plan = self._plan_agent_guided(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"evolve", "evolve_mode", "openevolve"}:
+        elif mode in {"openevolve", "open_evolve", "openevolve_mode"}:
+            plan = self._plan_openevolve(run, frozen, requested_k, planned_k, remaining)
+        elif mode in {"evolve", "evolve_mode"}:
             plan = self._plan_evolve(run, frozen, requested_k, planned_k, remaining)
         elif mode in {"mcts", "mcts_mode"}:
             plan = self._plan_mcts(run, frozen, requested_k, planned_k, remaining)
@@ -1099,6 +1101,200 @@ class FileSearchRuntime:
             },
             created_at=utc_timestamp(),
         )
+
+    def _plan_openevolve(
+        self,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        requested_k: int,
+        planned_k: int,
+        remaining: int,
+    ) -> SearchPlan:
+        records = self._load_candidate_records(run.run_id)
+        scored = self._records_by_created(self._scored_records(records))
+        strategy = frozen.spec.strategy
+        config = strategy.config
+
+        if not scored:
+            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
+            plan.strategy_trace = {
+                "selection_rule": "openevolve bootstrap",
+                "sampling_mode": "bootstrap",
+                "reason": (
+                    "No verified parent exists yet, so OpenEvolve starts by creating "
+                    "source-derived programs before database sampling."
+                ),
+            }
+            return plan
+
+        rng = self._openevolve_rng(config, run.next_plan_index)
+        archive = self._openevolve_archive(
+            scored,
+            frozen.spec,
+            int(config.get("archive_size", 100)),
+        )
+        parent, sampling_mode, rand_val = self._openevolve_sample_parent(
+            scored,
+            archive,
+            rng,
+            exploration_ratio=float(config.get("exploration_ratio", 0.2)),
+            exploitation_ratio=float(config.get("exploitation_ratio", 0.7)),
+        )
+        num_inspirations = int(config.get("num_inspirations", 5))
+        inspirations = self._openevolve_sample_inspirations(
+            parent,
+            scored,
+            archive,
+            frozen.spec,
+            rng,
+            num_inspirations,
+        )
+        inspiration_ids = [record.candidate_id for record in inspirations]
+
+        work_orders: list[CandidateWorkOrder] = []
+        for slot in range(1, planned_k + 1):
+            work_orders.append(
+                CandidateWorkOrder(
+                    slot=slot,
+                    base_candidate_id=parent.candidate_id,
+                    parent_candidate_ids=[parent.candidate_id],
+                    inspiration_candidate_ids=inspiration_ids,
+                    intent=(
+                        f"OpenEvolve mutation from `{parent.candidate_id}` using sampled "
+                        "inspirations; make a small diff-like change and keep verifier feedback."
+                    ),
+                    hypothesis=f"OpenEvolve mutation from {parent.candidate_id} slot {slot}",
+                    instructions=[
+                        (
+                            f"OpenEvolve sampled parent `{parent.candidate_id}` via "
+                            f"{sampling_mode}; mutate this workspace instead of restarting."
+                        ),
+                        (
+                            "Use inspirations as design hints only; preserve the parent's "
+                            "working behavior before exploring one concrete change."
+                        ),
+                        (
+                            "Prefer a compact diff-style mutation, then verify through "
+                            "search-runtime_search_run_verifier."
+                        ),
+                    ],
+                    must_derive_from=[parent.candidate_id],
+                    metadata={
+                        "strategy": "openevolve",
+                        "sampling_mode": sampling_mode,
+                        "rand_val": rand_val,
+                        "parent_score": (
+                            parent.score_report.aggregate_score if parent.score_report else None
+                        ),
+                        "archive_candidate_ids": [record.candidate_id for record in archive],
+                    },
+                )
+            )
+
+        visible_ids = [parent.candidate_id, *inspiration_ids]
+        return SearchPlan(
+            run_id=run.run_id,
+            plan_id=self._next_plan_id(run),
+            strategy=strategy,
+            requested_k=requested_k,
+            planned_k=planned_k,
+            remaining_budget=remaining,
+            requires_agent_proposals=False,
+            official_history=self._history_view(
+                run,
+                frozen,
+                strategy.history_policy,
+                forced_candidate_ids=visible_ids,
+            ),
+            derivation_policy={
+                "base_workspace_source": f"candidate:{parent.candidate_id}",
+                "must_derive_from": [parent.candidate_id],
+                "may_reference": inspiration_ids,
+            },
+            work_orders=work_orders,
+            strategy_trace={
+                "selection_rule": "openevolve sampled parent plus inspirations",
+                "sampling_mode": sampling_mode,
+                "rand_val": rand_val,
+                "parent_candidate_id": parent.candidate_id,
+                "archive_candidate_ids": [record.candidate_id for record in archive],
+                "inspiration_candidate_ids": inspiration_ids,
+                "reason": (
+                    "OpenEvolve-style base planner samples a parent from exploration, "
+                    "archive exploitation, or random fallback, then passes sampled "
+                    "inspirations to the worker as mutation context."
+                ),
+            },
+            created_at=utc_timestamp(),
+        )
+
+    def _openevolve_rng(self, config: dict[str, Any], plan_index: int) -> random.Random:
+        seed = config.get("seed", config.get("random_seed"))
+        if seed is None:
+            return random.Random()
+        return random.Random(int(seed) + plan_index)
+
+    def _openevolve_archive(
+        self,
+        scored: list[CandidateRecord],
+        spec: SearchSpec,
+        archive_size: int,
+    ) -> list[CandidateRecord]:
+        if archive_size <= 0:
+            return []
+        return self._top_records(scored, spec, min(archive_size, len(scored)))
+
+    def _openevolve_sample_parent(
+        self,
+        scored: list[CandidateRecord],
+        archive: list[CandidateRecord],
+        rng: random.Random,
+        *,
+        exploration_ratio: float,
+        exploitation_ratio: float,
+    ) -> tuple[CandidateRecord, str, float]:
+        rand_val = rng.random()
+        if rand_val < exploration_ratio:
+            return rng.choice(scored), "exploration", rand_val
+        if rand_val < exploration_ratio + exploitation_ratio and archive:
+            return rng.choice(archive), "exploitation", rand_val
+        return rng.choice(scored), "random", rand_val
+
+    def _openevolve_sample_inspirations(
+        self,
+        parent: CandidateRecord,
+        scored: list[CandidateRecord],
+        archive: list[CandidateRecord],
+        spec: SearchSpec,
+        rng: random.Random,
+        count: int,
+    ) -> list[CandidateRecord]:
+        if count <= 0:
+            return []
+
+        inspirations: list[CandidateRecord] = []
+        seen = {parent.candidate_id}
+
+        best = self._best_record(scored, spec)
+        if best.candidate_id not in seen:
+            inspirations.append(best)
+            seen.add(best.candidate_id)
+
+        for record in archive:
+            if len(inspirations) >= count:
+                return inspirations
+            if record.candidate_id not in seen:
+                inspirations.append(record)
+                seen.add(record.candidate_id)
+
+        remaining = [record for record in scored if record.candidate_id not in seen]
+        while remaining and len(inspirations) < count:
+            record = rng.choice(remaining)
+            remaining = [item for item in remaining if item.candidate_id != record.candidate_id]
+            inspirations.append(record)
+            seen.add(record.candidate_id)
+
+        return inspirations
 
     def _plan_mcts(
         self,

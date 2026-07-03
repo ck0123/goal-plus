@@ -515,6 +515,83 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
     assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 2\n"
 
 
+def test_openevolve_strategy_bootstraps_from_source_with_openevolve_trace(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(project, {"name": "openevolve"}, max_candidates=2)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, 2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    assert plan.requires_agent_proposals is False
+    assert plan.strategy_trace["selection_rule"] == "openevolve bootstrap"
+    assert plan.strategy_trace["sampling_mode"] == "bootstrap"
+    assert plan.derivation_policy["base_workspace_source"] == "source"
+    assert [task.base_candidate_id for task in tasks] == [None, None]
+
+
+def test_openevolve_strategy_samples_exploration_parent_and_inspirations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "openevolve",
+            "config": {
+                "seed": 1,
+                "exploration_ratio": 1.0,
+                "exploitation_ratio": 0.0,
+                "archive_size": 1,
+                "num_inspirations": 2,
+            },
+        },
+        max_candidates=3,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    first_plan = runtime.plan_next(run_id, 2)
+    first_tasks = runtime.start_batch(run_id, first_plan.plan_id)
+    (first_tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (first_tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    for task in first_tasks:
+        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "score parent pool"})
+
+    def fake_run(*args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        score = 0.9 if cwd.name == "c002" else 0.1
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    plan = runtime.plan_next(run_id, 1)
+    followups = runtime.start_batch(run_id, plan.plan_id)
+
+    assert plan.strategy_trace["selection_rule"] == "openevolve sampled parent plus inspirations"
+    assert plan.strategy_trace["sampling_mode"] == "exploration"
+    assert plan.strategy_trace["parent_candidate_id"] == "c001"
+    assert plan.strategy_trace["archive_candidate_ids"] == ["c002"]
+    assert plan.strategy_trace["inspiration_candidate_ids"] == ["c002"]
+    assert plan.work_orders[0].base_candidate_id == "c001"
+    assert "OpenEvolve sampled parent" in plan.work_orders[0].instructions[0]
+    assert followups[0].base_candidate_id == "c001"
+    assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
 def test_random_strategy_gen1_independent_bootstrap(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")

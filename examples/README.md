@@ -27,6 +27,7 @@ Tests are skipped by default. They require `opencode` on PATH and the
 |---|---|---|---|
 | `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | `AnySearchAgentFlash` (15 steps) | 2 candidates, pool=2, single batch |
 | `search-mode/k_module_adaptevolve_search_spec.json` | `tests/fixtures/k_module_problem` | AdaptEvolve dynamic tier (starts with `AnySearchAgentFlash`) | 1 candidate, pool=1, smoke test |
+| `search-mode/k_module_openevolve_search_spec.json` | `tests/fixtures/k_module_problem` | OpenEvolve-style sampling with `AnySearchAgentFlash` | 2 candidates, pool=1, two sequential batches |
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `AnySearchAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `AnySearchAgent` (50 steps) | 8 candidates, pool=4, two batches |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
@@ -101,6 +102,7 @@ Comparison:
 | `agent_guided` (default) | Main agent | `true` | Empty history → no reference constraint, proposals may start from source | Let the main agent judge which prior candidates to build on |
 | `independent_branches` | None — all from source | `false` | All from source | Baseline, no lineage |
 | `evolve` | Runtime: best-score parent + top-N inspirations | `false` | Bootstrap from source | OpenEvolve-style fixed parent selection |
+| `openevolve` | Runtime: sampled parent from scored population/archive + inspirations | `false` | Bootstrap from source | Minimal OpenEvolve-style parent/archive/inspiration sampling |
 | `mcts` | Runtime: best-score frontier | `false` | Bootstrap from source | MCTS-style expansion (placeholder planner) |
 | `random` | Runtime: random scored parent (seedable via `strategy.config.seed`) | `false` | Bootstrap from source | Cheap random-walk baseline |
 | `adaptevolve` | Python plugin: best-score parent + confidence-routed worker tier | `false` | Bootstrap from source with `AnySearchAgentFlash` | Adaptive compute allocation around evolve-style mutations |
@@ -108,7 +110,7 @@ Comparison:
 Notes:
 
 - In `agent_guided`, `search_plan_next` returns `proposal_contract.must_reference_one_of` listing the candidate_ids each proposal must cite. The first batch has empty history so the constraint is empty; from the second batch on every proposal must reference at least one official candidate.
-- In `evolve` / `mcts` / `random`, the runtime selects the parent internally and emits fixed `work_orders`; `search_start_batch` must be called without proposals.
+- In `evolve` / `openevolve` / `mcts` / `random`, the runtime selects the parent internally and emits fixed `work_orders`; `search_start_batch` must be called without proposals.
 - In `adaptevolve`, the Python strategy plugin emits fixed `work_orders` and a dynamic `worker_policy`. The runtime records that policy in candidate metadata and uses it when building the OpenCode Task launch payload.
 - `independent_branches` ignores history entirely — every candidate starts from the frozen source workspace.
 
@@ -199,6 +201,12 @@ Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_par
 
 ```
 Load examples/search-mode/k_module_adaptevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run the smallest end-to-end AdaptEvolve case: freeze_spec → create → plan_next(k=1) → start_batch → start_agent_session → Task with session.launch → bind_opencode_session → run_verifier → select → report. Confirm that the plan strategy_trace shows selected_worker_agent_type and that the Task launch uses AnySearchAgentFlash for the first bootstrap candidate.
+```
+
+### k_module — OpenEvolve sampling smoke test
+
+```
+Load examples/search-mode/k_module_openevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run two sequential one-candidate batches: batch 1 does bootstrap from source, then run_verifier; batch 2 calls plan_next(k=1) again so openevolve samples a parent from scored history and emits inspiration context. Start the second batch without proposals, launch Task with session.launch, bind, verify, select, and report. Confirm that the second plan strategy_trace shows selection_rule=openevolve sampled parent plus inspirations and includes parent_candidate_id.
 ```
 
 ### signal_processing — multi-batch, AnySearchAgent
