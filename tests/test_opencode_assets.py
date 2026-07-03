@@ -82,6 +82,20 @@ def test_search_skill_does_not_store_case_specific_references() -> None:
     assert not (ROOT / ".opencode" / "skills" / "search" / "references").exists()
 
 
+def test_search_result_dump_skill_exports_chrome_trace() -> None:
+    skill = (
+        ROOT / ".opencode" / "skills" / "search-result-dump" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "name: search-result-dump" in skill
+    assert "agentic-any-search-trace" in skill
+    assert "--opencode-log" in skill
+    assert ".search/runs/<run_id>/trace.json" in skill
+    assert "ui.perfetto.dev" in skill
+    assert "chrome://tracing" in skill
+    assert 'message="exiting loop"' in skill
+
+
 def test_any_search_agent_denies_destructive_shell_commands() -> None:
     agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
         encoding="utf-8"

@@ -20,3 +20,4 @@ dev = [
 
 [project.scripts]
 agentic-any-search-mcp = "agentic_any_search_mcp.server:main"
+agentic-any-search-trace = "agentic_any_search_mcp.trace_export:main"
