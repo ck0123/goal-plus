@@ -1,0 +1,8 @@
+[mcp_servers.search-runtime]
+command = "agentic-any-search-mcp"
+args = ["--root", ".search"]
+cwd = "."
+startup_timeout_sec = 10
+tool_timeout_sec = 300
+enabled = true
+

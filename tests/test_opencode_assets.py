@@ -35,6 +35,16 @@ def test_search_skill_is_slash_command_ready() -> None:
     assert "k_module" in skill
 
 
+def test_opencode_search_skill_keeps_opencode_bind_contract() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "search-runtime_search_bind_opencode_session" in skill
+    assert "Task(" in skill
+    assert "search_bind_agent_handle" not in skill
+
+
 def test_goal_any_optimize_command_references_search_skill() -> None:
     command = (ROOT / ".opencode" / "command" / "goal-any-optimize.md").read_text(
         encoding="utf-8"

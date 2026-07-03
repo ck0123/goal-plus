@@ -9,6 +9,10 @@ opencode.json
 examples/k_module_search_spec.json
 ```
 
+OpenCode remains the compatibility baseline. Its launch payload,
+`search_bind_opencode_session`, and `Task(task_id=...)` continuation are
+intentionally preserved while Codex and Claude Code use separate host adapters.
+
 ## Install The MCP Server
 
 Install this Python package so the `agentic-any-search-mcp` command is available
@@ -168,6 +172,7 @@ search-runtime_search_list_history
 search-runtime_search_plan_next
 search-runtime_search_start_batch
 search-runtime_search_start_agent_session
+search-runtime_search_bind_agent_handle
 search-runtime_search_bind_opencode_session
 search-runtime_search_continue_agent_session
 search-runtime_search_get_agent_context
