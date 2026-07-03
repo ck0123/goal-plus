@@ -813,7 +813,7 @@ class FileSearchRuntime:
                     "## Agent Sessions",
                     "",
                     (
-                        "| Session | Host | Handle | Candidate | Verifier Runs | "
+                        "| Session | Host | Handle / OpenCode Session | Candidate | Verifier Runs | "
                         "Created | Updated |"
                     ),
                     "|---|---|---|---|---:|---|---|",
