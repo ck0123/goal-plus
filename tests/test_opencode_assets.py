@@ -35,6 +35,20 @@ def test_search_skill_is_slash_command_ready() -> None:
     assert "k_module" in skill
 
 
+def test_goal_any_optimize_command_references_search_skill() -> None:
+    command = (ROOT / ".opencode" / "command" / "goal-any-optimize.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "description: Run Agentic Any Search optimization using the search skill" in command
+    assert "agent: search-orchestrator" in command
+    assert "subtask: false" in command
+    assert "Load the `search` skill" in command
+    assert "@.opencode/skills/search/SKILL.md" in command
+    assert "search-runtime MCP tools" in command
+    assert "$ARGUMENTS" in command
+
+
 def test_search_skill_uses_foreground_tasks() -> None:
     skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
     orchestrator = (ROOT / ".opencode" / "agents" / "search-orchestrator.md").read_text(
@@ -153,6 +167,7 @@ def test_any_search_agent_tier_has_expected_step_cap(
     "relative_path",
     [
         ".opencode/skills/search/SKILL.md",
+        ".opencode/command/goal-any-optimize.md",
         ".opencode/agents/AnySearchAgent.md",
         ".opencode/agents/AnySearchAgentDeep.md",
         ".opencode/agents/AnySearchAgentExtraDeep.md",
