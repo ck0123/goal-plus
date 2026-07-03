@@ -34,6 +34,6 @@ def test_claude_worker_agent_calls_context_and_verifier() -> None:
     )
 
     assert "name: any-search-agent" in text
+    assert "mcp__search-runtime__*" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
-
