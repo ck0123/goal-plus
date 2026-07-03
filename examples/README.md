@@ -26,6 +26,7 @@ Tests are skipped by default. They require `opencode` on PATH and the
 | Spec | Fixture | Worker | Layout |
 |---|---|---|---|
 | `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | `AnySearchAgentFlash` (15 steps) | 2 candidates, pool=2, single batch |
+| `search-mode/k_module_adaptevolve_search_spec.json` | `tests/fixtures/k_module_problem` | AdaptEvolve dynamic tier (starts with `AnySearchAgentFlash`) | 1 candidate, pool=1, smoke test |
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `AnySearchAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `AnySearchAgent` (50 steps) | 8 candidates, pool=4, two batches |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
@@ -40,7 +41,7 @@ Subagents run until their OpenCode step cap hits or the user interrupts them. Th
 
 ## Step Tiers
 
-`strategy.worker_agent_type` picks one of four OpenCode subagent variants. The variant fixes the host-enforced step cap; runtime cannot override it per call.
+`strategy.worker_agent_type` picks one of four OpenCode subagent variants. The variant fixes the host-enforced step cap. Python strategy plugins may return a `worker_policy` override for the next plan; the `search_start_agent_session` launch payload is the authoritative subagent tier for that candidate.
 
 | Variant | Steps | Use when |
 |---|---|---|
@@ -102,11 +103,13 @@ Comparison:
 | `evolve` | Runtime: best-score parent + top-N inspirations | `false` | Bootstrap from source | OpenEvolve-style fixed parent selection |
 | `mcts` | Runtime: best-score frontier | `false` | Bootstrap from source | MCTS-style expansion (placeholder planner) |
 | `random` | Runtime: random scored parent (seedable via `strategy.config.seed`) | `false` | Bootstrap from source | Cheap random-walk baseline |
+| `adaptevolve` | Python plugin: best-score parent + confidence-routed worker tier | `false` | Bootstrap from source with `AnySearchAgentFlash` | Adaptive compute allocation around evolve-style mutations |
 
 Notes:
 
 - In `agent_guided`, `search_plan_next` returns `proposal_contract.must_reference_one_of` listing the candidate_ids each proposal must cite. The first batch has empty history so the constraint is empty; from the second batch on every proposal must reference at least one official candidate.
 - In `evolve` / `mcts` / `random`, the runtime selects the parent internally and emits fixed `work_orders`; `search_start_batch` must be called without proposals.
+- In `adaptevolve`, the Python strategy plugin emits fixed `work_orders` and a dynamic `worker_policy`. The runtime records that policy in candidate metadata and uses it when building the OpenCode Task launch payload.
 - `independent_branches` ignores history entirely — every candidate starts from the frozen source workspace.
 
 ## Running an example
@@ -190,6 +193,12 @@ Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores +
 
 ```
 Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_parallel=2, worker_agent_type=AnySearchAgentFlash. Freeze tests/fixtures/k_module_problem/evaluator.py and run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start 2 sessions → Task → bind_opencode_session → run_verifier on each → select → report.
+```
+
+### k_module — AdaptEvolve smoke test
+
+```
+Load examples/search-mode/k_module_adaptevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run the smallest end-to-end AdaptEvolve case: freeze_spec → create → plan_next(k=1) → start_batch → start_agent_session → Task with session.launch → bind_opencode_session → run_verifier → select → report. Confirm that the plan strategy_trace shows selected_worker_agent_type and that the Task launch uses AnySearchAgentFlash for the first bootstrap candidate.
 ```
 
 ### signal_processing — multi-batch, AnySearchAgent

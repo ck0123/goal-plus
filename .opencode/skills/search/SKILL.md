@@ -108,7 +108,7 @@ Minimum shape:
 
 `strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values are rejected at parse time — fix the spec instead of relying on normalization.
 
-`strategy.worker_agent_type` selects the OpenCode subagent variant, which fixes the per-session step cap:
+`strategy.worker_agent_type` selects the default OpenCode subagent variant, which fixes the per-session step cap:
 
 | Variant | Steps | Use when |
 |---|---|---|
@@ -116,6 +116,8 @@ Minimum shape:
 | `AnySearchAgent` (default) | 50 | Standard autoresearch loop |
 | `AnySearchAgentDeep` | 100 | Sustained iteration on harder problems |
 | `AnySearchAgentExtraDeep` | 150 | Extensive search, complex fixtures |
+
+Custom Python strategies may return a plan-level `worker_policy` that overrides the default worker tier for the next candidate batch. Always use `session.launch.subagent_type` from `search_start_agent_session`; it is the authoritative Task tier after any strategy routing.
 
 ## Workflow
 
@@ -170,7 +172,7 @@ The default strategy is `agent_guided`, so `plan.requires_agent_proposals` is `t
 - For each proposal, decide which prior candidate(s) to build on and write `intent` (one short sentence on the mutation direction), `expected_tradeoff` (what improves / what risks regressing), `instructions` (concrete steps the worker should follow), and `parent_candidate_ids` / `base_candidate_id` (which workspace to derive from).
 - First batch (empty history): `must_reference_one_of` is empty, so proposals may set `base_candidate_id=null` and start from source. From the second batch on, every proposal must reference at least one official candidate.
 
-If you switch the spec to a builtin that produces fixed work orders (`independent_branches`, `evolve`, `mcts`, `random`), `plan.requires_agent_proposals` is `false` and `search_start_batch` must be called without proposals.
+If you switch the spec to a builtin that produces fixed work orders (`independent_branches`, `evolve`, `mcts`, `random`) or to a Python planner such as `adaptevolve`, `plan.requires_agent_proposals` is `false` and `search_start_batch` must be called without proposals.
 
 ### Step 5: Launch OpenCode Task Workers
 

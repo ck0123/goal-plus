@@ -682,6 +682,125 @@ def test_python_strategy_driver_can_return_standard_plan(
     assert plan.proposal_contract.count == 2  # type: ignore[union-attr]
 
 
+def test_python_strategy_worker_policy_controls_launch_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    strategy_module = tmp_path / "dynamic_worker_strategy.py"
+    strategy_module.write_text(
+        "class Strategy:\n"
+        "    def __init__(self, config):\n"
+        "        self.config = config\n"
+        "    def plan_next(self, payload):\n"
+        "        return {\n"
+        "            'requires_agent_proposals': False,\n"
+        "            'worker_policy': {\n"
+        "                'mode': 'agent-session-pool',\n"
+        "                'subagent_type': 'AnySearchAgentDeep',\n"
+        "                'requires_agent_session': True,\n"
+        "            },\n"
+        "            'work_orders': [\n"
+        "                {\n"
+        "                    'slot': 1,\n"
+        "                    'intent': 'dynamic deep worker',\n"
+        "                    'hypothesis': 'dynamic deep worker',\n"
+        "                    'metadata': {'selected_worker_agent_type': 'AnySearchAgentDeep'},\n"
+        "                }\n"
+        "            ],\n"
+        "            'strategy_trace': {'selected_worker_agent_type': 'AnySearchAgentDeep'},\n"
+        "        }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "dynamic_worker",
+            "driver": "python",
+            "ref": "dynamic_worker_strategy:Strategy",
+            "worker_agent_type": "AnySearchAgentFlash",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, 1)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    session = runtime.start_agent_session(run_id, tasks[0].candidate_id)
+
+    assert plan.worker_policy["subagent_type"] == "AnySearchAgentDeep"
+    assert tasks[0].strategy_metadata["worker_policy"]["subagent_type"] == "AnySearchAgentDeep"
+    assert session.launch["subagent_type"] == "AnySearchAgentDeep"
+
+
+def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "adaptevolve",
+            "driver": "python",
+            "ref": "agentic_any_search_mcp.strategies.adaptevolve:AdaptEvolveStrategy",
+            "worker_agent_type": "AnySearchAgent",
+            "config": {
+                "tiers": [
+                    "AnySearchAgentFlash",
+                    "AnySearchAgentDeep",
+                    "AnySearchAgentExtraDeep",
+                ],
+                "low_score_threshold": 0.2,
+                "high_score_threshold": 0.8,
+            },
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan1 = runtime.plan_next(run_id, 1)
+    first_tasks = runtime.start_batch(run_id, plan1.plan_id)
+    first_session = runtime.start_agent_session(run_id, first_tasks[0].candidate_id)
+
+    assert plan1.strategy_trace["selection_rule"] == "adaptevolve bootstrap"
+    assert plan1.strategy_trace["selected_worker_agent_type"] == "AnySearchAgentFlash"
+    assert plan1.worker_policy["subagent_type"] == "AnySearchAgentFlash"
+    assert first_session.launch["subagent_type"] == "AnySearchAgentFlash"
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.05}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    runtime.run_verifier(
+        run_id,
+        first_tasks[0].candidate_id,
+        agent_session_id=first_session.agent_session_id,
+    )
+
+    plan2 = runtime.plan_next(run_id, 1)
+    followups = runtime.start_batch(run_id, plan2.plan_id)
+    followup_session = runtime.start_agent_session(run_id, followups[0].candidate_id)
+
+    assert plan2.strategy_trace["selection_rule"] == "adaptevolve mutate best parent"
+    assert plan2.strategy_trace["parent_candidate_id"] == first_tasks[0].candidate_id
+    assert plan2.strategy_trace["selected_worker_agent_type"] == "AnySearchAgentDeep"
+    assert plan2.worker_policy["subagent_type"] == "AnySearchAgentDeep"
+    assert followups[0].base_candidate_id == first_tasks[0].candidate_id
+    assert followups[0].strategy_metadata["worker_policy"]["subagent_type"] == "AnySearchAgentDeep"
+    assert followup_session.launch["subagent_type"] == "AnySearchAgentDeep"
+
+
 def test_run_verifier_records_edit_surface_violation_in_iteration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

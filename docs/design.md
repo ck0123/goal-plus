@@ -60,10 +60,10 @@ FileSearchRuntime
 
 `StrategySpec` controls planning and execution:
 
-- `name`: strategy mode, default `agent_guided`; alternatives `independent_branches`, `evolve`, `mcts`, `random`
+- `name`: strategy mode, default `agent_guided`; alternatives `independent_branches`, `evolve`, `mcts`, `random`, or Python plugins such as `adaptevolve`
 - `driver`: `builtin`, `python`, or `external_mcp`
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
-- `worker_agent_type`: optional host hint such as OpenCode `AnySearchAgent`
+- `worker_agent_type`: optional default host hint such as OpenCode `AnySearchAgent`; a strategy plan may override it through `worker_policy`
 - `history_policy`, `parent_policy`, and `config`: strategy-specific controls
 
 Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) and string-form `strategy` are rejected at parse time. Fix the spec instead of relying on normalization.
@@ -143,7 +143,7 @@ There is no batch-shortcut compatibility helper. For fixed-work-order strategies
 
 `budget.max_parallel` is a batch planning hint. The runtime does not gate session creation on it and does not supervise Task lifecycle.
 
-There are no time-based deadlines. Subagents run until their OpenCode step cap (15/50/100/150, set by `strategy.worker_agent_type`) hits or until the user interrupts the run. Users can interrupt anytime and query current best via `search_list_history` / `search_status`. There is no MCP abort tool — stopping a running subagent is an OpenCode/user interruption concern.
+There are no time-based deadlines. Subagents run until their OpenCode step cap (15/50/100/150, set by `strategy.worker_agent_type` or a plan-level `worker_policy` override) hits or until the user interrupts the run. Users can interrupt anytime and query current best via `search_list_history` / `search_status`. There is no MCP abort tool — stopping a running subagent is an OpenCode/user interruption concern.
 
 ## Main Agent Responsibilities
 

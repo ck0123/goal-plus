@@ -268,7 +268,7 @@ class FileSearchRuntime:
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
             "strategy": frozen.spec.strategy.model_dump(mode="json"),
-            "worker_policy": self._worker_policy(frozen.spec.strategy),
+            "worker_policy": self._normalize_worker_policy(frozen.spec.strategy),
             "best_candidate_id": run.best_candidate_id,
             "best_score": run.best_score,
             "total_candidates": len(records),
@@ -316,7 +316,7 @@ class FileSearchRuntime:
         else:
             raise ValueError(f"unknown builtin strategy: {strategy.name}")
 
-        plan.worker_policy = self._worker_policy(plan.strategy)
+        plan.worker_policy = self._normalize_worker_policy(plan.strategy, plan.worker_policy)
         plan.strategy_trace.setdefault("worker_policy", plan.worker_policy)
         self._write_plan(plan)
         run.budget_used["last_plan_id"] = plan.plan_id
@@ -499,6 +499,7 @@ class FileSearchRuntime:
             frozen=frozen,
             session=session,
             directive=normalized_directive,
+            candidate_record=candidate_record,
         )
         updated = session.model_copy(
             update={
@@ -813,6 +814,41 @@ class FileSearchRuntime:
             ),
         }
 
+    def _normalize_worker_policy(
+        self,
+        strategy: StrategySpec,
+        worker_policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        base_policy = self._worker_policy(strategy)
+        policy = {**base_policy, **(worker_policy or {})}
+        selected = (
+            policy.get("subagent_type")
+            or policy.get("worker_agent_type")
+            or strategy.worker_agent_type
+            or "AnySearchAgent"
+        )
+        policy["worker_agent_type"] = selected
+        policy["subagent_type"] = selected
+        policy.setdefault("mode", "agent-session-pool")
+        policy.setdefault("configured_mode", strategy.worker_mode)
+        policy.setdefault("requires_agent_session", True)
+        policy.setdefault("direct_edit_allowed", False)
+        return policy
+
+    def _candidate_worker_agent_type(
+        self,
+        frozen: FrozenSpec,
+        candidate_record: CandidateRecord,
+    ) -> str:
+        worker_policy = candidate_record.task.strategy_metadata.get("worker_policy", {})
+        selected = (
+            worker_policy.get("subagent_type")
+            or worker_policy.get("worker_agent_type")
+            or frozen.spec.strategy.worker_agent_type
+            or "AnySearchAgent"
+        )
+        return str(selected)
+
     def _build_launch_payload(
         self,
         frozen: FrozenSpec,
@@ -821,7 +857,7 @@ class FileSearchRuntime:
         directive: dict[str, Any],
         candidate_record: CandidateRecord,
     ) -> dict[str, Any]:
-        worker_agent_type = frozen.spec.strategy.worker_agent_type or "AnySearchAgent"
+        worker_agent_type = self._candidate_worker_agent_type(frozen, candidate_record)
         proposal = candidate_record.task.proposal
         if directive.get("goal"):
             short_intent = str(directive["goal"])
@@ -855,8 +891,9 @@ class FileSearchRuntime:
         frozen: FrozenSpec,
         session: AgentSessionRecord,
         directive: dict[str, Any],
+        candidate_record: CandidateRecord,
     ) -> dict[str, Any]:
-        worker_agent_type = frozen.spec.strategy.worker_agent_type or "AnySearchAgent"
+        worker_agent_type = self._candidate_worker_agent_type(frozen, candidate_record)
         if directive.get("goal"):
             short_intent = str(directive["goal"])
         else:
