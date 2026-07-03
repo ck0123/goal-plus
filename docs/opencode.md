@@ -13,6 +13,9 @@ OpenCode remains the compatibility baseline. Its launch payload,
 `search_bind_opencode_session`, and `Task(task_id=...)` continuation are
 intentionally preserved while Codex and Claude Code use separate host adapters.
 
+For the cross-host capability matrix and adapter contract, see
+[agent-host-adapters.md](agent-host-adapters.md).
+
 ## Install The MCP Server
 
 Install this Python package so the `agentic-any-search-mcp` command is available

@@ -1,0 +1,228 @@
+# Agent Host Adapters
+
+`agentic-any-search-mcp` is host-neutral at the runtime layer. The runtime owns
+durable search state, workspaces, verifier execution, scoring history, reports,
+and promotion patches. The selected code-agent host owns worker process
+lifecycle.
+
+The adapter layer is the small boundary between those two concerns. It converts
+one runtime concept, an `AgentSessionRecord`, into the host-native foreground
+worker call that the main agent should execute.
+
+## When To Use This Page
+
+Use this page when you need to choose a host, write a `SearchSpec` with
+`strategy.worker_host`, or add a new host adapter without changing runtime
+state semantics.
+
+Host setup references:
+
+- [OpenCode](opencode.md)
+- [Codex](codex.md)
+- [Claude Code](claude-code.md)
+
+---
+
+## Common Runtime Contract
+
+All three hosts use the same MCP control plane:
+
+1. `search_freeze_spec`
+2. `search_create`
+3. `search_plan_next`
+4. `search_start_batch`
+5. `search_start_agent_session`
+6. host foreground worker launch
+7. `search_bind_opencode_session` or `search_bind_agent_handle`
+8. worker `search_get_agent_context`
+9. worker `search_run_verifier(..., agent_session_id=...)`
+10. main-agent final `search_run_verifier(...)`
+11. `search_select`
+12. `search_report`
+
+The runtime does not wait for, abort, supervise, or synchronize host workers.
+It records provenance and verifier counters only after the host or worker calls
+the corresponding MCP tools.
+
+## Host Selection
+
+Set `strategy.worker_host` in the `SearchSpec`:
+
+```json
+{
+  "strategy": {
+    "name": "random",
+    "driver": "builtin",
+    "worker_mode": "agent-session-pool",
+    "worker_host": "codex",
+    "worker_agent_type": "any_search_agent"
+  }
+}
+```
+
+Valid host values are:
+
+- `opencode`
+- `codex`
+- `claude-code`
+
+If `worker_host` is omitted, the runtime defaults to `opencode`.
+
+---
+
+## Current Host Differences
+
+| Capability | OpenCode | Codex | Claude Code |
+|---|---|---|---|
+| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/search/`, `.claude/agents/` |
+| Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` |
+| Launch tool | `Task` | `spawn_agent` | `Agent` |
+| Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` |
+| Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` |
+| Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise |
+| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | supported with `SendMessage` when a reusable handle is bound |
+| Trace export | supported for OpenCode logs | not implemented | not implemented |
+| Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only |
+
+Portable builtin strategies are:
+
+- `agent_guided`
+- `agent`
+- `default`
+- `random`
+- `random_mode`
+
+OpenCode remains the compatibility baseline for high-touch or host-specific
+behavior such as Python strategy plugins, external proposal drivers,
+OpenEvolve-style workflows, MCTS-style workflows, and trace export. Codex and
+Claude Code support should be expanded one strategy at a time with explicit
+system tests.
+
+## Strategy Support Matrix
+
+| Strategy or driver | OpenCode | Codex | Claude Code | Notes |
+|---|---|---|---|---|
+| `agent_guided`, `agent`, `default` | supported | supported | supported | proposal-based; main agent must pass proposals to `search_start_batch` |
+| `random`, `random_mode`, `random-mode` | supported | supported | supported | fixed work orders; `search_start_batch` needs no proposals |
+| `independent_branches` | supported | not supported | not supported | treated as OpenCode-only for now, even though it is builtin |
+| `evolve` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
+| `openevolve` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
+| `mcts` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
+| Python strategy driver, including `adaptevolve` | supported | not supported | not supported | non-OpenCode hosts reject non-builtin drivers |
+| `external_mcp` strategy driver | OpenCode-only boundary | not supported | not supported | requires explicit host adaptation before use outside OpenCode |
+
+---
+
+## Adapter Responsibilities
+
+Adapters live in `src/agentic_any_search_mcp/agent_hosts.py`.
+
+Each adapter exposes:
+
+- `name`: the runtime host id
+- `capabilities`: bind, continuation, trace export, and background-worker flags
+- `build_launch_payload(...)`: host-native fields returned by
+  `search_start_agent_session`
+- `build_continue_payload(...)`: host-native fields returned by
+  `search_continue_agent_session`, or a clear unsupported-capability error
+
+The runtime uses `get_agent_host_adapter(strategy.worker_host)` when it builds
+launch payloads and worker policy. It uses `get_agent_host_adapter(session.host)`
+when a previous session is continued.
+
+Adapters must not own:
+
+- candidate workspace creation
+- verifier execution
+- score aggregation
+- budget accounting
+- report generation
+- promotion patch export
+
+Those are runtime responsibilities and should stay host-neutral.
+
+## Launch Payloads
+
+OpenCode launch payload:
+
+```json
+{
+  "subagent_type": "AnySearchAgent",
+  "description": "c001 try alternate parser",
+  "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
+}
+```
+
+Codex launch payload:
+
+```json
+{
+  "tool": "spawn_agent",
+  "task_name": "search_agent_001",
+  "agent_type": "any_search_agent",
+  "fork_turns": "none",
+  "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
+}
+```
+
+Claude Code launch payload:
+
+```json
+{
+  "tool": "Agent",
+  "agent_type": "any-search-agent",
+  "description": "c001 try alternate parser",
+  "background": false,
+  "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
+}
+```
+
+The main agent should treat the returned `launch` object as authoritative.
+Do not reconstruct it from local assumptions.
+
+## Binding Handles
+
+Binding records host-native identity after the foreground worker starts or
+returns:
+
+- OpenCode callers may keep using `search_bind_opencode_session`.
+- Codex and Claude Code callers use `search_bind_agent_handle`.
+
+Generic handle shape:
+
+```json
+{
+  "host": "claude-code",
+  "external_id": "optional-stable-agent-id",
+  "task_name": "optional-stable-task-name",
+  "nickname": "c001",
+  "metadata": {
+    "tool": "Agent",
+    "background": false
+  }
+}
+```
+
+`AgentSessionRecord.host_handle` is for provenance and optional continuation.
+It is not a lifecycle status object.
+
+---
+
+## Adding Another Host
+
+Add a host only through the adapter boundary:
+
+1. Add the host literal to `AgentHostKind`.
+2. Add an adapter implementing `AgentHostAdapter`.
+3. Register it in `_ADAPTERS`.
+4. Add project-local host assets or setup docs.
+5. Add unit tests for launch, bind, continuation, worker policy, and strategy
+   validation.
+6. Add at least one real two-round smoke test that proves:
+   - round 1 records worker verifier provenance
+   - round 2 plans from recorded history
+   - a fresh worker can consume the previous candidate state
+
+Do not add host-specific branches to verifier execution, candidate workspace
+copying, scoring, report generation, or promotion unless the runtime contract
+itself changes.

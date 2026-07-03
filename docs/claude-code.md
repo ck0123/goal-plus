@@ -3,6 +3,9 @@
 This project can run the Search MCP Runtime from Claude Code through the host
 adapter introduced for `strategy.worker_host = "claude-code"`.
 
+For the cross-host capability matrix and adapter contract, see
+[agent-host-adapters.md](agent-host-adapters.md).
+
 ## Version
 
 The implementation does not require upgrading Claude Code. The local version
@@ -44,7 +47,7 @@ The MCP server is configured as:
 Claude Code currently supports the portable builtin strategies only:
 
 - `agent_guided`, `agent`, or `default`
-- `random`
+- `random` or `random_mode`
 
 OpenCode-specific or high-touch strategies such as `openevolve`, `evolve`,
 `mcts`, Python strategy plugins, and external strategy drivers remain
@@ -72,4 +75,3 @@ If `search_continue_agent_session` returns a `SendMessage` payload, send the
 message to that foreground agent. If no handle is bound, start a new foreground
 Agent for the same candidate and use `search_get_agent_context` to recover the
 authoritative state.
-

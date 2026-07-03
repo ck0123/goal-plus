@@ -6,7 +6,7 @@ The goal of V0 is not to control one specific coding agent. The runtime exposes 
 
 Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `openevolve` (OpenEvolve-style parent/archive/inspiration sampling), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract; the bundled `adaptevolve` Python planner adds evolve-style parent selection plus dynamic worker-tier routing. See `examples/README.md` for the full strategy comparison table, `docs/strategy-adaptevolve.md` for the AdaptEvolve code path, and `docs/strategy-openevolve.md` for the OpenEvolve path.
 
-Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The host dispatches one foreground OpenCode Task per candidate via `search_start_agent_session`, binds the returned Task `metadata.sessionId` with `search_bind_opencode_session`, and can later continue the same node with `search_continue_agent_session`. OpenCode owns Task lifecycle and return values; the runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is a batch planning hint; the runtime does not provide a wait loop or lifecycle supervisor. `strategy.worker_agent_type` tells OpenCode the default `subagent_type`; a custom strategy can override it by returning a plan-level `worker_policy`, and the launch payload from `search_start_agent_session` is authoritative. Bundled examples use `AnySearchAgent`, an autoresearch-style looper that self-iterates inside its workspace and self-verifies through `search_run_verifier`. Worker tiers are `AnySearchAgent` (default, 50 steps), `AnySearchAgentFlash` (15), `AnySearchAgentDeep` (100), or `AnySearchAgentExtraDeep` (150). The step cap is enforced by OpenCode per Task invocation.
+Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The runtime creates an `AgentSessionRecord` and returns a host-native launch payload; the main agent dispatches one foreground worker in OpenCode, Codex, or Claude Code. The host owns worker lifecycle and return values. The runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is a batch planning hint; the runtime does not provide a wait loop or lifecycle supervisor. `strategy.worker_host` selects the adapter, and `strategy.worker_agent_type` gives that host its default worker type. The launch payload from `search_start_agent_session` is authoritative. See [docs/agent-host-adapters.md](docs/agent-host-adapters.md) for the adapter design and current host differences.
 
 ## Getting Started
 
@@ -58,6 +58,27 @@ For an installed package, use the same command in your MCP client:
 ```text
 agentic-any-search-mcp --root .search
 ```
+
+## Agent Hosts
+
+The runtime currently supports three host clients through adapters:
+
+| Host | `strategy.worker_host` | Worker launch | Continuation | Strategy scope |
+|---|---|---|---|---|
+| OpenCode | `opencode` | foreground `Task` | `Task(task_id=...)` | compatibility baseline |
+| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | portable builtin modes |
+| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | portable builtin modes |
+
+Portable builtin modes for Codex and Claude Code are `agent_guided`, `agent`,
+`default`, `random`, and `random_mode`. OpenCode remains the baseline for existing
+OpenCode-tested strategies and trace export.
+
+Host references:
+
+- [OpenCode](docs/opencode.md)
+- [Codex](docs/codex.md)
+- [Claude Code](docs/claude-code.md)
+- [Adapter design and host differences](docs/agent-host-adapters.md)
 
 ## OpenCode
 
@@ -137,7 +158,7 @@ This project is structured like a normal Python command-line MCP package:
 - `src/agentic_any_search_mcp/runtime.py` owns file-backed runtime state.
 - `src/agentic_any_search_mcp/models.py` defines the Pydantic API models.
 
-The current repository-local OpenCode setup is for development and examples.
+The current repository-local host setup is for development and examples.
 This package is not published to PyPI yet; use the Git or editable install
 commands below.
 
@@ -226,20 +247,31 @@ Not yet covered by this prototype:
 - one-click installer links for individual MCP clients
 - generated CLI option tables
 - Docker image and remote transport examples
-- broader client-specific setup sections beyond OpenCode
 
 ## Repository Layout
 
 ```text
 opencode.json                         # project-local OpenCode MCP config
+.mcp.json                             # project-local Claude Code MCP config
+.codex/config.toml                    # project-local Codex MCP config
 .opencode/
   skills/search/SKILL.md              # search workflow guide (loaded by host agent via Skill tool, NOT a slash command)
   agents/search-orchestrator.md       # optional host-agent prompt
   agents/AnySearchAgent.md            # candidate worker subagent prompt
+.agents/
+  skills/search/SKILL.md              # Codex search skill
+.codex/
+  agents/any_search_agent.toml        # Codex worker agent config
+.claude/
+  skills/search/SKILL.md              # Claude Code search skill
+  agents/any-search-agent.md          # Claude Code worker agent config
 docs/
+  agent-host-adapters.md              # host adapter design and OpenCode/Codex/Claude differences
   design.md                           # architecture and control-plane design
   toy-example.md                      # step-by-step k_module walkthrough
   opencode.md                         # OpenCode-specific reference
+  codex.md                            # Codex-specific reference
+  claude-code.md                      # Claude Code-specific reference
 examples/
   README.md                           # bundled example index
   k_module_search_spec.json           # single-round toy SearchSpec
@@ -258,7 +290,9 @@ tests/
 
 ## Runtime Surface
 
-OpenCode registers the MCP server as `search-runtime`, so tools appear with that prefix:
+OpenCode registers the MCP server as `search-runtime`, so tools appear with
+that prefix. Codex and Claude Code expose the same logical tool names through
+their own MCP tool naming conventions.
 
 - `search-runtime_search_freeze_spec`
 - `search-runtime_search_create`
@@ -267,6 +301,7 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with that
 - `search-runtime_search_plan_next`
 - `search-runtime_search_start_batch`
 - `search-runtime_search_start_agent_session`
+- `search-runtime_search_bind_agent_handle`
 - `search-runtime_search_bind_opencode_session`
 - `search-runtime_search_continue_agent_session`
 - `search-runtime_search_get_agent_context`

@@ -869,8 +869,87 @@ def test_non_opencode_hosts_allow_default_and_random_strategies(
     assert plan.strategy.name == strategy_name
 
 
+@pytest.mark.parametrize(
+    ("host", "expected_launch"),
+    [
+        ("opencode", {"subagent_type": "AnySearchAgent"}),
+        ("codex", {"tool": "spawn_agent", "agent_type": "any_search_agent"}),
+        (
+            "claude-code",
+            {"tool": "Agent", "agent_type": "any-search-agent", "background": False},
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("strategy_name", "requires_proposals"),
+    [
+        ("agent_guided", True),
+        ("agent", True),
+        ("default", True),
+        ("random", False),
+        ("random-mode", False),
+        ("random_mode", False),
+    ],
+)
+def test_all_hosts_create_sessions_for_portable_strategy_modes(
+    tmp_path: Path,
+    host: str,
+    expected_launch: dict[str, object],
+    strategy_name: str,
+    requires_proposals: bool,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, host, strategy_name=strategy_name, max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, requested_k=1)
+
+    assert plan.worker_policy["host"] == host
+    assert plan.requires_agent_proposals is requires_proposals
+    if requires_proposals:
+        tasks = runtime.start_batch(
+            run_id,
+            plan.plan_id,
+            [CandidateProposal(intent=f"{host} {strategy_name} candidate")],
+        )
+    else:
+        tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    session = runtime.start_agent_session(run_id, tasks[0].candidate_id)
+
+    assert session.host == host
+    assert session.host_handle.host == host
+    assert session.agent_session_id in (
+        session.launch.get("prompt") or session.launch.get("message")
+    )
+    for key, value in expected_launch.items():
+        assert session.launch[key] == value
+
+
+@pytest.mark.parametrize(
+    "strategy_name",
+    ["agent_guided", "default", "random", "random-mode", "evolve", "openevolve", "mcts"],
+)
+def test_opencode_accepts_existing_builtin_strategy_modes(
+    tmp_path: Path,
+    strategy_name: str,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "opencode", strategy_name=strategy_name, max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, requested_k=1)
+
+    assert plan.worker_policy["host"] == "opencode"
+    assert plan.strategy.name == strategy_name
+
+
 @pytest.mark.parametrize("host", ["codex", "claude-code"])
-@pytest.mark.parametrize("strategy_name", ["openevolve", "evolve", "mcts"])
+@pytest.mark.parametrize("strategy_name", ["independent_branches", "openevolve", "evolve", "mcts"])
 def test_non_opencode_hosts_reject_non_portable_strategies(
     tmp_path: Path,
     host: str,
@@ -883,6 +962,31 @@ def test_non_opencode_hosts_reject_non_portable_strategies(
     run_id = runtime.create_run(frozen.frozen_spec_id)
 
     with pytest.raises(ValueError, match=f"{host}.*{strategy_name}"):
+        runtime.plan_next(run_id, requested_k=1)
+
+
+@pytest.mark.parametrize("host", ["codex", "claude-code"])
+def test_non_opencode_hosts_reject_non_builtin_strategy_drivers(
+    tmp_path: Path,
+    host: str,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "driver": "python",
+            "ref": "agentic_any_search_mcp.strategies.adaptevolve:AdaptEvolveStrategy",
+            "worker_mode": "agent-session-pool",
+            "worker_host": host,
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    with pytest.raises(ValueError, match=f"{host}.*only supports builtin"):
         runtime.plan_next(run_id, requested_k=1)
 
 

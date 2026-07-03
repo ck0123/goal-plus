@@ -3,6 +3,9 @@
 This project can run the Search MCP Runtime from Codex through the host adapter
 introduced for `strategy.worker_host = "codex"`.
 
+For the cross-host capability matrix and adapter contract, see
+[agent-host-adapters.md](agent-host-adapters.md).
+
 ## Config
 
 Project-local MCP configuration lives in:
@@ -30,7 +33,7 @@ enabled = true
 Codex currently supports the portable builtin strategies only:
 
 - `agent_guided`, `agent`, or `default`
-- `random`
+- `random` or `random_mode`
 
 OpenCode-specific or high-touch strategies such as `openevolve`, `evolve`,
 `mcts`, Python strategy plugins, and external strategy drivers remain
@@ -57,4 +60,3 @@ the returned task name or nickname with `search_bind_agent_handle`.
 Codex does not expose an equivalent same-worker continuation in this adapter.
 When continuation is needed, start a new foreground worker for the same
 candidate and use `search_get_agent_context` to recover the authoritative state.
-

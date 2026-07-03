@@ -12,7 +12,7 @@ The current design is **not** a supervisor loop. The runtime is a scoring and ar
 - create a context handle (AgentSessionRecord) and return a host-native launch payload
 - the main agent uses the launch payload to spawn a foreground worker in the selected host
 - the subagent self-scores via verifier calls
-- OpenCode Task returns to the main agent
+- the host worker returns to the main agent
 - the main agent final-confirms the score, then selects, reports, and optionally promotes
 
 The MCP runtime does not wait, abort, finalize, submit, observe, or host-sync subagent state. Those responsibilities belong to the host client (lifecycle) or to the main agent (selection).
@@ -140,35 +140,15 @@ There is no batch-shortcut compatibility helper. For fixed-work-order strategies
 
 ## Agent Host Adapters
 
-Host-specific worker lifecycle details live behind `agent_hosts.py`. The runtime
-continues to own specs, plans, workspaces, verifier execution, reports, and
-promotion. Adapters only describe how a main agent should launch, bind, and
+Host-specific worker lifecycle details live behind `agent_hosts.py`. The
+runtime continues to own specs, plans, workspaces, verifier execution, reports,
+and promotion. Adapters only describe how a main agent should launch, bind, and
 optionally continue a worker in a specific code-agent client.
 
-OpenCode is the default and remains the compatibility baseline:
-
-- launch: `Task(subagent_type, description, prompt)`
-- bind: `search_bind_opencode_session` records `metadata.sessionId`
-- continue: `Task(task_id=launch.task_id, ...)`
-- trace export: supported through the existing OpenCode log parser
-
-Codex support is Codex-native and intentionally narrower:
-
-- launch: foreground `spawn_agent(task_name, agent_type, message, fork_turns="none")`
-- bind: `search_bind_agent_handle` records task name or nickname
-- continue: unsupported in the same-worker sense; start a new foreground worker for the same candidate
-- trace export: not implemented
-
-Claude Code support is foreground-only:
-
-- launch: foreground `Agent` with `background: false`
-- bind: `search_bind_agent_handle` records a reusable agent id or name when available
-- continue: `SendMessage` when a handle is bound; otherwise start a new foreground Agent
-- trace export: not implemented
-
-For `codex` and `claude-code`, the first version supports only portable builtin
-strategies: `agent_guided`/`agent`/`default` and `random`. OpenCode-specific or
-high-touch strategies remain OpenCode-only until explicitly adapted.
+OpenCode is the default compatibility baseline. Codex and Claude Code use the
+same runtime state machine, but narrower host-native launch and continuation
+semantics. See [agent-host-adapters.md](agent-host-adapters.md) for the current
+OpenCode/Codex/Claude Code capability matrix and adapter contract.
 
 ## Budget Model
 
@@ -176,7 +156,13 @@ high-touch strategies remain OpenCode-only until explicitly adapted.
 
 `budget.max_parallel` is a batch planning hint. The runtime does not gate session creation on it and does not supervise Task lifecycle.
 
-There are no time-based deadlines. Subagents run until their OpenCode step cap (15/50/100/150, set by `strategy.worker_agent_type` or a plan-level `worker_policy` override) hits or until the user interrupts the run. Users can interrupt anytime and query current best via `search_list_history` / `search_status`. There is no MCP abort tool — stopping a running subagent is an OpenCode/user interruption concern.
+There are no runtime-owned time-based deadlines. Host workers run until their
+host-local budget, step cap, or user interruption stops them. OpenCode worker
+tiers use `AnySearchAgent` (default, 50 steps), `AnySearchAgentFlash` (15),
+`AnySearchAgentDeep` (100), or `AnySearchAgentExtraDeep` (150). Codex and
+Claude Code use their own foreground agent limits. Users can interrupt anytime
+and query current best via `search_list_history` / `search_status`. There is no
+MCP abort tool; stopping a running subagent is a host/user concern.
 
 ## Main Agent Responsibilities
 
@@ -215,6 +201,8 @@ Workers must not modify denied files, frozen verifier artifacts, or the main sou
 - `server.py`: FastMCP stdio server for host clients
 - `.opencode/skills/search/SKILL.md`: host-agent workflow guide
 - `.opencode/agents/AnySearchAgent*.md`: managed subagent prompts
+- `.agents/skills/search/SKILL.md`, `.codex/agents/any_search_agent.toml`: Codex host assets
+- `.claude/skills/search/SKILL.md`, `.claude/agents/any-search-agent.md`: Claude Code host assets
 
 ## Current Boundary
 
