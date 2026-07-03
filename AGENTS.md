@@ -1,0 +1,232 @@
+# AGENTS.md
+
+This file is the entry point for agents developing or maintaining this
+repository. It applies to the whole repository unless a nested `AGENTS.md`
+overrides it.
+
+## Read First
+
+Before changing behavior, read the smallest relevant set of docs:
+
+- [README.md](README.md): project overview, install path, host summary.
+- [docs/design.md](docs/design.md): runtime architecture, data model, state
+  flow, and ownership boundaries.
+- [docs/flow-view.md](docs/flow-view.md): who calls which MCP tool, what each
+  agent sees, and OpenCode-specific platform constraints.
+- [docs/agent-host-adapters.md](docs/agent-host-adapters.md): OpenCode, Codex,
+  and Claude Code adapter contract, capability matrix, budget rules, and
+  current strategy support.
+- [docs/debugging-runtime.md](docs/debugging-runtime.md): `.search` state,
+  host-native logs, OpenCode SQLite inspection, Codex rollout logs, and Claude
+  Code transcript/debug paths.
+- [docs/opencode.md](docs/opencode.md), [docs/codex.md](docs/codex.md), and
+  [docs/claude-code.md](docs/claude-code.md): host-specific setup and behavior.
+- [examples/README.md](examples/README.md): example specs, strategy modes, and
+  scenario prompts.
+- [tests/README.md](tests/README.md): unit/integration/system test layout and
+  commands.
+
+Strategy-specific docs:
+
+- [docs/strategy-openevolve.md](docs/strategy-openevolve.md)
+- [docs/strategy-adaptevolve.md](docs/strategy-adaptevolve.md)
+
+Recent implementation evidence:
+
+- [docs/worker-budget-smoke.md](docs/worker-budget-smoke.md)
+
+## Code Discovery
+
+Prefer the codebase knowledge graph tools when available:
+
+- `search_graph` for functions, classes, and symbols.
+- `get_code_snippet` for exact source after locating a symbol.
+- `trace_path` or `query_graph` when available for call relationships and
+  structural queries.
+
+If the graph server is unavailable or the target is a non-code file, use `rg`
+or `rg --files`. Use `rg` for docs, config values, string literals, prompts,
+fixtures, and test assets.
+
+## Core Boundary
+
+This project is a Search MCP Runtime, not a worker supervisor.
+
+The runtime owns:
+
+- frozen specs and verifier artifacts
+- candidate workspace creation
+- planning and strategy state
+- verifier execution and score reports
+- durable `.search/` run state
+- report generation and promotion patches
+
+The host code-agent owns:
+
+- worker launch, lifecycle, stop/interrupt, and return values
+- host step, turn, or time budget enforcement
+- native logs and transcripts
+
+Do not add runtime-owned wait loops, abort APIs, heartbeats, lifecycle status,
+observation buses, or host-sync state unless the runtime contract is explicitly
+redesigned and documented.
+
+`AgentSessionRecord` is a context/provenance handle, not a lifecycle record.
+`search_start_agent_session` returns a host-native launch payload. The main
+agent must treat that launch payload as authoritative and spawn a foreground
+worker through the selected host.
+
+## Directory Map
+
+- `src/agentic_any_search_mcp/models.py`: strict Pydantic data models and
+  validation.
+- `src/agentic_any_search_mcp/runtime.py`: file-backed state machine,
+  workspace copy, verifier execution, selection, reports, and promotion.
+- `src/agentic_any_search_mcp/agent_hosts.py`: host adapters for OpenCode,
+  Codex, and Claude Code. Keep host launch/continue/budget mapping here.
+- `src/agentic_any_search_mcp/tools.py`: JSON-friendly facade used by tests and
+  MCP.
+- `src/agentic_any_search_mcp/server.py`: FastMCP stdio server.
+- `src/agentic_any_search_mcp/strategies/`: strategy plugins and helpers.
+- `src/agentic_any_search_mcp/trace_export.py`: OpenCode trace export tooling.
+- `.opencode/`: OpenCode skills, commands, and worker agents.
+- `.agents/` and `.codex/`: Codex search skill and worker agent assets.
+- `.claude/`: Claude Code search skill and worker agents.
+- `docs/`: design, adapter, host, debug, and strategy documentation.
+- `examples/`: example SearchSpec files.
+- `tests/`: unit/integration tests, asset tests, fixtures, and opt-in
+  OpenCode system tests.
+
+Generated or local-only state:
+
+- `.search/` is runtime output and is gitignored.
+- `.tmp/` is local scratch and is gitignored.
+- `docs/superpowers/` is gitignored.
+- Raw host logs and transcripts should stay in ignored locations such as
+  `.search/host-logs/`.
+
+## Host Adapter Rules
+
+Keep runtime behavior host-neutral. Host-specific behavior belongs in
+`agent_hosts.py`, host asset files, and host docs/tests.
+
+Current host expectations:
+
+- OpenCode is the compatibility baseline. It supports the existing
+  OpenCode-tested strategies, `Task(task_id=...)` continuation, step-tiered
+  agents, and OpenCode trace export.
+- Codex supports the portable builtin strategy subset. `worker_budget` requires
+  `max_runtime_seconds` and is enforced by parent watchdog metadata:
+  `wait_agent(timeout_ms=...)`, then `interrupt_agent` or
+  `send_input(..., interrupt=true)` when the deadline expires.
+- Claude Code supports the portable builtin strategy subset. `worker_budget`
+  requires `max_turns` and maps known budgets to `.claude/agents/*.md`
+  `maxTurns` definitions.
+
+Portable strategy names for non-OpenCode hosts are currently:
+
+- `agent_guided`
+- `agent`
+- `default`
+- `random`
+- `random_mode`
+
+Do not enable additional Codex or Claude Code strategies without adding unit or
+mock coverage for launch payloads and at least one real smoke path when the
+behavior depends on host execution.
+
+Host workers are foreground by design. Do not switch the adapter flow to
+background subagents unless the design docs, host skills, runtime validation,
+and tests are updated together.
+
+## Asset And Prompt Changes
+
+Host assets are executable product surface, not decorative docs. When changing
+the runtime contract, update the matching assets and tests:
+
+- OpenCode: `.opencode/skills/search/SKILL.md`,
+  `.opencode/agents/AnySearchAgent*.md`,
+  `.opencode/agents/search-orchestrator.md`, and
+  `tests/test_opencode_assets.py`.
+- Codex: `.agents/skills/search/SKILL.md`,
+  `.codex/agents/any_search_agent.toml`, `.codex/config.toml`, and
+  `tests/test_codex_assets.py`.
+- Claude Code: `.claude/skills/search/SKILL.md`,
+  `.claude/agents/any-search-agent*.md`, `.mcp.json`, and
+  `tests/test_claude_assets.py`.
+
+Do not let agents rediscover retired runtime APIs. The deleted lifecycle,
+observation, submit, abort, and host-sync APIs must not reappear in host assets.
+
+## Testing
+
+Default verification:
+
+```bash
+python -m pytest -q
+git diff --check
+```
+
+Focused tests:
+
+```bash
+python -m pytest tests/test_runtime_unit.py -q
+python -m pytest tests/test_agent_hosts.py tests/test_models.py -q
+python -m pytest tests/test_opencode_assets.py tests/test_codex_assets.py tests/test_claude_assets.py -q
+```
+
+Opt-in system tests drive real OpenCode and are skipped by default:
+
+```bash
+python -m pytest -m st -k k_module_smoke -v -s
+python -m pytest -m st -v -s
+```
+
+Run ST only when host credentials, `opencode`, and the `search-runtime` MCP
+connection are available. See [tests/README.md](tests/README.md) for preflight
+checks and environment variables.
+
+## Debugging
+
+Use [docs/debugging-runtime.md](docs/debugging-runtime.md) as the first debug
+entry point.
+
+High-level rule:
+
+1. Inspect `.search/runs/<run_id>/...` to see what the runtime recorded.
+2. Inspect the host-native transcript/log to see what the worker actually did.
+3. Cross-reference by `agent_session_id`, `candidate_id`, and host handle.
+
+Host log sources:
+
+- OpenCode: `~/.local/share/opencode/opencode.db` and
+  `~/.local/share/opencode/log/opencode.log`.
+- Codex: `codex exec --json`, `${CODEX_HOME:-~/.codex}/sessions/...`, and
+  optional `RUST_LOG=debug codex -c log_dir=./.codex-log`.
+- Claude Code: `claude -p --output-format stream-json`, `--debug-file`, and
+  `~/.claude/projects/<encoded-project>/...`.
+
+Never commit raw logs, transcripts, `.search/`, or credentials.
+
+## Implementation Style
+
+- Keep changes scoped to the runtime/adapter/asset boundary implied by the
+  task.
+- Prefer existing Pydantic models and runtime helper methods over ad hoc JSON
+  manipulation.
+- Keep `.search` state shape backward-readable unless a migration is explicitly
+  designed.
+- Keep verifier execution deterministic and runtime-owned.
+- Do not edit frozen verifier artifacts or candidate workspaces by hand except
+  inside tests that intentionally create fixtures.
+- Use `apply_patch` for manual file edits.
+- Use ASCII unless the target file already uses non-ASCII or the content
+  clearly needs it.
+
+## Commit Hygiene
+
+- Keep commits focused.
+- Do not commit `.search/`, `.tmp/`, raw host logs, local transcripts, auth
+  files, or generated caches.
+- Before committing behavior changes, run `python -m pytest -q` and
+  `git diff --check`.
