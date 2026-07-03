@@ -101,6 +101,70 @@ def create_run(tools: SearchTools, project: Path) -> tuple[str, list[dict]]:
     return run_id, tasks
 
 
+def create_two_round_host_run(
+    tools: SearchTools,
+    project: Path,
+    worker_host: str,
+) -> str:
+    spec = spec_for(project)
+    spec["budget"] = {"max_candidates": 2, "max_parallel": 1}
+    spec["strategy"] = {
+        "name": "random",
+        "worker_mode": "agent-session-pool",
+        "worker_host": worker_host,
+    }
+    frozen = tools.search_freeze_spec(spec, [str(project / "evaluator.py")])
+    run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
+
+    for round_index in (1, 2):
+        plan = tools.search_plan_next(run_id, 1)
+        task = tools.search_start_batch(run_id, plan["plan_id"])[0]
+        session = tools.search_start_agent_session(
+            run_id,
+            task["candidate_id"],
+            {"goal": f"round {round_index} k-module candidate"},
+        )
+        if worker_host == "opencode":
+            tools.search_bind_opencode_session(
+                session["agent_session_id"],
+                f"opencode_session_{round_index}",
+            )
+        else:
+            tools.search_bind_agent_handle(
+                session["agent_session_id"],
+                {
+                    "host": worker_host,
+                    "external_id": f"{worker_host}_agent_{round_index}",
+                    "task_name": f"{worker_host}_task_{round_index}",
+                },
+            )
+
+        if round_index == 1:
+            write_config(
+                Path(task["workspace"]) / "initial_program.py",
+                loader="csv_reader",
+                preprocess="dedupe",
+                algorithm="mergesort",
+                formatter="xml",
+            )
+        else:
+            write_config(
+                Path(task["workspace"]) / "initial_program.py",
+                loader="csv_reader",
+                preprocess="normalize",
+                algorithm="quicksort",
+                formatter="json",
+            )
+        tools.search_run_verifier(
+            run_id,
+            task["candidate_id"],
+            agent_session_id=session["agent_session_id"],
+        )
+        tools.search_run_verifier(run_id, task["candidate_id"])
+
+    return run_id
+
+
 def submit(tools: SearchTools, run_id: str, candidate_id: str) -> None:
     tools.search_start_agent_session(run_id, candidate_id, {"goal": f"{candidate_id} ready"})
 
@@ -179,6 +243,35 @@ def test_k_module_end_to_end_selects_best_without_changing_main_workspace(
 
     status = tools.search_status(run_id)
     assert status["state"] == RunState.PROMOTED
+
+
+@pytest.mark.parametrize("worker_host", ["opencode", "codex", "claude-code"])
+def test_k_module_two_rounds_record_host_sessions_and_redispatch(
+    tools: SearchTools,
+    project_dir: Path,
+    worker_host: str,
+) -> None:
+    run_id = create_two_round_host_run(tools, project_dir, worker_host)
+
+    history = tools.search_list_history(run_id, top_n=5, sort_by="created")
+    assert len(history["candidates"]) == 2
+    assert [candidate["status"] for candidate in history["candidates"]] == [
+        "evaluated",
+        "evaluated",
+    ]
+
+    agent_sessions = [
+        session
+        for candidate in history["candidates"]
+        for session in candidate["agent_sessions"]
+    ]
+    assert len(agent_sessions) == 2
+    assert {session["host"] for session in agent_sessions} == {worker_host}
+    assert all(session["verifier_runs"] == 1 for session in agent_sessions)
+
+    selection = tools.search_select(run_id)
+    assert selection["selected_score"] == 1.0
+    assert selection["selected_candidate_id"] == history["candidates"][1]["candidate_id"]
 
 
 def test_denied_verifier_change_is_flagged(
