@@ -79,6 +79,7 @@ Host references:
 - [Codex](docs/codex.md)
 - [Claude Code](docs/claude-code.md)
 - [Adapter design and host differences](docs/agent-host-adapters.md)
+- [Runtime and host log debugging](docs/debugging-runtime.md)
 
 ## OpenCode
 

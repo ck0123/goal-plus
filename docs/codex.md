@@ -57,6 +57,77 @@ The runtime returns a Codex-native foreground launch payload from
 The main Codex agent should call `spawn_agent` with those fields, then record
 the returned task name or nickname with `search_bind_agent_handle`.
 
+## Worker Budget
+
+Codex `spawn_agent` does not accept a spawn-time timeout or step limit. This
+adapter therefore enforces elapsed worker time through a parent watchdog.
+
+Example spec:
+
+```json
+{
+  "strategy": {
+    "name": "random",
+    "worker_host": "codex",
+    "worker_budget": {
+      "max_runtime_seconds": 600,
+      "max_turns": 8,
+      "on_exceed": "interrupt"
+    }
+  }
+}
+```
+
+The returned launch payload includes:
+
+```json
+{
+  "budget_control": {
+    "mode": "parent_watchdog",
+    "max_runtime_seconds": 600,
+    "wait_timeout_ms": 600000,
+    "on_exceed": "interrupt",
+    "interrupt_target": "search_agent_001",
+    "max_turns_hint": 8
+  }
+}
+```
+
+The parent Codex agent must wait with `wait_agent(timeout_ms=...)`. If the wait
+times out, it interrupts the child with `interrupt_agent` when available, or
+with `send_input(..., interrupt=true)` on Codex surfaces that expose interruption
+through message sending.
+
+`max_turns` is only a hint for Codex workers. The enforceable control is
+`max_runtime_seconds`.
+
 Codex does not expose an equivalent same-worker continuation in this adapter.
 When continuation is needed, start a new foreground worker for the same
 candidate and use `search_get_agent_context` to recover the authoritative state.
+
+## Debugging Logs
+
+For the cross-host debugging workflow, see
+[debugging-runtime.md](debugging-runtime.md).
+
+Codex has two useful log surfaces for this adapter:
+
+- `codex exec --json ... > .search/host-logs/codex-<timestamp>.jsonl` captures
+  the full non-interactive event stream for a reproducible run.
+- `${CODEX_HOME:-~/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` stores persisted
+  local rollout transcripts unless the run used `codex exec --ephemeral`.
+
+For interactive CLI diagnostics, start Codex with a plaintext log directory:
+
+```bash
+RUST_LOG=debug codex -c log_dir=./.codex-log
+tail -F ./.codex-log/codex-tui.log
+```
+
+When debugging worker budgets, search Codex logs for `agent_session_id`,
+`candidate_id`, `spawn_agent`, `wait_agent`, `send_input`, `interrupt`,
+`budget_control`, `turn.completed`, and `turn.failed`.
+
+`codex exec -o <file>` writes only the final message. Use `--json` or the
+persisted rollout transcript when you need tool calls, spawned-agent events, or
+MCP calls.

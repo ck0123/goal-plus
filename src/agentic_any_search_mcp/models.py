@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class SearchModel(BaseModel):
@@ -81,6 +81,20 @@ class AgentHostHandle(SearchModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkerBudget(SearchModel):
+    max_runtime_seconds: int | None = Field(default=None, gt=0)
+    max_turns: int | None = Field(default=None, gt=0)
+    on_exceed: Literal["interrupt"] = "interrupt"
+
+    @model_validator(mode="after")
+    def require_runtime_or_turn_limit(self) -> "WorkerBudget":
+        if self.max_runtime_seconds is None and self.max_turns is None:
+            raise ValueError(
+                "worker_budget requires max_runtime_seconds or max_turns"
+            )
+        return self
+
+
 class StrategySpec(SearchModel):
     name: str = "agent_guided"
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
@@ -89,6 +103,7 @@ class StrategySpec(SearchModel):
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_host: AgentHostKind = "opencode"
     worker_agent_type: str | None = None
+    worker_budget: WorkerBudget | None = None
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)

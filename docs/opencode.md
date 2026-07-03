@@ -16,6 +16,9 @@ intentionally preserved while Codex and Claude Code use separate host adapters.
 For the cross-host capability matrix and adapter contract, see
 [agent-host-adapters.md](agent-host-adapters.md).
 
+For runtime and host log inspection, see
+[debugging-runtime.md](debugging-runtime.md).
+
 ## Install The MCP Server
 
 Install this Python package so the `agentic-any-search-mcp` command is available

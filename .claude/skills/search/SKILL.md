@@ -21,7 +21,9 @@ logical tool name.
    - agent type: `launch.agent_type`
    - message: `launch.message`
    - background: false
-6. Keep workers in the foreground.
+6. Keep workers in the foreground. If `launch.budget_control.mode == "host_turn_limit"`,
+   verify that `launch.agent_type` names a Claude agent definition with a matching
+   `maxTurns` frontmatter value before launch.
 7. If the Agent result includes an agent id or reusable agent name, call `search_bind_agent_handle` with:
    - `host: "claude-code"`
    - `external_id`
@@ -29,9 +31,22 @@ logical tool name.
 8. Run final `search_run_verifier` from the main agent before selecting.
 9. Use `search_select`, `search_report`, and `search_promote` when appropriate.
 
+## Worker Budget Control
+
+Claude Code worker runtime is controlled through foreground agent definitions.
+Use `launch.agent_type` exactly as returned by the runtime:
+
+- `any-search-agent-flash` has `maxTurns: 4`
+- `any-search-agent` has `maxTurns: 8`
+- `any-search-agent-deep` has `maxTurns: 16`
+
+`budget_control.max_turns` documents the expected bound. The enforcement comes
+from the selected Claude Code agent's `maxTurns` frontmatter. The runtime maps
+known budgets 4, 8, and 16 to the matching agent types when `worker_agent_type`
+is omitted.
+
 ## Continuation
 
 If `search_continue_agent_session` returns a `SendMessage` payload, send the
 message to the specified agent in the foreground. If no handle is bound, start
 a new foreground Agent for the same candidate.
-

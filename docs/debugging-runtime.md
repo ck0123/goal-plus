@@ -2,7 +2,10 @@
 
 How to inspect a running or finished search — what the agents are doing, what scores they've produced, and where to look when something goes wrong.
 
-For the general OpenCode inspection technique (SQLite DB, log files), see the `inspecting-opencode-runs` skill. This doc covers the project-specific surface.
+For the general OpenCode inspection technique (SQLite DB, log files), see the
+`inspecting-opencode-runs` skill. This doc covers the project-specific runtime
+surface plus the host-native log entry points for OpenCode, Codex, and Claude
+Code.
 
 ## Two Layers of State
 
@@ -15,6 +18,156 @@ OpenCode process
 ```
 
 The runtime owns specs, plans, candidate workspaces, iteration history, verifier scoring, reports, and promotion patches. OpenCode owns subagent lifecycle — start, run, step cap, stop/interrupt, Task return. The MCP runtime does not maintain lifecycle status, host-sync state, or process cancellation. Debugging lifecycle state belongs in OpenCode; debugging candidate state belongs in `.search/`.
+
+For Codex and Claude Code, substitute the host-native JSONL/debug files below
+for the OpenCode process layer. The same rule still applies: host logs explain
+what the worker did, while `.search/` records search facts such as candidates,
+iterations, scores, and verifier output.
+
+## Host-Native Log Inspection
+
+Keep raw host logs under `.search/host-logs/` or another ignored directory. They
+can include prompts, tool inputs, command output, file contents, and credentials
+that a tool printed. Do not commit raw logs.
+
+Cross-reference all host logs with the runtime IDs carried in the launch
+payload:
+
+- `agent_session_id`
+- `candidate_id`
+- `host_handle.external_id`, `host_handle.task_name`, or the OpenCode
+  `opencode_session_id`
+
+### OpenCode
+
+OpenCode is still the baseline host for the most complete inspection path:
+
+- Agent actions and child-session lifecycle: `~/.local/share/opencode/opencode.db`
+- OpenCode errors and permission/runtime decisions:
+  `~/.local/share/opencode/log/opencode.log`
+- Project runtime state: `.search/runs/<run_id>/...`
+
+Useful checks:
+
+```bash
+sqlite3 ~/.local/share/opencode/opencode.db \
+  "SELECT id, parent_id, title FROM session ORDER BY time_updated DESC LIMIT 20;"
+
+sqlite3 ~/.local/share/opencode/opencode.db \
+  "SELECT json_extract(data, '$.tool'), count(*)
+   FROM part
+   WHERE session_id='<SID>' AND json_extract(data, '$.type')='tool'
+   GROUP BY 1;"
+```
+
+Use OpenCode logs when a Task returned but `.search` has no iteration, when a
+worker hit its `steps` cap, or when a worker used Bash instead of
+`search_run_verifier`.
+
+### Codex
+
+For scripted or reproducible runs, capture Codex's event stream directly:
+
+```bash
+mkdir -p .search/host-logs
+codex exec --json --cd "$PWD" "<search prompt>" \
+  > ".search/host-logs/codex-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+`codex exec --json` emits JSONL events such as `thread.started`,
+`turn.started`, `turn.completed`, `turn.failed`, `item.*`, and `error`. Items
+include agent messages, reasoning, command executions, file changes, MCP tool
+calls, web searches, and plan updates. `codex exec -o <file>` is useful for the
+final answer only; it is not a full trace. `codex exec --ephemeral` intentionally
+does not persist session rollout files.
+
+Codex also persists local rollout transcripts by default:
+
+```bash
+find "${CODEX_HOME:-$HOME/.codex}/sessions" -name 'rollout-*.jsonl' -print
+```
+
+Related local state:
+
+- Session index: `${CODEX_HOME:-$HOME/.codex}/session_index.jsonl`
+- Session transcripts: `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl`
+- Archived transcripts: `${CODEX_HOME:-$HOME/.codex}/archived_sessions`
+- macOS app logs: `~/Library/Logs/com.openai.codex/YYYY/MM/DD`
+
+For interactive CLI diagnostics, opt into a plaintext TUI log:
+
+```bash
+RUST_LOG=debug codex -c log_dir=./.codex-log
+tail -F ./.codex-log/codex-tui.log
+```
+
+Useful search patterns for this adapter:
+
+```bash
+rg -n "agent_session_id|candidate_id|spawn_agent|wait_agent|send_input|interrupt|budget_control|turn.completed|turn.failed|error" \
+  .search/host-logs/codex-*.jsonl
+```
+
+If you are debugging Codex itself from the local `../codex` source checkout,
+`codex-rs/rollout-trace/README.md` describes the opt-in
+`CODEX_ROLLOUT_TRACE_ROOT` bundle format and offline reducer. The installed CLI
+in this environment exposes only the stable `codex debug` subcommands shown by
+`codex debug --help`, so treat rollout tracing as source/dev-only unless your
+Codex binary exposes it.
+
+### Claude Code
+
+For scripted or reproducible runs, capture both the stream output and the debug
+file:
+
+```bash
+mkdir -p .search/host-logs
+claude -p --verbose --output-format stream-json \
+  --debug-file ".search/host-logs/claude-debug-$(date +%Y%m%d-%H%M%S).log" \
+  "<search prompt>" \
+  > ".search/host-logs/claude-$(date +%Y%m%d-%H%M%S).jsonl"
+```
+
+Add `--include-hook-events` when diagnosing hooks, or
+`--include-partial-messages` when token-level streaming matters. `--debug-file`
+implicitly enables debug mode. Use `--debug api,mcp` for a narrower debug filter
+when API or MCP traffic is the focus.
+
+Claude Code persists application data under `~/.claude` unless disabled with
+`--no-session-persistence` in print mode or
+`CLAUDE_CODE_SKIP_PROMPT_HISTORY`. The safest way to locate all state for this
+project is a dry run:
+
+```bash
+claude project purge "$PWD" --dry-run
+```
+
+Do not run the purge without `--dry-run` unless you really intend to delete
+local Claude Code state for the project.
+
+Important locations:
+
+- Parent transcripts:
+  `~/.claude/projects/<encoded-project>/<session>.jsonl`
+- Subagent transcripts:
+  `~/.claude/projects/<encoded-project>/<session>/subagents/`
+- Large tool outputs:
+  `~/.claude/projects/<encoded-project>/<session>/tool-results/`
+- Per-session task lists: `~/.claude/tasks/<session>/`
+- Debug logs: `~/.claude/debug/` or the path passed to `--debug-file`
+- File edit history: `~/.claude/file-history/<session>/`
+
+Useful search patterns for this adapter:
+
+```bash
+rg -n "agent_session_id|candidate_id|task_started|task_progress|task_notification|subagent_type|Reached max turns limit|Agent:" \
+  .search/host-logs/claude-*.jsonl .search/host-logs/claude-debug-*.log
+```
+
+The current adapter uses foreground `Agent` launches, not Claude Code
+background sessions. If you manually experiment with background sessions,
+Claude Code also exposes `claude agents --json`, `claude logs <id>`, and
+`claude stop <id>`, but those commands are outside the normal adapter path.
 
 ## `.search/` Layout
 
@@ -183,11 +336,11 @@ These tools are safe to call anytime — they're read-only:
 
 When something goes wrong, cross-reference both layers:
 
-1. **OpenCode SQLite** — what the agent *did* (tool calls, bash commands, messages) and what the *lifecycle* did (start, step cap, stop)
+1. **Host-native transcript/log** — what the agent *did* (tool calls, bash commands, messages) and what the host lifecycle did (start, step cap or turn cap, stop/interrupt)
 2. **`.search/` runtime state** — what the runtime *recorded* (scores, iterations, verifier logs)
 
 Example: "OpenCode child session finished but the candidate shows no score"
-- SQLite shows: matching OpenCode child session has equal `step-start` / `step-finish` counts and the agent never called `search_run_verifier`
+- Host logs show: matching OpenCode child session has equal `step-start` / `step-finish` counts and the agent never called `search_run_verifier`
 - Runtime shows: `candidate.json` with empty `iterations`
 
 → Diagnosis: the subagent did not self-score. Have the main agent run `search_run_verifier(run_id, candidate_id, "process")` (without `agent_session_id`) to record the final score against the workspace state the subagent left behind.

@@ -64,6 +64,32 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     assert "agent_session_id=agent-0001" in payload["message"]
 
 
+def test_codex_adapter_builds_watchdog_budget_payload() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type=None,
+        candidate_id="cand-0001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_budget={
+            "max_runtime_seconds": 600,
+            "max_turns": 8,
+            "on_exceed": "interrupt",
+        },
+    )
+
+    assert payload["budget_control"] == {
+        "mode": "parent_watchdog",
+        "max_runtime_seconds": 600,
+        "wait_timeout_ms": 600000,
+        "on_exceed": "interrupt",
+        "interrupt_target": "search_agent_0001",
+        "max_turns_hint": 8,
+    }
+
+
 def test_claude_adapter_builds_foreground_agent_payload() -> None:
     adapter = get_agent_host_adapter("claude-code")
 
@@ -81,6 +107,26 @@ def test_claude_adapter_builds_foreground_agent_payload() -> None:
     assert "agent_session_id=agent_0001" in payload["message"]
 
 
+def test_claude_adapter_builds_turn_budget_payload() -> None:
+    adapter = get_agent_host_adapter("claude-code")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type="any-search-agent-deep",
+        candidate_id="cand_0001",
+        agent_session_id="agent_0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_budget={"max_turns": 16, "on_exceed": "interrupt"},
+    )
+
+    assert payload["agent_type"] == "any-search-agent-deep"
+    assert payload["budget_control"] == {
+        "mode": "host_turn_limit",
+        "max_turns": 16,
+        "on_exceed": "interrupt",
+    }
+
+
 def test_codex_continue_is_explicitly_unsupported() -> None:
     adapter = get_agent_host_adapter("codex")
 
@@ -94,4 +140,3 @@ def test_codex_continue_is_explicitly_unsupported() -> None:
             short_intent="continue",
             one_paragraph_idea="continue",
         )
-

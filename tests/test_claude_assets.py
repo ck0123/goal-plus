@@ -34,6 +34,33 @@ def test_claude_worker_agent_calls_context_and_verifier() -> None:
     )
 
     assert "name: any-search-agent" in text
+    assert "maxTurns: 8" in text
     assert "mcp__search-runtime__*" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+
+
+def test_claude_worker_agent_turn_budget_variants_exist() -> None:
+    flash = (ROOT / ".claude" / "agents" / "any-search-agent-flash.md").read_text(
+        encoding="utf-8"
+    )
+    deep = (ROOT / ".claude" / "agents" / "any-search-agent-deep.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "name: any-search-agent-flash" in flash
+    assert "maxTurns: 4" in flash
+    assert "name: any-search-agent-deep" in deep
+    assert "maxTurns: 16" in deep
+
+
+def test_claude_docs_record_log_inspection_paths() -> None:
+    text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
+    debug = (ROOT / "docs" / "debugging-runtime.md").read_text(encoding="utf-8")
+
+    combined = text + "\n" + debug
+    assert "--output-format stream-json" in combined
+    assert "--debug-file" in combined
+    assert "claude project purge" in combined
+    assert "~/.claude/projects" in combined
+    assert "subagents/" in combined

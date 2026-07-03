@@ -17,6 +17,7 @@ from agentic_any_search_mcp.models import (
     SearchSpec,
     StrategySpec,
     VerifierCommand,
+    WorkerBudget,
 )
 
 
@@ -91,6 +92,38 @@ def test_strategy_spec_accepts_supported_worker_hosts() -> None:
 
     with pytest.raises(ValidationError):
         StrategySpec(worker_host="unsupported")  # type: ignore[arg-type]
+
+
+def test_strategy_spec_accepts_worker_budget() -> None:
+    spec = StrategySpec(
+        worker_host="codex",
+        worker_budget={
+            "max_runtime_seconds": 600,
+            "max_turns": 8,
+            "on_exceed": "interrupt",
+        },
+    )
+
+    assert isinstance(spec.worker_budget, WorkerBudget)
+    assert spec.worker_budget.max_runtime_seconds == 600
+    assert spec.worker_budget.max_turns == 8
+    assert spec.worker_budget.on_exceed == "interrupt"
+    assert spec.model_dump(mode="json")["worker_budget"] == {
+        "max_runtime_seconds": 600,
+        "max_turns": 8,
+        "on_exceed": "interrupt",
+    }
+
+
+def test_worker_budget_requires_runtime_or_turn_limit() -> None:
+    with pytest.raises(ValidationError):
+        WorkerBudget()
+
+    with pytest.raises(ValidationError):
+        WorkerBudget(max_runtime_seconds=0)
+
+    with pytest.raises(ValidationError):
+        WorkerBudget(max_turns=0)
 
 
 def test_strategy_plan_models_capture_proposal_contract() -> None:

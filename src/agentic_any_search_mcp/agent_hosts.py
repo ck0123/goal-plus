@@ -40,6 +40,7 @@ class AgentHostAdapter(Protocol):
         agent_session_id: str,
         short_intent: str,
         one_paragraph_idea: str,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -70,6 +71,13 @@ def _codex_task_name(agent_session_id: str) -> str:
     return f"search_{normalized or 'agent'}"
 
 
+def _budget_max_runtime_ms(worker_budget: dict[str, Any]) -> int | None:
+    seconds = worker_budget.get("max_runtime_seconds")
+    if seconds is None:
+        return None
+    return int(seconds) * 1000
+
+
 class OpenCodeAdapter:
     name: AgentHostKind = "opencode"
     capabilities = HostCapabilities(
@@ -86,6 +94,7 @@ class OpenCodeAdapter:
         agent_session_id: str,
         short_intent: str,
         one_paragraph_idea: str,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
             "subagent_type": worker_agent_type or "AnySearchAgent",
@@ -143,10 +152,12 @@ class CodexAdapter:
         agent_session_id: str,
         short_intent: str,
         one_paragraph_idea: str,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        task_name = _codex_task_name(agent_session_id)
+        payload = {
             "tool": "spawn_agent",
-            "task_name": _codex_task_name(agent_session_id),
+            "task_name": task_name,
             "agent_type": worker_agent_type or "any_search_agent",
             "fork_turns": "none",
             "message": (
@@ -155,6 +166,18 @@ class CodexAdapter:
                 f"idea: {one_paragraph_idea}"
             ),
         }
+        if worker_budget:
+            budget_control: dict[str, Any] = {
+                "mode": "parent_watchdog",
+                "max_runtime_seconds": worker_budget.get("max_runtime_seconds"),
+                "wait_timeout_ms": _budget_max_runtime_ms(worker_budget),
+                "on_exceed": worker_budget.get("on_exceed", "interrupt"),
+                "interrupt_target": task_name,
+            }
+            if worker_budget.get("max_turns") is not None:
+                budget_control["max_turns_hint"] = worker_budget["max_turns"]
+            payload["budget_control"] = budget_control
+        return payload
 
     def build_continue_payload(self, **_: Any) -> dict[str, Any]:
         raise UnsupportedHostCapability(
@@ -179,8 +202,9 @@ class ClaudeCodeAdapter:
         agent_session_id: str,
         short_intent: str,
         one_paragraph_idea: str,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {
+        payload = {
             "tool": "Agent",
             "agent_type": worker_agent_type or "any-search-agent",
             "description": f"{candidate_id} {short_intent}",
@@ -191,6 +215,13 @@ class ClaudeCodeAdapter:
                 f"idea: {one_paragraph_idea}"
             ),
         }
+        if worker_budget:
+            payload["budget_control"] = {
+                "mode": "host_turn_limit",
+                "max_turns": worker_budget.get("max_turns"),
+                "on_exceed": worker_budget.get("on_exceed", "interrupt"),
+            }
+        return payload
 
     def build_continue_payload(
         self,
@@ -229,4 +260,3 @@ _ADAPTERS: dict[AgentHostKind, AgentHostAdapter] = {
 
 def get_agent_host_adapter(host: AgentHostKind) -> AgentHostAdapter:
     return _ADAPTERS[host]
-

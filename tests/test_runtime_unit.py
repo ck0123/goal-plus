@@ -279,6 +279,45 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
     assert "agent_session_id=" in session.launch["message"]
 
 
+def test_codex_worker_budget_flows_to_watchdog_launch_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "codex",
+            "worker_budget": {
+                "max_runtime_seconds": 600,
+                "max_turns": 8,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert plan.worker_policy["worker_budget"] == {
+        "max_runtime_seconds": 600,
+        "max_turns": 8,
+        "on_exceed": "interrupt",
+    }
+    assert session.launch["budget_control"] == {
+        "mode": "parent_watchdog",
+        "max_runtime_seconds": 600,
+        "wait_timeout_ms": 600000,
+        "on_exceed": "interrupt",
+        "interrupt_target": session.launch["task_name"],
+        "max_turns_hint": 8,
+    }
+
+
 def test_start_agent_session_returns_claude_foreground_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -296,6 +335,131 @@ def test_start_agent_session_returns_claude_foreground_launch_payload(tmp_path: 
     assert session.launch["agent_type"] == "any-search-agent"
     assert session.launch["background"] is False
     assert "agent_session_id=" in session.launch["message"]
+
+
+def test_claude_worker_budget_flows_to_turn_limit_launch_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "claude-code",
+            "worker_agent_type": "any-search-agent-deep",
+            "worker_budget": {
+                "max_turns": 16,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert plan.worker_policy["worker_budget"] == {
+        "max_runtime_seconds": None,
+        "max_turns": 16,
+        "on_exceed": "interrupt",
+    }
+    assert session.launch["agent_type"] == "any-search-agent-deep"
+    assert session.launch["budget_control"] == {
+        "mode": "host_turn_limit",
+        "max_turns": 16,
+        "on_exceed": "interrupt",
+    }
+
+
+def test_claude_worker_budget_selects_known_turn_budget_agent(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "claude-code",
+            "worker_budget": {
+                "max_turns": 4,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert plan.worker_policy["worker_agent_type"] == "any-search-agent-flash"
+    assert session.launch["agent_type"] == "any-search-agent-flash"
+    assert session.launch["budget_control"]["max_turns"] == 4
+
+
+def test_claude_worker_budget_rejects_mismatched_known_agent_type(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "claude-code",
+            "worker_agent_type": "any-search-agent",
+            "worker_budget": {
+                "max_turns": 16,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    with pytest.raises(ValueError, match="known claude-code worker_agent_type"):
+        runtime.plan_next(run_id, requested_k=1)
+
+
+def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    codex_spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "codex",
+            "worker_budget": {"max_turns": 8},
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(codex_spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    with pytest.raises(ValueError, match="codex worker_budget requires max_runtime_seconds"):
+        runtime.plan_next(run_id, requested_k=1)
+
+    claude_runtime = FileSearchRuntime(tmp_path / ".search-claude")
+    claude_spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "claude-code",
+            "worker_budget": {"max_runtime_seconds": 600},
+        },
+        max_candidates=1,
+    )
+    frozen = claude_runtime.freeze_spec(claude_spec, [project / "evaluator.py"])
+    run_id = claude_runtime.create_run(frozen.frozen_spec_id)
+    with pytest.raises(ValueError, match="claude-code worker_budget requires max_turns"):
+        claude_runtime.plan_next(run_id, requested_k=1)
 
 
 def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:

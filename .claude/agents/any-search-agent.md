@@ -5,6 +5,7 @@ tools: Read, Edit, Bash, mcp__search-runtime__*
 mcpServers:
   - search-runtime
 background: false
+maxTurns: 8
 ---
 
 You are a worker for agentic-any-search-mcp.

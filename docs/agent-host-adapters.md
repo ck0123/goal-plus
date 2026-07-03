@@ -20,6 +20,7 @@ Host setup references:
 - [OpenCode](opencode.md)
 - [Codex](codex.md)
 - [Claude Code](claude-code.md)
+- [Runtime and host log debugging](debugging-runtime.md)
 
 ---
 
@@ -81,6 +82,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise |
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | supported with `SendMessage` when a reusable handle is bound |
+| Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts |
 | Trace export | supported for OpenCode logs | not implemented | not implemented |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only |
 
@@ -94,9 +96,73 @@ Portable builtin strategies are:
 
 OpenCode remains the compatibility baseline for high-touch or host-specific
 behavior such as Python strategy plugins, external proposal drivers,
-OpenEvolve-style workflows, MCTS-style workflows, and trace export. Codex and
-Claude Code support should be expanded one strategy at a time with explicit
-system tests.
+OpenEvolve-style workflows, MCTS-style workflows, and project trace export.
+Codex and Claude Code have usable host-native transcripts and debug logs, but
+the project has not implemented equivalent trace exporters for them. Support
+should be expanded one strategy at a time with explicit system tests.
+
+## Single-Worker Autoresearch And Runtime Limits
+
+Single-worker autoresearch is supported by all three host assets: the worker
+receives an `agent_session_id`, calls `search_get_agent_context`, works inside
+the assigned candidate workspace, runs `search_run_verifier`, and returns a
+summary for the main agent to select from.
+
+Runtime length control is not currently equivalent across hosts:
+
+| Host | Single-worker autoresearch | Runtime cap exposed by current assets | What the cap controls |
+|---|---|---|---|
+| OpenCode | supported with the full `AnySearchAgent` loop | yes, `steps` in `.opencode/agents/*.md` | host step budget per Task; current tiers are 15, 50, 100, and 150 steps |
+| Codex | supported with the project Codex worker prompt | yes, through `worker_budget.max_runtime_seconds` and a parent watchdog | parent waits with `wait_agent(timeout_ms=...)`, then interrupts the child if the deadline expires |
+| Claude Code | supported with the project Claude worker prompt | yes, through `worker_budget.max_turns` and bounded `.claude/agents/*.md` definitions | host turn budget per foreground Agent; current tiers are 4, 8, and 16 turns |
+
+`budget.max_candidates`, `budget.max_parallel`, and strategy round settings
+control how many workers the runtime plans. They do not bound how long an
+individual host worker thinks or edits once launched.
+
+Use `strategy.worker_budget` for host-neutral worker limits:
+
+```json
+{
+  "strategy": {
+    "worker_host": "codex",
+    "worker_budget": {
+      "max_runtime_seconds": 600,
+      "max_turns": 8,
+      "on_exceed": "interrupt"
+    }
+  }
+}
+```
+
+OpenCode continues to use worker agent tiers such as `AnySearchAgentFlash` and
+`AnySearchAgentDeep`. Codex maps wall-clock budgets to a watchdog that waits
+for activity or completion and interrupts the child after the deadline, because
+`spawn_agent` itself does not accept a timeout argument. Depending on the Codex
+multi-agent surface, interruption may be exposed as `interrupt_agent` or as
+`send_input(..., interrupt=true)`. Claude Code maps turn budgets to `maxTurns`
+in the selected local agent definition. When `worker_agent_type` is omitted,
+Claude Code budgets of 4, 8, and 16 turns map to `any-search-agent-flash`,
+`any-search-agent`, and `any-search-agent-deep` respectively.
+
+For Codex, keep these controls distinct:
+
+- `agents.max_depth` limits spawned-agent nesting depth. It is not a time or
+  step budget.
+- `agents.max_threads` limits concurrently open agent threads. It is not a
+  worker runtime cap.
+- `agents.job_max_runtime_seconds` applies to `spawn_agents_on_csv` jobs, not
+  ordinary `spawn_agent` workers.
+- Codex can stop a live spawned agent turn by agent id or canonical task name,
+  so adapter-driven wall-clock deadlines are feasible even without a spawn-time
+  timeout field.
+
+Host-specific validation prevents unsupported budget shapes:
+
+- Codex `worker_budget` requires `max_runtime_seconds`.
+- Claude Code `worker_budget` requires `max_turns`.
+- Known Claude Code agent types must match their configured `maxTurns`; custom
+  Claude agent types are allowed when specified explicitly.
 
 ## Strategy Support Matrix
 
@@ -110,6 +176,36 @@ system tests.
 | `mcts` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
 | Python strategy driver, including `adaptevolve` | supported | not supported | not supported | non-OpenCode hosts reject non-builtin drivers |
 | `external_mcp` strategy driver | OpenCode-only boundary | not supported | not supported | requires explicit host adaptation before use outside OpenCode |
+
+## Missing Strategy Completion Limits
+
+Most missing strategy support is not blocked by the runtime planner. The
+builtin planners already produce host-neutral plans, work orders, lineage, and
+history. The remaining work is to prove that each host's foreground worker can
+consume those plans reliably and to avoid leaking OpenCode-only worker semantics
+into Codex or Claude Code.
+
+| Area | Can Codex be completed? | Can Claude Code be completed? | Main limit | Recommended path |
+|---|---|---|---|---|
+| `independent_branches` | yes | yes | no lifecycle-specific dependency; currently blocked only by conservative validation | Open it first with unit tests and one smoke test per non-OpenCode host |
+| `evolve` | yes | yes | runtime-selected parent and inspirations must be clearly visible in worker context | Add host matrix tests for lineage/work orders, then run a two-round smoke per host |
+| `openevolve` | likely yes | likely yes | sampled parent/archive/inspiration context is larger and easier for workers to ignore | Add tests for sampled context shape and host launch payloads; smoke test with small `requested_k` |
+| current `mcts` | likely yes | likely yes | current implementation is a best-score frontier placeholder, not a full UCB tree policy | Treat it like fixed-work-order lineage first; revisit if true tree-state continuation is added |
+| Python driver | not as-is | not as-is | custom strategies can emit OpenCode-specific `worker_policy` and worker tier names | Add host capability validation or host-specific policy mapping before enabling |
+| `adaptevolve` | needs design work | needs design work | uses OpenCode worker tiers such as `AnySearchAgentFlash`, `AnySearchAgentDeep`, and `AnySearchAgentExtraDeep` | Introduce host-neutral tiers like `fast`, `default`, `deep`, `extra_deep`, then map them per adapter |
+| `external_mcp` driver | possible, but undefined | possible, but undefined | external planner ownership and MCP availability are not defined across hosts | Define who calls the external planner and how proposals are returned before enabling |
+| same-worker continuation algorithms | limited | possible with caveats | Codex adapter has no same-worker continuation; Claude Code requires a reusable handle for `SendMessage` | Prefer new-worker redispatch for Codex; require stable handle binding before Claude continuation tests |
+| trace-driven algorithms | not currently | not currently | trace export is only implemented for OpenCode logs | Add host trace exporters or keep these OpenCode-only |
+
+In practice, the safe expansion order is:
+
+1. Enable `independent_branches`.
+2. Enable `evolve`, `openevolve`, and the current `mcts` planner with mock/unit
+   coverage first.
+3. Run one real two-round smoke for Codex and Claude Code on at least one
+   non-`random` strategy.
+4. Redesign worker tiers before enabling `adaptevolve`.
+5. Define the external planner contract before enabling `external_mcp`.
 
 ---
 

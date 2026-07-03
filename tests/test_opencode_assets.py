@@ -212,8 +212,9 @@ def test_deleted_lifecycle_apis_are_absent_from_opencode_assets(
         "opencode_db_path",
         "sync_host_agent_sessions",
         "host sync",
-        "sqlite",
     ]
+    if relative_path != "docs/debugging-runtime.md":
+        forbidden.append("sqlite")
     for token in forbidden:
         assert token not in text, f"{relative_path} mentions deleted API: {token}"
 

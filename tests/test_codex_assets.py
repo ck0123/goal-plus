@@ -26,6 +26,19 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
     assert "background" not in text.lower()
 
 
+def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
+    text = (ROOT / ".agents" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "budget_control" in text
+    assert "parent_watchdog" in text
+    assert "wait_agent" in text
+    assert "interrupt_agent" in text
+    assert "send_input" in text
+    assert "interrupt=true" in text
+
+
 def test_codex_worker_agent_calls_context_and_verifier() -> None:
     text = (ROOT / ".codex" / "agents" / "any_search_agent.toml").read_text(
         encoding="utf-8"
@@ -35,3 +48,14 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
 
+
+def test_codex_docs_record_log_inspection_paths() -> None:
+    text = (ROOT / "docs" / "codex.md").read_text(encoding="utf-8")
+    debug = (ROOT / "docs" / "debugging-runtime.md").read_text(encoding="utf-8")
+
+    combined = text + "\n" + debug
+    assert "codex exec --json" in combined
+    assert "CODEX_HOME" in combined
+    assert "rollout-*.jsonl" in combined
+    assert "RUST_LOG=debug" in combined
+    assert "log_dir=./.codex-log" in combined

@@ -46,6 +46,15 @@ from agentic_any_search_mcp.models import (
 
 IGNORED_NAMES = {".git", ".search", ".tmp", ".pytest_cache", "__pycache__"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
+CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS = {
+    "any-search-agent-flash": 4,
+    "any-search-agent": 8,
+    "any-search-agent-deep": 16,
+}
+CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET = {
+    turns: agent_type
+    for agent_type, turns in CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS.items()
+}
 
 
 def utc_timestamp() -> str:
@@ -875,15 +884,67 @@ class FileSearchRuntime:
                 f"{strategy.worker_host} worker_host does not support strategy "
                 f"{strategy.name}; use default/agent_guided or random"
             )
+        if strategy.worker_budget is not None:
+            if (
+                strategy.worker_host == "codex"
+                and strategy.worker_budget.max_runtime_seconds is None
+            ):
+                raise ValueError(
+                    "codex worker_budget requires max_runtime_seconds so the "
+                    "parent agent can enforce a watchdog deadline"
+                )
+            if (
+                strategy.worker_host == "claude-code"
+                and strategy.worker_budget.max_turns is None
+            ):
+                raise ValueError(
+                    "claude-code worker_budget requires max_turns so the "
+                    "subagent definition can enforce a turn budget"
+                )
+            if strategy.worker_host == "claude-code":
+                turns = strategy.worker_budget.max_turns
+                configured_agent = strategy.worker_agent_type
+                if configured_agent in CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS:
+                    expected = CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS[configured_agent]
+                    if turns != expected:
+                        raise ValueError(
+                            "known claude-code worker_agent_type "
+                            f"{configured_agent!r} has maxTurns {expected}, "
+                            f"not requested worker_budget.max_turns {turns}"
+                        )
+                elif configured_agent is None and turns not in CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET:
+                    supported = sorted(CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET)
+                    raise ValueError(
+                        "claude-code worker_budget.max_turns without an explicit "
+                        "custom worker_agent_type must be one of "
+                        f"{supported}"
+                    )
+
+    def _worker_budget_dict(self, strategy: StrategySpec) -> dict[str, Any] | None:
+        if strategy.worker_budget is None:
+            return None
+        return strategy.worker_budget.model_dump(mode="json")
 
     def _worker_policy(self, strategy: StrategySpec) -> dict[str, Any]:
         adapter = get_agent_host_adapter(strategy.worker_host)
+        worker_agent_type = strategy.worker_agent_type
+        worker_budget = self._worker_budget_dict(strategy)
+        if (
+            strategy.worker_host == "claude-code"
+            and worker_agent_type is None
+            and strategy.worker_budget is not None
+            and strategy.worker_budget.max_turns is not None
+        ):
+            worker_agent_type = CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET[
+                strategy.worker_budget.max_turns
+            ]
         return {
             "mode": "agent-session-pool",
             "configured_mode": strategy.worker_mode,
             "host": strategy.worker_host,
-            "worker_agent_type": strategy.worker_agent_type,
-            "subagent_type": strategy.worker_agent_type,
+            "worker_agent_type": worker_agent_type,
+            "subagent_type": worker_agent_type,
+            "worker_budget": worker_budget,
             "supports_bind_handle": adapter.capabilities.supports_bind_handle,
             "supports_same_worker_continue": adapter.capabilities.supports_same_worker_continue,
             "supports_trace_export": adapter.capabilities.supports_trace_export,
@@ -944,6 +1005,17 @@ class FileSearchRuntime:
         )
         return str(selected)
 
+    def _candidate_worker_budget(
+        self,
+        frozen: FrozenSpec,
+        candidate_record: CandidateRecord,
+    ) -> dict[str, Any] | None:
+        worker_policy = candidate_record.task.strategy_metadata.get("worker_policy", {})
+        budget = worker_policy.get("worker_budget")
+        if budget is not None:
+            return dict(budget)
+        return self._worker_budget_dict(frozen.spec.strategy)
+
     def _build_launch_payload(
         self,
         frozen: FrozenSpec,
@@ -978,6 +1050,7 @@ class FileSearchRuntime:
             agent_session_id=agent_session_id,
             short_intent=short_intent,
             one_paragraph_idea=one_paragraph_idea,
+            worker_budget=self._candidate_worker_budget(frozen, candidate_record),
         )
 
     def _build_continue_launch_payload(
