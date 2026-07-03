@@ -14,7 +14,7 @@ def test_create_mcp(tmp_path: Path) -> None:
     assert isinstance(mcp, FastMCP)
 
 
-def test_create_mcp_registers_only_opencode_native_tools(tmp_path: Path) -> None:
+def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
     tools = asyncio.run(mcp.get_tools())
@@ -27,6 +27,7 @@ def test_create_mcp_registers_only_opencode_native_tools(tmp_path: Path) -> None
         "search_plan_next",
         "search_start_batch",
         "search_start_agent_session",
+        "search_bind_agent_handle",
         "search_bind_opencode_session",
         "search_continue_agent_session",
         "search_get_agent_context",
@@ -105,6 +106,9 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return []
 
         def search_start_agent_session(self, *args, **kwargs):
+            return {}
+
+        def search_bind_agent_handle(self, *args, **kwargs):
             return {}
 
         def search_bind_opencode_session(self, *args, **kwargs):

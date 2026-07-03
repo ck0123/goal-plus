@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from agentic_any_search_mcp.models import (
+    AgentHostHandle,
     AgentSessionRecord,
     CandidateProposal,
     CandidateTask,
@@ -117,6 +118,12 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         )
     ]
     runtime.start_agent_session.return_value = agent_session
+    generic_bound_session = agent_session.model_copy(
+        update={
+            "host": "codex",
+            "host_handle": AgentHostHandle(host="codex", task_name="search_agent_001"),
+        }
+    )
     bound_session = agent_session.model_copy(
         update={"opencode_session_id": "opencode_session_001"}
     )
@@ -130,6 +137,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             }
         }
     )
+    runtime.bind_agent_handle.return_value = generic_bound_session
     runtime.bind_opencode_session.return_value = bound_session
     runtime.continue_agent_session.return_value = continued_session
     runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
@@ -174,6 +182,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "c001",
         {"goal": "try one"},
     )["agent_session_id"] == "agent_001"
+    assert tools.search_bind_agent_handle(
+        "agent_001",
+        {"host": "codex", "task_name": "search_agent_001"},
+    )["host_handle"]["task_name"] == "search_agent_001"
     assert tools.search_bind_opencode_session(
         "agent_001",
         "opencode_session_001",
@@ -215,6 +227,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.bind_opencode_session.assert_called_once_with(
         agent_session_id="agent_001",
         opencode_session_id="opencode_session_001",
+    )
+    runtime.bind_agent_handle.assert_called_once_with(
+        agent_session_id="agent_001",
+        handle={"host": "codex", "task_name": "search_agent_001"},
     )
     runtime.continue_agent_session.assert_called_once_with(
         agent_session_id="agent_001",

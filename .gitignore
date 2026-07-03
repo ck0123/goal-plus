@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .search/
 .tmp/
+docs/superpowers/
 .opencode/node_modules/
 .opencode/package.json
 .opencode/package-lock.json

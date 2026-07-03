@@ -75,6 +75,16 @@ class SearchTools:
             opencode_session_id=opencode_session_id,
         ).model_dump(mode="json")
 
+    def search_bind_agent_handle(
+        self,
+        agent_session_id: str,
+        handle: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runtime.bind_agent_handle(
+            agent_session_id=agent_session_id,
+            handle=handle,
+        ).model_dump(mode="json")
+
     def search_continue_agent_session(
         self,
         agent_session_id: str,

@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from agentic_any_search_mcp.models import AgentHostKind
+
+
+PORTABLE_STRATEGY_MODES = {
+    "agent",
+    "agent_guided",
+    "default",
+    "random",
+    "random_mode",
+}
+
+
+class UnsupportedHostCapability(RuntimeError):
+    """Raised when a host cannot provide a requested worker lifecycle action."""
+
+
+@dataclass(frozen=True)
+class HostCapabilities:
+    supports_bind_handle: bool
+    supports_same_worker_continue: bool
+    supports_trace_export: bool
+    uses_background_workers: bool = False
+
+
+class AgentHostAdapter(Protocol):
+    name: AgentHostKind
+    capabilities: HostCapabilities
+
+    def build_launch_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        ...
+
+    def build_continue_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        external_id: str | None,
+        task_name: str | None,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        ...
+
+
+def _normalize_mode(value: str) -> str:
+    return value.strip().lower().replace("-", "_")
+
+
+def portable_strategy_mode(value: str) -> bool:
+    return _normalize_mode(value) in PORTABLE_STRATEGY_MODES
+
+
+def _codex_task_name(agent_session_id: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", agent_session_id.lower()).strip("_")
+    return f"search_{normalized or 'agent'}"
+
+
+class OpenCodeAdapter:
+    name: AgentHostKind = "opencode"
+    capabilities = HostCapabilities(
+        supports_bind_handle=True,
+        supports_same_worker_continue=True,
+        supports_trace_export=True,
+    )
+
+    def build_launch_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        return {
+            "subagent_type": worker_agent_type or "AnySearchAgent",
+            "description": f"{candidate_id} {short_intent}",
+            "prompt": (
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                f"idea: {one_paragraph_idea}"
+            ),
+        }
+
+    def build_continue_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        external_id: str | None,
+        task_name: str | None,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        if not external_id:
+            raise UnsupportedHostCapability(
+                "opencode continuation requires a bound OpenCode session id"
+            )
+        return {
+            "task_id": external_id,
+            "subagent_type": worker_agent_type or "AnySearchAgent",
+            "description": f"{candidate_id} continue {short_intent}",
+            "prompt": (
+                "continue_existing_agent_session=true; "
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                "refresh authoritative runtime context with search_get_agent_context "
+                "before editing; continue the same candidate and workspace; "
+                f"directive: {one_paragraph_idea}"
+            ),
+        }
+
+
+class CodexAdapter:
+    name: AgentHostKind = "codex"
+    capabilities = HostCapabilities(
+        supports_bind_handle=True,
+        supports_same_worker_continue=False,
+        supports_trace_export=False,
+    )
+
+    def build_launch_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        return {
+            "tool": "spawn_agent",
+            "task_name": _codex_task_name(agent_session_id),
+            "agent_type": worker_agent_type or "any_search_agent",
+            "fork_turns": "none",
+            "message": (
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                f"idea: {one_paragraph_idea}"
+            ),
+        }
+
+    def build_continue_payload(self, **_: Any) -> dict[str, Any]:
+        raise UnsupportedHostCapability(
+            "codex does not expose an equivalent same-worker continuation in this adapter"
+        )
+
+
+class ClaudeCodeAdapter:
+    name: AgentHostKind = "claude-code"
+    capabilities = HostCapabilities(
+        supports_bind_handle=True,
+        supports_same_worker_continue=True,
+        supports_trace_export=False,
+        uses_background_workers=False,
+    )
+
+    def build_launch_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        return {
+            "tool": "Agent",
+            "agent_type": worker_agent_type or "any-search-agent",
+            "description": f"{candidate_id} {short_intent}",
+            "background": False,
+            "message": (
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                f"idea: {one_paragraph_idea}"
+            ),
+        }
+
+    def build_continue_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        external_id: str | None,
+        task_name: str | None,
+        short_intent: str,
+        one_paragraph_idea: str,
+    ) -> dict[str, Any]:
+        target = external_id or task_name
+        if not target:
+            raise UnsupportedHostCapability(
+                "claude-code continuation requires a bound agent id or name"
+            )
+        return {
+            "tool": "SendMessage",
+            "agent": target,
+            "message": (
+                "continue_existing_agent_session=true; "
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                f"idea: {one_paragraph_idea}"
+            ),
+        }
+
+
+_ADAPTERS: dict[AgentHostKind, AgentHostAdapter] = {
+    "opencode": OpenCodeAdapter(),
+    "codex": CodexAdapter(),
+    "claude-code": ClaudeCodeAdapter(),
+}
+
+
+def get_agent_host_adapter(host: AgentHostKind) -> AgentHostAdapter:
+    return _ADAPTERS[host]
+

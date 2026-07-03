@@ -15,7 +15,13 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
 
+from agentic_any_search_mcp.agent_hosts import (
+    UnsupportedHostCapability,
+    get_agent_host_adapter,
+    portable_strategy_mode,
+)
 from agentic_any_search_mcp.models import (
+    AgentHostHandle,
     AgentSessionRecord,
     CandidateRecord,
     CandidateProposal,
@@ -299,11 +305,12 @@ class FileSearchRuntime:
         remaining = max(0, spec.budget.max_candidates - run.candidates_total)
         planned_k = min(requested_k, remaining)
         strategy = spec.strategy
+        self._validate_host_strategy(strategy)
         mode = self._strategy_mode(strategy)
 
         if strategy.driver != "builtin":
             plan = self._plan_custom_strategy(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"agent", "agent_guided"}:
+        elif mode in {"agent", "agent_guided", "default"}:
             plan = self._plan_agent_guided(run, frozen, requested_k, planned_k, remaining)
         elif mode in {"openevolve", "open_evolve", "openevolve_mode"}:
             plan = self._plan_openevolve(run, frozen, requested_k, planned_k, remaining)
@@ -412,10 +419,18 @@ class FileSearchRuntime:
             directive=normalized_directive,
             candidate_record=candidate_record,
         )
+        host = frozen.spec.strategy.worker_host
+        host_handle = AgentHostHandle(host=host)
+        if host == "codex":
+            host_handle = host_handle.model_copy(
+                update={"task_name": launch.get("task_name")}
+            )
         session = AgentSessionRecord(
             agent_session_id=agent_session_id,
             run_id=run_id,
             candidate_id=candidate_id,
+            host=host,
+            host_handle=host_handle,
             created_at=now,
             updated_at=now,
             directive=normalized_directive,
@@ -443,17 +458,50 @@ class FileSearchRuntime:
         bound_id = opencode_session_id.strip()
         if not bound_id:
             raise ValueError("opencode_session_id must be non-empty")
-        if session.opencode_session_id and session.opencode_session_id != bound_id:
+        existing_id = session.opencode_session_id or session.host_handle.external_id
+        if existing_id and existing_id != bound_id:
             raise ValueError(
                 "agent session is already bound to a different OpenCode session"
             )
+        if session.host != "opencode":
+            raise ValueError(f"agent session host is {session.host}, not opencode")
 
-        updated = session.model_copy(
+        return self.bind_agent_handle(
+            agent_session_id,
+            {"host": "opencode", "external_id": bound_id},
+        )
+
+    def bind_agent_handle(
+        self,
+        agent_session_id: str,
+        handle: dict[str, Any],
+    ) -> AgentSessionRecord:
+        """Bind a runtime session to the host-specific worker handle."""
+        session = self._load_agent_session_by_id(agent_session_id)
+        host = handle.get("host", session.host)
+        if host != session.host:
+            raise ValueError(f"agent session host is {session.host}, got handle for {host}")
+
+        metadata = {
+            **session.host_handle.metadata,
+            **dict(handle.get("metadata") or {}),
+        }
+        updated_handle = session.host_handle.model_copy(
             update={
-                "opencode_session_id": bound_id,
-                "updated_at": utc_timestamp(),
+                "host": session.host,
+                "external_id": handle.get("external_id", session.host_handle.external_id),
+                "task_name": handle.get("task_name", session.host_handle.task_name),
+                "nickname": handle.get("nickname", session.host_handle.nickname),
+                "metadata": metadata,
             }
         )
+        update: dict[str, Any] = {
+            "host_handle": updated_handle,
+            "updated_at": utc_timestamp(),
+        }
+        if session.host == "opencode" and updated_handle.external_id:
+            update["opencode_session_id"] = updated_handle.external_id
+        updated = session.model_copy(update=update)
         self._write_agent_session(updated)
         return updated
 
@@ -469,7 +517,9 @@ class FileSearchRuntime:
         and the bound OpenCode session id as Task's `task_id`.
         """
         session = self._load_agent_session_by_id(agent_session_id)
-        if not session.opencode_session_id:
+        if session.host == "opencode" and not (
+            session.opencode_session_id or session.host_handle.external_id
+        ):
             raise RuntimeError(
                 "agent session has no bound OpenCode session id; call "
                 "search_bind_opencode_session with Task metadata.sessionId first"
@@ -497,12 +547,15 @@ class FileSearchRuntime:
             if directive is None
             else self._normalize_main_directive(directive)
         )
-        launch = self._build_continue_launch_payload(
-            frozen=frozen,
-            session=session,
-            directive=normalized_directive,
-            candidate_record=candidate_record,
-        )
+        try:
+            launch = self._build_continue_launch_payload(
+                frozen=frozen,
+                session=session,
+                directive=normalized_directive,
+                candidate_record=candidate_record,
+            )
+        except UnsupportedHostCapability as exc:
+            raise RuntimeError(str(exc)) from exc
         updated = session.model_copy(
             update={
                 "updated_at": utc_timestamp(),
@@ -527,6 +580,8 @@ class FileSearchRuntime:
             "agent_session_id": session.agent_session_id,
             "run_id": session.run_id,
             "candidate_id": session.candidate_id,
+            "host": session.host,
+            "host_handle": session.host_handle.model_dump(mode="json"),
             "directive": session.directive,
             "workspace": str(session.workspace),
             "objective": frozen.spec.objective,
@@ -758,16 +813,17 @@ class FileSearchRuntime:
                     "## Agent Sessions",
                     "",
                     (
-                        "| Session | OpenCode Session | Candidate | Verifier Runs | "
+                        "| Session | Host | Handle | Candidate | Verifier Runs | "
                         "Created | Updated |"
                     ),
-                    "|---|---|---|---:|---|---|",
+                    "|---|---|---|---|---:|---|---|",
                 ]
             )
             for session in agent_sessions:
                 lines.append(
                     f"| `{session.agent_session_id}` | "
-                    f"{self._markdown_cell(session.opencode_session_id or '')} | "
+                    f"`{session.host}` | "
+                    f"{self._markdown_cell(self._display_host_handle(session))} | "
                     f"`{session.candidate_id or ''}` | "
                     f"{session.counters.get('verifier_runs', 0)} | "
                     f"{session.created_at} | {session.updated_at} |"
@@ -797,12 +853,41 @@ class FileSearchRuntime:
     def _strategy_mode(self, strategy: StrategySpec) -> str:
         return strategy.name.strip().lower().replace("-", "_")
 
+    def _display_host_handle(self, session: AgentSessionRecord) -> str:
+        return (
+            session.host_handle.external_id
+            or session.host_handle.task_name
+            or session.host_handle.nickname
+            or session.opencode_session_id
+            or ""
+        )
+
+    def _validate_host_strategy(self, strategy: StrategySpec) -> None:
+        if strategy.worker_host == "opencode":
+            return
+        if strategy.driver != "builtin":
+            raise ValueError(
+                f"{strategy.worker_host} worker_host only supports builtin "
+                "default/agent_guided and random strategies"
+            )
+        if not portable_strategy_mode(strategy.name):
+            raise ValueError(
+                f"{strategy.worker_host} worker_host does not support strategy "
+                f"{strategy.name}; use default/agent_guided or random"
+            )
+
     def _worker_policy(self, strategy: StrategySpec) -> dict[str, Any]:
+        adapter = get_agent_host_adapter(strategy.worker_host)
         return {
             "mode": "agent-session-pool",
             "configured_mode": strategy.worker_mode,
+            "host": strategy.worker_host,
             "worker_agent_type": strategy.worker_agent_type,
             "subagent_type": strategy.worker_agent_type,
+            "supports_bind_handle": adapter.capabilities.supports_bind_handle,
+            "supports_same_worker_continue": adapter.capabilities.supports_same_worker_continue,
+            "supports_trace_export": adapter.capabilities.supports_trace_export,
+            "uses_background_workers": adapter.capabilities.uses_background_workers,
             "directive_rule": (
                 "Worker directives should describe the candidate idea and deliverable, not score "
                 "targets or baseline scores. Workers must treat any score target in a directive as "
@@ -811,8 +896,9 @@ class FileSearchRuntime:
             "requires_agent_session": True,
             "direct_edit_allowed": False,
             "reason": (
-                "worker_mode=agent-session-pool requires the main agent to launch OpenCode "
-                "Task workers using the launch payload from search_start_agent_session."
+                f"worker_mode=agent-session-pool requires the main agent to launch "
+                f"{strategy.worker_host} foreground workers using the launch payload "
+                "from search_start_agent_session."
             ),
         }
 
@@ -827,7 +913,7 @@ class FileSearchRuntime:
             policy.get("subagent_type")
             or policy.get("worker_agent_type")
             or strategy.worker_agent_type
-            or "AnySearchAgent"
+            or self._default_worker_agent_type(strategy.worker_host)
         )
         policy["worker_agent_type"] = selected
         policy["subagent_type"] = selected
@@ -836,6 +922,13 @@ class FileSearchRuntime:
         policy.setdefault("requires_agent_session", True)
         policy.setdefault("direct_edit_allowed", False)
         return policy
+
+    def _default_worker_agent_type(self, host: str) -> str:
+        if host == "codex":
+            return "any_search_agent"
+        if host == "claude-code":
+            return "any-search-agent"
+        return "AnySearchAgent"
 
     def _candidate_worker_agent_type(
         self,
@@ -847,7 +940,7 @@ class FileSearchRuntime:
             worker_policy.get("subagent_type")
             or worker_policy.get("worker_agent_type")
             or frozen.spec.strategy.worker_agent_type
-            or "AnySearchAgent"
+            or self._default_worker_agent_type(frozen.spec.strategy.worker_host)
         )
         return str(selected)
 
@@ -878,15 +971,14 @@ class FileSearchRuntime:
             idea_lines = [candidate_record.task.hypothesis]
         one_paragraph_idea = "; ".join(idea_lines)
 
-        return {
-            "subagent_type": worker_agent_type,
-            "description": f"{candidate_id} {short_intent}",
-            "prompt": (
-                f"agent_session_id={agent_session_id}; "
-                f"candidate_id={candidate_id}; "
-                f"idea: {one_paragraph_idea}"
-            ),
-        }
+        adapter = get_agent_host_adapter(frozen.spec.strategy.worker_host)
+        return adapter.build_launch_payload(
+            worker_agent_type=worker_agent_type,
+            candidate_id=candidate_id,
+            agent_session_id=agent_session_id,
+            short_intent=short_intent,
+            one_paragraph_idea=one_paragraph_idea,
+        )
 
     def _build_continue_launch_payload(
         self,
@@ -910,19 +1002,16 @@ class FileSearchRuntime:
                 "continue improving the same candidate from its current workspace state"
             )
 
-        return {
-            "task_id": session.opencode_session_id,
-            "subagent_type": worker_agent_type,
-            "description": f"{session.candidate_id} continue {short_intent}",
-            "prompt": (
-                "continue_existing_agent_session=true; "
-                f"agent_session_id={session.agent_session_id}; "
-                f"candidate_id={session.candidate_id}; "
-                "refresh authoritative runtime context with search_get_agent_context "
-                "before editing; continue the same candidate and workspace; "
-                f"directive: {directive_text}"
-            ),
-        }
+        adapter = get_agent_host_adapter(session.host)
+        return adapter.build_continue_payload(
+            worker_agent_type=worker_agent_type,
+            candidate_id=session.candidate_id,
+            agent_session_id=session.agent_session_id,
+            external_id=session.host_handle.external_id or session.opencode_session_id,
+            task_name=session.host_handle.task_name,
+            short_intent=short_intent,
+            one_paragraph_idea=directive_text,
+        )
 
     def _next_plan_id(self, run: RunRecord) -> str:
         plan_id = f"plan_{run.next_plan_index:03d}"
@@ -2037,6 +2126,9 @@ class FileSearchRuntime:
             {
                 "agent_session_id": session.agent_session_id,
                 "candidate_id": session.candidate_id,
+                "host": session.host,
+                "host_handle": session.host_handle.model_dump(mode="json"),
+                "host_handle_display": self._display_host_handle(session),
                 "opencode_session_id": session.opencode_session_id,
                 "created_at": session.created_at,
                 "updated_at": session.updated_at,

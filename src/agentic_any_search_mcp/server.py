@@ -97,6 +97,19 @@ def create_mcp(
         )
 
     @mcp.tool()
+    def search_bind_agent_handle(
+        agent_session_id: str,
+        handle: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Bind a runtime agent session to a non-OpenCode host worker handle.
+
+        Used by Codex and Claude Code adapters to record task names, nicknames,
+        or agent ids returned by their native foreground worker launch tools.
+        OpenCode callers may keep using `search_bind_opencode_session`.
+        """
+        return tools.search_bind_agent_handle(agent_session_id, handle)
+
+    @mcp.tool()
     def search_continue_agent_session(
         agent_session_id: str,
         directive: dict[str, Any] | str | None = None,

@@ -70,12 +70,24 @@ class HistoryPolicy(SearchModel):
     )
 
 
+AgentHostKind = Literal["opencode", "codex", "claude-code"]
+
+
+class AgentHostHandle(SearchModel):
+    host: AgentHostKind = "opencode"
+    external_id: str | None = None
+    task_name: str | None = None
+    nickname: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class StrategySpec(SearchModel):
     name: str = "agent_guided"
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
     ref: str | None = None
     agent_role: str = "planner_and_mutator"
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
+    worker_host: AgentHostKind = "opencode"
     worker_agent_type: str | None = None
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
@@ -286,6 +298,8 @@ class AgentSessionRecord(SearchModel):
     run_id: str
     candidate_id: str
     opencode_session_id: str | None = None
+    host: AgentHostKind = "opencode"
+    host_handle: AgentHostHandle = Field(default_factory=AgentHostHandle)
     created_at: str
     updated_at: str
     directive: dict[str, Any] = Field(default_factory=dict)

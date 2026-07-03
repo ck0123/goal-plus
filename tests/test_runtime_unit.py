@@ -72,6 +72,24 @@ def spec_with_strategy(
     return SearchSpec.model_validate(data)
 
 
+def spec_with_host(
+    project: Path,
+    worker_host: str,
+    *,
+    strategy_name: str = "agent_guided",
+    max_candidates: int = 4,
+) -> SearchSpec:
+    return spec_with_strategy(
+        project,
+        {
+            "name": strategy_name,
+            "worker_mode": "agent-session-pool",
+            "worker_host": worker_host,
+        },
+        max_candidates=max_candidates,
+    )
+
+
 def create_candidate(
     runtime: FileSearchRuntime,
     project: Path,
@@ -193,6 +211,20 @@ def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
     )
 
 
+def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, requested_k=1)
+
+    assert plan.worker_policy["host"] == "codex"
+    assert plan.worker_policy["supports_same_worker_continue"] is False
+    assert plan.worker_policy["uses_background_workers"] is False
+
+
 def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -219,10 +251,110 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     assert session.workspace == tasks[0].workspace
     assert session.agent_session_id.startswith("agent_")
     assert session.launch["subagent_type"] == "AnySearchAgent"
+    assert session.host == "opencode"
+    assert session.host_handle.host == "opencode"
     assert tasks[0].candidate_id in session.launch["description"]
     assert session.agent_session_id in session.launch["prompt"]
     assert tasks[0].candidate_id in session.launch["prompt"]
     assert "required" not in session.launch
+
+
+def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert session.host == "codex"
+    assert session.host_handle.host == "codex"
+    assert session.host_handle.task_name == session.launch["task_name"]
+    assert session.launch["tool"] == "spawn_agent"
+    assert session.launch["agent_type"] == "any_search_agent"
+    assert session.launch["fork_turns"] == "none"
+    assert "agent_session_id=" in session.launch["message"]
+
+
+def test_start_agent_session_returns_claude_foreground_launch_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "claude-code", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert session.host == "claude-code"
+    assert session.host_handle.host == "claude-code"
+    assert session.launch["tool"] == "Agent"
+    assert session.launch["agent_type"] == "any-search-agent"
+    assert session.launch["background"] is False
+    assert "agent_session_id=" in session.launch["message"]
+
+
+def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    updated = runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "codex", "task_name": "search_agent_0001", "nickname": "search worker"},
+    )
+
+    assert updated.host == "codex"
+    assert updated.host_handle.task_name == "search_agent_0001"
+    assert updated.host_handle.nickname == "search worker"
+    assert updated.opencode_session_id is None
+
+
+def test_codex_continue_agent_session_is_explicitly_unsupported(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    with pytest.raises(RuntimeError, match="codex"):
+        runtime.continue_agent_session(session.agent_session_id, {"goal": "continue"})
+
+
+def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "claude-code", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "claude-code", "external_id": "agent_123"},
+    )
+
+    continued = runtime.continue_agent_session(
+        session.agent_session_id,
+        {"goal": "continue"},
+    )
+
+    assert continued.launch["tool"] == "SendMessage"
+    assert continued.launch["agent"] == "agent_123"
+    assert "continue_existing_agent_session=true" in continued.launch["message"]
 
 
 def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
@@ -717,6 +849,41 @@ def test_random_strategy_name_normalizes_case_and_dash(
 
         assert plan.strategy_trace["selection_rule"] == "random bootstrap"
         assert plan.requires_agent_proposals is False
+
+
+@pytest.mark.parametrize("host", ["codex", "claude-code"])
+@pytest.mark.parametrize("strategy_name", ["agent_guided", "agent", "default", "random", "random-mode"])
+def test_non_opencode_hosts_allow_default_and_random_strategies(
+    tmp_path: Path,
+    host: str,
+    strategy_name: str,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, host, strategy_name=strategy_name, max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, requested_k=1)
+
+    assert plan.strategy.name == strategy_name
+
+
+@pytest.mark.parametrize("host", ["codex", "claude-code"])
+@pytest.mark.parametrize("strategy_name", ["openevolve", "evolve", "mcts"])
+def test_non_opencode_hosts_reject_non_portable_strategies(
+    tmp_path: Path,
+    host: str,
+    strategy_name: str,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, host, strategy_name=strategy_name, max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    with pytest.raises(ValueError, match=f"{host}.*{strategy_name}"):
+        runtime.plan_next(run_id, requested_k=1)
 
 
 def test_python_strategy_driver_can_return_standard_plan(

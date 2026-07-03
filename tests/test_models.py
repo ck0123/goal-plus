@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentic_any_search_mcp.models import (
+    AgentHostHandle,
     AgentSessionRecord,
     Budget,
     CandidateRecord,
@@ -83,6 +84,15 @@ def test_search_spec_requires_structured_strategy() -> None:
             SearchSpec.model_validate(data)
 
 
+def test_strategy_spec_accepts_supported_worker_hosts() -> None:
+    assert StrategySpec(worker_host="opencode").worker_host == "opencode"
+    assert StrategySpec(worker_host="codex").worker_host == "codex"
+    assert StrategySpec(worker_host="claude-code").worker_host == "claude-code"
+
+    with pytest.raises(ValidationError):
+        StrategySpec(worker_host="unsupported")  # type: ignore[arg-type]
+
+
 def test_strategy_plan_models_capture_proposal_contract() -> None:
     plan = SearchPlan(
         run_id="run_1",
@@ -122,6 +132,8 @@ def test_agent_session_record_is_context_handle_with_required_candidate() -> Non
         counters={"verifier_runs": 0},
     )
     assert session.candidate_id == "c001"
+    assert session.host == "opencode"
+    assert session.host_handle == AgentHostHandle(host="opencode")
     assert session.launch["subagent_type"] == "AnySearchAgent"
 
     # candidate_id is now required - a subagent session without a candidate
