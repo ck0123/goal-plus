@@ -2,11 +2,11 @@
 
 ## Status
 
-Draft, 2026-07-06.
+Baseline implemented, 2026-07-06.
 
-`goal-plus` is a proposed goal entrypoint that can fall back to ordinary
-goal-style progress or upgrade an optimization-shaped task into the existing
-Search MCP workflow.
+`goal-plus` is a goal entrypoint that can fall back to ordinary goal-style
+progress or upgrade an optimization-shaped task into the existing Search MCP
+workflow.
 
 The design target is pragmatic: let more domains use the candidate workspace,
 verifier, scoring, and promotion machinery without forcing every user request
@@ -14,10 +14,10 @@ to start as a fully specified search problem.
 
 ## Documents
 
-- [Flow and Design](flow-and-design.md): proposed modes, triage flow, MCP
+- [Flow and Design](flow-and-design.md): modes, triage flow, MCP
   boundary, frozen-spec rules, and implementation shape.
 - [MCP API Impact](api-impact.md): current `search_*` API assessment and the
-  proposed minimal `goal_plus_*` API surface.
+  implemented minimal `goal_plus_*` API surface.
 
 ## Short Version
 
@@ -33,6 +33,6 @@ to start as a fully specified search problem.
     "Can this be safely upgraded into a verifiable search?"
 ```
 
-`goal-plus` should not replace the Search MCP runtime. It should sit above it:
-the host agent or skill performs intake, decides whether a frozen spec is
-available, and only then calls the existing search tools.
+`goal-plus` does not replace the Search MCP runtime. It sits above it: the host
+agent or skill performs intake, decides whether a frozen spec is available, and
+only then calls the existing search tools.

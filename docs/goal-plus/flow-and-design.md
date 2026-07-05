@@ -2,8 +2,8 @@
 
 ## Objective
 
-Design a small `goal-plus` layer that makes the existing Search MCP workflow
-usable from broader goal-shaped requests.
+Design and implement a small `goal-plus` layer that makes the existing Search
+MCP workflow usable from broader goal-shaped requests.
 
 The key idea is progressive commitment:
 
@@ -198,8 +198,8 @@ original user goal was fully satisfied.
 
 ## MCP Boundary
 
-For this repository, `goal-plus` should initially be a host/skill layer over the
-existing Search MCP tools.
+For this repository, `goal-plus` is implemented as a small file-backed state
+machine plus host/skill instructions over the existing Search MCP tools.
 
 ```text
 Host command or skill
@@ -226,18 +226,30 @@ Host adapter
     - continuation only where supported
 ```
 
-This avoids changing the runtime into a general goal supervisor. The runtime can
-be strict where it is already strong: frozen inputs, isolated candidates,
-verifier results, and promotion artifacts.
+This avoids changing the runtime into a general goal supervisor. The goal-plus
+state machine records phase, next action, spec draft, linked search run, and
+gate decisions; the search runtime stays strict where it is already strong:
+frozen inputs, isolated candidates, verifier results, and promotion artifacts.
 
 ## Natural Implementation Shape
 
-The smallest useful version can be implemented without runtime changes:
+The baseline implementation has these pieces:
 
 ```text
+.search/goal-plus/<goal_plus_id>/
+  - goal.json
+  - events.jsonl
+
+src/agentic_any_search_mcp/goal_plus.py
+  - file-backed Goal Plus state machine
+  - deterministic gate decisions for stop and pre-tool-use checkpoints
+
+src/agentic_any_search_mcp/tools.py / server.py
+  - goal_plus_* MCP facade and registration
+
 .opencode/command/goal-plus.md
   - load a goal-plus skill or instructions
-  - run triage
+  - create goal-plus state and run triage
   - call the existing search skill only when Search Mode is selected
 
 .agents/skills/goal-plus/SKILL.md
@@ -248,18 +260,14 @@ The smallest useful version can be implemented without runtime changes:
 
 docs/goal-plus/
   - shared design and scenario guidance
-
-scenarios/<domain>/
-  - optional domain bundles with verifier/spec templates
 ```
 
-Runtime changes should be deferred until a repeated pain point appears. Likely
-future additions, if needed, are:
+Likely future additions, if needed, are:
 
-- a pure helper that validates a `GoalPlusSpecDraft` before converting it to a
-  `SearchSpec`
 - scenario metadata files that declare detection hints and required verifier
   artifacts
+- a pure helper that validates a `GoalPlusSpecDraft` before converting it to a
+  `SearchSpec`
 - host asset tests that ensure the `goal-plus` commands do not bypass the
   required search workflow
 
@@ -343,8 +351,5 @@ claiming completion.
 
 - Should medium-confidence spec drafts require explicit user confirmation, or
   can the host agent proceed when the verifier is strong?
-- Should `goal-plus` write a small run-local intake file under `.search/`, or
-  keep all intake state in the host conversation until a `SearchSpec` exists?
 - Should scenario packs be plain docs first, or should they grow a tiny metadata
   schema once two or three domains repeat the same fields?
-

@@ -2,7 +2,7 @@
 
 ## Objective
 
-Define how `goal-plus` should fit around the current MCP API surface.
+Define how `goal-plus` fits around the current MCP API surface.
 
 The current runtime exposes a `search_*` API for verifiable candidate search.
 That surface should remain focused. `goal-plus` needs a small state machine for
@@ -61,7 +61,7 @@ authoritative goal state. Search state and goal state have different lifecycles:
 - hook gating needs a lightweight record even before Search Mode exists
 - final completion must audit the raw goal, not just the selected candidate
 
-## Proposed Minimal API
+## Implemented Minimal API
 
 ### `goal_plus_create`
 
@@ -250,7 +250,7 @@ The gate should be conservative and deterministic:
 
 ## State Model
 
-Proposed file layout:
+Implemented file layout:
 
 ```text
 .search/
@@ -347,13 +347,13 @@ agent at lifecycle boundaries, but process lifecycle remains host-owned.
 
 ## Implementation Impact
 
-Likely files if this design is implemented:
+Files changed by the baseline implementation:
 
 | File | Change |
 |---|---|
 | `src/agentic_any_search_mcp/models.py` | Add `GoalPlusRecord`, `GoalPlusTriage`, `GoalPlusSpecDraft`, `GoalPlusNextAction`, and status/phase literals. |
 | `src/agentic_any_search_mcp/goal_plus.py` | New file-backed goal-plus runtime. Keeps goal state separate from `FileSearchRuntime`. |
-| `src/agentic_any_search_mcp/tools.py` | Add `GoalPlusTools` or compose it beside `SearchTools`. |
+| `src/agentic_any_search_mcp/tools.py` | Add `GoalPlusTools` as the JSON-friendly facade beside `SearchTools`. |
 | `src/agentic_any_search_mcp/server.py` | Register `goal_plus_*` tools in addition to existing `search_*` tools. |
 | `tests/test_goal_plus.py` | Unit tests for state transitions, gate decisions, and search linking. |
 | `tests/test_server.py` | Update exact MCP tool registration expectations. |
@@ -411,8 +411,6 @@ ordinary Goal Mode fallback unless the spec cannot be made safe.
 
 ## Open Questions
 
-- Should `goal_plus_create` allocate human-readable ids like `gp_0001` or
-  timestamped ids like current `run_id`?
 - Should `goal_plus_gate` be an MCP tool only, or should there also be a small
   CLI helper for hook scripts that cannot easily reuse the active MCP
   connection?
@@ -421,4 +419,3 @@ ordinary Goal Mode fallback unless the spec cannot be made safe.
   `search_freeze_spec`?
 - Should final raw-goal audit be structured evidence in
   `goal_plus_set_status`, or a separate `goal_plus_record_audit` tool?
-
