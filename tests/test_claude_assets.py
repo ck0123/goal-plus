@@ -28,6 +28,24 @@ def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
     assert "background subagent" not in text.lower()
 
 
+def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
+    text = (ROOT / ".claude" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "name: goal-plus" in text
+    assert "goal_plus_create" in text
+    assert "goal_plus_record_triage" in text
+    assert "goal_plus_save_spec_draft" in text
+    assert "goal_plus_gate" in text
+    assert "Goal Mode" in text
+    assert "Spec Discovery Mode" in text
+    assert "Search Mode" in text
+    assert "Do not create a SearchSpec in Goal Mode" in text
+    assert "search_freeze_spec" in text
+    assert "final raw-goal audit" in text
+
+
 def test_claude_worker_agent_calls_context_and_verifier() -> None:
     text = (ROOT / ".claude" / "agents" / "any-search-agent.md").read_text(
         encoding="utf-8"

@@ -26,6 +26,24 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
     assert "background" not in text.lower()
 
 
+def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
+    text = (ROOT / ".agents" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "name: goal-plus" in text
+    assert "goal_plus_create" in text
+    assert "goal_plus_record_triage" in text
+    assert "goal_plus_save_spec_draft" in text
+    assert "goal_plus_gate" in text
+    assert "Goal Mode" in text
+    assert "Spec Discovery Mode" in text
+    assert "Search Mode" in text
+    assert "Do not create a SearchSpec in Goal Mode" in text
+    assert "search_freeze_spec" in text
+    assert "final raw-goal audit" in text
+
+
 def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
     text = (ROOT / ".agents" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"

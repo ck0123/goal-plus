@@ -59,6 +59,41 @@ def test_goal_any_optimize_command_references_search_skill() -> None:
     assert "$ARGUMENTS" in command
 
 
+def test_goal_plus_command_references_goal_plus_skill() -> None:
+    command = (ROOT / ".opencode" / "command" / "goal-plus.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "description: Run a goal with optional Agentic Search upgrade" in command
+    assert "agent: goal-plus-orchestrator" in command
+    assert "Load the `goal-plus` skill" in command
+    assert "@.opencode/skills/goal-plus/SKILL.md" in command
+    assert "goal_plus_create" in command
+    assert "$ARGUMENTS" in command
+
+
+def test_opencode_goal_plus_skill_documents_progressive_modes() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    agent = (ROOT / ".opencode" / "agents" / "goal-plus-orchestrator.md").read_text(
+        encoding="utf-8"
+    )
+
+    combined = skill + "\n" + agent
+    assert "name: goal-plus" in skill
+    assert "search-runtime_goal_plus_create" in skill
+    assert "search-runtime_goal_plus_record_triage" in skill
+    assert "search-runtime_goal_plus_save_spec_draft" in skill
+    assert "search-runtime_goal_plus_gate" in skill
+    assert "Goal Mode" in combined
+    assert "Spec Discovery Mode" in combined
+    assert "Search Mode" in combined
+    assert "Do not create a SearchSpec in Goal Mode" in combined
+    assert "call the `search` skill" in combined
+    assert "final raw-goal audit" in combined
+
+
 def test_search_skill_uses_foreground_tasks() -> None:
     skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
     orchestrator = (ROOT / ".opencode" / "agents" / "search-orchestrator.md").read_text(
@@ -177,7 +212,10 @@ def test_any_search_agent_tier_has_expected_step_cap(
     "relative_path",
     [
         ".opencode/skills/search/SKILL.md",
+        ".opencode/skills/goal-plus/SKILL.md",
         ".opencode/command/goal-any-optimize.md",
+        ".opencode/command/goal-plus.md",
+        ".opencode/agents/goal-plus-orchestrator.md",
         ".opencode/agents/AnySearchAgent.md",
         ".opencode/agents/AnySearchAgentDeep.md",
         ".opencode/agents/AnySearchAgentExtraDeep.md",
