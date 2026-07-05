@@ -6,15 +6,18 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import SearchTools
+from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
 
 
 def create_mcp(
     root_dir: str | Path = ".search",
 ) -> FastMCP:
     runtime = FileSearchRuntime(root_dir)
+    goal_runtime = FileGoalPlusRuntime(root_dir)
     tools = SearchTools(runtime)
+    goal_tools = GoalPlusTools(goal_runtime)
     mcp = FastMCP("agentic-any-search")
 
     @mcp.tool()
@@ -171,6 +174,91 @@ def create_mcp(
     def search_promote(run_id: str, candidate_id: str) -> dict[str, str]:
         """Export the selected candidate as a patch. Does not mutate the main source workspace."""
         return tools.search_promote(run_id, candidate_id)
+
+    @mcp.tool()
+    def goal_plus_create(
+        raw_goal: str,
+        source_path: str | None = None,
+        mode_hint: str = "auto",
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a goal-plus record from a raw user goal before triage."""
+        return goal_tools.goal_plus_create(raw_goal, source_path, mode_hint, policy)
+
+    @mcp.tool()
+    def goal_plus_status(goal_plus_id: str) -> dict[str, Any]:
+        """Read goal-plus phase, status, linked search state, and evidence log."""
+        return goal_tools.goal_plus_status(goal_plus_id)
+
+    @mcp.tool()
+    def goal_plus_record_triage(
+        goal_plus_id: str,
+        triage: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Record whether a goal should stay goal-like or upgrade toward search."""
+        return goal_tools.goal_plus_record_triage(goal_plus_id, triage)
+
+    @mcp.tool()
+    def goal_plus_save_spec_draft(
+        goal_plus_id: str,
+        spec_draft: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Save the discovered frozen-spec candidate before search_freeze_spec."""
+        return goal_tools.goal_plus_save_spec_draft(goal_plus_id, spec_draft)
+
+    @mcp.tool()
+    def goal_plus_link_search_run(
+        goal_plus_id: str,
+        frozen_spec_id: str,
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Link an existing Search MCP run to a goal-plus record."""
+        return goal_tools.goal_plus_link_search_run(goal_plus_id, frozen_spec_id, run_id)
+
+    @mcp.tool()
+    def goal_plus_record_search_result(
+        goal_plus_id: str,
+        run_id: str,
+        selected_candidate_id: str | None = None,
+        report_path: str | None = None,
+        promotion_artifact_path: str | None = None,
+        summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Record selected/promoted search evidence before final raw-goal audit."""
+        return goal_tools.goal_plus_record_search_result(
+            goal_plus_id,
+            run_id,
+            selected_candidate_id,
+            report_path,
+            promotion_artifact_path,
+            summary,
+        )
+
+    @mcp.tool()
+    def goal_plus_set_status(
+        goal_plus_id: str,
+        status: str,
+        reason: str | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        next_action: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Set goal-plus status after evidence-based completion, block, or pause."""
+        return goal_tools.goal_plus_set_status(
+            goal_plus_id,
+            status,
+            reason,
+            evidence,
+            next_action,
+        )
+
+    @mcp.tool()
+    def goal_plus_gate(
+        goal_plus_id: str,
+        event: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return a hook-friendly allow/block decision for goal-plus flow control."""
+        return goal_tools.goal_plus_gate(goal_plus_id, event, context)
 
     return mcp
 

@@ -3,7 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.models import CandidateProposal, SearchSpec
+from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+from agentic_any_search_mcp.models import (
+    CandidateProposal,
+    GoalPlusNextAction,
+    GoalPlusSpecDraft,
+    GoalPlusTriage,
+    SearchSpec,
+)
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
@@ -128,3 +135,112 @@ class SearchTools:
 
     def search_promote(self, run_id: str, candidate_id: str) -> dict[str, str]:
         return {"artifact_path": str(self.runtime.promote(run_id, candidate_id))}
+
+
+class GoalPlusTools:
+    """JSON-friendly goal-plus tool layer shared by tests and the MCP server."""
+
+    def __init__(self, runtime: FileGoalPlusRuntime) -> None:
+        self.runtime = runtime
+
+    def goal_plus_create(
+        self,
+        raw_goal: str,
+        source_path: str | None = None,
+        mode_hint: str = "auto",
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.create_goal(
+            raw_goal=raw_goal,
+            source_path=source_path,
+            mode_hint=mode_hint,  # type: ignore[arg-type]
+            policy=policy,
+        ).model_dump(mode="json")
+
+    def goal_plus_status(self, goal_plus_id: str) -> dict[str, Any]:
+        payload = self.runtime.status(goal_plus_id).model_dump(mode="json")
+        payload["evidence_log"] = self.runtime.list_events(goal_plus_id)
+        return payload
+
+    def goal_plus_record_triage(
+        self,
+        goal_plus_id: str,
+        triage: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runtime.record_triage(
+            goal_plus_id,
+            GoalPlusTriage.model_validate(triage),
+        ).model_dump(mode="json")
+
+    def goal_plus_save_spec_draft(
+        self,
+        goal_plus_id: str,
+        spec_draft: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runtime.save_spec_draft(
+            goal_plus_id,
+            GoalPlusSpecDraft.model_validate(spec_draft),
+        ).model_dump(mode="json")
+
+    def goal_plus_link_search_run(
+        self,
+        goal_plus_id: str,
+        frozen_spec_id: str,
+        run_id: str,
+    ) -> dict[str, Any]:
+        return self.runtime.link_search_run(
+            goal_plus_id,
+            frozen_spec_id,
+            run_id,
+        ).model_dump(mode="json")
+
+    def goal_plus_record_search_result(
+        self,
+        goal_plus_id: str,
+        run_id: str,
+        selected_candidate_id: str | None = None,
+        report_path: str | None = None,
+        promotion_artifact_path: str | None = None,
+        summary: str | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.record_search_result(
+            goal_plus_id,
+            run_id=run_id,
+            selected_candidate_id=selected_candidate_id,
+            report_path=report_path,
+            promotion_artifact_path=promotion_artifact_path,
+            summary=summary,
+        ).model_dump(mode="json")
+
+    def goal_plus_set_status(
+        self,
+        goal_plus_id: str,
+        status: str,
+        reason: str | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        next_action: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        parsed_next_action = (
+            GoalPlusNextAction.model_validate(next_action)
+            if next_action is not None
+            else None
+        )
+        return self.runtime.set_status(
+            goal_plus_id,
+            status=status,  # type: ignore[arg-type]
+            reason=reason,
+            evidence=evidence,
+            next_action=parsed_next_action,
+        ).model_dump(mode="json")
+
+    def goal_plus_gate(
+        self,
+        goal_plus_id: str,
+        event: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.runtime.gate(
+            goal_plus_id,
+            event=event,  # type: ignore[arg-type]
+            context=context,
+        ).model_dump(mode="json")

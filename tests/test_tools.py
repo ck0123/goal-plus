@@ -9,6 +9,9 @@ from agentic_any_search_mcp.models import (
     CandidateProposal,
     CandidateTask,
     FrozenSpec,
+    GoalPlusGateResult,
+    GoalPlusNextAction,
+    GoalPlusRecord,
     RunState,
     RunSummary,
     ScoreReport,
@@ -18,7 +21,7 @@ from agentic_any_search_mcp.models import (
     VerifierResult,
     VerifierRole,
 )
-from agentic_any_search_mcp.tools import SearchTools
+from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
 
 
 def spec_dict() -> dict:
@@ -54,6 +57,22 @@ def frozen_spec() -> FrozenSpec:
         verifier_hashes={"evaluator.py": "abc"},
         frozen_verifier_paths={"evaluator.py": "/tmp/evaluator.py"},
         created_at="2026-06-24T00:00:00Z",
+    )
+
+
+def goal_plus_record() -> GoalPlusRecord:
+    return GoalPlusRecord(
+        goal_plus_id="gp_0001",
+        raw_goal="Optimize a benchmark if possible",
+        status="active",
+        phase="intake",
+        mode_hint="auto",
+        next_action=GoalPlusNextAction(
+            kind="record_triage",
+            description="classify the goal",
+        ),
+        created_at="2026-07-06T00:00:00Z",
+        updated_at="2026-07-06T00:00:00Z",
     )
 
 
@@ -253,3 +272,81 @@ def test_search_tools_expose_no_lifecycle_methods() -> None:
         "search_submit_candidate",
     ):
         assert not hasattr(tools, deleted), f"SearchTools should not expose {deleted}"
+
+
+def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
+    runtime = Mock()
+    record = goal_plus_record()
+    runtime.create_goal.return_value = record
+    runtime.status.return_value = record
+    runtime.list_events.return_value = [{"event_type": "created"}]
+    runtime.record_triage.return_value = record
+    runtime.save_spec_draft.return_value = record
+    runtime.link_search_run.return_value = record
+    runtime.record_search_result.return_value = record
+    runtime.set_status.return_value = record.model_copy(update={"status": "complete"})
+    runtime.gate.return_value = GoalPlusGateResult(
+        decision="block",
+        phase="intake",
+        status="active",
+        reason="needs triage",
+        continuation_prompt="continue triage",
+    )
+    tools = GoalPlusTools(runtime)
+
+    created = tools.goal_plus_create(
+        raw_goal="Optimize a benchmark if possible",
+        source_path=".",
+        mode_hint="auto",
+        policy={"max_discovery_turns": 1},
+    )
+    assert created["goal_plus_id"] == "gp_0001"
+    assert tools.goal_plus_status("gp_0001")["evidence_log"][0]["event_type"] == "created"
+    assert tools.goal_plus_record_triage(
+        "gp_0001",
+        {
+            "is_optimization": True,
+            "confidence": "medium",
+            "recommended_phase": "spec_discovery",
+        },
+    )["phase"] == "intake"
+    assert tools.goal_plus_save_spec_draft(
+        "gp_0001",
+        {
+            "baseline": {},
+            "metric": {},
+            "correctness_gate": {},
+            "edit_surface": {},
+            "search_spec": {},
+            "promotion_rule": "must pass",
+            "confidence": "high",
+        },
+    )["goal_plus_id"] == "gp_0001"
+    assert tools.goal_plus_link_search_run("gp_0001", "spec_1", "run_1")["goal_plus_id"] == "gp_0001"
+    assert tools.goal_plus_record_search_result(
+        "gp_0001",
+        run_id="run_1",
+        selected_candidate_id="c001",
+        report_path="/tmp/report.md",
+        promotion_artifact_path="/tmp/c001.patch",
+        summary="c001 selected",
+    )["goal_plus_id"] == "gp_0001"
+    assert tools.goal_plus_set_status(
+        "gp_0001",
+        status="complete",
+        reason="done",
+        evidence=[{"kind": "test"}],
+    )["status"] == "complete"
+    assert tools.goal_plus_gate(
+        "gp_0001",
+        event="stop",
+        context={"turn_id": "turn_1"},
+    )["continuation_prompt"] == "continue triage"
+
+    runtime.create_goal.assert_called_once_with(
+        raw_goal="Optimize a benchmark if possible",
+        source_path=".",
+        mode_hint="auto",
+        policy={"max_discovery_turns": 1},
+    )
+    runtime.link_search_run.assert_called_once_with("gp_0001", "spec_1", "run_1")
