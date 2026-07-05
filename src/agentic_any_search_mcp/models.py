@@ -154,6 +154,77 @@ class SearchSpec(SearchModel):
         return value
 
 
+GoalPlusStatus = Literal["active", "needs_user", "blocked", "complete", "abandoned"]
+GoalPlusPhase = Literal["intake", "goal", "spec_discovery", "search", "final_audit"]
+GoalPlusModeHint = Literal["auto", "goal", "search"]
+GoalPlusConfidence = Literal["high", "medium", "low"]
+GoalPlusRecommendedPhase = Literal["goal", "spec_discovery", "search"]
+GoalPlusGateEvent = Literal["stop", "subagent_stop", "pre_tool_use", "user_prompt_submit"]
+GoalPlusGateDecision = Literal["allow", "block"]
+
+
+class GoalPlusNextAction(SearchModel):
+    kind: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    required: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GoalPlusTriage(SearchModel):
+    is_optimization: bool
+    confidence: GoalPlusConfidence
+    recommended_phase: GoalPlusRecommendedPhase
+    scenario: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+
+
+class GoalPlusSpecDraft(SearchModel):
+    baseline: dict[str, Any]
+    metric: dict[str, Any]
+    correctness_gate: dict[str, Any]
+    edit_surface: dict[str, Any]
+    verifier_artifacts: list[str] = Field(default_factory=list)
+    search_spec: dict[str, Any]
+    promotion_rule: str = Field(min_length=1)
+    confidence: GoalPlusConfidence
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class GoalPlusLinkedSearch(SearchModel):
+    frozen_spec_id: str | None = None
+    run_id: str | None = None
+    selected_candidate_id: str | None = None
+    report_path: str | None = None
+    promotion_artifact_path: str | None = None
+    summary: str | None = None
+
+
+class GoalPlusRecord(SearchModel):
+    goal_plus_id: str
+    raw_goal: str = Field(min_length=1)
+    source_path: str | None = None
+    status: GoalPlusStatus = "active"
+    phase: GoalPlusPhase = "intake"
+    mode_hint: GoalPlusModeHint = "auto"
+    policy: dict[str, Any] = Field(default_factory=dict)
+    triage: GoalPlusTriage | None = None
+    spec_draft: GoalPlusSpecDraft | None = None
+    linked_search: GoalPlusLinkedSearch | None = None
+    next_action: GoalPlusNextAction | None = None
+    hook_counters: dict[str, int] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class GoalPlusGateResult(SearchModel):
+    decision: GoalPlusGateDecision
+    phase: GoalPlusPhase
+    status: GoalPlusStatus
+    reason: str | None = None
+    continuation_prompt: str | None = None
+
+
 class FrozenSpec(SearchModel):
     frozen_spec_id: str
     spec_hash: str
