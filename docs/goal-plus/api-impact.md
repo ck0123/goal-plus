@@ -264,10 +264,10 @@ This is the bridge for hook-capable hosts. For a `Stop` hook, `block` means
 hook, `block` means "this tool call is not valid in the current goal-plus
 phase."
 
-The current repository registers `goal_plus_gate` as an MCP tool but does not
-ship host hook adapters for OpenCode, Codex, or Claude Code. Without such an
-adapter, gate calls are manual skill/orchestrator steps rather than enforced
-host lifecycle checks.
+The current repository registers `goal_plus_gate` as an MCP tool and ships a
+small Stop hook helper for Codex and Claude Code. OpenCode and all
+PreToolUse/SubagentStop checkpoints remain manual skill/orchestrator steps
+rather than enforced host lifecycle checks.
 
 The gate should be conservative and deterministic:
 
@@ -390,7 +390,7 @@ Files changed by the baseline implementation:
 | `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then the internal search skill only in Search Mode. |
 | `.agents/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
 | `.claude/skills/goal-plus/SKILL.md` | Claude Code workflow instructions. |
-| hook scripts/docs | Not implemented in this repository. Future host-specific `Stop` / `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
+| `scripts/hooks/goal_plus_stop.py`, `.codex/hooks.json`, `.claude/settings.json` | Narrow Stop hook backstop for Codex and Claude Code. Future host-specific `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
 
 ## Hook Integration Pattern
 
@@ -442,8 +442,8 @@ confirmation, or final raw-goal audit.
 
 ## Open Questions
 
-- Should `goal_plus_gate` be an MCP tool only, or should there also be a small
-  CLI helper for hook scripts that cannot easily reuse the active MCP
+- Should `goal_plus_gate` be an MCP tool only, or should there also be more CLI
+  helpers for hook scripts that cannot easily reuse the active MCP
   connection?
 - Should final raw-goal audit be structured evidence in
   `goal_plus_set_status`, or a separate `goal_plus_record_audit` tool?

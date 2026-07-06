@@ -10,10 +10,9 @@ client owns the subagent process lifecycle. The main agent owns policy decisions
 through MCP tool calls.
 
 `goal_plus_gate` records deterministic phase decisions, but those decisions are
-enforced only when a host actually calls the gate. The checked-in OpenCode,
-Codex, and Claude Code assets call the gate by instruction; this is
-best-effort. No host hook adapter is currently shipped to automatically enforce
-Stop, SubagentStop, or PreToolUse checkpoints.
+enforced only when a host actually calls the gate. Codex and Claude Code ship a
+narrow Stop hook backstop through `scripts/hooks/goal_plus_stop.py`; OpenCode
+and all PreToolUse/SubagentStop checkpoints remain instruction-driven.
 
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
 

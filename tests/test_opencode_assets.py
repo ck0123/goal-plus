@@ -197,6 +197,24 @@ def test_any_search_agent_documents_autoresearch_loop() -> None:
     assert "agent_session_id" in agent
 
 
+def test_opencode_search_skill_documents_tier_escalation_and_resume_history() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Main-Agent Dispatch Policy" in skill
+    assert "AnySearchAgentFlash" in skill
+    assert "AnySearchAgentDeep" in skill
+    assert "previous flash/default worker returned without any `search_run_verifier`" in skill
+    assert "History is runtime-owned, not `plan.md`" in skill
+    assert "context.history" in skill
+    assert "context.iterations" in skill
+    assert "do not rely on chat transcript" in agent
+
+
 @pytest.mark.parametrize(
     "agent_file,expected_steps",
     [

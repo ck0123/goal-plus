@@ -20,10 +20,8 @@ Newer Claude Code versions may expose richer subagent management, but this
 adapter only relies on foreground Agent launches and optional `SendMessage`
 continuation when Claude Code exposes a reusable agent handle.
 
-This repository does not currently ship Claude Code hook configuration for
-Goal Plus. The `.claude/` directory contains skills and bounded Agent
-definitions only; there is no `.claude/settings*.json` or hook script that
-automatically calls `goal_plus_gate`.
+This repository ships one Claude Code Stop hook for Goal Plus:
+`.claude/settings.json` runs `scripts/hooks/goal_plus_stop.py`.
 
 ## Config
 
@@ -31,11 +29,13 @@ Project-local assets:
 
 ```text
 .mcp.json
+.claude/settings.json
 .claude/skills/goal-plus/SKILL.md
 .claude/skills/search/SKILL.md
 .claude/agents/any-search-agent.md
 .claude/agents/any-search-agent-flash.md
 .claude/agents/any-search-agent-deep.md
+scripts/hooks/goal_plus_stop.py
 ```
 
 Use `goal-plus` as the user-facing skill. The `search` skill is the internal
@@ -57,20 +57,18 @@ The MCP server is configured as:
 
 ## Goal Plus Hook Status
 
-Claude Code assets currently provide Search Mode worker orchestration and
-manual Goal Plus gate calls through the `goal-plus` skill. They do not provide
-hook-enforced lifecycle control.
+Claude Code assets provide Search Mode worker orchestration, manual Goal Plus
+gate calls through the `goal-plus` skill, and one Stop hook backstop.
 
-Concretely, the checked-in assets do not wire:
+Concretely, the checked-in assets wire:
 
-- a `PreToolUse` hook to call `goal_plus_gate` before `search_*`
-- a `Stop` hook to call `goal_plus_gate` before the main agent ends
-- a `SubagentStop` hook to audit foreground Agent completion
+- a `Stop` hook that calls `scripts/hooks/goal_plus_stop.py`
 
-The debugging examples below mention `--include-hook-events` because Claude
-Code can expose hook diagnostics when hooks exist. In this repository, that is
-only useful for externally supplied hooks; there is no built-in Goal Plus hook
-implementation to inspect.
+The project does not wire PreToolUse or SubagentStop hooks. The agent must still call `goal_plus_gate(event="pre_tool_use", ...)` before Search Mode tools and call the stop gate manually before the final response. The hook exists to catch a missed final stop gate, not to supervise foreground workers.
+
+Set `GOAL_PLUS_ID=gp_...` to force the hook to gate a specific active goal when
+multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` to
+temporarily bypass the Stop hook.
 
 ## Supported Strategies
 
@@ -145,10 +143,21 @@ This is a subagent/Agent-definition limit. A top-level `claude -p --agent ...`
 session is not treated as proof that `maxTurns` applies to a dispatched search
 worker; verify budget behavior through an actual `Agent`/`Task` subagent launch.
 
-If `search_continue_agent_session` returns a `SendMessage` payload, send the
-message to that foreground agent. If no handle is bound, start a new foreground
-Agent for the same candidate and use `search_get_agent_context` to recover the
-authoritative state.
+Choose `any-search-agent-flash` only for smoke tests or cheap probes. Use the
+default worker for normal candidate work. Use `any-search-agent-deep` when the
+source tree is large, the verifier is slow, the edit requires cross-file
+reasoning, or a flash worker reaches `maxTurns` before recording any verifier
+iteration or usable score.
+
+Claude Code Agent results may include an `agentId` with a `SendMessage` hint,
+but the `claude -p` tool surface used by this adapter may not expose a usable
+`SendMessage` tool. Treat same-agent continuation as conditional and unverified
+unless a real run shows the tool call succeeding. If no handle is bound,
+`SendMessage` is unavailable, or continuation is uncertain, start a new
+foreground Agent for the same candidate and use `search_get_agent_context` to
+recover the authoritative state. The worker should use `context.history` and
+`context.iterations` from the MCP runtime; there is no `plan.md` history file
+for Search Mode.
 
 ## Debugging Logs
 

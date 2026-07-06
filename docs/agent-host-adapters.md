@@ -61,11 +61,16 @@ checkpoints such as:
 - before the top-level agent stops
 - before a subagent stop, if the host exposes that hook
 
-Current repository assets do not include hook wiring for OpenCode, Codex, or
-Claude Code. The `goal_plus_gate` calls in the skills are therefore manual /
-instruction-driven. They document the intended phase order, but they are not a
-hard guarantee that an agent cannot skip the final raw-goal audit or call a
-Search Mode tool early.
+Current repository assets include one narrow Stop hook for Codex and Claude
+Code. `scripts/hooks/goal_plus_stop.py` reads local `.search/goal-plus` state
+and calls the same `goal_plus_gate(event="stop")` semantics as the MCP tool. If
+the active Goal Plus record still has a required next action, the hook returns a
+host-native block decision with the continuation prompt.
+
+OpenCode still has no shipped hook. No host currently has a shipped
+`PreToolUse` or `SubagentStop` hook. Those gate calls remain manual /
+instruction-driven in the skills, so this is a Stop backstop rather than full
+process supervision.
 
 ## Host Selection
 
@@ -103,10 +108,10 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise |
-| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | supported with `SendMessage` when a reusable handle is bound |
+| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface |
 | Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts |
 | Trace export | supported for OpenCode logs | not implemented | not implemented |
-| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | manual skill calls unless external hooks are added | manual skill calls; no `.claude` hook settings shipped |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | project Stop hook backstop; PreToolUse/SubagentStop manual | project Stop hook backstop; PreToolUse/SubagentStop manual |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only |
 
 Portable builtin strategies are:
@@ -187,6 +192,30 @@ Host-specific validation prevents unsupported budget shapes:
 - Known Claude Code agent types must match their configured `maxTurns`; custom
   Claude agent types are allowed when specified explicitly.
 
+Main agents should choose worker size from task shape before freezing the spec.
+Use cheap/flash tiers only for smoke probes. If a worker stops because the
+selected tier was too small and it records no verifier iteration or usable
+score, raise the worker size for later planned work: OpenCode raises
+`worker_agent_type`, Claude Code raises `worker_budget.max_turns` /
+`worker_agent_type`, and Codex raises `worker_budget.max_runtime_seconds`
+because Codex has no hard step tier.
+
+## State-Level Resume
+
+Same-worker continuation is optional host sugar, not the portable recovery
+model. The portable model is state-level resume:
+
+1. Start a new host worker for the same candidate workspace when same-worker
+   continuation is unavailable or unreliable.
+2. The worker calls `search_get_agent_context(agent_session_id)`.
+3. The worker treats `context.history` and `context.iterations` as the
+   authoritative prior-attempt record.
+4. The main agent uses `search_list_history` and `search_list_iterations` for
+   audit and follow-up planning.
+
+Search history lives in the MCP runtime's `.search/runs/...` candidate records,
+not in a `plan.md` file.
+
 ## Strategy Support Matrix
 
 | Strategy or driver | OpenCode | Codex | Claude Code | Notes |
@@ -217,7 +246,7 @@ into Codex or Claude Code.
 | Python driver | not as-is | not as-is | custom strategies can emit OpenCode-specific `worker_policy` and worker tier names | Add host capability validation or host-specific policy mapping before enabling |
 | `adaptevolve` | needs design work | needs design work | uses OpenCode worker tiers such as `AnySearchAgentFlash`, `AnySearchAgentDeep`, and `AnySearchAgentExtraDeep` | Introduce host-neutral tiers like `fast`, `default`, `deep`, `extra_deep`, then map them per adapter |
 | `external_mcp` driver | possible, but undefined | possible, but undefined | external planner ownership and MCP availability are not defined across hosts | Define who calls the external planner and how proposals are returned before enabling |
-| same-worker continuation algorithms | limited | possible with caveats | Codex adapter has no same-worker continuation; Claude Code requires a reusable handle for `SendMessage` | Prefer new-worker redispatch for Codex; require stable handle binding before Claude continuation tests |
+| same-worker continuation algorithms | limited | limited | Codex adapter has no same-worker continuation; Claude Code may expose an agent id but `SendMessage` is not reliable on every tool surface | Prefer state-level resume with new-worker redispatch; treat same-worker continuation as a host-specific optimization only after a real smoke test |
 | trace-driven algorithms | not currently | not currently | trace export is only implemented for OpenCode logs | Add host trace exporters or keep these OpenCode-only |
 
 In practice, the safe expansion order is:

@@ -249,11 +249,12 @@ state machine records phase, next action, spec draft, linked search run, and
 gate decisions; the search runtime stays strict where it is already strong:
 frozen inputs, isolated candidates, verifier results, and promotion artifacts.
 
-The gate decisions are enforceable only when the host calls them. Current
-OpenCode, Codex, and Claude Code assets call `goal_plus_gate` by instruction in
-the skill/orchestrator text; this is best-effort. The repository does not ship
-hook adapters that automatically invoke the gate on Stop, SubagentStop, or
-PreToolUse events.
+The gate decisions are enforceable only when the host calls them. Current Codex
+and Claude Code assets ship one Stop hook backstop through
+`scripts/hooks/goal_plus_stop.py`; it calls the same `goal_plus_gate` semantics
+before the top-level agent ends. OpenCode has no shipped hook, and no host
+currently ships PreToolUse or SubagentStop hook wiring. Those checkpoints remain
+manual skill/orchestrator calls.
 
 ## Natural Implementation Shape
 
@@ -283,7 +284,13 @@ src/agentic_any_search_mcp/tools.py / server.py
   - host-specific workflow text
   - same triage model
   - host-specific worker launch notes
-  - manual gate checkpoints unless external hooks are wired
+  - manual gate checkpoints for PreToolUse and SubagentStop
+
+scripts/hooks/goal_plus_stop.py
+.codex/hooks.json
+.claude/settings.json
+  - Stop hook backstop for Codex and Claude Code
+  - calls goal_plus_gate-equivalent local state logic before top-level Stop
 
 docs/goal-plus/
   - shared design and scenario guidance
@@ -373,10 +380,10 @@ claiming completion.
   `goal-plus` feel like a supervisor. Mitigation: keep lifecycle controls in
   host adapters and host-native surfaces unless the runtime contract is
   intentionally redesigned.
-- **Manual gate bypass.** Without host hooks, an agent can forget to call
-  `goal_plus_gate` before stopping or entering Search Mode. Mitigation:
-  document OpenCode/Codex/Claude support as instruction-driven until hook
-  adapters exist.
+- **Manual gate bypass.** OpenCode can still forget every gate call, and Codex
+  or Claude Code can still forget PreToolUse gates before entering Search Mode.
+  Mitigation: the Codex/Claude Stop hook catches unfinished final stops; broader
+  hook coverage should be added only when the host-specific behavior is tested.
 
 ## Open Questions
 

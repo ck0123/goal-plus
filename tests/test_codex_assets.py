@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -12,6 +13,20 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
     assert "[mcp_servers.search-runtime]" in text
     assert 'command = "agentic-any-search-mcp"' in text
     assert 'args = ["--root", ".search"]' in text
+
+
+def test_codex_assets_wire_stop_hook_only() -> None:
+    hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    stop_hooks = hooks["hooks"]["Stop"]
+
+    assert hooks["hooks"].keys() == {"Stop"}
+    assert stop_hooks[0]["hooks"][0]["type"] == "command"
+    assert "scripts/hooks/goal_plus_stop.py" in stop_hooks[0]["hooks"][0]["command"]
+    assert stop_hooks[0]["hooks"][0]["timeout"] == 30
+
+    text = (ROOT / "docs" / "codex.md").read_text(encoding="utf-8")
+    assert "ships one project-local Stop hook" in text
+    assert "does not wire PreToolUse or SubagentStop hooks" in text
 
 
 def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
@@ -59,6 +74,22 @@ def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
     assert "interrupt_agent" in text
     assert "send_input" in text
     assert "interrupt=true" in text
+
+
+def test_codex_search_skill_documents_state_level_resume() -> None:
+    text = (ROOT / ".agents" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    agent = (ROOT / ".codex" / "agents" / "any_search_agent.toml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "History is runtime-owned, not a `plan.md` file" in text
+    assert "State-level resume" in text
+    assert "context.history" in text
+    assert "context.iterations" in text
+    assert "worker_budget.max_runtime_seconds" in text
+    assert "do not rely on chat transcript" in agent
 
 
 def test_codex_worker_agent_calls_context_and_verifier() -> None:

@@ -138,9 +138,10 @@ claude -p --verbose --output-format stream-json \
   > ".search/host-logs/claude-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
-Add `--include-hook-events` when diagnosing externally supplied hooks, or
-`--include-partial-messages` when token-level streaming matters. This repository
-does not currently ship Claude Code hook settings for `goal_plus_gate`.
+Add `--include-hook-events` when diagnosing the shipped Stop hook or externally
+supplied hooks, or `--include-partial-messages` when token-level streaming
+matters. This repository ships `scripts/hooks/goal_plus_stop.py` for Stop only;
+PreToolUse and SubagentStop remain manual gate calls.
 `--debug-file` implicitly enables debug mode. Use `--debug api,mcp` for a
 narrower debug filter when API or MCP traffic is the focus.
 

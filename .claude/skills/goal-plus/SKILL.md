@@ -60,10 +60,14 @@ existing Search MCP flow.
 
 ## Hook Compatibility
 
-Claude Code goal-plus currently runs through manual MCP tool calls in this
-repository. The checked-in `.claude/` assets do not include hook settings or
-hook scripts. If a host surface supplies hooks, wire them to `goal_plus_gate`;
-otherwise the gate is an instruction-driven checkpoint and can be skipped by a
-non-compliant agent. `goal_plus_gate` does not supervise worker lifecycle.
-Claude foreground agent behavior and turn budgets remain the responsibility of
-the internal `search` skill.
+This repository ships a Claude Code `Stop` hook in `.claude/settings.json` that
+runs `scripts/hooks/goal_plus_stop.py`. It is a final backstop for
+`goal_plus_gate(event="stop")`: if the active Goal Plus record still has a
+required next action, Claude receives a continuation prompt instead of ending.
+
+The hook does not replace the explicit workflow calls above. It does not wire
+`PreToolUse` or `SubagentStop`, so call `goal_plus_gate(event="pre_tool_use",
+...)` before Search Mode tools and call the stop gate manually before the final
+response. `goal_plus_gate` does not supervise worker lifecycle. Claude
+foreground agent behavior and turn budgets remain the responsibility of the
+internal `search` skill.

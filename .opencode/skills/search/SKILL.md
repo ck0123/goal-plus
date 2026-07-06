@@ -127,6 +127,25 @@ Minimum shape:
 
 Custom Python strategies may return a plan-level `worker_policy` that overrides the default worker tier for the next candidate batch. Always use `session.launch.subagent_type` from `search_start_agent_session`; it is the authoritative Task tier after any strategy routing.
 
+## Main-Agent Dispatch Policy
+
+Choose the initial tier before freezing the spec, and raise the tier for later
+work when the prior worker did not produce useful verifier evidence:
+
+- Use `AnySearchAgentFlash` only for smoke tests, very cheap probes, or tasks
+  where a partial answer is acceptable.
+- Use `AnySearchAgent` for normal candidate work.
+- Use `AnySearchAgentDeep` or `AnySearchAgentExtraDeep` when the source tree is
+  large, the verifier is slow, the edit requires cross-file reasoning, or a
+  previous flash/default worker returned without any `search_run_verifier`
+  iteration or usable final score.
+
+History is runtime-owned, not `plan.md`. The main agent reads prior candidate
+results through `search_list_history`; workers read `context.history` and
+`context.iterations` from `search_get_agent_context`. If a worker stops before a
+useful result, prefer a higher tier for the next candidate batch or continuation
+attempt. Do not ask the worker to infer history from chat transcript.
+
 ## Workflow
 
 ### Step 1: Probe Read-Only Context
@@ -191,7 +210,7 @@ For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 3. Wait for the OpenCode Task to return. There is no MCP wait call.
 4. When a first-time Task returns, bind the runtime session to the OpenCode session id: `search-runtime_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
 5. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
-6. If the same candidate should keep working in the same OpenCode context, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
+6. If the same candidate should keep working in the same OpenCode context, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate. If the prior tier was too small and the returned continuation payload still names that same underpowered tier, prefer planning a new higher-tier candidate rather than repeating the same failure mode.
 7. If candidate budget remains and you want new candidates, plan and start the next batch.
 
 Hard host rules:
@@ -240,7 +259,7 @@ while budget_remaining:
 
 The subagent receives only `agent_session_id` and a candidate idea (from `launch.prompt`). It then:
 
-1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `iterations` (its own previous attempts). The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
+1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `iterations` (its own previous attempts). The only required MCP calls are `search_get_agent_context` and `search_run_verifier`. Treat these fields as the resume context if this is a restarted worker; do not rely on the launch prompt or prior chat transcript for history.
 2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate submit step exists.
 3. Maintains `workspace/.tmp/results.tsv` as its private iteration log. Header is `commit \t <metric_name> \t status \t hypothesis`, where `<metric_name>` is the literal value of `context.metric_name` (set by the main agent at freeze time). Commit-first: each iteration is `git commit`-ed before `search_run_verifier` so every row carries a real 7-char short hash; `discard` rows are rolled back with `git reset --hard HEAD~1`, but the hash stays recoverable via git reflog (`git checkout <hash>` still works).
 4. Ends with the best workspace state checked out and a concise text summary that includes `agent_session_id`, `candidate_id`, best score/metric, best commit hash, changed files, and a short description. This final answer is for OpenCode/main-agent mapping only; no MCP finalize call exists.

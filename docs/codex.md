@@ -13,19 +13,26 @@ Project-local MCP configuration lives in:
 
 ```text
 .codex/config.toml
+.codex/hooks.json
 .agents/skills/goal-plus/SKILL.md
 .agents/skills/search/SKILL.md
 .codex/agents/any_search_agent.toml
+scripts/hooks/goal_plus_stop.py
 ```
 
 Use `goal-plus` as the user-facing skill. The `search` skill is the internal
 Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
 verifier-backed spec.
 
-This repository does not currently ship Codex hook wiring for Goal Plus.
-`goal_plus_gate` calls are documented in the skill and are manual /
-instruction-driven unless a host-level hook adapter is added outside these
-assets.
+This repository ships one project-local Stop hook for Goal Plus:
+`.codex/hooks.json` runs `scripts/hooks/goal_plus_stop.py`. Codex project hooks
+must be reviewed and trusted through `/hooks` before they run.
+
+The hook only gates top-level Stop. It does not wire PreToolUse or SubagentStop hooks. The skill still calls `goal_plus_gate` manually before Search Mode tools and before the final response.
+
+Set `GOAL_PLUS_ID=gp_...` to force the hook to gate a specific active goal when
+multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` to
+temporarily bypass the Stop hook.
 
 The MCP server is configured as:
 
@@ -113,9 +120,16 @@ through message sending.
 `max_turns` is only a hint for Codex workers. The enforceable control is
 `max_runtime_seconds`.
 
+If a worker is interrupted before it records any verifier iteration or usable
+score, treat the budget as too small for that task. For later planned work,
+increase `worker_budget.max_runtime_seconds`; Codex does not expose a hard
+per-subagent step tier.
+
 Codex does not expose an equivalent same-worker continuation in this adapter.
 When continuation is needed, start a new foreground worker for the same
-candidate and use `search_get_agent_context` to recover the authoritative state.
+candidate and use `search_get_agent_context` to recover the authoritative
+state. The worker should use `context.history` and `context.iterations` from
+the MCP runtime; there is no `plan.md` history file for Search Mode.
 
 ## Debugging Logs
 

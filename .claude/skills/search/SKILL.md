@@ -48,8 +48,37 @@ from the selected Claude Code agent's `maxTurns` frontmatter. The runtime maps
 known budgets 4, 8, and 16 to the matching agent types when `worker_agent_type`
 is omitted.
 
+Choose the initial tier before freezing the spec:
+
+- Use `any-search-agent-flash` only for smoke tests or very cheap probes.
+- Use `any-search-agent` for normal candidate work.
+- Use `any-search-agent-deep` when the source tree is large, the verifier is
+  slow, the edit requires cross-file reasoning, or a previous flash worker
+  reached `maxTurns` before recording any verifier iteration or usable score.
+
+If a worker returns no useful verifier evidence because the tier was too small,
+prefer a higher tier for later planned work or a replacement search run. Do not
+repeat the same underpowered tier unless the user explicitly wants a cheap
+probe.
+
+## Runtime History And Resume
+
+History is runtime-owned, not a `plan.md` file. The main agent reads prior
+candidate results through `search_list_history`; workers recover state through
+`search_get_agent_context`, which returns `context.history` and
+`context.iterations`.
+
+For hosts or tool surfaces that cannot re-enter the same foreground agent, use
+state-level resume: start a new foreground Agent for the same candidate
+workspace and tell it to treat `search_get_agent_context` as the authoritative
+resume context. Do not ask the worker to infer prior attempts from chat
+transcript.
+
 ## Continuation
 
-If `search_continue_agent_session` returns a `SendMessage` payload, send the
-message to the specified agent in the foreground. If no handle is bound, start
-a new foreground Agent for the same candidate.
+If `search_continue_agent_session` returns a `SendMessage` payload and the
+current Claude Code tool surface actually exposes a usable `SendMessage` tool,
+send the message to the specified agent in the foreground. If no handle is
+bound, `SendMessage` is unavailable, or the host cannot prove same-agent
+continuation, start a new foreground Agent for the same candidate and rely on
+MCP history/iterations for resume.

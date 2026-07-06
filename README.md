@@ -73,8 +73,8 @@ The runtime currently supports three host clients through adapters:
 | Host | `strategy.worker_host` | Worker launch | Continuation | Goal Plus gate enforcement | Strategy scope |
 |---|---|---|---|---|---|
 | OpenCode | `opencode` | foreground `Task` | `Task(task_id=...)` | manual / instruction-driven | compatibility baseline |
-| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | manual unless external hooks are wired | portable builtin modes |
-| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | manual unless external hooks are wired | portable builtin modes |
+| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | Stop hook backstop plus manual PreToolUse gate | portable builtin modes |
+| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | Stop hook backstop plus manual PreToolUse gate | portable builtin modes |
 
 Portable builtin modes for Codex and Claude Code are `agent_guided`, `agent`,
 `default`, `random`, and `random_mode`. OpenCode remains the baseline for existing
@@ -87,9 +87,11 @@ Goal Plus has two support levels:
   for the hosts above.
 - **Lifecycle gate enforcement**: host hooks automatically call
   `goal_plus_gate` before Search Mode tools and before the agent stops. This
-  repository does not currently ship OpenCode, Codex, or Claude Code hook
-  wiring. Until a host hook adapter is added, `goal_plus_gate` is called by the
-  skill/orchestrator instructions and is best-effort rather than enforced.
+  repository ships a narrow Stop hook for Codex and Claude Code through
+  `scripts/hooks/goal_plus_stop.py`. It blocks top-level Stop when the latest
+  active Goal Plus record still has a required next action. OpenCode has no
+  shipped hook, and `PreToolUse`/`SubagentStop` are still manual gate calls in
+  all hosts.
 
 Host references:
 
@@ -282,6 +284,8 @@ Not yet covered by this prototype:
 opencode.json                         # project-local OpenCode MCP config
 .mcp.json                             # project-local Claude Code MCP config
 .codex/config.toml                    # project-local Codex MCP config
+.codex/hooks.json                     # Codex Stop hook for goal-plus
+scripts/hooks/goal_plus_stop.py       # shared Codex/Claude Stop hook helper
 .opencode/
   command/goal-plus.md                # canonical OpenCode goal entrypoint
   command/goal-any-optimize.md        # legacy alias to goal-plus
@@ -296,6 +300,7 @@ opencode.json                         # project-local OpenCode MCP config
 .codex/
   agents/any_search_agent.toml        # Codex worker agent config
 .claude/
+  settings.json                       # Claude Code Stop hook for goal-plus
   skills/goal-plus/SKILL.md           # Claude Code goal-plus skill
   skills/search/SKILL.md              # Claude Code internal search skill
   agents/any-search-agent.md          # Claude Code worker agent config

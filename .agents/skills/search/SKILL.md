@@ -47,9 +47,28 @@ a timeout argument, so the parent must combine `wait_agent` with an interrupt.
 Treat `budget_control.max_turns_hint` as a prompt-level hint only. The hard
 control for Codex is `budget_control.wait_timeout_ms` plus interruption.
 
-## Continuation
+Choose the worker budget before freezing the spec. Codex does not expose a
+hard per-subagent step tier like OpenCode, so escalation means choosing a larger
+`worker_budget.max_runtime_seconds` for the next search run or later planned
+work, not asking `spawn_agent` for more steps. If a watchdog stops a worker
+before it records any verifier iteration or usable final score, do not repeat
+the same underpowered budget unless the user explicitly wants a cheap probe.
+
+## Runtime History And Resume
+
+History is runtime-owned, not a `plan.md` file. The main agent reads prior
+candidate results through `search_list_history`; workers recover state through
+`search_get_agent_context`, which returns `context.history` and
+`context.iterations`.
 
 Codex does not expose an equivalent same-worker continuation in this adapter.
 If `search_continue_agent_session` reports unsupported capability for Codex,
-start a new foreground Codex worker for the same candidate and include the prior
-context from `search_get_agent_context`.
+start a new foreground Codex worker for the same candidate and tell it to treat
+`search_get_agent_context` as the authoritative resume context. Do not ask the
+worker to infer prior attempts from chat transcript.
+
+## Continuation
+
+Same-worker continuation is not supported for Codex. State-level resume is
+supported by creating a new worker for the same candidate workspace and relying
+on MCP history/iterations.

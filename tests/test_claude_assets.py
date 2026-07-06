@@ -15,14 +15,20 @@ def test_claude_mcp_json_registers_search_runtime() -> None:
     assert server["args"] == ["--root", ".search"]
 
 
-def test_claude_assets_do_not_claim_hook_wiring() -> None:
-    assert not (ROOT / ".claude" / "settings.json").exists()
+def test_claude_assets_wire_stop_hook_only() -> None:
+    settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    stop_hooks = settings["hooks"]["Stop"]
+
     assert not (ROOT / ".claude" / "settings.local.json").exists()
+    assert settings["hooks"].keys() == {"Stop"}
+    assert stop_hooks[0]["matcher"] == ""
+    assert stop_hooks[0]["hooks"][0]["type"] == "command"
+    assert "scripts/hooks/goal_plus_stop.py" in stop_hooks[0]["hooks"][0]["command"]
 
     text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
-    assert "does not currently ship Claude Code hook configuration" in text
-    assert "no built-in Goal Plus hook" in text
-    assert "implementation to inspect" in text
+    assert "ships one Claude Code Stop hook" in text
+    assert "does not wire PreToolUse or SubagentStop hooks" in text
+    assert "scripts/hooks/goal_plus_stop.py" in text
 
 
 def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
@@ -84,6 +90,25 @@ def test_claude_worker_agent_turn_budget_variants_exist() -> None:
     assert "maxTurns: 4" in flash
     assert "name: any-search-agent-deep" in deep
     assert "maxTurns: 16" in deep
+
+
+def test_claude_search_skill_documents_tier_escalation_and_resume() -> None:
+    text = (ROOT / ".claude" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    agent = (ROOT / ".claude" / "agents" / "any-search-agent.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "any-search-agent-flash" in text
+    assert "any-search-agent-deep" in text
+    assert "reached `maxTurns` before recording any verifier iteration" in text
+    assert "History is runtime-owned, not a `plan.md` file" in text
+    assert "state-level resume" in text
+    assert "context.history" in text
+    assert "context.iterations" in text
+    assert "SendMessage` is unavailable" in text
+    assert "do not rely on chat transcript" in agent
 
 
 def test_claude_docs_record_log_inspection_paths() -> None:

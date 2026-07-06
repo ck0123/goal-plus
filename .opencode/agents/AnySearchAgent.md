@@ -34,6 +34,8 @@ Treat the returned MCP context as authoritative. If the launch prompt, main-agen
 
 Use `context.run_id`, `context.candidate_id`, `context.workspace`, and `context.candidate_task` for all file work and verifier calls. Do not hard-code `run_id`, `candidate_id`, or workspace paths for use in the workspace — context is authoritative. The `agent_session_id` and `candidate_id` labels in the launch prompt are for OpenCode UI mapping only.
 
+If this is a continued or relaunched worker, recover prior attempts from `context.history` and `context.iterations`; do not rely on chat transcript as the source of history.
+
 Rely on the OpenCode step cap (15/50/100/150 depending on the variant you were launched as) as your only hard stop. Run until OpenCode asks you to summarize. There are no per-session or run-level time deadlines.
 
 ## Workspace Rules
