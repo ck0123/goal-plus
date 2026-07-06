@@ -1,12 +1,13 @@
-# Search Examples
+# Goal Plus Search Examples
 
-The example specs are small local scenarios for exercising the Search MCP runtime.
+The example specs are small local scenarios for exercising `/goal-plus` after it
+upgrades a measurable task into Search Mode.
 
 ## Automated ST Coverage
 
 Each scenario prompt below has a paired system test under `tests/st/`. The tests
-drive `opencode run --command search "<prompt>"` in a temporary project root and
-parse a machine-readable JSON report from the main agent's final message.
+drive `opencode run --command goal-plus "<prompt>"` in a temporary project root
+and parse a machine-readable JSON report from the main agent's final message.
 
 - Prompts: `tests/st/prompts/<scenario>.md`
 - Tests: `tests/st/test_st_scenarios.py`
@@ -32,7 +33,13 @@ Tests are skipped by default. They require `opencode` on PATH and the
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `AnySearchAgent` (50 steps) | 8 candidates, pool=4, two batches |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
 
-For each example, create the run, call `search_plan_next(run_id, k)`, then start the returned plan with `search_start_batch(run_id, plan_id)`. For multi-batch examples, plan + start the next batch after the first batch finishes. The runtime enforces isolated workspaces and verifier-owned scoring; the active strategy defines how later candidates should derive from history.
+For each example, start through `/goal-plus`. The goal-plus layer records the
+raw goal, triage, frozen verifier confirmation, and final raw-goal audit. Once
+the task enters Search Mode, create the run, call `search_plan_next(run_id, k)`,
+then start the returned plan with `search_start_batch(run_id, plan_id)`. For
+multi-batch examples, plan + start the next batch after the first batch
+finishes. The runtime enforces isolated workspaces and verifier-owned scoring;
+the active strategy defines how later candidates should derive from history.
 
 Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far.
 
@@ -122,7 +129,10 @@ Start OpenCode:
 opencode
 ```
 
-Then paste a plain-language prompt into the Build agent. The host loads the `search` skill automatically based on description match — there is no `/search` slash command.
+Then paste a plain-language prompt into `/goal-plus`. The host loads the
+goal-plus skill first and uses the internal `search` skill only after Search
+Mode starts. For non-interactive runs, include explicit text confirming the
+frozen verifier, metric, edit surface, and promotion rule.
 
 ### circle_packing — fork-style continuation smoke test
 

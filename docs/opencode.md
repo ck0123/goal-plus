@@ -1,10 +1,15 @@
 # OpenCode Reference
 
-This project ships a local OpenCode setup for running the Search MCP Runtime:
+This project ships a local OpenCode setup for running `/goal-plus` over the
+Search MCP Runtime:
 
 ```text
 opencode.json
+.opencode/command/goal-plus.md
+.opencode/command/goal-any-optimize.md
+.opencode/skills/goal-plus/SKILL.md
 .opencode/skills/search/SKILL.md
+.opencode/agents/goal-plus-orchestrator.md
 .opencode/agents/search-orchestrator.md
 examples/k_module_search_spec.json
 ```
@@ -117,7 +122,7 @@ The server uses stdio transport.
 For headless runs:
 
 ```bash
-opencode run --command search "<prompt>"
+opencode run --command goal-plus "<prompt>"
 ```
 
 Current OpenCode `Task` does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or the user interrupts the run; there are no per-session or run-level time deadlines, and there is no MCP abort tool.
@@ -148,27 +153,43 @@ The expected result is that the tool is callable and reports that the run does n
 In OpenCode:
 
 ```text
-Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test end-to-end (freeze → create → plan → batch → sessions → verify → select → report).
+Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Show and confirm the frozen verifier, metric, edit surface, and promotion rule before Search Mode. Then run the k_module smoke test end-to-end.
 ```
 
 Headless:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. This prompt explicitly confirms the frozen verifier, metric, edit surface, and promotion rule. Keep all edits inside candidate workspaces."
 ```
 
 Expected behavior:
 
-1. The `search` skill loads `examples/k_module_search_spec.json` or drafts an equivalent SearchSpec.
-2. Runtime freezes `tests/fixtures/k_module_problem/evaluator.py`.
-3. Runtime plans the next strategy step and creates candidate workspaces under `.search/runs/<run_id>/workspace/`.
-4. The host edits each candidate workspace.
-5. Runtime verifies candidates and selects the score `1.0` candidate.
-6. Runtime writes `report.md` with strategy/candidate details and exports a promotion patch.
+1. The `goal-plus` skill creates a goal-plus record and records triage.
+2. For this initial search-ready task, the agent saves a spec draft and records frozen-verifier confirmation.
+3. The internal `search` skill freezes `tests/fixtures/k_module_problem/evaluator.py`.
+4. Runtime plans the next strategy step and creates candidate workspaces under `.search/runs/<run_id>/workspace/`.
+5. The host edits each candidate workspace.
+6. Runtime verifies candidates and selects the score `1.0` candidate.
+7. Runtime writes `report.md` with strategy/candidate details and exports a promotion patch.
 
 ## Tool Prefix
 
-OpenCode prefixes MCP tool names by server name. With `search-runtime`, the only tools are:
+OpenCode prefixes MCP tool names by server name. With `search-runtime`, the
+goal-plus tools are:
+
+```text
+search-runtime_goal_plus_create
+search-runtime_goal_plus_status
+search-runtime_goal_plus_record_triage
+search-runtime_goal_plus_save_spec_draft
+search-runtime_goal_plus_confirm_frozen_verifier
+search-runtime_goal_plus_link_search_run
+search-runtime_goal_plus_record_search_result
+search-runtime_goal_plus_set_status
+search-runtime_goal_plus_gate
+```
+
+The internal Search Mode engine tools are:
 
 ```text
 search-runtime_search_freeze_spec

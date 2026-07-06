@@ -95,7 +95,7 @@ def test_opencode_goal_plus_skill_documents_progressive_modes() -> None:
     assert "Initial Search-Ready" in combined
     assert "In-Progress Search Discovery" in combined
     assert "Do not create a SearchSpec in Goal Mode" in combined
-    assert "call the `search` skill" in combined
+    assert "call the internal `search` skill" in combined
     assert "final raw-goal audit" in combined
 
 

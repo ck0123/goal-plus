@@ -1,4 +1,4 @@
-# Toy Example: k_module Search
+# Toy Example: k_module Goal Plus Search
 
 This guide shows how to run the bundled toy search from a repo checkout when OpenCode is already available.
 
@@ -14,6 +14,8 @@ tests/fixtures/k_module_problem/
   config.yaml             # denied config file
 opencode.json             # starts the MCP server
 .opencode/skills/search/SKILL.md
+.opencode/skills/goal-plus/SKILL.md
+.opencode/command/goal-plus.md
 ```
 
 The target configuration is:
@@ -101,23 +103,30 @@ opencode
 Then send:
 
 ```text
-Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test with 4 candidates end-to-end (freeze_spec → create → plan_next → start_batch → start_agent_session → Task → bind_opencode_session → verify → select → report).
+Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Show and confirm the frozen verifier, metric, edit surface, and promotion rule before Search Mode. Then run the k_module smoke test with 4 candidates end-to-end.
 ```
 
 The skill should guide the host agent through this sequence:
 
-1. Read `examples/k_module_search_spec.json`.
-2. Call `search-runtime_search_freeze_spec`.
-3. Call `search-runtime_search_create`.
-4. Call `search-runtime_search_plan_next` with `requested_k=4`.
-5. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-6. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim as a foreground Task call.
-7. When Task metadata is available, call `search-runtime_search_bind_opencode_session` with the runtime `agent_session_id` and Task `metadata.sessionId`.
-8. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
-9. After OpenCode Task return, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
-10. Call `search-runtime_search_select`.
-11. Call `search-runtime_search_report`.
-12. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+1. Call `search-runtime_goal_plus_create`.
+2. Read `examples/k_module_search_spec.json`.
+3. Record search-ready triage with `identified_at="initial"`.
+4. Save a high-confidence spec draft with `origin="initial"`.
+5. Show the user the frozen verifier, metric, edit surface, and promotion rule.
+6. After confirmation, call `search-runtime_goal_plus_confirm_frozen_verifier`.
+7. Call `search-runtime_goal_plus_gate` before `search-runtime_search_freeze_spec`.
+8. Call `search-runtime_search_freeze_spec`.
+9. Call `search-runtime_search_create`, then `search-runtime_goal_plus_link_search_run`.
+10. Call `search-runtime_search_plan_next` with `requested_k=4`.
+11. Call `search-runtime_search_start_batch` with the returned `plan_id`.
+12. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim as a foreground Task call.
+13. When Task metadata is available, call `search-runtime_search_bind_opencode_session` with the runtime `agent_session_id` and Task `metadata.sessionId`.
+14. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
+15. After OpenCode Task return, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
+16. Call `search-runtime_search_select`.
+17. Call `search-runtime_search_report`.
+18. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
+19. Call `search-runtime_goal_plus_record_search_result`, then perform the final raw-goal audit.
 
 There is no batch-shortcut tool. Call `search_plan_next` followed by `search_start_batch`.
 
@@ -126,13 +135,13 @@ There is no batch-shortcut tool. Call `search_plan_next` followed by `search_sta
 You can trigger the same skill from the command line:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
+opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. This prompt explicitly confirms the frozen verifier, metric, edit surface, and promotion rule. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
 ```
 
 If you want to inspect before promotion, use:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Stop after report generation and do not promote."
+opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. This prompt explicitly confirms the frozen verifier, metric, edit surface, and promotion rule. Stop after report generation and do not promote."
 ```
 
 ## 7. Expected Runtime Artifacts

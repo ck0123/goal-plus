@@ -1,4 +1,4 @@
-"""System tests: drive `opencode run --command search` and assert the main
+"""System tests: drive `opencode run --command goal-plus` and assert the main
 agent's final JSON report matches the expected scenario contract.
 
 These tests are skipped unless `-m st` is passed. They require:

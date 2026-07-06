@@ -30,7 +30,7 @@ prefix:
 | `goal_plus_set_status` | `search-runtime_goal_plus_set_status` |
 | `goal_plus_gate` | `search-runtime_goal_plus_gate` |
 
-Use the existing `search` skill for Search Mode tools such as
+Use the internal `search` skill for Search Mode tools such as
 `search_freeze_spec`, `search_create`, `search_plan_next`,
 `search_start_batch`, `search_start_agent_session`, `search_select`,
 `search_report`, and `search_promote`.
@@ -136,7 +136,7 @@ search-runtime_goal_plus_gate(
 )
 ```
 
-If allowed, call the `search` skill and follow its workflow exactly:
+If allowed, call the internal `search` skill and follow its workflow exactly:
 
 ```text
 search_freeze_spec -> search_create -> search_plan_next -> search_start_batch

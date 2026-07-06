@@ -1,6 +1,8 @@
 # Debugging Runtime State
 
-How to inspect a running or finished search — what the agents are doing, what scores they've produced, and where to look when something goes wrong.
+How to inspect a running or finished `/goal-plus` run after it enters Search
+Mode — what the agents are doing, what scores they have produced, and where to
+look when something goes wrong.
 
 For the general OpenCode inspection technique (SQLite DB, log files), see the
 `inspecting-opencode-runs` skill. This doc covers the project-specific runtime
@@ -17,12 +19,20 @@ OpenCode process
        └─ .search/  ← runtime-owned durable state (this project)
 ```
 
-The runtime owns specs, plans, candidate workspaces, iteration history, verifier scoring, reports, and promotion patches. OpenCode owns subagent lifecycle — start, run, step cap, stop/interrupt, Task return. The MCP runtime does not maintain lifecycle status, host-sync state, or process cancellation. Debugging lifecycle state belongs in OpenCode; debugging candidate state belongs in `.search/`.
+The runtime owns goal-plus records, specs, plans, candidate workspaces,
+iteration history, verifier scoring, reports, and promotion patches. OpenCode
+owns subagent lifecycle — start, run, step cap, stop/interrupt, Task return.
+The MCP runtime does not maintain lifecycle status, host-sync state, or process
+cancellation. Debugging lifecycle state belongs in OpenCode; debugging
+goal/search state belongs in `.search/`.
+
+Goal-plus records live under `.search/goal-plus/<goal_plus_id>/`. Search runs
+live under `.search/runs/<run_id>/`.
 
 For Codex and Claude Code, substitute the host-native JSONL/debug files below
 for the OpenCode process layer. The same rule still applies: host logs explain
-what the worker did, while `.search/` records search facts such as candidates,
-iterations, scores, and verifier output.
+what the worker did, while `.search/` records goal/search facts such as
+candidates, iterations, scores, and verifier output.
 
 ## Host-Native Log Inspection
 
@@ -70,7 +80,7 @@ For scripted or reproducible runs, capture Codex's event stream directly:
 
 ```bash
 mkdir -p .search/host-logs
-codex exec --json --cd "$PWD" "<search prompt>" \
+codex exec --json --cd "$PWD" "<goal-plus or search prompt>" \
   > ".search/host-logs/codex-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 

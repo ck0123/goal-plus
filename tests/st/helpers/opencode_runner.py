@@ -17,7 +17,7 @@ class RunResult:
 
 
 class OpenCodeRunner:
-    """Drive `opencode run --command search "<prompt>"` in a project root."""
+    """Drive `opencode run --command goal-plus "<prompt>"` in a project root."""
 
     def __init__(
         self,
@@ -35,10 +35,15 @@ class OpenCodeRunner:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_cmd(self, prompt: str) -> list[str]:
-        cmd = ["opencode", "run", "--command", "search"]
+        cmd = ["opencode", "run", "--command", "goal-plus"]
         if self.model:
             cmd += ["-m", self.model]
-        cmd.append(prompt)
+        cmd.append(
+            "This is a non-interactive /goal-plus system test. If the task is "
+            "Initial Search-Ready, this prompt explicitly confirms the frozen "
+            "verifier, metric, edit surface, and promotion rule.\n\n"
+            + prompt
+        )
         return cmd
 
     def run(self, prompt: str, *, scenario: str, timeout: int | None = None) -> RunResult:

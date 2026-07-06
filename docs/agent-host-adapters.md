@@ -1,9 +1,10 @@
 # Agent Host Adapters
 
-`agentic-any-search-mcp` is host-neutral at the runtime layer. The runtime owns
-durable search state, workspaces, verifier execution, scoring history, reports,
-and promotion patches. The selected code-agent host owns worker process
-lifecycle.
+`agentic-any-search-mcp` is host-neutral at the runtime layer. `/goal-plus`
+owns goal intake, triage, spec drafts, verifier confirmation, and final audit
+state. The internal Search Mode engine owns durable search state, workspaces,
+verifier execution, scoring history, reports, and promotion patches. The
+selected code-agent host owns worker process lifecycle.
 
 The adapter layer is the small boundary between those two concerns. It converts
 one runtime concept, an `AgentSessionRecord`, into the host-native foreground
@@ -11,9 +12,9 @@ worker call that the main agent should execute.
 
 ## When To Use This Page
 
-Use this page when you need to choose a host, write a `SearchSpec` with
-`strategy.worker_host`, or add a new host adapter without changing runtime
-state semantics.
+Use this page when `/goal-plus` has upgraded a task to Search Mode and you need
+to choose a host, write a `SearchSpec` with `strategy.worker_host`, or add a new
+host adapter without changing runtime state semantics.
 
 Host setup references:
 
@@ -26,7 +27,8 @@ Host setup references:
 
 ## Common Runtime Contract
 
-All three hosts use the same MCP control plane:
+After `/goal-plus` has frozen or linked a verifier-backed SearchSpec, all three
+hosts use the same Search Mode MCP control plane:
 
 1. `search_freeze_spec`
 2. `search_create`
@@ -75,7 +77,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 
 | Capability | OpenCode | Codex | Claude Code |
 |---|---|---|---|
-| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/search/`, `.claude/agents/` |
+| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/goal-plus/`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` |
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` |
 | Launch tool | `Task` | `spawn_agent` | `Agent` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` |

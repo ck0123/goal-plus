@@ -1,8 +1,15 @@
 # Agentic Any Search MCP
 
-`agentic-any-search-mcp` is a small MCP-first Search Runtime prototype for verifiable agentic search.
+`agentic-any-search-mcp` is a small MCP-first runtime for `/goal-plus`: a
+goal-like agent entrypoint that can upgrade measurable optimization work into
+verifiable multi-candidate search.
 
-The goal of V0 is not to control one specific coding agent. The runtime exposes a generic MCP control plane, while the host agent uses a `/search` skill to follow a disciplined workflow: freeze the spec, ask the active strategy to plan the next batch, create isolated candidate workspaces, verify candidates through runtime-owned checks, select the best candidate, and export a promotion patch.
+The goal of V0 is not to control one specific coding agent. The runtime exposes
+a generic MCP control plane, while the host agent uses `/goal-plus` as the
+user-facing workflow. Ordinary tasks stay goal-like. Search-shaped tasks freeze
+the verifier and metric, ask the active strategy to plan the next batch, create
+isolated candidate workspaces, verify candidates through runtime-owned checks,
+select the best candidate, and export a promotion patch.
 
 Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `openevolve` (OpenEvolve-style parent/archive/inspiration sampling), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract; the bundled `adaptevolve` Python planner adds evolve-style parent selection plus dynamic worker-tier routing. See `examples/README.md` for the full strategy comparison table, `docs/strategy-adaptevolve.md` for the AdaptEvolve code path, and `docs/strategy-openevolve.md` for the OpenEvolve path.
 
@@ -89,8 +96,12 @@ This repository ships project-local OpenCode assets:
 
 ```text
 opencode.json
-.opencode/skills/search/SKILL.md
-.opencode/agents/search-orchestrator.md
+.opencode/command/goal-plus.md
+.opencode/command/goal-any-optimize.md        # legacy alias to goal-plus
+.opencode/skills/goal-plus/SKILL.md
+.opencode/skills/search/SKILL.md              # internal Search Mode engine
+.opencode/agents/goal-plus-orchestrator.md
+.opencode/agents/search-orchestrator.md       # internal Search Mode dispatcher
 .opencode/agents/AnySearchAgent*.md
 ```
 
@@ -133,13 +144,13 @@ opencode
 Inside OpenCode:
 
 ```text
-Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Then run the k_module smoke test end-to-end (freeze_spec -> create -> plan_next -> start_batch -> start sessions -> Task -> bind_opencode_session -> verify -> select -> report).
+Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Show and confirm that frozen verifier, metric, edit surface, and promotion rule before Search Mode. Then run the k_module smoke test end-to-end.
 ```
 
 For a headless command-line run:
 
 ```bash
-opencode run --command search "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Keep all edits inside candidate workspaces."
+opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. This prompt explicitly confirms the frozen verifier, metric, edit surface, and promotion rule. Keep all edits inside candidate workspaces."
 ```
 
 OpenCode `Task` does not currently expose a `timeout` parameter; subagents run until their OpenCode step cap hits or the user interrupts them. The MCP runtime does not provide wait or abort tools.
@@ -256,15 +267,21 @@ opencode.json                         # project-local OpenCode MCP config
 .mcp.json                             # project-local Claude Code MCP config
 .codex/config.toml                    # project-local Codex MCP config
 .opencode/
-  skills/search/SKILL.md              # search workflow guide (loaded by host agent via Skill tool, NOT a slash command)
-  agents/search-orchestrator.md       # optional host-agent prompt
+  command/goal-plus.md                # canonical OpenCode goal entrypoint
+  command/goal-any-optimize.md        # legacy alias to goal-plus
+  skills/goal-plus/SKILL.md           # goal-plus workflow guide
+  skills/search/SKILL.md              # internal Search Mode workflow guide
+  agents/goal-plus-orchestrator.md    # canonical host-agent prompt
+  agents/search-orchestrator.md       # internal Search Mode dispatcher
   agents/AnySearchAgent.md            # candidate worker subagent prompt
 .agents/
-  skills/search/SKILL.md              # Codex search skill
+  skills/goal-plus/SKILL.md           # Codex goal-plus skill
+  skills/search/SKILL.md              # Codex internal search skill
 .codex/
   agents/any_search_agent.toml        # Codex worker agent config
 .claude/
-  skills/search/SKILL.md              # Claude Code search skill
+  skills/goal-plus/SKILL.md           # Claude Code goal-plus skill
+  skills/search/SKILL.md              # Claude Code internal search skill
   agents/any-search-agent.md          # Claude Code worker agent config
 docs/
   agent-host-adapters.md              # host adapter design and OpenCode/Codex/Claude differences
@@ -295,6 +312,15 @@ OpenCode registers the MCP server as `search-runtime`, so tools appear with
 that prefix. Codex and Claude Code expose the same logical tool names through
 their own MCP tool naming conventions.
 
+- `search-runtime_goal_plus_create`
+- `search-runtime_goal_plus_status`
+- `search-runtime_goal_plus_record_triage`
+- `search-runtime_goal_plus_save_spec_draft`
+- `search-runtime_goal_plus_confirm_frozen_verifier`
+- `search-runtime_goal_plus_link_search_run`
+- `search-runtime_goal_plus_record_search_result`
+- `search-runtime_goal_plus_set_status`
+- `search-runtime_goal_plus_gate`
 - `search-runtime_search_freeze_spec`
 - `search-runtime_search_create`
 - `search-runtime_search_status`
@@ -312,7 +338,11 @@ their own MCP tool naming conventions.
 - `search-runtime_search_report`
 - `search-runtime_search_promote`
 
-The same methods are available through the Python `SearchTools` facade for unit tests and non-OpenCode hosts.
+The `goal_plus_*` tools are the user-facing orchestration surface. The
+`search_*` tools remain the internal Search Mode engine after `/goal-plus`
+freezes a verifier-backed spec. The same methods are available through the
+Python `GoalPlusTools` and `SearchTools` facades for unit tests and non-OpenCode
+hosts.
 
 ## Development Checks
 

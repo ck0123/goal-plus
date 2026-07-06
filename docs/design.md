@@ -2,7 +2,12 @@
 
 ## Objective
 
-This project provides a generic Search MCP Runtime for measurable coding tasks. The runtime owns durable state, candidate workspaces, budgets, verifier execution, scoring history, best-candidate selection, reports, and promotion artifacts. The host code-agent client owns the subagent process lifecycle. The main agent owns policy decisions through MCP tool calls.
+This project provides `/goal-plus`: a generic goal entrypoint that can upgrade
+measurable coding tasks into Search MCP runs. The runtime owns durable state,
+candidate workspaces, budgets, verifier execution, scoring history,
+best-candidate selection, reports, and promotion artifacts. The host code-agent
+client owns the subagent process lifecycle. The main agent owns policy decisions
+through MCP tool calls.
 
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
 
@@ -22,16 +27,24 @@ The MCP runtime does not wait, abort, finalize, submit, observe, or host-sync su
 ```text
 User
   |
-  | "load examples/k_module_search_spec.json and run the search"
+  | "/goal-plus: improve this measurable task"
   v
 OpenCode / Codex / Claude Code host agent
   |
-  | reads host-local search skill
-  | calls MCP tools
+  | reads host-local goal-plus skill
+  | calls goal_plus_* MCP tools
   v
 Search MCP server
   |
   | delegates JSON tool calls
+  v
+GoalPlusTools facade
+  |
+  | records goal state, triage, confirmation, gates
+  v
+FileGoalPlusRuntime
+  |
+  | links to Search Mode when verifier-backed spec is ready
   v
 SearchTools facade
   |
@@ -42,6 +55,9 @@ FileSearchRuntime
   | writes durable state
   v
 .search/
+  goal-plus/<goal_plus_id>/
+    goal.json
+    events.jsonl
   specs/<frozen_spec_id>/
   runs/<run_id>/
     run.json

@@ -2,13 +2,17 @@
 
 This doc is the information-flow counterpart to [design.md](design.md). `design.md` describes the data model and state machine; this doc describes **which agent does which step, what each agent actually sees at runtime, and which OpenCode platform constraints gate the flow**.
 
-Use this before designing strategy changes (evolve, mcts, hybrid). If a planned feature depends on an agent seeing data that the platform or runtime does not actually expose, the feature is dead on arrival.
+The flow below describes the internal Search Mode path after `/goal-plus` has
+created a goal record, recorded triage, and frozen or confirmed a verifier-backed
+spec. Use this before designing strategy changes (evolve, mcts, hybrid). If a
+planned feature depends on an agent seeing data that the platform or runtime
+does not actually expose, the feature is dead on arrival.
 
 ## 1. Two Agents, One OpenCode Lifecycle
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
-│  Main Agent (search-orchestrator, mode: primary)                │
+│  Main Agent (goal-plus/search orchestrator, mode: primary)      │
 │  Owns: plan batches + launch OpenCode Tasks + final verify      │
 │  Sees: plan.work_orders, plan.official_history,                 │
 │        launch payload (subagent_type, description, prompt),     │

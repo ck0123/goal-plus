@@ -6,7 +6,7 @@ Draft, 2026-07-03.
 
 ## Objective
 
-Add a `scenarios/kernel-optimize/` directory to `agentic-any-search-mcp` as the first domain scenario bundle. The bundle lets a host agent run kernel optimization tasks (any DSL) on the existing Search MCP runtime without modifying runtime code, the `AnySearchAgent` subagent, or the `search` skill.
+Add a `scenarios/kernel-optimize/` directory to `agentic-any-search-mcp` as the first domain scenario bundle. The bundle lets a host agent run kernel optimization tasks (any DSL) through `/goal-plus` and the existing internal Search Mode engine without modifying runtime code, the `AnySearchAgent` subagent, or the internal `search` skill.
 
 The scenario contributes three things and nothing else:
 
@@ -18,7 +18,7 @@ The scenario contributes three things and nothing else:
 
 Three reference projects were reviewed:
 
-- **`agentic-any-search-mcp` (this repo).** Generic Search MCP runtime. `SearchSpec` (objective / metric / source_path / edit_surface / verifier command / budget / strategy), isolated candidate workspaces, `AnySearchAgent` already runs an autoresearch loop (`hypothesis → edit → search_run_verifier → keep/discard/git`), runtime parses the last JSON object from the verifier command's stdout. Examples (`k_module`, `circle_packing`, `signal_processing`, `swe_bench_20212`) all freeze a small toy evaluator as the verifier artifact.
+- **`agentic-any-search-mcp` (this repo).** `/goal-plus` goal entrypoint plus generic Search MCP runtime. `SearchSpec` (objective / metric / source_path / edit_surface / verifier command / budget / strategy), isolated candidate workspaces, `AnySearchAgent` already runs an autoresearch loop (`hypothesis → edit → search_run_verifier → keep/discard/git`), runtime parses the last JSON object from the verifier command's stdout. Examples (`k_module`, `circle_packing`, `signal_processing`, `swe_bench_20212`) all freeze a small toy evaluator as the verifier artifact.
 - **`akg/akg_agents/workspace_autoresearch`.** Claude-Code slash command workflow for kernel optimization. `task.yaml` (backend / framework / dsl / editable_files), state machine (BASELINE → PLAN → EDIT → eval → KEEP/DISCARD → FINISH), `KernelVerifier` shared across local and remote workers, CodeChecker to catch cheating, DSL adapters for `triton_ascend`, `ascendc`, `ascendc_catlass`, `pypto`, `tilelang_ascend`, `cpp`.
 - **`cannbot-skills`.** Skill library. `ops/triton-op-verifier/scripts/{verify.py, benchmark.py, validate_triton_impl.py}` is the canonical Triton-Ascend verifier (multi-shape, dtype-threshold MERE/MARE, geometric-mean speedup, L1 verify gate). `plugins-official/triton-op-generator/AGENTS.md` is the 6-phase orchestration prompt.
 
@@ -26,7 +26,7 @@ The kernel-agent capability the user wants already exists in `akg` and `cannbot-
 
 ## Design Principles
 
-1. **Zero runtime change.** `src/`, `AnySearchAgent.md`, `.opencode/skills/search/SKILL.md` are not modified. If the design forces a runtime change, the design is wrong.
+1. **Zero runtime change.** The scenario bundle should not require changes to `src/`, `AnySearchAgent.md`, the `/goal-plus` assets, or the internal `search` skill. If the design forces a runtime change, the design is wrong.
 2. **Verifier is DSL-agnostic.** Both sides of the comparison are PyTorch `nn.Module`: `Model` (reference) and `ModelNew` (the candidate kernel wrapper). Whether `ModelNew` internally launches a Triton kernel, calls a C++ custom op, or invokes AscendC is invisible to the verifier.
 3. **Host agent owns verifier generation.** The host agent reads the scenario README, copies the reference verifier into `<source>/_verifier/`, and points the `SearchSpec.process_verifiers` at it before `search_freeze_spec`. The subagent never writes verifier code — anti-cheat is enforced by the existing frozen-verifier mechanism.
 4. **No new abstraction layer.** No builder, no template engine, no DSL adapter. The verifier reference is a readable Python file that the host agent may copy verbatim or adapt.
@@ -76,7 +76,7 @@ The host agent's entry point. Structure:
    - `promotion_verifiers`: optional, the runtime's built-in frozen-hash checker.
    - `budget`: per run.
    - `strategy`: typically `agent_guided` with `worker_agent_type` `AnySearchAgentDeep` (100 steps) or `AnySearchAgent` (50 steps).
-6. **Step 4 — drive the standard search flow.** `freeze_spec → create → plan_next → start_batch → start_agent_session → Task → bind_opencode_session → (subagent autoresearch loop) → run_verifier → select → report → promote`. The README does not restate the full flow; it points at `.opencode/skills/search/SKILL.md` and `examples/README.md`.
+6. **Step 4 — drive the standard Goal Plus/Search Mode flow.** `/goal-plus` records triage and verifier confirmation, then Search Mode runs `freeze_spec → create → plan_next → start_batch → start_agent_session → Task → bind_opencode_session → (subagent autoresearch loop) → run_verifier → select → report → promote`. The README does not restate the full flow; it points at `.opencode/skills/goal-plus/SKILL.md`, `.opencode/skills/search/SKILL.md`, and `examples/README.md`.
 7. **DSL notes.** One short paragraph per family: `cpp` wraps a custom op via `torch.utils.cpp_extension` or a prebuilt `.so`; `triton_ascend` imports a `@triton.jit` kernel; `ascendc` / `ascendc_catlass` typically build a project and expose a torch binding; `pypto` / `tilelang_ascend` import their DSL module. The note is informational — the host agent reads the kernel file to confirm the import path. The verifier stays identical across all families.
 
 ### `scenarios/kernel-optimize/verifier/verify.py`
@@ -126,13 +126,18 @@ Shared helpers:
 
 ### `scenarios/kernel-optimize/example-prompt-cpp.md`
 
-A prompt the user can paste into `opencode run --command search "..."`. Same style as `examples/README.md`'s circle_packing prompt blocks. Concrete contents:
+A prompt the user can paste into `opencode run --command goal-plus "..."`.
+Same style as `examples/README.md`'s circle_packing prompt blocks. Concrete
+contents:
 
 - State the task: optimize a C++ kernel exposed via `torch.utils.cpp_extension`. Reference is `workspace/matmul_ref.py` (a torch `Model`). Kernel under work is `workspace/matmul_kernel.cpp` plus `workspace/matmul_wrapper.py` (defines `ModelNew`, loads the `.cpp` via `load_inline`).
 - Direct the host agent through Steps 1–4 of the README (bootstrap verifier, build `_verifier/matmul_torch.py` and `_verifier/matmul_impl.py`, fill the spec).
 - Include the literal `SearchSpec` JSON to freeze, with `process_verifiers` commands spelled out.
 - Direct the host agent to request 4 candidates, two batches, `worker_agent_type = AnySearchAgentDeep`, `strategy = agent_guided`.
-- Direct the host agent to follow `.opencode/skills/search/SKILL.md` for the rest, and to report `run_id`, all 4 candidate scores, `selected_candidate_id`, and `report.md` path at the end.
+- Direct the host agent to follow `.opencode/skills/goal-plus/SKILL.md` first,
+  then the internal `.opencode/skills/search/SKILL.md` after Search Mode starts,
+  and to report `run_id`, all 4 candidate scores, `selected_candidate_id`, and
+  `report.md` path at the end.
 - Note: the C++ kernel file is the only entry in `edit_surface.allow`. The wrapper is denied (changing the binding changes the binding contract, not the kernel — that is out of scope for this scenario).
 
 ## Anti-Cheat
@@ -144,16 +149,17 @@ The runtime already enforces frozen verifier hashes via `promotion_verifiers` an
 - The C++ wrapper (or any torch binding glue) is also denied — the candidate can only edit the kernel source itself. The runtime's existing `anti_cheat_gate` verifier catches violations.
 - No new anti-cheat mechanism is added.
 
-## Host Agent Flow (no change to search SKILL.md)
+## Host Agent Flow
 
 ```text
 1. User asks for kernel optimization.
-2. Host agent recognizes the kernel-optimize scenario and reads scenarios/kernel-optimize/README.md.
+2. Goal Plus records triage and recognizes the kernel-optimize scenario.
 3. Host agent copies verifier/* into <source>/_verifier/.
 4. Host agent materializes {op}_torch.py and {op}_impl.py under _verifier/.
 5. Host agent fills a SearchSpec following the README's Step 3.
-6. search_freeze_spec(spec, verifier_artifact_paths=[_verifier/verify.py, _verifier/benchmark.py, _verifier/_common_utils.py, <op>_torch.py, <op>_impl.py])
-7. search_create → search_plan_next → search_start_batch → start_agent_session → Task → bind → (AnySearchAgent autoresearch loop) → search_run_verifier → select → report → promote
+6. If this was Initial Search-Ready, Goal Plus confirms the frozen verifier with the user.
+7. search_freeze_spec(spec, verifier_artifact_paths=[_verifier/verify.py, _verifier/benchmark.py, _verifier/_common_utils.py, <op>_torch.py, <op>_impl.py])
+8. search_create → search_plan_next → search_start_batch → start_agent_session → Task → bind → (AnySearchAgent autoresearch loop) → search_run_verifier → select → report → promote
 ```
 
 Step 2 ("host agent recognizes the scenario") relies on the existing OpenCode skill description match. Either:

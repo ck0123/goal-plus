@@ -30,14 +30,19 @@ Core loop:
    metric, correctness gate, or edit surface are missing.
 5. Use Search Mode only after saving a high-confidence draft with
    `goal_plus_save_spec_draft`.
-6. Before Search Mode calls such as `search_freeze_spec`, check
+6. For Initial Search-Ready goals, show the frozen verifier, metric, edit
+   surface, and promotion rule to the user, then call
+   `goal_plus_confirm_frozen_verifier` after explicit approval.
+7. For In-Progress Search Discovery, when the verifier was constructed during
+   the active goal, continue without a separate confirmation.
+8. Before Search Mode calls such as `search_freeze_spec`, check
    `goal_plus_gate(event="pre_tool_use", context={"tool_name": "<tool>"})`.
-7. In Search Mode, call the `search` skill and follow its frozen-spec workflow.
-8. After selection/report/promotion, record the result with
+9. In Search Mode, call the internal `search` skill and follow its frozen-spec workflow.
+10. After selection/report/promotion, record the result with
    `goal_plus_record_search_result`.
-9. Finish with a final raw-goal audit. Mark `goal_plus_set_status(...,
+11. Finish with a final raw-goal audit. Mark `goal_plus_set_status(...,
    status="complete")` only when the original objective is satisfied.
-10. Before stopping, call `goal_plus_gate(event="stop", context={})`; if it
+12. Before stopping, call `goal_plus_gate(event="stop", context={})`; if it
     blocks, continue with the returned continuation prompt.
 
 Modes:
@@ -46,6 +51,10 @@ Modes:
   complete from evidence.
 - Spec Discovery Mode: build the baseline, metric, verifier, edit surface, and
   promotion rule needed for a safe SearchSpec.
+- Initial Search-Ready: ask the user to confirm the frozen verifier before
+  `search_freeze_spec`.
+- In-Progress Search Discovery: proceed once the verifier-backed draft is high
+  confidence.
 - Search Mode: freeze the SearchSpec, run isolated candidates, select/report,
   promote, then audit the raw goal.
 

@@ -50,10 +50,13 @@ fixtures, and test assets.
 
 ## Core Boundary
 
-This project is a Search MCP Runtime, not a worker supervisor.
+This project is a `/goal-plus` runtime with an internal Search Mode engine, not
+a worker supervisor.
 
 The runtime owns:
 
+- goal-plus intake, triage, spec drafts, verifier confirmation state, and final
+  audit evidence
 - frozen specs and verifier artifacts
 - candidate workspace creation
 - planning and strategy state
@@ -80,8 +83,11 @@ worker through the selected host.
 
 - `src/agentic_any_search_mcp/models.py`: strict Pydantic data models and
   validation.
-- `src/agentic_any_search_mcp/runtime.py`: file-backed state machine,
-  workspace copy, verifier execution, selection, reports, and promotion.
+- `src/agentic_any_search_mcp/goal_plus.py`: file-backed goal-plus state
+  machine for raw goal intake, triage, spec drafts, gates, and search links.
+- `src/agentic_any_search_mcp/runtime.py`: file-backed Search Mode state
+  machine for workspace copy, verifier execution, selection, reports, and
+  promotion.
 - `src/agentic_any_search_mcp/agent_hosts.py`: host adapters for OpenCode,
   Codex, and Claude Code. Keep host launch/continue/budget mapping here.
 - `src/agentic_any_search_mcp/tools.py`: JSON-friendly facade used by tests and
@@ -89,9 +95,10 @@ worker through the selected host.
 - `src/agentic_any_search_mcp/server.py`: FastMCP stdio server.
 - `src/agentic_any_search_mcp/strategies/`: strategy plugins and helpers.
 - `src/agentic_any_search_mcp/trace_export.py`: OpenCode trace export tooling.
-- `.opencode/`: OpenCode skills, commands, and worker agents.
-- `.agents/` and `.codex/`: Codex search skill and worker agent assets.
-- `.claude/`: Claude Code search skill and worker agents.
+- `.opencode/`: OpenCode goal-plus/search skills, commands, and worker agents.
+- `.agents/` and `.codex/`: Codex goal-plus/search skills and worker agent
+  assets.
+- `.claude/`: Claude Code goal-plus/search skills and worker agents.
 - `docs/`: design, adapter, host, debug, and strategy documentation.
 - `examples/`: example SearchSpec files.
 - `tests/`: unit/integration tests, asset tests, fixtures, and opt-in
@@ -145,13 +152,18 @@ Host assets are executable product surface, not decorative docs. When changing
 the runtime contract, update the matching assets and tests:
 
 - OpenCode: `.opencode/skills/search/SKILL.md`,
+  `.opencode/skills/goal-plus/SKILL.md`, `.opencode/command/goal-plus.md`,
+  `.opencode/command/goal-any-optimize.md`,
+  `.opencode/agents/goal-plus-orchestrator.md`,
   `.opencode/agents/AnySearchAgent*.md`,
   `.opencode/agents/search-orchestrator.md`, and
   `tests/test_opencode_assets.py`.
-- Codex: `.agents/skills/search/SKILL.md`,
+- Codex: `.agents/skills/goal-plus/SKILL.md`,
+  `.agents/skills/search/SKILL.md`,
   `.codex/agents/any_search_agent.toml`, `.codex/config.toml`, and
   `tests/test_codex_assets.py`.
-- Claude Code: `.claude/skills/search/SKILL.md`,
+- Claude Code: `.claude/skills/goal-plus/SKILL.md`,
+  `.claude/skills/search/SKILL.md`,
   `.claude/agents/any-search-agent*.md`, `.mcp.json`, and
   `tests/test_claude_assets.py`.
 

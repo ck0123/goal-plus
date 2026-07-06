@@ -1,11 +1,13 @@
 ---
 name: search
-description: Run agentic any-search with the search-runtime MCP server from Codex.
+description: Internal Search Mode engine for /goal-plus with the search-runtime MCP server from Codex.
 ---
 
-# Search Runtime for Codex
+# Search Mode Runtime for Codex
 
-Use this skill when the user asks to run or continue an agentic search.
+Use this skill after `/goal-plus` has upgraded a goal to Search Mode, or for
+explicit low-level debugging of an already measurable SearchSpec. The normal
+user-facing entrypoint is `/goal-plus`.
 
 Use the logical `search_*` tools exposed by the `search-runtime` MCP server.
 Codex may display MCP tools with a client-specific prefix; match by the final
@@ -13,7 +15,8 @@ logical tool name.
 
 ## Main Workflow
 
-1. Call `search_freeze_spec` or `search_create` according to the user's input.
+1. Call `search_freeze_spec` for the Goal Plus spec draft, or `search_create`
+   when a frozen spec already exists.
 2. Call `search_plan_next`.
 3. Call `search_start_batch`.
 4. For each candidate, call `search_start_agent_session`.

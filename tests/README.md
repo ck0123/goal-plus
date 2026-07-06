@@ -1,7 +1,8 @@
 # Tests
 
-Pytest layout for the Search MCP runtime. Two tiers: unit/integration tests run by
-default; system tests (ST) drive a real `opencode run` and are opt-in.
+Pytest layout for the `/goal-plus` runtime and internal Search Mode engine. Two
+tiers: unit/integration tests run by default; system tests (ST) drive a real
+`opencode run` and are opt-in.
 
 ## Layout
 
@@ -14,7 +15,7 @@ tests/
 │   └── swe_bench_20212/
 ├── test_models.py                     # SearchSpec / dataclass validation
 ├── test_runtime_unit.py               # FileSearchRuntime internals (history, batches, verifier)
-├── test_tools.py                      # SearchTools facade delegates to runtime
+├── test_tools.py                      # GoalPlusTools/SearchTools facades
 ├── test_server.py                     # MCP server tool registration
 ├── test_example_scenarios.py          # Examples + runtime integration (no real opencode)
 ├── test_k_module_runtime.py           # k_module end-to-end on runtime (no real opencode)
@@ -48,12 +49,15 @@ pytest -k history                      # by name pattern
 
 ## System Tests (ST, opt-in)
 
-ST tests drive `opencode run --command search "<prompt>"` in a temporary project
-root and parse a machine-readable JSON report from the main agent's final
-message. Each scenario prompt is in `tests/st/prompts/<scenario>.md`; the
-prompt embeds an `{{PROJECT_ROOT}}` placeholder that `conftest.load_prompt`
-renders with the absolute repo path so opencode (running in a tmpdir) can find
-specs and fixtures without anything being copied.
+ST tests drive `opencode run --command goal-plus "<prompt>"` in a temporary
+project root and parse a machine-readable JSON report from the main agent's
+final message. The runner prepends a non-interactive confirmation preamble for
+Initial Search-Ready tasks so the frozen verifier, metric, edit surface, and
+promotion rule are explicitly confirmed. Each scenario prompt is in
+`tests/st/prompts/<scenario>.md`; the prompt embeds an `{{PROJECT_ROOT}}`
+placeholder that `conftest.load_prompt` renders with the absolute repo path so
+opencode (running in a tmpdir) can find specs and fixtures without anything
+being copied.
 
 ST tests are skipped by default. Pass `-m st` to enable them.
 

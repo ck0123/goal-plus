@@ -63,4 +63,5 @@ existing Search MCP flow.
 Codex goal-plus can be run manually through the MCP tools or guarded by hooks
 when the host surface supports them. `goal_plus_gate` is the checkpoint API for
 phase order; it does not supervise worker lifecycle. Codex worker budget and
-foreground subagent behavior remain the responsibility of the `search` skill.
+foreground subagent behavior remain the responsibility of the internal `search`
+skill.

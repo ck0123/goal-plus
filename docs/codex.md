@@ -1,7 +1,8 @@
 # Codex Reference
 
-This project can run the Search MCP Runtime from Codex through the host adapter
-introduced for `strategy.worker_host = "codex"`.
+This project can run `/goal-plus` from Codex. Search Mode uses the Search MCP
+Runtime through the host adapter introduced for `strategy.worker_host =
+"codex"`.
 
 For the cross-host capability matrix and adapter contract, see
 [agent-host-adapters.md](agent-host-adapters.md).
@@ -12,9 +13,14 @@ Project-local MCP configuration lives in:
 
 ```text
 .codex/config.toml
+.agents/skills/goal-plus/SKILL.md
 .agents/skills/search/SKILL.md
 .codex/agents/any_search_agent.toml
 ```
+
+Use `goal-plus` as the user-facing skill. The `search` skill is the internal
+Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
+verifier-backed spec.
 
 The MCP server is configured as:
 
@@ -41,7 +47,8 @@ OpenCode-only until they are adapted and tested.
 
 ## Worker Flow
 
-The runtime returns a Codex-native foreground launch payload from
+After `/goal-plus` enters Search Mode, the runtime returns a Codex-native
+foreground launch payload from
 `search_start_agent_session`:
 
 ```json

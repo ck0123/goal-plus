@@ -1,7 +1,8 @@
 # Claude Code Reference
 
-This project can run the Search MCP Runtime from Claude Code through the host
-adapter introduced for `strategy.worker_host = "claude-code"`.
+This project can run `/goal-plus` from Claude Code. Search Mode uses the Search
+MCP Runtime through the host adapter introduced for `strategy.worker_host =
+"claude-code"`.
 
 For the cross-host capability matrix and adapter contract, see
 [agent-host-adapters.md](agent-host-adapters.md).
@@ -25,11 +26,16 @@ Project-local assets:
 
 ```text
 .mcp.json
+.claude/skills/goal-plus/SKILL.md
 .claude/skills/search/SKILL.md
 .claude/agents/any-search-agent.md
 .claude/agents/any-search-agent-flash.md
 .claude/agents/any-search-agent-deep.md
 ```
+
+Use `goal-plus` as the user-facing skill. The `search` skill is the internal
+Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
+verifier-backed spec.
 
 The MCP server is configured as:
 
@@ -57,7 +63,8 @@ OpenCode-only until they are adapted and tested.
 
 ## Worker Flow
 
-The runtime returns a Claude Code foreground launch payload from
+After `/goal-plus` enters Search Mode, the runtime returns a Claude Code
+foreground launch payload from
 `search_start_agent_session`:
 
 ```json

@@ -19,12 +19,15 @@ workspaces, verifier scoring, history, reports, and promotion patches.
 
 ## OpenCode Host Notes
 
-Run OpenCode normally:
+Run OpenCode normally through `/goal-plus`:
 
 ```bash
 opencode
-opencode run --command search "<prompt>"
+opencode run --command goal-plus "<prompt>"
 ```
+
+`opencode run --command search` is reserved for internal debugging of the
+Search Mode engine and should not be the normal user entrypoint.
 
 OpenCode `Task` has no `timeout` parameter. Subagents run until their OpenCode step cap (15/50/100/150 depending on `worker_agent_type`) hits or the user interrupts the run. There are no per-session or run-level time deadlines in this runtime. Do not pass or invent a Task-level timeout.
 

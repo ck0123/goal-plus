@@ -382,7 +382,7 @@ Files changed by the baseline implementation:
 | `tests/test_goal_plus.py` | Unit tests for state transitions, gate decisions, and search linking. |
 | `tests/test_server.py` | Update exact MCP tool registration expectations. |
 | `tests/test_tools.py` | Add JSON facade tests; keep lifecycle-exclusion tests for `search_*`. |
-| `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then search skill only in Search Mode. |
+| `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then the internal search skill only in Search Mode. |
 | `.agents/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
 | `.claude/skills/goal-plus/SKILL.md` | Claude Code workflow instructions. |
 | hook scripts/docs | Optional host-specific `Stop` / `SubagentStop` / `PreToolUse` adapters that call `goal_plus_gate` or read its state. |
