@@ -20,6 +20,11 @@ Newer Claude Code versions may expose richer subagent management, but this
 adapter only relies on foreground Agent launches and optional `SendMessage`
 continuation when Claude Code exposes a reusable agent handle.
 
+This repository does not currently ship Claude Code hook configuration for
+Goal Plus. The `.claude/` directory contains skills and bounded Agent
+definitions only; there is no `.claude/settings*.json` or hook script that
+automatically calls `goal_plus_gate`.
+
 ## Config
 
 Project-local assets:
@@ -49,6 +54,23 @@ The MCP server is configured as:
   }
 }
 ```
+
+## Goal Plus Hook Status
+
+Claude Code assets currently provide Search Mode worker orchestration and
+manual Goal Plus gate calls through the `goal-plus` skill. They do not provide
+hook-enforced lifecycle control.
+
+Concretely, the checked-in assets do not wire:
+
+- a `PreToolUse` hook to call `goal_plus_gate` before `search_*`
+- a `Stop` hook to call `goal_plus_gate` before the main agent ends
+- a `SubagentStop` hook to audit foreground Agent completion
+
+The debugging examples below mention `--include-hook-events` because Claude
+Code can expose hook diagnostics when hooks exist. In this repository, that is
+only useful for externally supplied hooks; there is no built-in Goal Plus hook
+implementation to inspect.
 
 ## Supported Strategies
 

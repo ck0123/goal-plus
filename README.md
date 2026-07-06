@@ -70,15 +70,26 @@ agentic-any-search-mcp --root .search
 
 The runtime currently supports three host clients through adapters:
 
-| Host | `strategy.worker_host` | Worker launch | Continuation | Strategy scope |
-|---|---|---|---|---|
-| OpenCode | `opencode` | foreground `Task` | `Task(task_id=...)` | compatibility baseline |
-| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | portable builtin modes |
-| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | portable builtin modes |
+| Host | `strategy.worker_host` | Worker launch | Continuation | Goal Plus gate enforcement | Strategy scope |
+|---|---|---|---|---|---|
+| OpenCode | `opencode` | foreground `Task` | `Task(task_id=...)` | manual / instruction-driven | compatibility baseline |
+| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | manual unless external hooks are wired | portable builtin modes |
+| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | manual unless external hooks are wired | portable builtin modes |
 
 Portable builtin modes for Codex and Claude Code are `agent_guided`, `agent`,
 `default`, `random`, and `random_mode`. OpenCode remains the baseline for existing
 OpenCode-tested strategies and trace export.
+
+Goal Plus has two support levels:
+
+- **Search Mode orchestration**: host assets can launch candidate workers,
+  verify scores, bind handles, select, report, and promote. This is implemented
+  for the hosts above.
+- **Lifecycle gate enforcement**: host hooks automatically call
+  `goal_plus_gate` before Search Mode tools and before the agent stops. This
+  repository does not currently ship OpenCode, Codex, or Claude Code hook
+  wiring. Until a host hook adapter is added, `goal_plus_gate` is called by the
+  skill/orchestrator instructions and is best-effort rather than enforced.
 
 Host references:
 
@@ -154,6 +165,11 @@ opencode run --command goal-plus "Run the k_module smoke test with 4 candidates.
 ```
 
 OpenCode `Task` does not currently expose a `timeout` parameter; subagents run until their OpenCode step cap hits or the user interrupts them. The MCP runtime does not provide wait or abort tools.
+
+OpenCode currently has no project hook that automatically calls
+`goal_plus_gate` on `Stop` or `PreToolUse`. `/goal-plus` works as an
+instruction-driven command, but final raw-goal audit and phase gates are not
+strongly enforced by OpenCode itself.
 
 See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
 

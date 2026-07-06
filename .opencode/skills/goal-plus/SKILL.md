@@ -165,6 +165,8 @@ When a host has hooks, wire `goal_plus_gate` to:
 - `pre_tool_use` before `search_*` tools
 - `stop` or `subagent_stop` before the agent ends
 
-When hooks are unavailable, call the same gate manually at those checkpoints.
-The gate controls phase order; the host still owns foreground worker launch,
+The checked-in OpenCode assets do not include such hooks. In OpenCode, call the
+same gate manually at those checkpoints. This is instruction-driven and can be
+skipped by a non-compliant agent; it is not enforced by OpenCode itself. The
+gate controls phase order; the host still owns foreground worker launch,
 interruptions, and return values.

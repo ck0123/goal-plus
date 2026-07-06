@@ -15,6 +15,16 @@ def test_claude_mcp_json_registers_search_runtime() -> None:
     assert server["args"] == ["--root", ".search"]
 
 
+def test_claude_assets_do_not_claim_hook_wiring() -> None:
+    assert not (ROOT / ".claude" / "settings.json").exists()
+    assert not (ROOT / ".claude" / "settings.local.json").exists()
+
+    text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
+    assert "does not currently ship Claude Code hook configuration" in text
+    assert "no built-in Goal Plus hook" in text
+    assert "implementation to inspect" in text
+
+
 def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
     text = (ROOT / ".claude" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"

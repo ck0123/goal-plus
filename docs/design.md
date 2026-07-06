@@ -9,6 +9,12 @@ best-candidate selection, reports, and promotion artifacts. The host code-agent
 client owns the subagent process lifecycle. The main agent owns policy decisions
 through MCP tool calls.
 
+`goal_plus_gate` records deterministic phase decisions, but those decisions are
+enforced only when a host actually calls the gate. The checked-in OpenCode,
+Codex, and Claude Code assets call the gate by instruction; this is
+best-effort. No host hook adapter is currently shipped to automatically enforce
+Stop, SubagentStop, or PreToolUse checkpoints.
+
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
 
 - freeze a `SearchSpec` and verifier artifacts
@@ -32,7 +38,7 @@ User
 OpenCode / Codex / Claude Code host agent
   |
   | reads host-local goal-plus skill
-  | calls goal_plus_* MCP tools
+  | calls goal_plus_* MCP tools manually
   v
 Search MCP server
   |

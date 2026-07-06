@@ -249,6 +249,12 @@ state machine records phase, next action, spec draft, linked search run, and
 gate decisions; the search runtime stays strict where it is already strong:
 frozen inputs, isolated candidates, verifier results, and promotion artifacts.
 
+The gate decisions are enforceable only when the host calls them. Current
+OpenCode, Codex, and Claude Code assets call `goal_plus_gate` by instruction in
+the skill/orchestrator text; this is best-effort. The repository does not ship
+hook adapters that automatically invoke the gate on Stop, SubagentStop, or
+PreToolUse events.
+
 ## Natural Implementation Shape
 
 The baseline implementation has these pieces:
@@ -270,12 +276,14 @@ src/agentic_any_search_mcp/tools.py / server.py
   - load a goal-plus skill or instructions
   - create goal-plus state and run triage
   - call the internal search skill only when Search Mode is selected
+  - call gate checkpoints manually; no OpenCode hook is installed
 
 .agents/skills/goal-plus/SKILL.md
 .claude/skills/goal-plus/SKILL.md
   - host-specific workflow text
   - same triage model
   - host-specific worker launch notes
+  - manual gate checkpoints unless external hooks are wired
 
 docs/goal-plus/
   - shared design and scenario guidance
@@ -365,6 +373,10 @@ claiming completion.
   `goal-plus` feel like a supervisor. Mitigation: keep lifecycle controls in
   host adapters and host-native surfaces unless the runtime contract is
   intentionally redesigned.
+- **Manual gate bypass.** Without host hooks, an agent can forget to call
+  `goal_plus_gate` before stopping or entering Search Mode. Mitigation:
+  document OpenCode/Codex/Claude support as instruction-driven until hook
+  adapters exist.
 
 ## Open Questions
 

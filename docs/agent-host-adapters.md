@@ -47,6 +47,26 @@ The runtime does not wait for, abort, supervise, or synchronize host workers.
 It records provenance and verifier counters only after the host or worker calls
 the corresponding MCP tools.
 
+## Goal Plus Enforcement Levels
+
+Do not conflate Search Mode worker support with enforced Goal Plus lifecycle
+control.
+
+Search Mode support means a host can launch foreground candidate workers and
+the runtime can record verifier-backed search results. Goal Plus lifecycle
+enforcement means a host hook automatically calls `goal_plus_gate` at
+checkpoints such as:
+
+- before `search_*` tools that create or run search state
+- before the top-level agent stops
+- before a subagent stop, if the host exposes that hook
+
+Current repository assets do not include hook wiring for OpenCode, Codex, or
+Claude Code. The `goal_plus_gate` calls in the skills are therefore manual /
+instruction-driven. They document the intended phase order, but they are not a
+hard guarantee that an agent cannot skip the final raw-goal audit or call a
+Search Mode tool early.
+
 ## Host Selection
 
 Set `strategy.worker_host` in the `SearchSpec`:
@@ -86,6 +106,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | supported with `SendMessage` when a reusable handle is bound |
 | Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts |
 | Trace export | supported for OpenCode logs | not implemented | not implemented |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | manual skill calls unless external hooks are added | manual skill calls; no `.claude` hook settings shipped |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only |
 
 Portable builtin strategies are:

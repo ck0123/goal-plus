@@ -58,5 +58,7 @@ Modes:
 - Search Mode: freeze the SearchSpec, run isolated candidates, select/report,
   promote, then audit the raw goal.
 
-`goal_plus_gate` protects phase order. It is not a worker lifecycle API and does
-not replace host foreground subagent execution.
+`goal_plus_gate` protects phase order only when you call it. The checked-in
+OpenCode setup does not install Stop or PreToolUse hooks, so OpenCode will not
+call the gate automatically. It is not a worker lifecycle API and does not
+replace host foreground subagent execution.

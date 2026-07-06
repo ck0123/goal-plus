@@ -121,14 +121,17 @@ Current host expectations:
 
 - OpenCode is the compatibility baseline. It supports the existing
   OpenCode-tested strategies, `Task(task_id=...)` continuation, step-tiered
-  agents, and OpenCode trace export.
+  agents, and OpenCode trace export. It does not currently provide
+  hook-enforced Goal Plus lifecycle gates in this repository.
 - Codex supports the portable builtin strategy subset. `worker_budget` requires
   `max_runtime_seconds` and is enforced by parent watchdog metadata:
   `wait_agent(timeout_ms=...)`, then `interrupt_agent` or
-  `send_input(..., interrupt=true)` when the deadline expires.
+  `send_input(..., interrupt=true)` when the deadline expires. Goal Plus gates
+  are manual unless a host hook adapter is added.
 - Claude Code supports the portable builtin strategy subset. `worker_budget`
   requires `max_turns` and maps known budgets to `.claude/agents/*.md`
-  `maxTurns` definitions.
+  `maxTurns` definitions. The checked-in `.claude/` assets do not include hook
+  settings or scripts for `goal_plus_gate`.
 
 Portable strategy names for non-OpenCode hosts are currently:
 
@@ -145,6 +148,10 @@ behavior depends on host execution.
 Host workers are foreground by design. Do not switch the adapter flow to
 background subagents unless the design docs, host skills, runtime validation,
 and tests are updated together.
+
+Do not describe a host as hook-enforced Goal Plus unless the repository ships
+and tests the hook wiring that calls `goal_plus_gate` at the relevant Stop,
+SubagentStop, or PreToolUse checkpoints.
 
 ## Asset And Prompt Changes
 

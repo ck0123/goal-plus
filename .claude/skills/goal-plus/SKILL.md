@@ -60,8 +60,10 @@ existing Search MCP flow.
 
 ## Hook Compatibility
 
-Claude Code goal-plus can be run manually through the MCP tools or guarded by
-hooks when the host surface supports them. `goal_plus_gate` is the checkpoint
-API for phase order; it does not supervise worker lifecycle. Claude foreground
-agent behavior and turn budgets remain the responsibility of the internal
-`search` skill.
+Claude Code goal-plus currently runs through manual MCP tool calls in this
+repository. The checked-in `.claude/` assets do not include hook settings or
+hook scripts. If a host surface supplies hooks, wire them to `goal_plus_gate`;
+otherwise the gate is an instruction-driven checkpoint and can be skipped by a
+non-compliant agent. `goal_plus_gate` does not supervise worker lifecycle.
+Claude foreground agent behavior and turn budgets remain the responsibility of
+the internal `search` skill.

@@ -259,10 +259,15 @@ phase
 status
 ```
 
-This is the bridge for Codex/Claude Code hooks. For a `Stop` hook, `block`
-means "do not let the model stop; continue with this prompt." For a
-`PreToolUse` hook, `block` means "this tool call is not valid in the current
-goal-plus phase."
+This is the bridge for hook-capable hosts. For a `Stop` hook, `block` means
+"do not let the model stop; continue with this prompt." For a `PreToolUse`
+hook, `block` means "this tool call is not valid in the current goal-plus
+phase."
+
+The current repository registers `goal_plus_gate` as an MCP tool but does not
+ship host hook adapters for OpenCode, Codex, or Claude Code. Without such an
+adapter, gate calls are manual skill/orchestrator steps rather than enforced
+host lifecycle checks.
 
 The gate should be conservative and deterministic:
 
@@ -385,7 +390,7 @@ Files changed by the baseline implementation:
 | `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then the internal search skill only in Search Mode. |
 | `.agents/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
 | `.claude/skills/goal-plus/SKILL.md` | Claude Code workflow instructions. |
-| hook scripts/docs | Optional host-specific `Stop` / `SubagentStop` / `PreToolUse` adapters that call `goal_plus_gate` or read its state. |
+| hook scripts/docs | Not implemented in this repository. Future host-specific `Stop` / `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
 
 ## Hook Integration Pattern
 
@@ -414,8 +419,9 @@ Do not stop yet. The next required action is:
   verifier artifacts, edit surface, and promotion rule.
 ```
 
-This gives deterministic phase control without making MCP responsible for
-worker supervision.
+This gives deterministic phase-control semantics once a host hook actually
+calls it. Until then, it is a manual checkpoint API and does not make MCP
+responsible for worker supervision.
 
 ## Compatibility With `/goal-any-optimize`
 

@@ -138,10 +138,11 @@ claude -p --verbose --output-format stream-json \
   > ".search/host-logs/claude-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
-Add `--include-hook-events` when diagnosing hooks, or
-`--include-partial-messages` when token-level streaming matters. `--debug-file`
-implicitly enables debug mode. Use `--debug api,mcp` for a narrower debug filter
-when API or MCP traffic is the focus.
+Add `--include-hook-events` when diagnosing externally supplied hooks, or
+`--include-partial-messages` when token-level streaming matters. This repository
+does not currently ship Claude Code hook settings for `goal_plus_gate`.
+`--debug-file` implicitly enables debug mode. Use `--debug api,mcp` for a
+narrower debug filter when API or MCP traffic is the focus.
 
 Claude Code persists application data under `~/.claude` unless disabled with
 `--no-session-persistence` in print mode or

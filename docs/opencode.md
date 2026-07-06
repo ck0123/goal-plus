@@ -18,6 +18,13 @@ OpenCode remains the compatibility baseline. Its launch payload,
 `search_bind_opencode_session`, and `Task(task_id=...)` continuation are
 intentionally preserved while Codex and Claude Code use separate host adapters.
 
+This means OpenCode is the baseline for Search Mode worker orchestration, not
+for enforced Goal Plus lifecycle control. The checked-in OpenCode assets do not
+include a `Stop` or `PreToolUse` hook that calls `goal_plus_gate`; the
+`goal-plus-orchestrator` is instructed to call the gate manually. If it skips
+that instruction, OpenCode will not automatically block the final answer or an
+early Search Mode tool call.
+
 For the cross-host capability matrix and adapter contract, see
 [agent-host-adapters.md](agent-host-adapters.md).
 
@@ -126,6 +133,25 @@ opencode run --command goal-plus "<prompt>"
 ```
 
 Current OpenCode `Task` does not expose a Task-level `timeout` parameter. Subagents run until their OpenCode step cap hits or the user interrupts the run; there are no per-session or run-level time deadlines, and there is no MCP abort tool.
+
+## Goal Plus Enforcement
+
+OpenCode support is currently instruction-driven:
+
+1. `/goal-plus` loads the `goal-plus-orchestrator`.
+2. The orchestrator calls `goal_plus_create`, triage/spec-draft tools, and
+   manual `goal_plus_gate` checks at the points documented in the skill.
+3. After Search Mode starts, OpenCode Task workers run through the internal
+   `search` skill flow.
+
+There is no checked-in OpenCode hook adapter that automatically invokes:
+
+- `goal_plus_gate(event="pre_tool_use", ...)` before `search_*`
+- `goal_plus_gate(event="stop", ...)` before the main agent stops
+
+Therefore `/goal-plus` on OpenCode should be described as best-effort lifecycle
+control plus real Search Mode worker orchestration. A future OpenCode hook or
+external runner would be needed before calling it hook-enforced Goal Plus.
 
 ## Verify MCP Connectivity
 

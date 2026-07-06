@@ -60,8 +60,9 @@ existing Search MCP flow.
 
 ## Hook Compatibility
 
-Codex goal-plus can be run manually through the MCP tools or guarded by hooks
-when the host surface supports them. `goal_plus_gate` is the checkpoint API for
-phase order; it does not supervise worker lifecycle. Codex worker budget and
-foreground subagent behavior remain the responsibility of the internal `search`
-skill.
+Codex goal-plus currently runs through manual MCP tool calls in this repository.
+No Codex hook adapter is shipped here. If a host surface supplies hooks, wire
+them to `goal_plus_gate`; otherwise the gate is an instruction-driven
+checkpoint and can be skipped by a non-compliant agent. `goal_plus_gate` does
+not supervise worker lifecycle. Codex worker budget and foreground subagent
+behavior remain the responsibility of the internal `search` skill.

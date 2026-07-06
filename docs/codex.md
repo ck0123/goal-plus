@@ -22,6 +22,11 @@ Use `goal-plus` as the user-facing skill. The `search` skill is the internal
 Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
 verifier-backed spec.
 
+This repository does not currently ship Codex hook wiring for Goal Plus.
+`goal_plus_gate` calls are documented in the skill and are manual /
+instruction-driven unless a host-level hook adapter is added outside these
+assets.
+
 The MCP server is configured as:
 
 ```toml
