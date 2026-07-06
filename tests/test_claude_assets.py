@@ -37,6 +37,7 @@ def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
     )
 
     assert "search_start_agent_session" in text
+    assert "search_redispatch_candidate" in text
     assert "Agent" in text
     assert "search_bind_agent_handle" in text
     assert "SendMessage" in text
@@ -107,6 +108,7 @@ def test_claude_search_skill_documents_tier_escalation_and_resume() -> None:
     assert "state-level resume" in text
     assert "context.history" in text
     assert "context.iterations" in text
+    assert "search_redispatch_candidate" in text
     assert "SendMessage` is unavailable" in text
     assert "do not rely on chat transcript" in agent
 

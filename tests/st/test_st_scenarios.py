@@ -1,12 +1,13 @@
-"""System tests: drive `opencode run --command goal-plus` and assert the main
-agent's final JSON report matches the expected scenario contract.
+"""System tests: drive a real host code agent and assert the main agent's final
+JSON report matches the expected scenario contract.
 
 These tests are skipped unless `-m st` is passed. They require:
-  - opencode binary on PATH
-  - search-runtime MCP server connected (verified via `opencode mcp list`)
+  - host binary on PATH (`opencode`, `codex`, or `claude`)
+  - search-runtime MCP server configured for that host
 
-Each test loads a prompt from tests/st/prompts/<scenario>.md, runs opencode in
-a temporary project root, then parses the st_report JSON block from stdout.
+Each test loads a prompt from tests/st/prompts/<scenario>.md, runs the selected
+host in a temporary project root, then parses the st_report JSON block from
+stdout.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from .conftest import load_prompt
 from .helpers.report_parser import StReport, extract_st_report, find_run_id_in_stdout
 
 
-SCENARIOS = [
+OPENCODE_SCENARIOS = [
     "circle_packing_continue",
     "circle_packing_two_batch",
     "circle_packing_random",
@@ -27,10 +28,31 @@ SCENARIOS = [
     "swe_bench_20212",
 ]
 
+SCENARIO_CASES = [
+    *[
+        pytest.param(
+            scenario,
+            marks=(pytest.mark.st, pytest.mark.st_opencode),
+            id=f"opencode-{scenario}",
+        )
+        for scenario in OPENCODE_SCENARIOS
+    ],
+    pytest.param(
+        "codex_redispatch",
+        marks=(pytest.mark.st, pytest.mark.st_codex),
+        id="codex_redispatch",
+    ),
+    pytest.param(
+        "claude_k_module_smoke",
+        marks=(pytest.mark.st, pytest.mark.st_claude),
+        id="claude_k_module_smoke",
+    ),
+]
+
 
 def _assert_common_contract(report: StReport, scenario: str) -> None:
     assert report is not None, (
-        "no st_report JSON block found in opencode stdout — main agent did not "
+        "no st_report JSON block found in host stdout — main agent did not "
         "emit the ST output contract; check the log file for the full session"
     )
     assert report.scenario == scenario, (
@@ -42,7 +64,7 @@ def _assert_common_contract(report: StReport, scenario: str) -> None:
         assert report.extra.get("error"), (
             "candidates empty but no error reason in extra.error"
         )
-        pytest.skip(f"opencode run failed before producing candidates: {report.extra['error']}")
+        pytest.skip(f"host run failed before producing candidates: {report.extra['error']}")
     assert report.selected_candidate_id, "selected_candidate_id missing"
     assert report.best_score is not None, "best_score missing"
     assert report.report_path, "report_path missing"
@@ -152,6 +174,30 @@ def _assert_swe_bench_20212(report: StReport) -> None:
     assert "pass_to_pass" in report.extra, "extra.pass_to_pass missing"
 
 
+def _assert_codex_redispatch(report: StReport) -> None:
+    assert len(report.candidates) >= 1, (
+        f"codex redispatch should have >=1 candidate, got {len(report.candidates)}"
+    )
+    extra = report.extra
+    assert extra.get("host") == "codex"
+    assert extra.get("model") == "gpt-5.3-codex-spark"
+    assert extra.get("same_candidate") is True
+    first = extra.get("first_agent_session_id")
+    redispatched = extra.get("redispatch_agent_session_id")
+    assert first and redispatched and first != redispatched, (
+        "redispatch must create a second, distinct agent_session_id"
+    )
+    assert extra.get("redispatch_budget_control_mode") == "parent_watchdog"
+    assert len(extra.get("verifier_scores") or []) >= 1
+
+
+def _assert_claude_k_module_smoke(report: StReport) -> None:
+    assert len(report.candidates) >= 1, (
+        f"claude k_module smoke should have >=1 candidate, got {len(report.candidates)}"
+    )
+    assert report.extra.get("host") == "claude-code"
+
+
 SCENARIO_ASSERTIONS = {
     "circle_packing_continue": _assert_circle_packing_continue,
     "circle_packing_two_batch": _assert_circle_packing_two_batch,
@@ -160,27 +206,28 @@ SCENARIO_ASSERTIONS = {
     "k_module_then_circle_packing": _assert_k_module_then_circle_packing,
     "signal_processing_multi": _assert_signal_processing_multi,
     "swe_bench_20212": _assert_swe_bench_20212,
+    "codex_redispatch": _assert_codex_redispatch,
+    "claude_k_module_smoke": _assert_claude_k_module_smoke,
 }
 
 
-@pytest.mark.st
-@pytest.mark.parametrize("scenario", SCENARIOS)
+@pytest.mark.parametrize("scenario", SCENARIO_CASES)
 def test_scenario(
     scenario: str,
-    opencode_runner,
+    st_runner,
 ) -> None:
     prompt = load_prompt(scenario)
-    result = opencode_runner.run_streaming(prompt, scenario=scenario, timeout=2400)
+    result = st_runner.run_streaming(prompt, scenario=scenario, timeout=2400)
 
     # Always print the log path so debugging is one click away
     print(f"\n[{scenario}] log: {result.log_path}")
     print(f"[{scenario}] exit: {result.returncode}, timed_out: {result.timed_out}")
 
     assert not result.timed_out, (
-        f"opencode run timed out for {scenario}; see {result.log_path}"
+        f"host run timed out for {scenario}; see {result.log_path}"
     )
-    # OpenCode may exit non-zero even on success; the st_report block is the
-    # source of truth, not the exit code.
+    # Some hosts may exit non-zero even on useful agent output; the st_report
+    # block is the source of truth, not the exit code.
     report = extract_st_report(result.stdout)
     if report is None:
         run_id_fallback = find_run_id_in_stdout(result.stdout)

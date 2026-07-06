@@ -44,6 +44,7 @@ The MCP server is configured as `search-runtime`, so tools appear with this pref
 | `search_plan_next` | `search-runtime_search_plan_next` |
 | `search_start_batch` | `search-runtime_search_start_batch` |
 | `search_start_agent_session` | `search-runtime_search_start_agent_session` |
+| `search_redispatch_candidate` | `search-runtime_search_redispatch_candidate` |
 | `search_bind_opencode_session` | `search-runtime_search_bind_opencode_session` |
 | `search_continue_agent_session` | `search-runtime_search_continue_agent_session` |
 | `search_get_agent_context` | `search-runtime_search_get_agent_context` |
@@ -143,8 +144,9 @@ work when the prior worker did not produce useful verifier evidence:
 History is runtime-owned, not `plan.md`. The main agent reads prior candidate
 results through `search_list_history`; workers read `context.history` and
 `context.iterations` from `search_get_agent_context`. If a worker stops before a
-useful result, prefer a higher tier for the next candidate batch or continuation
-attempt. Do not ask the worker to infer history from chat transcript.
+useful result, call `search_redispatch_candidate` for the same candidate with a
+higher `worker_agent_type` instead of repeating the underpowered launch. Do not
+ask the worker to infer history from chat transcript.
 
 ## Workflow
 
@@ -210,8 +212,9 @@ For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 3. Wait for the OpenCode Task to return. There is no MCP wait call.
 4. When a first-time Task returns, bind the runtime session to the OpenCode session id: `search-runtime_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
 5. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
-6. If the same candidate should keep working in the same OpenCode context, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate. If the prior tier was too small and the returned continuation payload still names that same underpowered tier, prefer planning a new higher-tier candidate rather than repeating the same failure mode.
-7. If candidate budget remains and you want new candidates, plan and start the next batch.
+6. If the same candidate should keep working in the same OpenCode context and the tier was sufficient, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
+7. If the prior Task hit its step cap, returned no useful verifier evidence, or needs a larger tier/budget, call `search-runtime_search_redispatch_candidate(run_id, candidate_id, directive?, worker_agent_type="AnySearchAgentDeep")`. Launch the returned payload like a fresh Task. This creates a new `agent_session_id` for the same candidate workspace and includes resume instructions; it does not mutate candidate policy or create a new candidate.
+8. If candidate budget remains and you want new candidates, plan and start the next batch.
 
 Hard host rules:
 
@@ -220,6 +223,7 @@ Hard host rules:
 - There is no supported `timeout` field on Task. Subagents run until their step cap or until the user interrupts.
 - The Task prompt must not hard-code `run_id`, `candidate_id`, or workspace paths for the worker to use. The worker must derive them from `search_get_agent_context(agent_session_id)`. The `candidate_id` in the launch description/prompt is a label for OpenCode UI mapping only — context is authoritative.
 - `search_continue_agent_session` is only for continuing the same runtime `agent_session_id` after `search_bind_opencode_session`. Do not use it to branch into a new direction that needs a different candidate workspace.
+- `search_redispatch_candidate` is state-level resume for the same candidate workspace with a new `agent_session_id`. Use it when the old worker could not finish or when you need to override `worker_agent_type` / `worker_budget` for the next launch.
 - Stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool.
 
 Multi-batch sketch:
@@ -252,6 +256,19 @@ while budget_remaining:
     subagent_type=continued.launch.subagent_type,
     description=continued.launch.description,
     prompt=continued.launch.prompt,
+  )
+
+  # Optional state-level resume when the prior worker needs a larger tier.
+  resumed = search_redispatch_candidate(
+    run_id,
+    session.candidate_id,
+    directive,
+    worker_agent_type="AnySearchAgentDeep",
+  )
+  Task(
+    subagent_type=resumed.launch.subagent_type,
+    description=resumed.launch.description,
+    prompt=resumed.launch.prompt,
   )
 ```
 

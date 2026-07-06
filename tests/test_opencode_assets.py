@@ -32,6 +32,7 @@ def test_search_skill_is_internal_search_mode_engine() -> None:
     assert "search-runtime_search_freeze_spec" in skill
     assert "search-runtime_search_bind_opencode_session" in skill
     assert "search-runtime_search_continue_agent_session" in skill
+    assert "search-runtime_search_redispatch_candidate" in skill
     assert "Do not start candidate execution before" in skill
     assert "k_module" in skill
 
@@ -212,6 +213,7 @@ def test_opencode_search_skill_documents_tier_escalation_and_resume_history() ->
     assert "History is runtime-owned, not `plan.md`" in skill
     assert "context.history" in skill
     assert "context.iterations" in skill
+    assert "search_redispatch_candidate" in skill
     assert "do not rely on chat transcript" in agent
 
 

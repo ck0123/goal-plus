@@ -225,6 +225,7 @@ search-runtime_search_list_history
 search-runtime_search_plan_next
 search-runtime_search_start_batch
 search-runtime_search_start_agent_session
+search-runtime_search_redispatch_candidate
 search-runtime_search_bind_agent_handle
 search-runtime_search_bind_opencode_session
 search-runtime_search_continue_agent_session
@@ -249,8 +250,9 @@ The autonomous-search control plane represents each long-running subagent as an 
 5. Subagents call `search_get_agent_context(agent_session_id)`, then read/edit their workspace and self-score with `search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are those two.
 6. Main agent waits for OpenCode Task to return. There is no MCP wait loop.
 7. After a Task returns, the main agent runs `search_run_verifier(run_id, candidate_id, "process")` to confirm the current best workspace state.
-8. To continue the same candidate/node, main agent calls `search_continue_agent_session(agent_session_id, directive?)` and launches `Task(task_id=launch.task_id, ...)`. This reuses the same OpenCode session and candidate workspace; it is not fork/branch creation.
-9. When the run budget is exhausted, the main agent stops launching new Tasks and reports the best candidates. Stopping a running subagent is an OpenCode/user interruption concern; there is no MCP abort.
+8. To continue the same candidate/node in the same OpenCode context, main agent calls `search_continue_agent_session(agent_session_id, directive?)` and launches `Task(task_id=launch.task_id, ...)`. This reuses the same OpenCode session and candidate workspace; it is not fork/branch creation.
+9. To recover from a step-cap hit or upgrade the worker tier for the same candidate workspace, main agent calls `search_redispatch_candidate(run_id, candidate_id, directive?, worker_agent_type?)` and launches a fresh Task from the returned payload. This creates a new `agent_session_id`; it does not create a new candidate.
+10. When the run budget is exhausted, the main agent stops launching new Tasks and reports the best candidates. Stopping a running subagent is an OpenCode/user interruption concern; there is no MCP abort.
 
 The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion. OpenCode owns the actual subagent lifecycle (start, step cap, stop/interrupt, Task return). The runtime does not maintain lifecycle status, host-sync state, or process cancellation.
 

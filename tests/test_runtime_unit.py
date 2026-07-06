@@ -260,6 +260,43 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     assert "required" not in session.launch
 
 
+def test_redispatch_candidate_creates_new_session_with_tier_override(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+            "worker_agent_type": "AnySearchAgentFlash",
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    first = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "try flash"})
+
+    redispatched = runtime.redispatch_candidate(
+        run_id,
+        task.candidate_id,
+        {"goal": "resume with more steps"},
+        worker_agent_type="AnySearchAgentDeep",
+    )
+
+    assert redispatched.agent_session_id != first.agent_session_id
+    assert redispatched.candidate_id == first.candidate_id
+    assert redispatched.workspace == first.workspace
+    assert redispatched.launch["subagent_type"] == "AnySearchAgentDeep"
+    assert redispatched.agent_session_id in redispatched.launch["prompt"]
+    assert "state_level_resume" in redispatched.launch["prompt"]
+
+    refreshed_candidate = runtime._load_candidate_record(run_id, task.candidate_id)
+    worker_policy = refreshed_candidate.task.strategy_metadata["worker_policy"]
+    assert worker_policy["worker_agent_type"] == "AnySearchAgentFlash"
+
+
 def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -278,6 +315,36 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
     assert session.launch["agent_type"] == "any_search_agent"
     assert session.launch["fork_turns"] == "none"
     assert "agent_session_id=" in session.launch["message"]
+
+
+def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    first = runtime.start_agent_session(run_id, task.candidate_id)
+
+    redispatched = runtime.redispatch_candidate(
+        run_id,
+        task.candidate_id,
+        "resume after timeout",
+        worker_agent_type="any_search_agent_deep",
+        worker_budget={"max_runtime_seconds": 30, "max_turns": 12, "on_exceed": "interrupt"},
+    )
+
+    assert redispatched.agent_session_id != first.agent_session_id
+    assert redispatched.launch["agent_type"] == "any_search_agent_deep"
+    assert redispatched.launch["budget_control"] == {
+        "mode": "parent_watchdog",
+        "max_runtime_seconds": 30,
+        "wait_timeout_ms": 30000,
+        "on_exceed": "interrupt",
+        "interrupt_target": redispatched.launch["task_name"],
+        "max_turns_hint": 12,
+    }
 
 
 def test_codex_worker_budget_flows_to_watchdog_launch_payload(tmp_path: Path) -> None:
@@ -336,6 +403,62 @@ def test_start_agent_session_returns_claude_foreground_launch_payload(tmp_path: 
     assert session.launch["agent_type"] == "any-search-agent"
     assert session.launch["background"] is False
     assert "agent_session_id=" in session.launch["message"]
+
+
+def test_redispatch_candidate_overrides_claude_tier_and_budget(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "claude-code", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    redispatched = runtime.redispatch_candidate(
+        run_id,
+        task.candidate_id,
+        {"goal": "resume with deep budget"},
+        worker_agent_type="any-search-agent-deep",
+        worker_budget={"max_turns": 16, "on_exceed": "interrupt"},
+    )
+
+    assert redispatched.launch["agent_type"] == "any-search-agent-deep"
+    assert redispatched.launch["budget_control"] == {
+        "mode": "host_turn_limit",
+        "max_turns": 16,
+        "on_exceed": "interrupt",
+    }
+
+
+def test_redispatch_candidate_rejects_claude_tier_budget_mismatch(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "claude-code",
+            "worker_agent_type": "any-search-agent-flash",
+            "worker_budget": {
+                "max_turns": 4,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    with pytest.raises(ValueError, match="known claude-code worker_agent_type"):
+        runtime.redispatch_candidate(
+            run_id,
+            task.candidate_id,
+            {"goal": "resume deeper"},
+            worker_agent_type="any-search-agent-deep",
+        )
 
 
 def test_claude_worker_budget_flows_to_turn_limit_launch_payload(tmp_path: Path) -> None:

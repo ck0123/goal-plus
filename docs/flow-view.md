@@ -158,6 +158,7 @@ Each step lists **who acts** and **what they see**.
 | `proposal.history_refs` | Point worker at specific inspirations | Set by evolve, but worker only gets ids, not content |
 | `directive` (at session start or continuation) | Pass a goal to the worker | Mostly meaningful for `agent_guided`; in builtin evolve the proposal overrides it |
 | `search_continue_agent_session(agent_session_id)` | Reuse the same OpenCode session and candidate workspace | Requires `search_bind_opencode_session` with the Task `metadata.sessionId`; this is not a fork |
+| `search_redispatch_candidate(run_id, candidate_id)` | Start a new worker on the same candidate workspace | Portable state-level resume; may override `worker_agent_type` / `worker_budget` for the new launch |
 | `budget.max_parallel` | Batch planning hint | Used to size planned groups, not to supervise Task lifecycle |
 
 ## 5. OpenCode Platform Hard Constraints
@@ -167,7 +168,7 @@ These are the root causes of "API exists but agent can't use it":
 1. **Task has no `timeout`.** There are no per-session or run-level time deadlines. The worker runs until OpenCode's step cap (15/50/100/150) is hit or the user interrupts the run. Stopping a running subagent is an OpenCode/user concern.
 2. **No MCP wait API.** The runtime records context/provenance and scores; it does not supervise Task lifecycle.
 3. **Subagents have no direct communication.** Subagent A cannot read subagent B's workspace. There is no observation bus or peer-status channel. Cross-session learning must happen via Main's next `plan_next`, not at runtime.
-4. **Subagent step budget is fixed per Task invocation.** 15/50/100/150, not dynamically adjustable inside a running invocation. A promising candidate can continue later only if Main bound the Task `metadata.sessionId` via `search_bind_opencode_session`, then relaunches with `Task(task_id=launch.task_id, ...)` from `search_continue_agent_session`.
+4. **Subagent step budget is fixed per Task invocation.** 15/50/100/150, not dynamically adjustable inside a running invocation. A promising candidate can continue later through same-session continuation when Main bound the Task `metadata.sessionId`, or through `search_redispatch_candidate` when it needs a fresh worker or a larger tier.
 5. **No MCP process cancellation.** Stopping a running subagent is an OpenCode/user interruption concern, not an MCP call. There is no MCP abort tool.
 
 ## 6. Diagnosis: What Evolve Needs That Is Currently Missing
@@ -182,12 +183,12 @@ Root cause: OpenCode platform (subagents can't read peers' workspaces) + runtime
 `StrategySpec.parent_policy: dict` is defined in `models.py` but has zero references in `runtime.py`. There is no way to configure tournament size, elitism, multi-parent crossover, or any selection policy without editing builtin planner code.
 
 **Break C — Subagent step budget is per invocation (platform limit).**
-A candidate that shows promise at step 50 cannot have the running invocation's cap edited in place. It can be reinvested in by continuing the same bound OpenCode session with `search_continue_agent_session`, which keeps the same runtime `agent_session_id`, candidate, and workspace.
+A candidate that shows promise at step 50 cannot have the running invocation's cap edited in place. It can be reinvested in by continuing the same bound OpenCode session with `search_continue_agent_session`, or by calling `search_redispatch_candidate` to create a new `agent_session_id` for the same candidate workspace with a larger tier/budget.
 
 **Priority for unblocking evolve: A > B > C.**
 - A is the root information bottleneck. Fix: `_plan_evolve` should embed the parent's key diff / changed-file content into `proposal.instructions` so the worker truly stands on the parent's shoulders.
 - B: wire `parent_policy` into `_plan_evolve` to support tournament / elitism / multi-parent configuration.
-- C: supported as same-session continuation after binding the OpenCode session id; still not a fork and still not a dynamic in-process step-cap change.
+- C: supported as same-session continuation after binding the OpenCode session id, or as state-level resume through `search_redispatch_candidate`; neither path is a fork or a dynamic in-process step-cap change.
 
 ## 7. Removed APIs
 

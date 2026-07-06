@@ -153,10 +153,11 @@ Claude Code Agent results may include an `agentId` with a `SendMessage` hint,
 but the `claude -p` tool surface used by this adapter may not expose a usable
 `SendMessage` tool. Treat same-agent continuation as conditional and unverified
 unless a real run shows the tool call succeeding. If no handle is bound,
-`SendMessage` is unavailable, or continuation is uncertain, start a new
-foreground Agent for the same candidate and use `search_get_agent_context` to
-recover the authoritative state. The worker should use `context.history` and
-`context.iterations` from the MCP runtime; there is no `plan.md` history file
+`SendMessage` is unavailable, or a larger turn budget is needed, call
+`search_redispatch_candidate` for the same candidate with a matching
+`worker_agent_type` / `worker_budget.max_turns`. The new worker should use
+`search_get_agent_context` to recover the authoritative state from
+`context.history` and `context.iterations`; there is no `plan.md` history file
 for Search Mode.
 
 ## Debugging Logs

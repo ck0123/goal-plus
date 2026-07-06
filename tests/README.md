@@ -2,7 +2,7 @@
 
 Pytest layout for the `/goal-plus` runtime and internal Search Mode engine. Two
 tiers: unit/integration tests run by default; system tests (ST) drive a real
-`opencode run` and are opt-in.
+host code agent and are opt-in.
 
 ## Layout
 
@@ -20,9 +20,12 @@ tests/
 ├── test_example_scenarios.py          # Examples + runtime integration (no real opencode)
 ├── test_k_module_runtime.py           # k_module end-to-end on runtime (no real opencode)
 ├── test_opencode_assets.py            # Bundled agents / skills are well-formed
-└── st/                                # System tests (real opencode run)
+└── st/                                # System tests (real host code-agent run)
     ├── conftest.py                    # Pre-flight checks + fixtures
+    ├── hosts.py                       # Host marker mapping and asset linking
     ├── helpers/
+    │   ├── codex_runner.py            # subprocess wrapper for `codex exec`
+    │   ├── claude_runner.py           # subprocess wrapper for `claude -p`
     │   ├── opencode_runner.py         # subprocess wrapper for `opencode run`
     │   └── report_parser.py           # Parse st_report JSON block from stdout
     ├── prompts/                       # Scenario prompt templates (with {{PROJECT_ROOT}})
@@ -30,6 +33,8 @@ tests/
     │   ├── circle_packing_continue.md
     │   ├── circle_packing_two_batch.md
     │   ├── circle_packing_random.md
+    │   ├── claude_k_module_smoke.md
+    │   ├── codex_redispatch.md
     │   ├── k_module_smoke.md
     │   ├── k_module_then_circle_packing.md
     │   ├── signal_processing_multi.md
@@ -49,15 +54,28 @@ pytest -k history                      # by name pattern
 
 ## System Tests (ST, opt-in)
 
-ST tests drive `opencode run --command goal-plus "<prompt>"` in a temporary
-project root and parse a machine-readable JSON report from the main agent's
-final message. The runner prepends a non-interactive confirmation preamble for
-Initial Search-Ready tasks so the frozen verifier, metric, edit surface, and
-promotion rule are explicitly confirmed. Each scenario prompt is in
+ST tests drive a real host code agent in a temporary project root and parse a
+machine-readable JSON report from the main agent's final message. Host-specific
+markers select the runner:
+
+| Marker | Runner | Default model |
+|---|---|---|
+| `st_opencode` | `opencode run --command goal-plus` | OpenCode default unless `$ST_OPENCODE_MODEL` is set |
+| `st_codex` | `codex exec` | `gpt-5.3-codex-spark` unless `$ST_CODEX_MODEL` is set |
+| `st_claude` | `claude -p` | Claude default unless `$ST_CLAUDE_MODEL` is set |
+
+The runner prepends a non-interactive confirmation preamble for Initial
+Search-Ready tasks so the frozen verifier, metric, edit surface, and promotion
+rule are explicitly confirmed. Each scenario prompt is in
 `tests/st/prompts/<scenario>.md`; the prompt embeds an `{{PROJECT_ROOT}}`
 placeholder that `conftest.load_prompt` renders with the absolute repo path so
-opencode (running in a tmpdir) can find specs and fixtures without anything
-being copied.
+the host agent can find specs and fixtures without copying them.
+
+Host runner subprocesses set `AGENTIC_ANY_SEARCH_ST_ACTIVE=<scenario>`. If a
+host agent accidentally tries to run `pytest -m st` from inside an active ST,
+`tests/st/conftest.py` exits with code 4. This prevents recursive ST launches;
+the correct path is for the host agent to call `search-runtime` MCP tools
+directly, then launch foreground workers from runtime launch payloads.
 
 ST tests are skipped by default. Pass `-m st` to enable them.
 
@@ -65,19 +83,26 @@ ST tests are skipped by default. Pass `-m st` to enable them.
 
 ```bash
 # Single scenario (smoke, ~2 min)
-pytest -m st -k k_module_smoke -v -s
+pytest -m "st and st_opencode" -k k_module_smoke -v -s
+
+# Codex redispatch scenario, default model gpt-5.3-codex-spark
+pytest -m "st and st_codex" -k codex_redispatch -v -s
 
 # Two-run isolation scenario (k_module then circle_packing, ~5-8 min)
-pytest -m st -k k_module_then_circle_packing -v -s
+pytest -m "st and st_opencode" -k k_module_then_circle_packing -v -s
 
-# All seven scenarios (10-25 min)
+# All scenarios for every installed/configured host
 pytest -m st -v -s
 
-# Use a different model
+# Use a different host model
 ST_OPENCODE_MODEL=anthropic/claude-sonnet-4-6 pytest -m st -v -s
+ST_CODEX_MODEL=gpt-5.3-codex-spark pytest -m "st and st_codex" -v -s
+ST_CLAUDE_MODEL=sonnet pytest -m "st and st_claude" -v -s
 
 # Raise per-run timeout (default 1800s)
 ST_OPENCODE_TIMEOUT=3600 pytest -m st -v -s
+ST_CODEX_TIMEOUT=3600 pytest -m "st and st_codex" -v -s
+ST_CLAUDE_TIMEOUT=3600 pytest -m "st and st_claude" -v -s
 ```
 
 `-s` is required: ST tests print the log path on failure, and pytest swallows
@@ -91,18 +116,19 @@ single skip reason so you see all problems at once:
 
 | Check | How |
 |---|---|
-| `opencode` binary on PATH | `shutil.which` |
+| Host binary on PATH | `shutil.which` for `opencode`, `codex`, or `claude` based on marker |
 | `agentic-any-search-mcp` server binary on PATH | `shutil.which` |
-| `search-runtime` MCP connected | `opencode mcp list` matches `search-runtime.*connected` |
-| Configured model available | `opencode models` contains `$ST_OPENCODE_MODEL` (default `deepseek/deepseek-v4-flash`) |
-| Example specs + fixture evaluators present | `examples/*.json` and `tests/fixtures/*/evaluator.py` exist |
+| `search-runtime` MCP connected/configured | host-native MCP listing for the selected marker |
+| Configured model available | OpenCode only, via `opencode models`; Codex/Claude validate model during the real run |
+| ST specs + fixture evaluators present | `tests/st/fixtures/*/{spec.json,evaluator.py,initial_program.py,config.yaml}` exist |
+| Nested ST guard | `AGENTIC_ANY_SEARCH_ST_ACTIVE` is not set in the pytest process |
 
 When a check fails, ST tests are skipped with a concrete reason that includes
 the fix command. Use `pytest -rs` to see skip reasons in the summary.
 
 ### ST Output Contract
 
-Every ST prompt ends with a hard constraint: the OpenCode main agent must emit
+Every ST prompt ends with a hard constraint: the host main agent must emit
 a fenced JSON block tagged `st_report` as the LAST thing in its final message.
 `helpers/report_parser.py` extracts and parses it. Schema:
 
@@ -126,12 +152,12 @@ strategy, `fail_to_pass` for swe_bench) are documented in
 
 ### Debugging
 
-Each ST case writes the full opencode stdout/stderr to a log file under
-`tmp_path/st_logs/<scenario>.log`. On failure, the test prints the path. To
-find the latest log:
+Each ST case writes the full host stdout/stderr to
+`<repo>/.tmp/st-logs/<test-node>/<scenario>.log`. On failure, the test prints
+the path. To find the latest log:
 
 ```bash
-find /private/var/folders -name "*.log" -path "*st_logs*" -newer /tmp 2>/dev/null
+find .tmp/st-logs -name "*.log" -print
 ```
 
 The runtime also writes `report.md` and run state under `<repo>/.search/runs/`
@@ -167,7 +193,10 @@ pytest tests/st -m st --collect-only
 testpaths = tests
 pythonpath = src
 markers =
-    st: system test that drives a real `opencode run` (slow, opt-in via `-m st`)
+    st: system test that drives a real host code agent (slow, opt-in via `-m st`)
+    st_opencode: ST case that runs through OpenCode
+    st_codex: ST case that runs through Codex
+    st_claude: ST case that runs through Claude Code
 ```
 
 The `st` marker is what gates the opt-in behavior. Without `-m st`, every ST

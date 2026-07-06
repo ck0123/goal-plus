@@ -27,6 +27,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_plan_next",
         "search_start_batch",
         "search_start_agent_session",
+        "search_redispatch_candidate",
         "search_bind_agent_handle",
         "search_bind_opencode_session",
         "search_continue_agent_session",
@@ -60,6 +61,20 @@ def test_start_agent_session_returns_launch_payload(tmp_path: Path) -> None:
     # The legacy admission parameters (budget, visibility_mode) are gone.
     assert "budget" not in properties
     assert "visibility_mode" not in properties
+
+
+def test_redispatch_candidate_exposes_worker_overrides(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    schema = tools["search_redispatch_candidate"].parameters
+
+    properties = schema["properties"]
+    assert "run_id" in properties
+    assert "candidate_id" in properties
+    assert "directive" in properties
+    assert "worker_agent_type" in properties
+    assert "worker_budget" in properties
 
 
 def test_continue_agent_session_exposes_task_id_launch_payload(tmp_path: Path) -> None:

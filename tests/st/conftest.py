@@ -8,17 +8,25 @@ from pathlib import Path
 
 import pytest
 
+from .helpers.claude_runner import ClaudeRunner, find_claude
+from .helpers.codex_runner import CodexRunner, find_codex
 from .helpers.opencode_runner import OpenCodeRunner, find_opencode
+from .hosts import HOSTS, HostKind, ST_ACTIVE_ENV, link_host_assets, st_host_from_marker_names
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
-def _run(cmd: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str] | None:
+def _run(
+    cmd: list[str],
+    timeout: int = 20,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
             cmd,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -31,11 +39,19 @@ def _opencode_available() -> bool:
     return find_opencode() is not None
 
 
-def _mcp_runtime_connected() -> tuple[bool, str]:
+def _codex_available() -> bool:
+    return find_codex() is not None
+
+
+def _claude_available() -> bool:
+    return find_claude() is not None
+
+
+def _opencode_mcp_runtime_connected() -> tuple[bool, str]:
     """Verify search-runtime MCP server shows up as connected in `opencode mcp list`."""
     if not _opencode_available():
         return False, "opencode binary not on PATH"
-    proc = _run(["opencode", "mcp", "list"], timeout=20)
+    proc = _run(["opencode", "mcp", "list"], timeout=20, cwd=ROOT)
     if proc is None:
         return False, "opencode mcp list timed out or failed to launch"
     if proc.returncode != 0:
@@ -46,6 +62,32 @@ def _mcp_runtime_connected() -> tuple[bool, str]:
             "Check opencode.json in project root, or run: "
             "opencode mcp add search-runtime --command 'agentic-any-search-mcp --root .search'"
         )
+    return True, ""
+
+
+def _codex_mcp_runtime_connected() -> tuple[bool, str]:
+    if not _codex_available():
+        return False, "codex binary not on PATH"
+    proc = _run(["codex", "mcp", "list"], timeout=20, cwd=ROOT)
+    if proc is None:
+        return False, "codex mcp list timed out or failed to launch"
+    if proc.returncode != 0:
+        return False, f"codex mcp list exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+    if "search-runtime" not in proc.stdout:
+        return False, "search-runtime MCP server not configured for Codex"
+    return True, ""
+
+
+def _claude_mcp_runtime_connected() -> tuple[bool, str]:
+    if not _claude_available():
+        return False, "claude binary not on PATH"
+    proc = _run(["claude", "mcp", "list"], timeout=30, cwd=ROOT)
+    if proc is None:
+        return False, "claude mcp list timed out or failed to launch"
+    if proc.returncode != 0:
+        return False, f"claude mcp list exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+    if "search-runtime" not in proc.stdout or "Connected" not in proc.stdout:
+        return False, "search-runtime MCP server not connected for Claude Code"
     return True, ""
 
 
@@ -109,11 +151,46 @@ def _st_selected(config: pytest.Config) -> bool:
     return "st" in (config.getoption("-m") or "")
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers",
-        "st: system test that drives a real `opencode run` (slow, opt-in via `-m st`)",
-    )
+def _requested_hosts(config: pytest.Config, st_items: list[pytest.Item]) -> set[HostKind]:
+    markexpr = config.getoption("-m") or ""
+    explicit = {
+        host.kind
+        for host in HOSTS.values()
+        if host.marker in markexpr
+    }
+    if explicit:
+        return explicit
+    return {_item_host(item) for item in st_items}
+
+
+def _item_host(item: pytest.Item) -> HostKind:
+    return st_host_from_marker_names({marker.name for marker in item.iter_markers()})
+
+
+def _host_checks(host: HostKind) -> list[tuple[bool, str]]:
+    checks: list[tuple[bool, str]] = []
+    config = HOSTS[host]
+    checks.append((shutil.which(config.binary) is not None, f"{config.binary} binary not on PATH"))
+    binary_ok, binary_msg = _mcp_server_binary_available()
+    checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
+
+    if host == "opencode" and _opencode_available():
+        mcp_ok, mcp_msg = _opencode_mcp_runtime_connected()
+        checks.append((mcp_ok, mcp_msg or "search-runtime MCP connected for OpenCode"))
+        model = os.environ.get("ST_OPENCODE_MODEL")
+        if model:
+            model_ok, model_msg = _model_available(model)
+            checks.append((model_ok, model_msg or f"model {model} available"))
+    elif host == "codex" and _codex_available():
+        mcp_ok, mcp_msg = _codex_mcp_runtime_connected()
+        checks.append((mcp_ok, mcp_msg or "search-runtime MCP configured for Codex"))
+    elif host == "claude-code" and _claude_available():
+        mcp_ok, mcp_msg = _claude_mcp_runtime_connected()
+        checks.append((mcp_ok, mcp_msg or "search-runtime MCP connected for Claude Code"))
+
+    fixtures_ok, fixtures_msg = _fixtures_present()
+    checks.append((fixtures_ok, fixtures_msg or "fixtures/specs present"))
+    return checks
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -122,9 +199,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
 
     selected = _st_selected(config)
-
-    # Run all checks up front so we can report ALL failures, not just the first
-    checks: list[tuple[bool, str]] = []
 
     if not selected:
         # No need to run expensive checks if user didn't select ST
@@ -135,31 +209,27 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 ))
         return
 
-    opencode_ok = _opencode_available()
-    checks.append((opencode_ok, "opencode binary not on PATH"))
+    nested_scenario = os.environ.get(ST_ACTIVE_ENV)
+    if nested_scenario:
+        pytest.exit(
+            f"refusing to run ST from inside active ST host agent: {nested_scenario}",
+            returncode=4,
+        )
 
-    if opencode_ok:
-        mcp_ok, mcp_msg = _mcp_runtime_connected()
-        checks.append((mcp_ok, mcp_msg or "search-runtime MCP connected"))
-
-        binary_ok, binary_msg = _mcp_server_binary_available()
-        checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
-
-        # Only verify model when user explicitly set ST_OPENCODE_MODEL; otherwise
-        # let opencode pick its own default and skip the check.
-        model = os.environ.get("ST_OPENCODE_MODEL")
-        if model:
-            model_ok, model_msg = _model_available(model)
-            checks.append((model_ok, model_msg or f"model {model} available"))
-
-    fixtures_ok, fixtures_msg = _fixtures_present()
-    checks.append((fixtures_ok, fixtures_msg or "fixtures/specs present"))
-
-    failed = [msg for ok, msg in checks if not ok]
-    if failed:
-        reason = "ST pre-flight check failed: " + " | ".join(failed)
-        for item in items:
-            if "st" in [m.name for m in item.iter_markers()]:
+    st_items = [item for item in items if "st" in [m.name for m in item.iter_markers()]]
+    requested_hosts = _requested_hosts(config, st_items)
+    for host in requested_hosts:
+        host_items = [item for item in st_items if _item_host(item) == host]
+        if not host_items:
+            continue
+        checks = _host_checks(host)
+        failed = [msg for ok, msg in checks if not ok]
+        if failed:
+            reason = (
+                f"ST pre-flight check failed for {HOSTS[host].display_name}: "
+                + " | ".join(failed)
+            )
+            for item in host_items:
                 item.add_marker(pytest.mark.skip(reason=reason))
 
 
@@ -179,12 +249,7 @@ def st_project_root(request: pytest.FixtureRequest) -> Path:
     project_root = base / node
     project_root.mkdir(parents=True, exist_ok=True)
 
-    opencode_json = ROOT / "opencode.json"
-    if opencode_json.exists():
-        target = project_root / "opencode.json"
-        if target.exists() or target.is_symlink():
-            target.unlink()
-        target.symlink_to(opencode_json)
+    link_host_assets(project_root, ROOT)
 
     return project_root
 
@@ -205,6 +270,36 @@ def opencode_runner(st_project_root: Path, st_log_dir: Path) -> OpenCodeRunner:
         project_root=st_project_root,
         log_dir=st_log_dir,
         default_timeout=int(os.environ.get("ST_OPENCODE_TIMEOUT", "1800")),
+    )
+
+
+@pytest.fixture()
+def st_host(request: pytest.FixtureRequest) -> HostKind:
+    return _item_host(request.node)
+
+
+@pytest.fixture()
+def st_runner(
+    st_host: HostKind,
+    st_project_root: Path,
+    st_log_dir: Path,
+):
+    if st_host == "opencode":
+        return OpenCodeRunner(
+            project_root=st_project_root,
+            log_dir=st_log_dir,
+            default_timeout=int(os.environ.get("ST_OPENCODE_TIMEOUT", "1800")),
+        )
+    if st_host == "codex":
+        return CodexRunner(
+            project_root=st_project_root,
+            log_dir=st_log_dir,
+            default_timeout=int(os.environ.get("ST_CODEX_TIMEOUT", "1800")),
+        )
+    return ClaudeRunner(
+        project_root=st_project_root,
+        log_dir=st_log_dir,
+        default_timeout=int(os.environ.get("ST_CLAUDE_TIMEOUT", "1800")),
     )
 
 

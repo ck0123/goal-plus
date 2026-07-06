@@ -195,10 +195,10 @@ Host-specific validation prevents unsupported budget shapes:
 Main agents should choose worker size from task shape before freezing the spec.
 Use cheap/flash tiers only for smoke probes. If a worker stops because the
 selected tier was too small and it records no verifier iteration or usable
-score, raise the worker size for later planned work: OpenCode raises
-`worker_agent_type`, Claude Code raises `worker_budget.max_turns` /
-`worker_agent_type`, and Codex raises `worker_budget.max_runtime_seconds`
-because Codex has no hard step tier.
+score, call `search_redispatch_candidate` for the same candidate and raise the
+worker size for that dispatch: OpenCode raises `worker_agent_type`, Claude Code
+raises `worker_budget.max_turns` / `worker_agent_type`, and Codex raises
+`worker_budget.max_runtime_seconds` because Codex has no hard step tier.
 
 ## State-Level Resume
 
@@ -206,11 +206,15 @@ Same-worker continuation is optional host sugar, not the portable recovery
 model. The portable model is state-level resume:
 
 1. Start a new host worker for the same candidate workspace when same-worker
-   continuation is unavailable or unreliable.
-2. The worker calls `search_get_agent_context(agent_session_id)`.
-3. The worker treats `context.history` and `context.iterations` as the
+   continuation is unavailable or unreliable by calling
+   `search_redispatch_candidate(run_id, candidate_id, directive?,
+   worker_agent_type?, worker_budget?)`.
+2. The runtime returns a fresh `agent_session_id` and host launch payload for
+   the same candidate workspace.
+3. The worker calls `search_get_agent_context(agent_session_id)`.
+4. The worker treats `context.history` and `context.iterations` as the
    authoritative prior-attempt record.
-4. The main agent uses `search_list_history` and `search_list_iterations` for
+5. The main agent uses `search_list_history` and `search_list_iterations` for
    audit and follow-up planning.
 
 Search history lives in the MCP runtime's `.search/runs/...` candidate records,

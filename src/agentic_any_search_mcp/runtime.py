@@ -47,6 +47,7 @@ from agentic_any_search_mcp.models import (
     VerifierCommand,
     VerifierResult,
     VerifierRole,
+    WorkerBudget,
 )
 
 
@@ -440,6 +441,82 @@ class FileSearchRuntime:
         lifecycle state. The main agent must launch the worker via OpenCode Task
         using the returned ``launch`` payload.
         """
+        return self._create_agent_session(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            directive=directive,
+        )
+
+    def redispatch_candidate(
+        self,
+        run_id: str,
+        candidate_id: str,
+        directive: dict[str, Any] | str | None = None,
+        *,
+        worker_agent_type: str | None = None,
+        worker_budget: dict[str, Any] | None = None,
+    ) -> AgentSessionRecord:
+        """Create a new worker launch for an existing candidate workspace.
+
+        This is state-level resume, not same-worker continuation. It allocates
+        a new agent_session_id for the same candidate/workspace and may
+        temporarily override the worker tier or budget for that launch. It does
+        not mutate the candidate task policy or track host lifecycle state.
+        """
+        if worker_agent_type is not None and not worker_agent_type.strip():
+            raise ValueError("worker_agent_type must be non-empty when provided")
+
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        candidate_record = self._load_candidate_record(run_id, candidate_id)
+        if candidate_record.status not in {"created", "evaluated"}:
+            raise RuntimeError(
+                f"cannot redispatch candidate in status {candidate_record.status}"
+            )
+
+        selected_worker_agent_type = (
+            worker_agent_type
+            or self._candidate_worker_agent_type(frozen, candidate_record)
+        )
+        worker_budget_override = self._resolve_worker_budget_for_dispatch(
+            frozen=frozen,
+            candidate_record=candidate_record,
+            worker_agent_type=selected_worker_agent_type,
+            worker_budget_override=worker_budget,
+        )
+        normalized_directive = self._normalize_main_directive(directive)
+        previous_session_ids = [
+            session["agent_session_id"]
+            for session in self._agent_session_payloads_for_candidate(run_id, candidate_id)
+        ]
+        resume_directive = {
+            **normalized_directive,
+            "state_level_resume": True,
+            "resume_candidate_id": candidate_id,
+            "previous_agent_session_ids": previous_session_ids,
+            "resume_instruction": (
+                "This is a new worker session for an existing candidate. "
+                "Call search_get_agent_context first and use its history and "
+                "iterations as the authoritative resume context."
+            ),
+        }
+        return self._create_agent_session(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            directive=resume_directive,
+            worker_agent_type_override=selected_worker_agent_type,
+            worker_budget_override=worker_budget_override,
+        )
+
+    def _create_agent_session(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        directive: dict[str, Any] | str | None,
+        worker_agent_type_override: str | None = None,
+        worker_budget_override: dict[str, Any] | None = None,
+    ) -> AgentSessionRecord:
         run = self._load_run(run_id)
         if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
             raise RuntimeError(f"cannot start agent session from state {run.state}")
@@ -458,6 +535,8 @@ class FileSearchRuntime:
             agent_session_id=agent_session_id,
             directive=normalized_directive,
             candidate_record=candidate_record,
+            worker_agent_type_override=worker_agent_type_override,
+            worker_budget_override=worker_budget_override,
         )
         host = frozen.spec.strategy.worker_host
         host_handle = AgentHostHandle(host=host)
@@ -925,41 +1004,51 @@ class FileSearchRuntime:
                 f"{strategy.worker_host} worker_host does not support strategy "
                 f"{strategy.name}; use default/agent_guided or random"
             )
-        if strategy.worker_budget is not None:
-            if (
-                strategy.worker_host == "codex"
-                and strategy.worker_budget.max_runtime_seconds is None
-            ):
+        self._validate_worker_budget_for_host(
+            worker_host=strategy.worker_host,
+            worker_agent_type=strategy.worker_agent_type,
+            worker_budget=strategy.worker_budget,
+        )
+
+    def _validate_worker_budget_for_host(
+        self,
+        *,
+        worker_host: str,
+        worker_agent_type: str | None,
+        worker_budget: WorkerBudget | None,
+    ) -> None:
+        if worker_budget is None:
+            return
+        if worker_host == "codex" and worker_budget.max_runtime_seconds is None:
+            raise ValueError(
+                "codex worker_budget requires max_runtime_seconds so the "
+                "parent agent can enforce a watchdog deadline"
+            )
+        if worker_host == "claude-code" and worker_budget.max_turns is None:
+            raise ValueError(
+                "claude-code worker_budget requires max_turns so the "
+                "subagent definition can enforce a turn budget"
+            )
+        if worker_host != "claude-code":
+            return
+
+        turns = worker_budget.max_turns
+        configured_agent = worker_agent_type
+        if configured_agent in CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS:
+            expected = CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS[configured_agent]
+            if turns != expected:
                 raise ValueError(
-                    "codex worker_budget requires max_runtime_seconds so the "
-                    "parent agent can enforce a watchdog deadline"
+                    "known claude-code worker_agent_type "
+                    f"{configured_agent!r} has maxTurns {expected}, "
+                    f"not requested worker_budget.max_turns {turns}"
                 )
-            if (
-                strategy.worker_host == "claude-code"
-                and strategy.worker_budget.max_turns is None
-            ):
-                raise ValueError(
-                    "claude-code worker_budget requires max_turns so the "
-                    "subagent definition can enforce a turn budget"
-                )
-            if strategy.worker_host == "claude-code":
-                turns = strategy.worker_budget.max_turns
-                configured_agent = strategy.worker_agent_type
-                if configured_agent in CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS:
-                    expected = CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS[configured_agent]
-                    if turns != expected:
-                        raise ValueError(
-                            "known claude-code worker_agent_type "
-                            f"{configured_agent!r} has maxTurns {expected}, "
-                            f"not requested worker_budget.max_turns {turns}"
-                        )
-                elif configured_agent is None and turns not in CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET:
-                    supported = sorted(CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET)
-                    raise ValueError(
-                        "claude-code worker_budget.max_turns without an explicit "
-                        "custom worker_agent_type must be one of "
-                        f"{supported}"
-                    )
+        elif configured_agent is None and turns not in CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET:
+            supported = sorted(CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET)
+            raise ValueError(
+                "claude-code worker_budget.max_turns without an explicit "
+                "custom worker_agent_type must be one of "
+                f"{supported}"
+            )
 
     def _worker_budget_dict(self, strategy: StrategySpec) -> dict[str, Any] | None:
         if strategy.worker_budget is None:
@@ -1057,6 +1146,42 @@ class FileSearchRuntime:
             return dict(budget)
         return self._worker_budget_dict(frozen.spec.strategy)
 
+    def _normalize_worker_budget_override(
+        self,
+        *,
+        worker_host: str,
+        worker_agent_type: str | None,
+        worker_budget: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if worker_budget is None:
+            return None
+        parsed = WorkerBudget.model_validate(worker_budget)
+        self._validate_worker_budget_for_host(
+            worker_host=worker_host,
+            worker_agent_type=worker_agent_type,
+            worker_budget=parsed,
+        )
+        return parsed.model_dump(mode="json")
+
+    def _resolve_worker_budget_for_dispatch(
+        self,
+        *,
+        frozen: FrozenSpec,
+        candidate_record: CandidateRecord,
+        worker_agent_type: str | None,
+        worker_budget_override: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        worker_budget = (
+            worker_budget_override
+            if worker_budget_override is not None
+            else self._candidate_worker_budget(frozen, candidate_record)
+        )
+        return self._normalize_worker_budget_override(
+            worker_host=frozen.spec.strategy.worker_host,
+            worker_agent_type=worker_agent_type,
+            worker_budget=worker_budget,
+        )
+
     def _build_launch_payload(
         self,
         frozen: FrozenSpec,
@@ -1064,8 +1189,13 @@ class FileSearchRuntime:
         agent_session_id: str,
         directive: dict[str, Any],
         candidate_record: CandidateRecord,
+        worker_agent_type_override: str | None = None,
+        worker_budget_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        worker_agent_type = self._candidate_worker_agent_type(frozen, candidate_record)
+        worker_agent_type = (
+            worker_agent_type_override
+            or self._candidate_worker_agent_type(frozen, candidate_record)
+        )
         proposal = candidate_record.task.proposal
         if directive.get("goal"):
             short_intent = str(directive["goal"])
@@ -1091,7 +1221,11 @@ class FileSearchRuntime:
             agent_session_id=agent_session_id,
             short_intent=short_intent,
             one_paragraph_idea=one_paragraph_idea,
-            worker_budget=self._candidate_worker_budget(frozen, candidate_record),
+            worker_budget=(
+                worker_budget_override
+                if worker_budget_override is not None
+                else self._candidate_worker_budget(frozen, candidate_record)
+            ),
         )
 
     def _build_continue_launch_payload(

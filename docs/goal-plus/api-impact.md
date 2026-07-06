@@ -23,6 +23,7 @@ search_list_history
 search_plan_next
 search_start_batch
 search_start_agent_session
+search_redispatch_candidate
 search_bind_agent_handle
 search_bind_opencode_session
 search_continue_agent_session
@@ -42,7 +43,7 @@ The surface is intentionally search-shaped:
 | Create search run | `search_create` | Yes | A goal can link to the resulting `run_id`. |
 | Inspect search state | `search_status`, `search_list_history`, `search_list_iterations` | Yes | Hook and orchestrator code may read these indirectly through goal-plus state. |
 | Plan/materialize candidates | `search_plan_next`, `search_start_batch` | Yes | No goal-specific change needed. |
-| Worker context and launch | `search_start_agent_session`, bind/continue tools, `search_get_agent_context` | Yes | Continue to treat sessions as context handles, not lifecycle records. |
+| Worker context and launch | `search_start_agent_session`, `search_redispatch_candidate`, bind/continue tools, `search_get_agent_context` | Yes | Continue to treat sessions as context handles, not lifecycle records; redispatch is state-level resume with a fresh session for the same candidate. |
 | Verification and selection | `search_run_verifier`, `search_select`, `search_report`, `search_promote` | Yes | This is the value that goal-plus upgrades into. |
 
 No current `search_*` tool stores the raw user goal, triage decision, discovery
@@ -339,6 +340,7 @@ search_list_history
 search_plan_next
 search_start_batch
 search_start_agent_session
+search_redispatch_candidate
 search_bind_agent_handle
 search_bind_opencode_session
 search_continue_agent_session

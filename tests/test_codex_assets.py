@@ -35,6 +35,7 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
     )
 
     assert "search_start_agent_session" in text
+    assert "search_redispatch_candidate" in text
     assert "spawn_agent" in text
     assert "search_bind_agent_handle" in text
     assert "search_bind_opencode_session" not in text
@@ -89,6 +90,7 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
     assert "context.history" in text
     assert "context.iterations" in text
     assert "worker_budget.max_runtime_seconds" in text
+    assert "search_redispatch_candidate" in text
     assert "do not rely on chat transcript" in agent
 
 

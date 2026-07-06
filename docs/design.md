@@ -97,7 +97,7 @@ Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-sea
 
 `CandidateTask` is produced by `search_start_batch`. It contains the candidate workspace path, allowed/denied files, candidate lineage, plan metadata, and local instructions.
 
-`AgentSessionRecord` is produced by `search_start_agent_session`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, host, host_handle, optional legacy opencode_session_id, workspace, directive, host-native launch payload, and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to the host client.
+`AgentSessionRecord` is produced by `search_start_agent_session` or `search_redispatch_candidate`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, host, host_handle, optional legacy opencode_session_id, workspace, directive, host-native launch payload, and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to the host client.
 
 `IterationRecord` is produced by every `search_run_verifier` call. It records the iteration number, agent_session_id (or None for main final verify), score, failure_class, changed files, and metrics. There is no separate submit step.
 
@@ -146,6 +146,12 @@ search_continue_agent_session  (optional, host capability dependent)
   |
   v
 Host worker continues if the adapter supports same-worker continuation
+  |
+  v
+search_redispatch_candidate  (optional state-level resume with fresh session)
+  |
+  v
+Host foreground worker runs the same candidate workspace with optional tier/budget override
   |
   v
 search_plan_next  (optional follow-up batch)

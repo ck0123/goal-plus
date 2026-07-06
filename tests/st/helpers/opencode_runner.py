@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from tests.st.hosts import ST_ACTIVE_ENV
+
 
 @dataclass
 class RunResult:
@@ -53,6 +55,7 @@ class OpenCodeRunner:
 
         env = dict(os.environ)
         env.setdefault("RUST_LOG", "info")
+        env[ST_ACTIVE_ENV] = scenario
 
         proc = subprocess.run(
             cmd,
@@ -87,6 +90,7 @@ class OpenCodeRunner:
 
         env = dict(os.environ)
         env.setdefault("RUST_LOG", "info")
+        env[ST_ACTIVE_ENV] = scenario
 
         try:
             with open(log_path, "w", encoding="utf-8") as f:

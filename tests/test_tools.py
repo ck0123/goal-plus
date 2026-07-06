@@ -136,6 +136,16 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         )
     ]
     runtime.start_agent_session.return_value = agent_session
+    runtime.redispatch_candidate.return_value = agent_session.model_copy(
+        update={
+            "agent_session_id": "agent_002",
+            "launch": {
+                "subagent_type": "AnySearchAgentDeep",
+                "description": "c001 resume",
+                "prompt": "state_level_resume=true; agent_session_id=agent_002",
+            },
+        }
+    )
     generic_bound_session = agent_session.model_copy(
         update={
             "host": "codex",
@@ -200,6 +210,15 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "c001",
         {"goal": "try one"},
     )["agent_session_id"] == "agent_001"
+    redispatched = tools.search_redispatch_candidate(
+        "run_1",
+        "c001",
+        {"goal": "resume same candidate"},
+        worker_agent_type="AnySearchAgentDeep",
+        worker_budget={"max_turns": 16},
+    )
+    assert redispatched["agent_session_id"] == "agent_002"
+    assert redispatched["launch"]["subagent_type"] == "AnySearchAgentDeep"
     assert tools.search_bind_agent_handle(
         "agent_001",
         {"host": "codex", "task_name": "search_agent_001"},
@@ -241,6 +260,13 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         run_id="run_1",
         candidate_id="c001",
         directive={"goal": "try one"},
+    )
+    runtime.redispatch_candidate.assert_called_once_with(
+        run_id="run_1",
+        candidate_id="c001",
+        directive={"goal": "resume same candidate"},
+        worker_agent_type="AnySearchAgentDeep",
+        worker_budget={"max_turns": 16},
     )
     runtime.bind_opencode_session.assert_called_once_with(
         agent_session_id="agent_001",

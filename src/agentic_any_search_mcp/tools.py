@@ -72,6 +72,22 @@ class SearchTools:
             directive=directive,
         ).model_dump(mode="json")
 
+    def search_redispatch_candidate(
+        self,
+        run_id: str,
+        candidate_id: str,
+        directive: dict[str, Any] | str | None = None,
+        worker_agent_type: str | None = None,
+        worker_budget: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.redispatch_candidate(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            directive=directive,
+            worker_agent_type=worker_agent_type,
+            worker_budget=worker_budget,
+        ).model_dump(mode="json")
+
     def search_bind_opencode_session(
         self,
         agent_session_id: str,

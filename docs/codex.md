@@ -122,14 +122,16 @@ through message sending.
 
 If a worker is interrupted before it records any verifier iteration or usable
 score, treat the budget as too small for that task. For later planned work,
-increase `worker_budget.max_runtime_seconds`; Codex does not expose a hard
-per-subagent step tier.
+call `search_redispatch_candidate` for the same candidate with a larger
+`worker_budget.max_runtime_seconds`; Codex does not expose a hard per-subagent
+step tier.
 
 Codex does not expose an equivalent same-worker continuation in this adapter.
-When continuation is needed, start a new foreground worker for the same
-candidate and use `search_get_agent_context` to recover the authoritative
-state. The worker should use `context.history` and `context.iterations` from
-the MCP runtime; there is no `plan.md` history file for Search Mode.
+When continuation is needed, call `search_redispatch_candidate` to start a new
+foreground worker for the same candidate and use `search_get_agent_context` to
+recover the authoritative state. The worker should use `context.history` and
+`context.iterations` from the MCP runtime; there is no `plan.md` history file
+for Search Mode.
 
 ## Debugging Logs
 

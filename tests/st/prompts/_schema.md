@@ -1,6 +1,6 @@
 # ST Final Report Schema
 
-Every ST prompt MUST end with the following instruction so the OpenCode main agent
+Every ST prompt MUST end with the following instruction so the host main agent
 emits a machine-parseable report at the end of stdout.
 
 Append this block verbatim to each prompt file (after the scenario-specific body):
@@ -12,7 +12,7 @@ When the search is complete, output a fenced JSON block tagged `st_report` as th
 LAST thing in your final message. No prose after the block. The JSON MUST conform
 to this schema:
 
-- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | k_module_then_circle_packing | signal_processing_multi | swe_bench_20212
+- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | k_module_then_circle_packing | signal_processing_multi | swe_bench_20212 | codex_redispatch | claude_k_module_smoke
 - run_id: string           # search runtime run_id
 - candidates: array of { candidate_id: string, score: number|null, iterations: integer, status: string }
 - selected_candidate_id: string | null
@@ -36,3 +36,5 @@ Scenario-specific `extra` fields:
 | k_module_then_circle_packing | `run1_run_id: string`, `run1_candidates: integer`, `run1_best_score: number\|null`, `run2_run_id: string`, `run2_candidates: integer`, `run2_best_score: number\|null`, `run_ids_distinct: boolean` |
 | signal_processing_multi | `batches: integer` |
 | swe_bench_20212 | `fail_to_pass: array<string>`, `pass_to_pass: array<string>` |
+| codex_redispatch | `host: "codex"`, `model: string`, `candidate_id: string`, `first_agent_session_id: string`, `redispatch_agent_session_id: string`, `same_candidate: boolean`, `redispatch_budget_control_mode: "parent_watchdog"`, `task_names: array<string>`, `verifier_scores: array<number\|null>` |
+| claude_k_module_smoke | `host: "claude-code"` |

@@ -19,7 +19,7 @@ logical tool name.
    when a frozen spec already exists.
 2. Call `search_plan_next`.
 3. Call `search_start_batch`.
-4. For each candidate, call `search_start_agent_session`.
+4. For each new candidate, call `search_start_agent_session`.
 5. Launch a foreground Codex subagent with the returned launch payload:
    - `spawn_agent(task_name=launch.task_name, agent_type=launch.agent_type, message=launch.message, fork_turns=launch.fork_turns)`
 6. If `spawn_agent` returns a task name or nickname, call `search_bind_agent_handle` with:
@@ -35,8 +35,12 @@ logical tool name.
    - if this Codex surface exposes interruption through `send_input`, use `send_input(..., interrupt=true)` with a short stop message
    - after interrupting, call `wait_agent` once more to observe the final stopped/completed status
 8. If no `budget_control` is present, wait for candidate workers according to Codex foreground subagent behavior.
-9. Run final `search_run_verifier` from the main agent before selecting.
-10. Use `search_select`, `search_report`, and `search_promote` when appropriate.
+9. If a worker stops before useful verifier evidence, call
+   `search_redispatch_candidate(run_id, candidate_id, directive?,
+   worker_budget={"max_runtime_seconds": <larger seconds>, ...})` and launch
+   the returned payload as a new foreground worker for the same candidate.
+10. Run final `search_run_verifier` from the main agent before selecting.
+11. Use `search_select`, `search_report`, and `search_promote` when appropriate.
 
 ## Worker Budget Control
 
@@ -62,13 +66,15 @@ candidate results through `search_list_history`; workers recover state through
 `context.iterations`.
 
 Codex does not expose an equivalent same-worker continuation in this adapter.
-If `search_continue_agent_session` reports unsupported capability for Codex,
-start a new foreground Codex worker for the same candidate and tell it to treat
+Use `search_redispatch_candidate` to start a new foreground Codex worker for
+the same candidate, optionally overriding `worker_budget.max_runtime_seconds`
+for that dispatch. The returned prompt tells the worker to treat
 `search_get_agent_context` as the authoritative resume context. Do not ask the
 worker to infer prior attempts from chat transcript.
 
 ## Continuation
 
 Same-worker continuation is not supported for Codex. State-level resume is
-supported by creating a new worker for the same candidate workspace and relying
-on MCP history/iterations.
+supported through `search_redispatch_candidate`, which creates a new
+`agent_session_id` for the same candidate workspace and relies on MCP
+history/iterations.

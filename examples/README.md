@@ -6,8 +6,10 @@ upgrades a measurable task into Search Mode.
 ## Automated ST Coverage
 
 Each scenario prompt below has a paired system test under `tests/st/`. The tests
-drive `opencode run --command goal-plus "<prompt>"` in a temporary project root
-and parse a machine-readable JSON report from the main agent's final message.
+drive a real host code agent in a temporary project root and parse a
+machine-readable JSON report from the main agent's final message. Most example
+scenarios run through OpenCode; host-specific smoke paths also cover Codex
+redispatch and Claude Code launch wiring.
 
 - Prompts: `tests/st/prompts/<scenario>.md`
 - Tests: `tests/st/test_st_scenarios.py`
@@ -16,12 +18,14 @@ and parse a machine-readable JSON report from the main agent's final message.
 Run them with:
 
 ```bash
-pytest -m st                       # all 6 scenarios
-pytest -m st -k k_module_smoke     # single scenario
+pytest -m st                                      # all configured host ST cases
+pytest -m "st and st_opencode" -k k_module_smoke # single OpenCode scenario
+pytest -m "st and st_codex" -k codex_redispatch  # Codex redispatch smoke
 ```
 
-Tests are skipped by default. They require `opencode` on PATH and the
-`search-runtime` MCP server connected (`opencode mcp list`).
+Tests are skipped by default. They require the selected host binary on PATH and
+the `search-runtime` MCP server configured for that host. See
+`tests/README.md` for the full host marker matrix and pre-flight checks.
 
 
 | Spec | Fixture | Worker | Layout |
@@ -46,6 +50,8 @@ Before requesting a follow-up batch, the host can call `search_list_history(run_
 `strategy.worker_mode` is always `agent-session-pool`. Candidate execution always goes through an OpenCode Task launched from a runtime context handle: call `search_start_agent_session(run_id, candidate_id, directive)`, launch the configured subagent with the returned `launch` payload, then bind the Task `metadata.sessionId` with `search_bind_opencode_session`.
 
 Subagents run until their OpenCode step cap hits or the user interrupts them. There are no per-session or run-level time deadlines. Launch candidate subagents as foreground OpenCode Task calls and wait for each Task to return before binding, verifying, continuing, or reporting.
+
+If a candidate needs more work after a step-cap hit, call `search_redispatch_candidate` for the same candidate and optionally raise `worker_agent_type` / `worker_budget`. This creates a new session for the same workspace and relies on runtime history/iterations for resume.
 
 ## Step Tiers
 

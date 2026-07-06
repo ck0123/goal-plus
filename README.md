@@ -13,7 +13,7 @@ select the best candidate, and export a promotion patch.
 
 Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `openevolve` (OpenEvolve-style parent/archive/inspiration sampling), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract; the bundled `adaptevolve` Python planner adds evolve-style parent selection plus dynamic worker-tier routing. See `examples/README.md` for the full strategy comparison table, `docs/strategy-adaptevolve.md` for the AdaptEvolve code path, and `docs/strategy-openevolve.md` for the OpenEvolve path.
 
-Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The runtime creates an `AgentSessionRecord` and returns a host-native launch payload; the main agent dispatches one foreground worker in OpenCode, Codex, or Claude Code. The host owns worker lifecycle and return values. The runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is a batch planning hint; the runtime does not provide a wait loop or lifecycle supervisor. `strategy.worker_host` selects the adapter, and `strategy.worker_agent_type` gives that host its default worker type. The launch payload from `search_start_agent_session` is authoritative. See [docs/agent-host-adapters.md](docs/agent-host-adapters.md) for the adapter design and current host differences.
+Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The runtime creates an `AgentSessionRecord` and returns a host-native launch payload; the main agent dispatches one foreground worker in OpenCode, Codex, or Claude Code. The host owns worker lifecycle and return values. The runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is a batch planning hint; the runtime does not provide a wait loop or lifecycle supervisor. `strategy.worker_host` selects the adapter, and `strategy.worker_agent_type` gives that host its default worker type. The launch payload from `search_start_agent_session` is authoritative; `search_redispatch_candidate` creates a fresh session for the same candidate workspace when a worker needs state-level resume or a larger tier/budget. See [docs/agent-host-adapters.md](docs/agent-host-adapters.md) for the adapter design and current host differences.
 
 ## Getting Started
 
@@ -349,6 +349,7 @@ their own MCP tool naming conventions.
 - `search-runtime_search_plan_next`
 - `search-runtime_search_start_batch`
 - `search-runtime_search_start_agent_session`
+- `search-runtime_search_redispatch_candidate`
 - `search-runtime_search_bind_agent_handle`
 - `search-runtime_search_bind_opencode_session`
 - `search-runtime_search_continue_agent_session`

@@ -84,6 +84,29 @@ def create_mcp(
         return tools.search_start_agent_session(run_id, candidate_id, directive)
 
     @mcp.tool()
+    def search_redispatch_candidate(
+        run_id: str,
+        candidate_id: str,
+        directive: dict[str, Any] | str | None = None,
+        worker_agent_type: str | None = None,
+        worker_budget: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new worker launch for an existing candidate workspace.
+
+        This is state-level resume, not same-worker continuation. It returns a
+        fresh `agent_session_id` and host launch payload for the same
+        candidate/workspace. Optional `worker_agent_type` and `worker_budget`
+        override only this dispatch; candidate task policy is unchanged.
+        """
+        return tools.search_redispatch_candidate(
+            run_id,
+            candidate_id,
+            directive,
+            worker_agent_type,
+            worker_budget,
+        )
+
+    @mcp.tool()
     def search_bind_opencode_session(
         agent_session_id: str,
         opencode_session_id: str,

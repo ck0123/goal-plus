@@ -19,7 +19,7 @@ logical tool name.
    when a frozen spec already exists.
 2. Call `search_plan_next`.
 3. Call `search_start_batch`.
-4. For each candidate, call `search_start_agent_session`.
+4. For each new candidate, call `search_start_agent_session`.
 5. Launch a foreground Agent using the returned launch payload:
    - agent type: `launch.agent_type`
    - message: `launch.message`
@@ -31,8 +31,13 @@ logical tool name.
    - `host: "claude-code"`
    - `external_id`
    - `task_name` only when the client exposes a stable name instead of an id
-8. Run final `search_run_verifier` from the main agent before selecting.
-9. Use `search_select`, `search_report`, and `search_promote` when appropriate.
+8. If a worker reaches `maxTurns` before useful verifier evidence, call
+   `search_redispatch_candidate(run_id, candidate_id, directive?,
+   worker_agent_type="any-search-agent-deep",
+   worker_budget={"max_turns": 16, "on_exceed": "interrupt"})` and launch the
+   returned foreground Agent payload for the same candidate workspace.
+9. Run final `search_run_verifier` from the main agent before selecting.
+10. Use `search_select`, `search_report`, and `search_promote` when appropriate.
 
 ## Worker Budget Control
 
@@ -69,10 +74,11 @@ candidate results through `search_list_history`; workers recover state through
 `context.iterations`.
 
 For hosts or tool surfaces that cannot re-enter the same foreground agent, use
-state-level resume: start a new foreground Agent for the same candidate
-workspace and tell it to treat `search_get_agent_context` as the authoritative
-resume context. Do not ask the worker to infer prior attempts from chat
-transcript.
+state-level resume: call `search_redispatch_candidate` to start a new
+foreground Agent for the same candidate workspace, optionally overriding
+`worker_agent_type` and `worker_budget.max_turns`. The returned prompt tells
+the worker to treat `search_get_agent_context` as the authoritative resume
+context. Do not ask the worker to infer prior attempts from chat transcript.
 
 ## Continuation
 
@@ -80,5 +86,5 @@ If `search_continue_agent_session` returns a `SendMessage` payload and the
 current Claude Code tool surface actually exposes a usable `SendMessage` tool,
 send the message to the specified agent in the foreground. If no handle is
 bound, `SendMessage` is unavailable, or the host cannot prove same-agent
-continuation, start a new foreground Agent for the same candidate and rely on
-MCP history/iterations for resume.
+continuation, call `search_redispatch_candidate` and rely on MCP
+history/iterations for resume.
