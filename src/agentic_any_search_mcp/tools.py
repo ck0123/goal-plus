@@ -147,13 +147,11 @@ class GoalPlusTools:
         self,
         raw_goal: str,
         source_path: str | None = None,
-        mode_hint: str = "auto",
         policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.create_goal(
             raw_goal=raw_goal,
             source_path=source_path,
-            mode_hint=mode_hint,  # type: ignore[arg-type]
             policy=policy,
         ).model_dump(mode="json")
 
@@ -180,6 +178,18 @@ class GoalPlusTools:
         return self.runtime.save_spec_draft(
             goal_plus_id,
             GoalPlusSpecDraft.model_validate(spec_draft),
+        ).model_dump(mode="json")
+
+    def goal_plus_confirm_frozen_verifier(
+        self,
+        goal_plus_id: str,
+        confirmed_by: str = "user",
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.confirm_frozen_verifier(
+            goal_plus_id,
+            confirmed_by=confirmed_by,
+            evidence=evidence,
         ).model_dump(mode="json")
 
     def goal_plus_link_search_run(

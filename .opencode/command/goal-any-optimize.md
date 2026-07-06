@@ -1,15 +1,18 @@
 ---
-description: Run Agentic Any Search optimization using the search skill
-agent: search-orchestrator
+description: Legacy alias for /goal-plus optimization goals
+agent: goal-plus-orchestrator
 subtask: false
 ---
 
-Use the `search` skill to run Agentic Search for this optimization goal.
+Use the `goal-plus` skill for this legacy optimization command. This command is
+only a compatibility alias; `/goal-plus` is the canonical user entrypoint.
 
 Before taking action:
-1. Load the `search` skill with the skill tool.
-2. Treat @.opencode/skills/search/SKILL.md as the required workflow reference.
-3. If the `search` skill or search-runtime MCP tools are unavailable, stop and report the missing dependency.
+1. Load the `goal-plus` skill with the skill tool.
+2. Treat @.opencode/skills/goal-plus/SKILL.md as the required workflow reference.
+3. Do not bypass `/goal-plus` triage, spec discovery, verifier confirmation, or final raw-goal audit.
+4. Call the internal `search` skill only after Goal Plus enters Search Mode.
+5. If the `goal-plus` skill or search-runtime MCP tools are unavailable, stop and report the missing dependency.
 
 Goal:
 

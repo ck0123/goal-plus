@@ -10,7 +10,6 @@ from agentic_any_search_mcp.models import (
     GoalPlusGateEvent,
     GoalPlusGateResult,
     GoalPlusLinkedSearch,
-    GoalPlusModeHint,
     GoalPlusNextAction,
     GoalPlusRecord,
     GoalPlusSpecDraft,
@@ -62,7 +61,6 @@ class FileGoalPlusRuntime:
         self,
         raw_goal: str,
         source_path: str | None = None,
-        mode_hint: GoalPlusModeHint = "auto",
         policy: dict[str, Any] | None = None,
     ) -> GoalPlusRecord:
         goal_plus_id = self._next_goal_id()
@@ -73,11 +71,10 @@ class FileGoalPlusRuntime:
             source_path=source_path,
             status="active",
             phase="intake",
-            mode_hint=mode_hint,
             policy=policy or {},
             next_action=GoalPlusNextAction(
                 kind="record_triage",
-                description="Classify whether the raw goal should stay in Goal Mode or upgrade to Search Mode.",
+                description="Classify whether the raw goal should run like /goal or upgrade to Search Mode.",
                 required=True,
             ),
             created_at=now,
@@ -135,20 +132,11 @@ class FileGoalPlusRuntime:
             else GoalPlusSpecDraft.model_validate(spec_draft)
         )
         record = self._load_record(goal_plus_id)
-        next_action = (
-            GoalPlusNextAction(
-                kind="freeze_search_spec",
-                description="Freeze the high-confidence SearchSpec and verifier artifacts, then create a search run.",
-                required=True,
-            )
-            if parsed.confidence == "high" and not parsed.open_questions
-            else GoalPlusNextAction(
-                kind="resolve_spec_questions",
-                description="Resolve open questions before freezing the SearchSpec.",
-                required=True,
-                metadata={"open_questions": parsed.open_questions},
-            )
+        origin = parsed.origin or (
+            record.triage.identified_at if record.triage is not None else "in_progress"
         )
+        parsed = parsed.model_copy(update={"origin": origin})
+        next_action = self._spec_draft_next_action(parsed)
         updated = record.model_copy(
             update={
                 "phase": "spec_discovery",
@@ -159,6 +147,40 @@ class FileGoalPlusRuntime:
         )
         self._write_record(updated)
         self._append_event(goal_plus_id, "spec_draft_saved", parsed.model_dump(mode="json"))
+        return updated
+
+    def confirm_frozen_verifier(
+        self,
+        goal_plus_id: str,
+        confirmed_by: str = "user",
+        evidence: dict[str, Any] | None = None,
+    ) -> GoalPlusRecord:
+        record = self._load_record(goal_plus_id)
+        if record.spec_draft is None:
+            raise ValueError("Cannot confirm frozen verifier before saving a spec draft.")
+        if record.spec_draft.confidence != "high" or record.spec_draft.open_questions:
+            raise ValueError("Cannot confirm a spec draft that is not search-ready.")
+
+        spec_draft = record.spec_draft.model_copy(
+            update={"user_confirmed_frozen_verifier": True}
+        )
+        updated = record.model_copy(
+            update={
+                "spec_draft": spec_draft,
+                "next_action": GoalPlusNextAction(
+                    kind="freeze_search_spec",
+                    description="Freeze the confirmed SearchSpec and verifier artifacts, then create a search run.",
+                    required=True,
+                ),
+                "updated_at": utc_timestamp(),
+            }
+        )
+        self._write_record(updated)
+        self._append_event(
+            goal_plus_id,
+            "frozen_verifier_confirmed",
+            {"confirmed_by": confirmed_by, "evidence": evidence or {}},
+        )
         return updated
 
     def link_search_run(
@@ -282,12 +304,12 @@ class FileGoalPlusRuntime:
 
         if event == "pre_tool_use":
             tool_name = self._tool_name(context)
-            if self._is_search_tool(tool_name) and not self._has_high_confidence_spec(record):
+            if self._is_search_tool(tool_name) and not self._has_search_ready_spec(record):
                 return self._record_gate(
                     record,
                     event,
                     "block",
-                    reason="Search tools require a high-confidence frozen spec draft first.",
+                    reason=self._search_block_reason(record),
                 )
             if self._tool_matches(tool_name, "search_promote") and not (
                 record.linked_search and record.linked_search.selected_candidate_id
@@ -315,10 +337,16 @@ class FileGoalPlusRuntime:
                 ),
             )
         missing = ", ".join(triage.missing) if triage.missing else "spec details"
+        if triage.recommended_phase == "search" and triage.identified_at == "initial":
+            missing = "user confirmation for the frozen verifier"
         return (
             "spec_discovery",
             GoalPlusNextAction(
-                kind="discover_spec",
+                kind=(
+                    "draft_initial_search_spec"
+                    if triage.recommended_phase == "search"
+                    else "discover_spec"
+                ),
                 description=f"Complete spec discovery before search. Missing: {missing}.",
                 required=True,
                 metadata={"missing": triage.missing},
@@ -362,12 +390,49 @@ class FileGoalPlusRuntime:
             "After completing that action, update the goal-plus state before stopping."
         )
 
-    def _has_high_confidence_spec(self, record: GoalPlusRecord) -> bool:
+    def _spec_draft_next_action(self, spec_draft: GoalPlusSpecDraft) -> GoalPlusNextAction:
+        if spec_draft.confidence != "high" or spec_draft.open_questions:
+            return GoalPlusNextAction(
+                kind="resolve_spec_questions",
+                description="Resolve open questions before freezing the SearchSpec.",
+                required=True,
+                metadata={"open_questions": spec_draft.open_questions},
+            )
+        if (
+            spec_draft.origin == "initial"
+            and not spec_draft.user_confirmed_frozen_verifier
+        ):
+            return GoalPlusNextAction(
+                kind="confirm_frozen_verifier",
+                description="Ask the user to confirm the frozen verifier, metric, edit surface, and promotion rule before Search Mode.",
+                required=True,
+            )
+        return GoalPlusNextAction(
+            kind="freeze_search_spec",
+            description="Freeze the high-confidence SearchSpec and verifier artifacts, then create a search run.",
+            required=True,
+        )
+
+    def _has_search_ready_spec(self, record: GoalPlusRecord) -> bool:
         return (
             record.spec_draft is not None
             and record.spec_draft.confidence == "high"
             and not record.spec_draft.open_questions
+            and (
+                record.spec_draft.origin != "initial"
+                or record.spec_draft.user_confirmed_frozen_verifier
+            )
         )
+
+    def _search_block_reason(self, record: GoalPlusRecord) -> str:
+        spec_draft = record.spec_draft
+        if spec_draft is None:
+            return "Search tools require a high-confidence frozen spec draft first."
+        if spec_draft.confidence != "high" or spec_draft.open_questions:
+            return "Search tools require a high-confidence frozen spec draft first."
+        if spec_draft.origin == "initial" and not spec_draft.user_confirmed_frozen_verifier:
+            return "Search tools require user confirmation of the initial frozen verifier first."
+        return "Search tools require a search-ready spec draft first."
 
     def _tool_name(self, context: dict[str, Any]) -> str:
         value = context.get("tool_name") or context.get("toolName") or ""

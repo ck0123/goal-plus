@@ -5,9 +5,9 @@ description: Run a Claude Code goal with optional upgrade to Agentic Search thro
 
 # Goal Plus for Claude Code
 
-Use this skill when the user wants `/goal-plus`: a normal goal workflow that can
-upgrade to multi-candidate Agentic Search when the success standard is
-measurable and frozen.
+Use this skill for `/goal-plus`: the normal goal workflow. It can upgrade to
+multi-candidate Agentic Search when the success standard is measurable and
+frozen.
 
 Use the logical `goal_plus_*` and `search_*` tools exposed by the
 `search-runtime` MCP server. Claude Code may display MCP tools with a server
@@ -15,7 +15,7 @@ prefix; match by the final logical tool name.
 
 ## Workflow
 
-1. Call `goal_plus_create(raw_goal=..., mode_hint="auto")`.
+1. Call `goal_plus_create(raw_goal=...)`.
 2. Inspect enough context to classify the task.
 3. Call `goal_plus_record_triage`.
 4. If triage chooses Goal Mode, work normally in the current workspace.
@@ -25,19 +25,25 @@ prefix; match by the final logical tool name.
    rule. Save them with `goal_plus_save_spec_draft`.
 6. Enter Search Mode only when the saved draft has `confidence="high"` and no
    open questions.
-7. Before calling Search Mode tools such as `search_freeze_spec`, call
+7. For Initial Search-Ready goals, ask the user to confirm the frozen verifier,
+   metric, edit surface, and promotion rule, then call
+   `goal_plus_confirm_frozen_verifier`.
+8. For In-Progress Search Discovery, when the verifier is constructed during
+   goal execution, save the draft with `origin="in_progress"` and do not ask for
+   a separate verifier-freeze confirmation.
+9. Before calling Search Mode tools such as `search_freeze_spec`, call
    `goal_plus_gate(event="pre_tool_use", context={"tool_name": "search_freeze_spec"})`.
-8. In Search Mode, use the `search` skill:
+10. In Search Mode, use the internal `search` skill:
    `search_freeze_spec`, `search_create`, `search_plan_next`,
    `search_start_batch`, `search_start_agent_session`, final
    `search_run_verifier`, `search_select`, `search_report`, and
    `search_promote`.
-9. After `search_create`, call `goal_plus_link_search_run`.
-10. After selection/report/promotion, call `goal_plus_record_search_result`.
-11. Finish with a final raw-goal audit, then call
+11. After `search_create`, call `goal_plus_link_search_run`.
+12. After selection/report/promotion, call `goal_plus_record_search_result`.
+13. Finish with a final raw-goal audit, then call
     `goal_plus_set_status(status="complete", evidence=[...])` only when the
     original objective is satisfied.
-12. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
+14. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
 
 ## Modes

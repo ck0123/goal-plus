@@ -179,11 +179,10 @@ def create_mcp(
     def goal_plus_create(
         raw_goal: str,
         source_path: str | None = None,
-        mode_hint: str = "auto",
         policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a goal-plus record from a raw user goal before triage."""
-        return goal_tools.goal_plus_create(raw_goal, source_path, mode_hint, policy)
+        return goal_tools.goal_plus_create(raw_goal, source_path, policy)
 
     @mcp.tool()
     def goal_plus_status(goal_plus_id: str) -> dict[str, Any]:
@@ -205,6 +204,19 @@ def create_mcp(
     ) -> dict[str, Any]:
         """Save the discovered frozen-spec candidate before search_freeze_spec."""
         return goal_tools.goal_plus_save_spec_draft(goal_plus_id, spec_draft)
+
+    @mcp.tool()
+    def goal_plus_confirm_frozen_verifier(
+        goal_plus_id: str,
+        confirmed_by: str = "user",
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record user confirmation for an initially search-ready frozen verifier."""
+        return goal_tools.goal_plus_confirm_frozen_verifier(
+            goal_plus_id,
+            confirmed_by,
+            evidence,
+        )
 
     @mcp.tool()
     def goal_plus_link_search_run(

@@ -156,9 +156,9 @@ class SearchSpec(SearchModel):
 
 GoalPlusStatus = Literal["active", "needs_user", "blocked", "complete", "abandoned"]
 GoalPlusPhase = Literal["intake", "goal", "spec_discovery", "search", "final_audit"]
-GoalPlusModeHint = Literal["auto", "goal", "search"]
 GoalPlusConfidence = Literal["high", "medium", "low"]
 GoalPlusRecommendedPhase = Literal["goal", "spec_discovery", "search"]
+GoalPlusDiscoveryOrigin = Literal["initial", "in_progress"]
 GoalPlusGateEvent = Literal["stop", "subagent_stop", "pre_tool_use", "user_prompt_submit"]
 GoalPlusGateDecision = Literal["allow", "block"]
 
@@ -174,6 +174,7 @@ class GoalPlusTriage(SearchModel):
     is_optimization: bool
     confidence: GoalPlusConfidence
     recommended_phase: GoalPlusRecommendedPhase
+    identified_at: GoalPlusDiscoveryOrigin = "initial"
     scenario: str | None = None
     reasons: list[str] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
@@ -188,6 +189,8 @@ class GoalPlusSpecDraft(SearchModel):
     search_spec: dict[str, Any]
     promotion_rule: str = Field(min_length=1)
     confidence: GoalPlusConfidence
+    origin: GoalPlusDiscoveryOrigin | None = None
+    user_confirmed_frozen_verifier: bool = False
     open_questions: list[str] = Field(default_factory=list)
 
 
@@ -206,7 +209,6 @@ class GoalPlusRecord(SearchModel):
     source_path: str | None = None
     status: GoalPlusStatus = "active"
     phase: GoalPlusPhase = "intake"
-    mode_hint: GoalPlusModeHint = "auto"
     policy: dict[str, Any] = Field(default_factory=dict)
     triage: GoalPlusTriage | None = None
     spec_draft: GoalPlusSpecDraft | None = None

@@ -40,6 +40,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "goal_plus_status",
         "goal_plus_record_triage",
         "goal_plus_save_spec_draft",
+        "goal_plus_confirm_frozen_verifier",
         "goal_plus_link_search_run",
         "goal_plus_record_search_result",
         "goal_plus_set_status",
@@ -90,6 +91,22 @@ def test_goal_plus_gate_exposes_hook_friendly_schema(tmp_path: Path) -> None:
     assert "goal_plus_id" in schema["properties"]
     assert "event" in schema["properties"]
     assert "context" in schema["properties"]
+
+
+def test_goal_plus_create_has_no_mode_hint_and_confirm_tool_is_registered(
+    tmp_path: Path,
+) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    create_schema = tools["goal_plus_create"].parameters
+    confirm_schema = tools["goal_plus_confirm_frozen_verifier"].parameters
+
+    assert "mode_hint" not in create_schema["properties"]
+    assert "raw_goal" in create_schema["properties"]
+    assert "goal_plus_id" in confirm_schema["properties"]
+    assert "confirmed_by" in confirm_schema["properties"]
+    assert "evidence" in confirm_schema["properties"]
 
 
 def test_create_mcp_constructs_runtime_with_configured_root(
@@ -173,6 +190,9 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return {}
 
         def goal_plus_save_spec_draft(self, *args, **kwargs):
+            return {}
+
+        def goal_plus_confirm_frozen_verifier(self, *args, **kwargs):
             return {}
 
         def goal_plus_link_search_run(self, *args, **kwargs):

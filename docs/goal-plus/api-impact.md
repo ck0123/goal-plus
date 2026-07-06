@@ -5,10 +5,11 @@
 Define how `goal-plus` fits around the current MCP API surface.
 
 The current runtime exposes a `search_*` API for verifiable candidate search.
-That surface should remain focused. `goal-plus` needs a small state machine for
-goal intake, phase tracking, hook gating, and linking to an optional search run.
-It should not turn the existing search runtime into a generic worker
-supervisor.
+That surface remains focused and becomes an internal Search Mode engine under
+`/goal-plus`. `goal-plus` adds a small state machine for goal intake, phase
+tracking, verifier-freeze confirmation, hook gating, and linking to an optional
+search run. It should not turn the existing search runtime into a generic
+worker supervisor.
 
 ## Current MCP Surface
 
@@ -72,7 +73,6 @@ Input:
 ```text
 raw_goal: str
 source_path?: str
-mode_hint?: "auto" | "goal" | "search"
 policy?: dict
 ```
 
@@ -85,8 +85,8 @@ phase: "intake"
 next_action
 ```
 
-Use `mode_hint="search"` for a strict `/goal-any-optimize` compatibility path.
-Use `mode_hint="auto"` for normal `/goal-plus`.
+There is no mode hint. The host model analyzes the task and records triage.
+`/goal-any-optimize` is a legacy alias that still enters through this API.
 
 ### `goal_plus_status`
 
@@ -125,6 +125,7 @@ triage:
   is_optimization: bool
   confidence: "high" | "medium" | "low"
   recommended_phase: "goal" | "spec_discovery" | "search"
+  identified_at: "initial" | "in_progress"
   scenario?: str
   reasons: list[str]
   missing: list[str]
@@ -153,12 +154,35 @@ spec_draft:
   search_spec: dict
   promotion_rule: str
   confidence: "high" | "medium" | "low"
+  origin?: "initial" | "in_progress"
+  user_confirmed_frozen_verifier: bool
   open_questions: list[str]
 ```
 
 Output: updated goal-plus state.
 
 The draft should freeze standards, not implementation plans.
+
+If `origin="initial"`, a high-confidence draft still requires explicit user
+confirmation before `search_freeze_spec`. If `origin="in_progress"`, the draft
+can proceed directly because verifier construction happened during the active
+goal execution.
+
+### `goal_plus_confirm_frozen_verifier`
+
+Record explicit user confirmation for an initially search-ready frozen verifier.
+
+Input:
+
+```text
+goal_plus_id: str
+confirmed_by: str = "user"
+evidence?: dict
+```
+
+Output: updated goal-plus state with `next_action.kind="freeze_search_spec"`.
+
+This tool is not needed for in-progress verifier discovery.
 
 ### `goal_plus_link_search_run`
 
@@ -268,7 +292,6 @@ raw_goal: str
 source_path?: str
 status: active | needs_user | blocked | complete | abandoned
 phase: intake | goal | spec_discovery | search | final_audit
-mode_hint: auto | goal | search
 triage?: GoalPlusTriage
 spec_draft?: GoalPlusSpecDraft
 linked_search?:
@@ -289,6 +312,7 @@ updated_at: str
 created
 triage_recorded
 spec_draft_saved
+frozen_verifier_confirmed
 search_linked
 search_result_recorded
 gate_blocked
@@ -300,7 +324,7 @@ status_changed
 
 ### Keep Unchanged
 
-Most existing `search_*` tools should not change.
+Existing `search_*` tools remain available as the internal Search Mode engine.
 
 ```text
 search_freeze_spec
@@ -395,27 +419,25 @@ worker supervision.
 
 ## Compatibility With `/goal-any-optimize`
 
-`/goal-any-optimize` can remain as an explicit search-first shortcut.
+`/goal-any-optimize` remains only as a compatibility alias for `/goal-plus`.
 
 Recommended behavior after `goal-plus` exists:
 
 ```text
 /goal-any-optimize <objective>
-  -> goal_plus_create(mode_hint="search")
-  -> require high-confidence spec draft
-  -> use existing search flow
+  -> goal_plus_create(...)
+  -> normal /goal-plus triage
+  -> if search-ready, require the same frozen-verifier confirmation rules
+  -> use existing search flow only after Goal Plus enters Search Mode
 ```
 
-The command should not bypass frozen-spec creation. It should simply skip the
-ordinary Goal Mode fallback unless the spec cannot be made safe.
+The command must not bypass Goal Plus triage, frozen-spec creation,
+confirmation, or final raw-goal audit.
 
 ## Open Questions
 
 - Should `goal_plus_gate` be an MCP tool only, or should there also be a small
   CLI helper for hook scripts that cannot easily reuse the active MCP
   connection?
-- Should `goal_plus_save_spec_draft` validate that `search_spec` already passes
-  `SearchSpec` validation, or should validation remain deferred to
-  `search_freeze_spec`?
 - Should final raw-goal audit be structured evidence in
   `goal_plus_set_status`, or a separate `goal_plus_record_audit` tool?

@@ -4,9 +4,9 @@
 
 Baseline implemented, 2026-07-06.
 
-`goal-plus` is a goal entrypoint that can fall back to ordinary goal-style
-progress or upgrade an optimization-shaped task into the existing Search MCP
-workflow.
+`goal-plus` is the unified goal entrypoint. It behaves like a normal goal run
+by default and can upgrade an optimization-shaped task into the existing Search
+MCP workflow.
 
 The design target is pragmatic: let more domains use the candidate workspace,
 verifier, scoring, and promotion machinery without forcing every user request
@@ -22,17 +22,17 @@ to start as a fully specified search problem.
 ## Short Version
 
 ```text
-/goal
+/goal-plus
   persistent progress toward a possibly fuzzy objective
 
 /goal-any-optimize
-  explicit multi-candidate search with a frozen spec and verifier
+  legacy alias that routes through /goal-plus
 
-/goal-plus
-  goal-style entrypoint that first asks:
-    "Can this be safely upgraded into a verifiable search?"
+search_*
+  internal Search Mode engine used only after /goal-plus upgrades
 ```
 
-`goal-plus` does not replace the Search MCP runtime. It sits above it: the host
-agent or skill performs intake, decides whether a frozen spec is available, and
-only then calls the existing search tools.
+`goal-plus` replaces direct search as the user-facing flow. It does not delete
+the Search MCP runtime; it sits above it. The host agent or skill performs
+intake, decides whether a frozen spec is available, and only then calls the
+existing search tools.

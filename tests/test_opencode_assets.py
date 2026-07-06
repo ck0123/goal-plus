@@ -24,10 +24,11 @@ def test_opencode_config_registers_search_runtime_mcp() -> None:
     assert server["enabled"] is True
 
 
-def test_search_skill_is_slash_command_ready() -> None:
+def test_search_skill_is_internal_search_mode_engine() -> None:
     skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
 
     assert "name: search" in skill
+    assert "internal Search Mode engine" in skill
     assert "search-runtime_search_freeze_spec" in skill
     assert "search-runtime_search_bind_opencode_session" in skill
     assert "search-runtime_search_continue_agent_session" in skill
@@ -45,17 +46,17 @@ def test_opencode_search_skill_keeps_opencode_bind_contract() -> None:
     assert "search_bind_agent_handle" not in skill
 
 
-def test_goal_any_optimize_command_references_search_skill() -> None:
+def test_goal_any_optimize_command_is_goal_plus_alias() -> None:
     command = (ROOT / ".opencode" / "command" / "goal-any-optimize.md").read_text(
         encoding="utf-8"
     )
 
-    assert "description: Run Agentic Any Search optimization using the search skill" in command
-    assert "agent: search-orchestrator" in command
+    assert "description: Legacy alias for /goal-plus optimization goals" in command
+    assert "agent: goal-plus-orchestrator" in command
     assert "subtask: false" in command
-    assert "Load the `search` skill" in command
-    assert "@.opencode/skills/search/SKILL.md" in command
-    assert "search-runtime MCP tools" in command
+    assert "Load the `goal-plus` skill" in command
+    assert "@.opencode/skills/goal-plus/SKILL.md" in command
+    assert "Do not bypass `/goal-plus` triage" in command
     assert "$ARGUMENTS" in command
 
 
@@ -85,10 +86,14 @@ def test_opencode_goal_plus_skill_documents_progressive_modes() -> None:
     assert "search-runtime_goal_plus_create" in skill
     assert "search-runtime_goal_plus_record_triage" in skill
     assert "search-runtime_goal_plus_save_spec_draft" in skill
+    assert "search-runtime_goal_plus_confirm_frozen_verifier" in skill
     assert "search-runtime_goal_plus_gate" in skill
+    assert "mode_hint" not in skill
     assert "Goal Mode" in combined
     assert "Spec Discovery Mode" in combined
     assert "Search Mode" in combined
+    assert "Initial Search-Ready" in combined
+    assert "In-Progress Search Discovery" in combined
     assert "Do not create a SearchSpec in Goal Mode" in combined
     assert "call the `search` skill" in combined
     assert "final raw-goal audit" in combined

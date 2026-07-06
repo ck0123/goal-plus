@@ -66,7 +66,6 @@ def goal_plus_record() -> GoalPlusRecord:
         raw_goal="Optimize a benchmark if possible",
         status="active",
         phase="intake",
-        mode_hint="auto",
         next_action=GoalPlusNextAction(
             kind="record_triage",
             description="classify the goal",
@@ -282,6 +281,7 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     runtime.list_events.return_value = [{"event_type": "created"}]
     runtime.record_triage.return_value = record
     runtime.save_spec_draft.return_value = record
+    runtime.confirm_frozen_verifier.return_value = record
     runtime.link_search_run.return_value = record
     runtime.record_search_result.return_value = record
     runtime.set_status.return_value = record.model_copy(update={"status": "complete"})
@@ -297,7 +297,6 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     created = tools.goal_plus_create(
         raw_goal="Optimize a benchmark if possible",
         source_path=".",
-        mode_hint="auto",
         policy={"max_discovery_turns": 1},
     )
     assert created["goal_plus_id"] == "gp_0001"
@@ -321,6 +320,11 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
             "promotion_rule": "must pass",
             "confidence": "high",
         },
+    )["goal_plus_id"] == "gp_0001"
+    assert tools.goal_plus_confirm_frozen_verifier(
+        "gp_0001",
+        confirmed_by="user",
+        evidence={"message": "freeze it"},
     )["goal_plus_id"] == "gp_0001"
     assert tools.goal_plus_link_search_run("gp_0001", "spec_1", "run_1")["goal_plus_id"] == "gp_0001"
     assert tools.goal_plus_record_search_result(
@@ -346,7 +350,11 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     runtime.create_goal.assert_called_once_with(
         raw_goal="Optimize a benchmark if possible",
         source_path=".",
-        mode_hint="auto",
         policy={"max_discovery_turns": 1},
+    )
+    runtime.confirm_frozen_verifier.assert_called_once_with(
+        "gp_0001",
+        confirmed_by="user",
+        evidence={"message": "freeze it"},
     )
     runtime.link_search_run.assert_called_once_with("gp_0001", "spec_1", "run_1")

@@ -10,13 +10,13 @@ def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
     record = runtime.create_goal(
         raw_goal="Improve the README examples",
         source_path=".",
-        mode_hint="auto",
     )
 
     assert record.goal_plus_id == "gp_0001"
     assert record.raw_goal == "Improve the README examples"
     assert record.status == "active"
     assert record.phase == "intake"
+    assert not hasattr(record, "mode_hint")
     assert record.next_action.kind == "record_triage"  # type: ignore[union-attr]
 
     loaded = runtime.status(record.goal_plus_id)
@@ -26,7 +26,7 @@ def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
 
 def test_goal_like_triage_allows_stop_without_search(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
-    record = runtime.create_goal("Tidy docs wording", mode_hint="auto")
+    record = runtime.create_goal("Tidy docs wording")
 
     updated = runtime.record_triage(
         record.goal_plus_id,
@@ -71,15 +71,16 @@ def test_spec_discovery_stop_gate_blocks_with_next_action(tmp_path) -> None:
     assert "baseline command" in gate.continuation_prompt
 
 
-def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> None:
+def test_initial_search_ready_spec_requires_user_confirmation_before_freeze(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
-    record = runtime.create_goal("Optimize kernel latency", mode_hint="search")
+    record = runtime.create_goal("Optimize kernel latency")
     runtime.record_triage(
         record.goal_plus_id,
         GoalPlusTriage(
             is_optimization=True,
             confidence="high",
             recommended_phase="search",
+            identified_at="initial",
             scenario="kernel-optimize",
             reasons=["latency benchmark exists"],
         ),
@@ -100,6 +101,109 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
             },
             promotion_rule="correctness pass and lower latency",
             confidence="high",
+            origin="initial",
+        ),
+    )
+    assert draft.next_action.kind == "confirm_frozen_verifier"  # type: ignore[union-attr]
+
+    blocked = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "search_freeze_spec"},
+    )
+    assert blocked.decision == "block"
+    assert "user confirmation" in blocked.reason
+
+    confirmed = runtime.confirm_frozen_verifier(
+        record.goal_plus_id,
+        confirmed_by="user",
+        evidence={"message": "freeze this verifier"},
+    )
+    assert confirmed.spec_draft.user_confirmed_frozen_verifier is True  # type: ignore[union-attr]
+    assert confirmed.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
+
+    allowed = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "search_freeze_spec"},
+    )
+    assert allowed.decision == "allow"
+
+
+def test_in_progress_search_discovery_does_not_require_user_confirmation(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Improve docs, then optimize verifier if found")
+    runtime.record_triage(
+        record.goal_plus_id,
+        GoalPlusTriage(
+            is_optimization=True,
+            confidence="high",
+            recommended_phase="search",
+            identified_at="in_progress",
+            reasons=["constructed verifier during goal execution"],
+        ),
+    )
+
+    draft = runtime.save_spec_draft(
+        record.goal_plus_id,
+        GoalPlusSpecDraft(
+            baseline={"command": "python bench.py"},
+            metric={"name": "avg_latency_ms", "direction": "minimize"},
+            correctness_gate={"command": "python verify.py"},
+            edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
+            verifier_artifacts=["verify.py", "bench.py"],
+            search_spec={
+                "objective": "minimize latency",
+                "metric_name": "avg_latency_ms",
+                "metric_direction": "minimize",
+            },
+            promotion_rule="correctness pass and lower latency",
+            confidence="high",
+            origin="in_progress",
+        ),
+    )
+    assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
+    assert draft.spec_draft.user_confirmed_frozen_verifier is False  # type: ignore[union-attr]
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "search_freeze_spec"},
+    )
+    assert gate.decision == "allow"
+
+
+def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize kernel latency")
+    runtime.record_triage(
+        record.goal_plus_id,
+        GoalPlusTriage(
+            is_optimization=True,
+            confidence="high",
+            recommended_phase="search",
+            identified_at="in_progress",
+            scenario="kernel-optimize",
+            reasons=["latency benchmark exists"],
+        ),
+    )
+
+    draft = runtime.save_spec_draft(
+        record.goal_plus_id,
+        GoalPlusSpecDraft(
+            baseline={"command": "python bench.py"},
+            metric={"name": "avg_latency_ms", "direction": "minimize"},
+            correctness_gate={"command": "python verify.py"},
+            edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
+            verifier_artifacts=["verify.py", "bench.py"],
+            search_spec={
+                "objective": "minimize latency",
+                "metric_name": "avg_latency_ms",
+                "metric_direction": "minimize",
+            },
+            promotion_rule="correctness pass and lower latency",
+            confidence="high",
+            origin="in_progress",
         ),
     )
     assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]

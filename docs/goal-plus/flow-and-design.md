@@ -2,8 +2,9 @@
 
 ## Objective
 
-Design and implement a small `goal-plus` layer that makes the existing Search
-MCP workflow usable from broader goal-shaped requests.
+Design and implement `goal-plus` as the unified goal entrypoint. It behaves like
+a normal goal runner by default and makes the existing Search MCP workflow
+available as an internal upgrade path.
 
 The key idea is progressive commitment:
 
@@ -18,11 +19,12 @@ runtime's requirement that search candidates be compared by frozen evidence.
 
 ## Relationship To Existing Entrypoints
 
-| Entrypoint | Primary shape | Success standard | Execution model |
-|---|---|---|---|
-| `/goal` | Long-running task | May be fuzzy; model audits evidence | Single thread, host-native continuation |
-| `/goal-any-optimize` | Explicit optimization run | Must be frozen before search | Multi-candidate Search MCP run |
-| `/goal-plus` | Goal with optional search upgrade | Starts fuzzy, freezes only when justified | Triage + optional Search MCP |
+| Entrypoint | Role |
+|---|---|
+| `/goal-plus` | Canonical goal flow. Starts goal-like, upgrades to Search Mode only when justified. |
+| `/goal` | Legacy/plain host goal concept that `/goal-plus` is intended to cover. |
+| `/goal-any-optimize` | Legacy alias that routes through `/goal-plus` triage. |
+| `search_*` | Internal Search Mode engine after `/goal-plus` freezes a verifier-backed spec. |
 
 `goal-plus` should keep the original user goal as the root objective even after
 it creates a `SearchSpec`. The frozen spec proves one measurable subproblem;
@@ -81,15 +83,26 @@ Goal Plus Orchestrator
   |
   +--> Optimization-shaped, spec clear
          |
-         v
-      Search Mode
-         - freeze spec and verifier artifacts
-         - create candidate workspaces
-         - dispatch host workers
-         - run verifier
-         - select best candidate
-         - report and promote
-         - audit original goal before claiming completion
+         +--> Initial Search-Ready
+         |      - save frozen spec draft
+         |      - show verifier/metric/edit surface to user
+         |      - require explicit frozen-verifier confirmation
+         |      - then enter Search Mode
+         |
+         +--> In-Progress Search Discovery
+                - construct verifier during goal work
+                - save frozen spec draft
+                - enter Search Mode without separate confirmation
+                |
+                v
+             Search Mode
+                - freeze spec and verifier artifacts
+                - create candidate workspaces
+                - dispatch host workers
+                - run verifier
+                - select best candidate
+                - report and promote
+                - audit original goal before claiming completion
 ```
 
 ## Triage
@@ -141,12 +154,17 @@ edit_surface: allowed and denied paths
 candidate_budget: max candidates and worker budget
 promotion_rule: what must be true before applying the best candidate
 confidence: high | medium | low
+origin: initial | in_progress
+user_confirmed_frozen_verifier: bool
 open_questions: unresolved issues that block freezing
 ```
 
-When confidence is high, the host agent can proceed to `search_freeze_spec`.
-When confidence is medium or low, it should either ask the user for the missing
-piece or continue in Goal Mode.
+When confidence is high and `origin="initial"`, the host agent must ask the user
+to confirm the frozen verifier, metric, edit surface, and promotion rule before
+`search_freeze_spec`. When confidence is high and `origin="in_progress"`, the
+host agent can proceed without a separate confirmation because verifier
+construction happened during the active goal run. When confidence is medium or
+low, it should either ask for the missing piece or continue in Goal Mode.
 
 ### Search Mode
 
@@ -246,11 +264,12 @@ src/agentic_any_search_mcp/goal_plus.py
 
 src/agentic_any_search_mcp/tools.py / server.py
   - goal_plus_* MCP facade and registration
+  - frozen-verifier confirmation for initially search-ready goals
 
 .opencode/command/goal-plus.md
   - load a goal-plus skill or instructions
   - create goal-plus state and run triage
-  - call the existing search skill only when Search Mode is selected
+  - call the internal search skill only when Search Mode is selected
 
 .agents/skills/goal-plus/SKILL.md
 .claude/skills/goal-plus/SKILL.md
@@ -349,7 +368,5 @@ claiming completion.
 
 ## Open Questions
 
-- Should medium-confidence spec drafts require explicit user confirmation, or
-  can the host agent proceed when the verifier is strong?
 - Should scenario packs be plain docs first, or should they grow a tiny metadata
   schema once two or three domains repeat the same fields?

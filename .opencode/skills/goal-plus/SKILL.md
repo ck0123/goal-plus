@@ -11,7 +11,7 @@ argument-hint: Objective, source path, optional optimization/scenario hints.
 
 Goal Plus is a thin goal-shaped layer over the Search MCP runtime. It records
 the raw goal, triages whether search is justified, discovers a frozen spec when
-needed, and then delegates Search Mode to the existing `search` skill.
+needed, and then delegates Search Mode to the internal `search` skill.
 
 ## Tool Names In OpenCode
 
@@ -24,6 +24,7 @@ prefix:
 | `goal_plus_status` | `search-runtime_goal_plus_status` |
 | `goal_plus_record_triage` | `search-runtime_goal_plus_record_triage` |
 | `goal_plus_save_spec_draft` | `search-runtime_goal_plus_save_spec_draft` |
+| `goal_plus_confirm_frozen_verifier` | `search-runtime_goal_plus_confirm_frozen_verifier` |
 | `goal_plus_link_search_run` | `search-runtime_goal_plus_link_search_run` |
 | `goal_plus_record_search_result` | `search-runtime_goal_plus_record_search_result` |
 | `goal_plus_set_status` | `search-runtime_goal_plus_set_status` |
@@ -44,12 +45,11 @@ MCP server is not connected. Do not simulate `.search` state in chat.
 Call:
 
 ```text
-search-runtime_goal_plus_create(raw_goal="<user objective>", source_path="<optional>", mode_hint="auto")
+search-runtime_goal_plus_create(raw_goal="<user objective>", source_path="<optional>")
 ```
 
-Use `mode_hint="search"` only when the user explicitly asks for an optimization
-search. Use `mode_hint="goal"` only when the user explicitly wants a normal
-goal-like run.
+There is no user-provided mode hint. The model decides from context whether the
+goal should stay goal-like or upgrade into Search Mode.
 
 ### Step 2: Triage
 
@@ -108,6 +108,21 @@ Discovery turns a fuzzy optimization request into a SearchSpec draft. Produce:
 Call `search-runtime_goal_plus_save_spec_draft`. Continue to Search Mode only
 when `confidence="high"` and `open_questions=[]`. Otherwise ask for the missing
 piece or continue in Goal Mode.
+
+#### Initial Search-Ready
+
+When the first triage already proves that search is ready, set
+`identified_at="initial"` in `goal_plus_record_triage` and `origin="initial"`
+in `goal_plus_save_spec_draft`. Show the user the frozen verifier artifacts,
+metric, edit surface, and promotion rule. After explicit approval, call
+`search-runtime_goal_plus_confirm_frozen_verifier`.
+
+#### In-Progress Search Discovery
+
+When ordinary Goal Mode work discovers or constructs a verifier later, set
+`identified_at="in_progress"` and `origin="in_progress"`. Do not ask for a
+separate verifier-freeze confirmation; the discovery work is already part of
+the active `/goal-plus` execution.
 
 ### Step 5: Search Mode
 

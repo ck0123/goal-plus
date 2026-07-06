@@ -10,7 +10,12 @@ argument-hint: >
 
 # Agentic Search Skill
 
-This skill runs Search Mode with isolated candidate workspaces, frozen verifier execution, iteration scoring, and OpenCode-native subagent lifecycle. The MCP runtime is not a process supervisor — OpenCode owns the actual `Task` lifecycle, step cap, and return value. The runtime owns specs, plans, workspaces, verifier scoring, history, reports, and promotion patches.
+This skill is the internal Search Mode engine for `/goal-plus`. It runs isolated
+candidate workspaces, frozen verifier execution, iteration scoring, and
+OpenCode-native subagent lifecycle after Goal Plus has decided to upgrade a
+goal. The MCP runtime is not a process supervisor — OpenCode owns the actual
+`Task` lifecycle, step cap, and return value. The runtime owns specs, plans,
+workspaces, verifier scoring, history, reports, and promotion patches.
 
 ## OpenCode Host Notes
 
