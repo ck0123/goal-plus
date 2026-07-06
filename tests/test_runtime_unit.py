@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -1633,6 +1634,70 @@ def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
             tasks[0].candidate_id,
             agent_session_id=other_session.agent_session_id,
         )
+
+
+def test_concurrent_run_verifiers_preserve_best_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "independent_branches",
+            "worker_mode": "agent-session-pool",
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    both_verifiers_started = threading.Barrier(2)
+    high_score_committed = threading.Event()
+    errors: list[BaseException] = []
+
+    def fake_run(*args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        both_verifiers_started.wait(timeout=5)
+        if cwd.name == "c002":
+            assert high_score_committed.wait(timeout=5)
+            score = 0.1
+        else:
+            score = 0.9
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}}}\n',
+            stderr="",
+        )
+
+    def verify(candidate_id: str) -> None:
+        try:
+            runtime.run_verifier(run_id, candidate_id)
+            if candidate_id == "c001":
+                high_score_committed.set()
+        except BaseException as exc:  # pragma: no cover - surfaced after join
+            errors.append(exc)
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    high = threading.Thread(target=verify, args=(tasks[0].candidate_id,))
+    low = threading.Thread(target=verify, args=(tasks[1].candidate_id,))
+    high.start()
+    low.start()
+    high.join(timeout=10)
+    low.join(timeout=10)
+
+    assert not high.is_alive()
+    assert not low.is_alive()
+    assert errors == []
+
+    run = runtime._load_run(run_id)
+    assert run.best_candidate_id == "c001"
+    assert run.best_score == 0.9
+    assert run.candidates_evaluated == 2
 
 
 def test_run_verifier_works_without_session_and_records_iterations(

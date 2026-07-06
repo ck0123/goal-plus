@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import difflib
 import calendar
 import hashlib
@@ -14,6 +15,11 @@ import uuid
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
+    fcntl = None  # type: ignore[assignment]
 
 from agentic_any_search_mcp.agent_hosts import (
     UnsupportedHostCapability,
@@ -92,11 +98,36 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True, ensure_ascii=True)
         handle.write("\n")
     tmp_path.replace(path)
+
+
+@contextmanager
+def exclusive_file_lock(lock_path: Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is not None:
+        with lock_path.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+
+    lock_dir = lock_path.with_suffix(lock_path.suffix + ".dir")
+    while True:  # pragma: no cover - fallback for non-POSIX hosts
+        try:
+            lock_dir.mkdir(parents=True)
+            break
+        except FileExistsError:
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        lock_dir.rmdir()
 
 
 def should_ignore(path: Path) -> bool:
@@ -647,10 +678,6 @@ class FileSearchRuntime:
         record.touched_denied_files = touched_denied
         record.changed_outside_allowed = outside_allowed
 
-        old_state = run.state
-        run.state = RunState.EVALUATING
-        self._write_run(run)
-
         try:
             precheck = self._precheck_candidate(frozen, record)
             if precheck is not None:
@@ -665,54 +692,68 @@ class FileSearchRuntime:
                     commands = frozen.spec.process_verifiers
                 report = self._run_commands(run, frozen, record, commands, scope)
 
-            record.status = "evaluated"
-            record.score_report = report
-            record.iterations.append(
-                IterationRecord(
-                    iteration=len(record.iterations) + 1,
-                    agent_session_id=agent_session_id,
-                    score=report.aggregate_score,
-                    failure_class=(
-                        next(
-                            (
-                                r.failure_class
-                                for r in report.verifier_results
-                                if r.failure_class
-                            ),
-                            None,
-                        )
-                    ),
-                    summary="",
-                    changed_files=list(detected_changed),
-                    touched_denied_files=touched_denied,
-                    changed_outside_allowed=outside_allowed,
-                    metrics={r.name: r.metrics for r in report.verifier_results},
-                    created_at=utc_timestamp(),
+            with self._run_transaction(run_id):
+                run = self._load_run(run_id)
+                record = self._load_candidate_record(run_id, candidate_id)
+                record.detected_changed_files = detected_changed
+                record.touched_denied_files = touched_denied
+                record.changed_outside_allowed = outside_allowed
+                record.status = "evaluated"
+                record.score_report = report
+                record.iterations.append(
+                    IterationRecord(
+                        iteration=len(record.iterations) + 1,
+                        agent_session_id=agent_session_id,
+                        score=report.aggregate_score,
+                        failure_class=(
+                            next(
+                                (
+                                    r.failure_class
+                                    for r in report.verifier_results
+                                    if r.failure_class
+                                ),
+                                None,
+                            )
+                        ),
+                        summary="",
+                        changed_files=list(detected_changed),
+                        touched_denied_files=touched_denied,
+                        changed_outside_allowed=outside_allowed,
+                        metrics={r.name: r.metrics for r in report.verifier_results},
+                        created_at=utc_timestamp(),
+                    )
                 )
-            )
-            self._write_candidate_record(run_id, record)
-            self._update_best_seen(run, frozen.spec, report)
-            run.candidates_evaluated = len(
-                [r for r in self._load_candidate_records(run_id) if r.status == "evaluated"]
-            )
-            if run.state == RunState.EVALUATING:
-                run.state = RunState.RUNNING if old_state != RunState.READY_TO_PROMOTE else old_state
-            self._write_run(run)
+                self._write_candidate_record(run_id, record)
+                self._update_best_seen(run, frozen.spec, report)
+                run.candidates_evaluated = len(
+                    [
+                        r
+                        for r in self._load_candidate_records(run_id)
+                        if r.status == "evaluated"
+                    ]
+                )
+                self._write_run(run)
 
-            if session is not None and agent_session_id is not None:
-                session.counters["verifier_runs"] = session.counters.get("verifier_runs", 0) + 1
-                updated = session.model_copy(
-                    update={
-                        "updated_at": utc_timestamp(),
-                        "counters": session.counters,
-                    }
-                )
-                self._write_agent_session(updated)
+                if session is not None and agent_session_id is not None:
+                    latest_session = self._load_agent_session_by_id(
+                        agent_session_id, run_id=run_id
+                    )
+                    counters = dict(latest_session.counters)
+                    counters["verifier_runs"] = counters.get("verifier_runs", 0) + 1
+                    updated = latest_session.model_copy(
+                        update={
+                            "updated_at": utc_timestamp(),
+                            "counters": counters,
+                        }
+                    )
+                    self._write_agent_session(updated)
 
             return report
         except Exception:
-            run.state = RunState.FAILED
-            self._write_run(run)
+            with self._run_transaction(run_id):
+                run = self._load_run(run_id)
+                run.state = RunState.FAILED
+                self._write_run(run)
             raise
 
     def select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
@@ -2265,6 +2306,11 @@ class FileSearchRuntime:
 
     def _run_dir(self, run_id: str) -> Path:
         return self.runs_dir / run_id
+
+    @contextmanager
+    def _run_transaction(self, run_id: str):
+        with exclusive_file_lock(self._run_dir(run_id) / "run.lock"):
+            yield
 
     def _candidate_dir(self, run_id: str, candidate_id: str) -> Path:
         return self._run_dir(run_id) / "candidates" / candidate_id
