@@ -38,6 +38,7 @@ Pi RPC. See
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `AnySearchAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `AnySearchAgent` (50 steps) | 8 candidates, pool=4, two batches |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
+| `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
 
 For each example, start through `/goal-plus`. The goal-plus layer records the
 raw goal, triage, frozen verifier confirmation, and final raw-goal audit. Once
