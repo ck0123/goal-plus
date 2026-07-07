@@ -90,14 +90,17 @@ existing Search MCP flow.
 
 ## Hook Compatibility
 
-This repository ships a Codex `Stop` hook at `.codex/hooks.json` that runs
-`agentic-any-search-mcp --goal-plus-stop-hook`. It is a final backstop for
-`goal_plus_gate(event="stop")`: if the active Goal Plus record still has a
-required next action, Codex receives a continuation prompt instead of ending.
+This repository ships Codex Goal Plus host hooks at `.codex/hooks.json` that
+run `agentic-any-search-mcp --goal-plus-host-hook`.
+`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
+current top-level Codex `session_id`. The `Stop` hook is a final backstop for
+`goal_plus_gate(event="stop")`: if the session-bound Goal Plus record still has
+a required next action, Codex receives a continuation prompt instead of
+ending.
 
 The hook does not replace the explicit workflow calls above. It does not wire
 `PreToolUse` or `SubagentStop`, so call `goal_plus_gate(event="pre_tool_use",
 ...)` before Search Mode tools and call the stop gate manually before the final
-response. `goal_plus_gate` does not supervise worker lifecycle. Codex worker
-budget and foreground subagent behavior remain the responsibility of the
-internal `search` skill.
+response. Subagent tool events do not bind Goal Plus ownership. `goal_plus_gate`
+does not supervise worker lifecycle. Codex worker budget and foreground
+subagent behavior remain the responsibility of the internal `search` skill.

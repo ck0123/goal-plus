@@ -266,9 +266,12 @@ hook, `block` means "this tool call is not valid in the current goal-plus
 phase."
 
 The current repository registers `goal_plus_gate` as an MCP tool and ships a
-small Stop hook helper for Codex and Claude Code. OpenCode and all
-PreToolUse/SubagentStop checkpoints remain manual skill/orchestrator steps
-rather than enforced host lifecycle checks.
+small host hook helper for Codex and Claude Code.
+`PostToolUse(goal_plus_create)` binds the record to the current top-level host
+session, and `Stop` applies the gate only to an explicit `GOAL_PLUS_ID` or a
+matching session-bound record. OpenCode and all PreToolUse/SubagentStop
+checkpoints remain manual skill/orchestrator steps rather than enforced host
+lifecycle checks.
 
 The gate should be conservative and deterministic:
 
@@ -392,19 +395,25 @@ Files changed by the baseline implementation:
 | `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then the internal search skill only in Search Mode. |
 | `.agents/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
 | `.claude/skills/goal-plus/SKILL.md` | Claude Code workflow instructions. |
-| `agentic-any-search-mcp --goal-plus-stop-hook`, `.codex/hooks.json`, `.claude/settings.json`, `scripts/hooks/goal_plus_stop.py` | Narrow Stop hook backstop for Codex and Claude Code; the script is a legacy wrapper for local testing. Future host-specific `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
+| `agentic-any-search-mcp --goal-plus-host-hook`, `.codex/hooks.json`, `.claude/settings.json`, `scripts/hooks/goal_plus_stop.py` | Session-binding `PostToolUse(goal_plus_create)` hook plus session-scoped Stop hook backstop for Codex and Claude Code; the script is a legacy wrapper for local testing. Future host-specific `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
 
 ## Hook Integration Pattern
 
-Hooks should not need to know search details. They should ask one question:
+Hooks should not need to know search details. They should bind ownership when
+`goal_plus_create` returns, then ask one gate question on Stop:
 
 ```text
-Given this goal_plus_id and hook event, may the agent stop or perform this tool?
+Given this goal_plus_id and hook event, may the agent stop?
 ```
 
-Example Stop hook behavior:
+Example host hook behavior:
 
 ```text
+PostToolUse(goal_plus_create)
+  -> bind goal_plus_id to current top-level session_id
+
+Stop
+  -> select GOAL_PLUS_ID, or the active record bound to current session_id
 goal_plus_gate(goal_plus_id, event="stop", context=<hook input>)
   -> allow
        exit 0

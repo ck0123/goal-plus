@@ -138,10 +138,12 @@ claude -p --verbose --output-format stream-json \
   > ".search/host-logs/claude-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
-Add `--include-hook-events` when diagnosing the shipped Stop hook or externally
-supplied hooks, or `--include-partial-messages` when token-level streaming
-matters. This repository ships `agentic-any-search-mcp --goal-plus-stop-hook`
-for Stop only; PreToolUse and SubagentStop remain manual gate calls.
+Add `--include-hook-events` when diagnosing the shipped Goal Plus host hooks or
+externally supplied hooks, or `--include-partial-messages` when token-level
+streaming matters. This repository ships
+`agentic-any-search-mcp --goal-plus-host-hook` for
+`PostToolUse(goal_plus_create)` session binding and session-scoped `Stop`
+gating; PreToolUse and SubagentStop remain manual gate calls.
 `--debug-file` implicitly enables debug mode. Use `--debug api,mcp` for a
 narrower debug filter when API or MCP traffic is the focus.
 

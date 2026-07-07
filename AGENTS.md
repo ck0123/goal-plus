@@ -126,12 +126,14 @@ Current host expectations:
 - Codex supports the portable builtin strategy subset. `worker_budget` requires
   `max_runtime_seconds` and is enforced by parent watchdog metadata:
   `wait_agent(timeout_ms=...)`, then `interrupt_agent` or
-  `send_input(..., interrupt=true)` when the deadline expires. Goal Plus gates
-  are manual unless a host hook adapter is added.
+  `send_input(..., interrupt=true)` when the deadline expires. Codex ships
+  `PostToolUse(goal_plus_create)` session binding and a session-scoped Stop
+  hook backstop; PreToolUse/SubagentStop gates remain manual.
 - Claude Code supports the portable builtin strategy subset. `worker_budget`
   requires `max_turns` and maps known budgets to `.claude/agents/*.md`
-  `maxTurns` definitions. The checked-in `.claude/` assets do not include hook
-  settings or scripts for `goal_plus_gate`.
+  `maxTurns` definitions. Claude Code ships `PostToolUse(goal_plus_create)`
+  session binding and a session-scoped Stop hook backstop;
+  PreToolUse/SubagentStop gates remain manual.
 
 Portable strategy names for non-OpenCode hosts are currently:
 
@@ -149,9 +151,10 @@ Host workers are foreground by design. Do not switch the adapter flow to
 background subagents unless the design docs, host skills, runtime validation,
 and tests are updated together.
 
-Do not describe a host as hook-enforced Goal Plus unless the repository ships
-and tests the hook wiring that calls `goal_plus_gate` at the relevant Stop,
-SubagentStop, or PreToolUse checkpoints.
+Do not describe a host as fully hook-enforced Goal Plus unless the repository
+ships and tests hook wiring at all relevant Stop, SubagentStop, and PreToolUse
+checkpoints. Codex and Claude Code currently provide ownership binding plus a
+session-scoped Stop backstop, not full process supervision.
 
 ## Asset And Prompt Changes
 

@@ -15,22 +15,27 @@ def test_claude_mcp_json_registers_search_runtime() -> None:
     assert server["args"] == ["--root", ".search"]
 
 
-def test_claude_assets_wire_stop_hook_only() -> None:
+def test_claude_assets_wire_goal_plus_host_hooks() -> None:
     settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
     stop_hooks = settings["hooks"]["Stop"]
+    post_tool_use_hooks = settings["hooks"]["PostToolUse"]
 
     assert not (ROOT / ".claude" / "settings.local.json").exists()
-    assert settings["hooks"].keys() == {"Stop"}
+    assert settings["hooks"].keys() == {"Stop", "PostToolUse"}
     assert stop_hooks[0]["matcher"] == ""
     assert stop_hooks[0]["hooks"][0]["type"] == "command"
     command = stop_hooks[0]["hooks"][0]["command"]
-    assert command == "agentic-any-search-mcp --goal-plus-stop-hook"
+    assert command == "agentic-any-search-mcp --goal-plus-host-hook"
     assert "python3" not in command
+    assert post_tool_use_hooks[0]["matcher"] == ""
+    post_command = post_tool_use_hooks[0]["hooks"][0]["command"]
+    assert post_command == "agentic-any-search-mcp --goal-plus-host-hook"
 
     text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
-    assert "ships one Claude Code Stop hook" in text
+    assert "ships Claude Code Goal Plus host hooks" in text
+    assert "PostToolUse(goal_plus_create)" in text
     assert "does not wire PreToolUse or SubagentStop hooks" in text
-    assert "agentic-any-search-mcp --goal-plus-stop-hook" in text
+    assert "agentic-any-search-mcp --goal-plus-host-hook" in text
 
 
 def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:

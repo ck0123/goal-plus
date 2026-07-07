@@ -1,11 +1,23 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "timeout": 30,
+            "statusMessage": "Binding Goal Plus session"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-stop-hook",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Checking Goal Plus stop gate"
           }

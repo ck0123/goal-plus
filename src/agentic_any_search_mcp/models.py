@@ -161,6 +161,7 @@ GoalPlusRecommendedPhase = Literal["goal", "spec_discovery", "search"]
 GoalPlusDiscoveryOrigin = Literal["initial", "in_progress"]
 GoalPlusGateEvent = Literal["stop", "subagent_stop", "pre_tool_use", "user_prompt_submit"]
 GoalPlusGateDecision = Literal["allow", "block"]
+GoalPlusSessionState = Literal["attached", "stale", "detached"]
 
 
 class GoalPlusNextAction(SearchModel):
@@ -203,6 +204,17 @@ class GoalPlusLinkedSearch(SearchModel):
     summary: str | None = None
 
 
+class GoalPlusActiveSession(SearchModel):
+    host: AgentHostKind
+    session_id: str = Field(min_length=1)
+    transcript_path: str | None = None
+    tool_use_id: str | None = None
+    state: GoalPlusSessionState = "attached"
+    attached_at: str
+    last_seen_at: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class GoalPlusRecord(SearchModel):
     goal_plus_id: str
     raw_goal: str = Field(min_length=1)
@@ -214,6 +226,7 @@ class GoalPlusRecord(SearchModel):
     spec_draft: GoalPlusSpecDraft | None = None
     linked_search: GoalPlusLinkedSearch | None = None
     next_action: GoalPlusNextAction | None = None
+    active_session: GoalPlusActiveSession | None = None
     hook_counters: dict[str, int] = Field(default_factory=dict)
     created_at: str
     updated_at: str

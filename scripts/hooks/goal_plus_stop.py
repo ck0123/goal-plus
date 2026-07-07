@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper for the Goal Plus Stop hook.
+"""Compatibility wrapper for the Goal Plus host hook.
 
-Host configs should prefer `agentic-any-search-mcp --goal-plus-stop-hook` so
+Host configs should prefer `agentic-any-search-mcp --goal-plus-host-hook` so
 the hook uses the same installed Python environment as the MCP server. This
 script remains useful for local development and direct unit tests.
 """

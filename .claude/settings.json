@@ -1,12 +1,23 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-stop-hook"
+            "command": "agentic-any-search-mcp --goal-plus-host-hook"
           }
         ]
       }

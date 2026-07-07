@@ -73,8 +73,8 @@ The runtime currently supports three host clients through adapters:
 | Host | `strategy.worker_host` | Worker launch | Continuation | Goal Plus gate enforcement | Strategy scope |
 |---|---|---|---|---|---|
 | OpenCode | `opencode` | foreground `Task` | `Task(task_id=...)` | manual / instruction-driven | compatibility baseline |
-| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | Stop hook backstop plus manual PreToolUse gate | portable builtin modes |
-| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | Stop hook backstop plus manual PreToolUse gate | portable builtin modes |
+| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | PostToolUse session binding, session-scoped Stop hook, manual PreToolUse gate | portable builtin modes |
+| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | PostToolUse session binding, session-scoped Stop hook, manual PreToolUse gate | portable builtin modes |
 
 Portable builtin modes for Codex and Claude Code are `agent_guided`, `agent`,
 `default`, `random`, and `random_mode`. OpenCode remains the baseline for existing
@@ -85,13 +85,13 @@ Goal Plus has two support levels:
 - **Search Mode orchestration**: host assets can launch candidate workers,
   verify scores, bind handles, select, report, and promote. This is implemented
   for the hosts above.
-- **Lifecycle gate enforcement**: host hooks automatically call
-  `goal_plus_gate` before Search Mode tools and before the agent stops. This
-  repository ships a narrow Stop hook for Codex and Claude Code through
-  `agentic-any-search-mcp --goal-plus-stop-hook`. It blocks top-level Stop
-  when the latest active Goal Plus record still has a required next action.
-  OpenCode has no shipped hook, and `PreToolUse`/`SubagentStop` are still
-  manual gate calls in all hosts.
+- **Lifecycle gate enforcement**: Codex and Claude Code ship host hooks through
+  `agentic-any-search-mcp --goal-plus-host-hook`.
+  `PostToolUse(goal_plus_create)` binds the Goal Plus record to the current
+  top-level session, and `Stop` blocks only an explicitly selected
+  `GOAL_PLUS_ID` or a session-bound Goal Plus record with a required next
+  action. OpenCode has no shipped hook, and `PreToolUse`/`SubagentStop` are
+  still manual gate calls in all hosts.
 
 Host references:
 
@@ -284,7 +284,7 @@ Not yet covered by this prototype:
 opencode.json                         # project-local OpenCode MCP config
 .mcp.json                             # project-local Claude Code MCP config
 .codex/config.toml                    # project-local Codex MCP config
-.codex/hooks.json                     # Codex Stop hook for goal-plus
+.codex/hooks.json                     # Codex Goal Plus host hooks
 scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 .opencode/
   command/goal-plus.md                # canonical OpenCode goal entrypoint
@@ -300,7 +300,7 @@ scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 .codex/
   agents/any_search_agent.toml        # Codex worker agent config
 .claude/
-  settings.json                       # Claude Code Stop hook for goal-plus
+  settings.json                       # Claude Code Goal Plus host hooks
   skills/goal-plus/SKILL.md           # Claude Code goal-plus skill
   skills/search/SKILL.md              # Claude Code internal search skill
   agents/any-search-agent.md          # Claude Code worker agent config

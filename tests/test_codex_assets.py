@@ -15,21 +15,26 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
     assert 'args = ["--root", ".search"]' in text
 
 
-def test_codex_assets_wire_stop_hook_only() -> None:
+def test_codex_assets_wire_goal_plus_host_hooks() -> None:
     hooks = json.loads((ROOT / ".codex" / "hooks.json").read_text(encoding="utf-8"))
     stop_hooks = hooks["hooks"]["Stop"]
+    post_tool_use_hooks = hooks["hooks"]["PostToolUse"]
 
-    assert hooks["hooks"].keys() == {"Stop"}
+    assert hooks["hooks"].keys() == {"Stop", "PostToolUse"}
     assert stop_hooks[0]["hooks"][0]["type"] == "command"
     command = stop_hooks[0]["hooks"][0]["command"]
-    assert command == "agentic-any-search-mcp --goal-plus-stop-hook"
+    assert command == "agentic-any-search-mcp --goal-plus-host-hook"
     assert "python3" not in command
     assert stop_hooks[0]["hooks"][0]["timeout"] == 30
+    post_command = post_tool_use_hooks[0]["hooks"][0]["command"]
+    assert post_command == "agentic-any-search-mcp --goal-plus-host-hook"
+    assert post_tool_use_hooks[0]["hooks"][0]["timeout"] == 30
 
     text = (ROOT / "docs" / "codex.md").read_text(encoding="utf-8")
-    assert "ships one project-local Stop hook" in text
+    assert "ships project-local Goal Plus host hooks" in text
+    assert "PostToolUse(goal_plus_create)" in text
     assert "does not wire PreToolUse or SubagentStop hooks" in text
-    assert "agentic-any-search-mcp --goal-plus-stop-hook" in text
+    assert "agentic-any-search-mcp --goal-plus-host-hook" in text
 
 
 def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:

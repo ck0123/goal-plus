@@ -10,8 +10,10 @@ client owns the subagent process lifecycle. The main agent owns policy decisions
 through MCP tool calls.
 
 `goal_plus_gate` records deterministic phase decisions, but those decisions are
-enforced only when a host actually calls the gate. Codex and Claude Code ship a
-narrow Stop hook backstop through `agentic-any-search-mcp --goal-plus-stop-hook`;
+enforced only when a host actually calls the gate. Codex and Claude Code ship
+Goal Plus host hooks through `agentic-any-search-mcp --goal-plus-host-hook`:
+`PostToolUse(goal_plus_create)` binds the record to the current top-level
+session, and `Stop` gates only that session or an explicit `GOAL_PLUS_ID`.
 OpenCode and all PreToolUse/SubagentStop checkpoints remain instruction-driven.
 
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:

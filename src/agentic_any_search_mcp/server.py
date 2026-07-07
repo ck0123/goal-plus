@@ -306,8 +306,13 @@ def main() -> None:
         action="store_true",
         help="Run the Goal Plus Stop hook instead of starting the MCP server",
     )
+    parser.add_argument(
+        "--goal-plus-host-hook",
+        action="store_true",
+        help="Run the Goal Plus host hook instead of starting the MCP server",
+    )
     args = parser.parse_args()
-    if args.goal_plus_stop_hook:
+    if args.goal_plus_stop_hook or args.goal_plus_host_hook:
         from agentic_any_search_mcp.goal_plus_stop_hook import main as hook_main
 
         raise SystemExit(hook_main())

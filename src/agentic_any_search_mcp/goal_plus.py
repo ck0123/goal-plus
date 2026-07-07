@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from agentic_any_search_mcp.models import (
+    GoalPlusActiveSession,
     GoalPlusGateEvent,
     GoalPlusGateResult,
     GoalPlusLinkedSearch,
@@ -86,6 +87,80 @@ class FileGoalPlusRuntime:
 
     def status(self, goal_plus_id: str) -> GoalPlusRecord:
         return self._load_record(goal_plus_id)
+
+    def activate_session(
+        self,
+        goal_plus_id: str,
+        session: GoalPlusActiveSession | dict[str, Any],
+    ) -> GoalPlusRecord:
+        record = self._load_record(goal_plus_id)
+        now = utc_timestamp()
+        if isinstance(session, GoalPlusActiveSession):
+            attached_at = (
+                record.active_session.attached_at
+                if record.active_session is not None
+                and record.active_session.session_id == session.session_id
+                else session.attached_at
+            )
+            parsed = session.model_copy(
+                update={
+                    "state": "attached",
+                    "attached_at": attached_at,
+                    "last_seen_at": now,
+                }
+            )
+        else:
+            data = dict(session)
+            existing = record.active_session
+            if (
+                existing is not None
+                and existing.session_id == data.get("session_id")
+                and existing.host == data.get("host")
+            ):
+                data.setdefault("attached_at", existing.attached_at)
+            else:
+                data.setdefault("attached_at", now)
+            data.setdefault("last_seen_at", now)
+            data.setdefault("state", "attached")
+            parsed = GoalPlusActiveSession.model_validate(data)
+
+        updated = record.model_copy(
+            update={
+                "active_session": parsed,
+                "updated_at": now,
+            }
+        )
+        self._write_record(updated)
+        self._append_event(
+            goal_plus_id,
+            "session_activated",
+            parsed.model_dump(mode="json"),
+        )
+        return updated
+
+    def record_session_gate_skipped(
+        self,
+        goal_plus_id: str,
+        reason: str,
+        current_session_id: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> GoalPlusRecord:
+        record = self._load_record(goal_plus_id)
+        self._append_event(
+            goal_plus_id,
+            "session_gate_skipped",
+            {
+                "reason": reason,
+                "current_session_id": current_session_id,
+                "active_session": (
+                    record.active_session.model_dump(mode="json")
+                    if record.active_session is not None
+                    else None
+                ),
+                "context": context or {},
+            },
+        )
+        return record
 
     def list_events(self, goal_plus_id: str) -> list[dict[str, Any]]:
         event_path = self._events_path(goal_plus_id)

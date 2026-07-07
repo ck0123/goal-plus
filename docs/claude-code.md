@@ -20,8 +20,9 @@ Newer Claude Code versions may expose richer subagent management, but this
 adapter only relies on foreground Agent launches and optional `SendMessage`
 continuation when Claude Code exposes a reusable agent handle.
 
-This repository ships one Claude Code Stop hook for Goal Plus:
-`.claude/settings.json` runs `agentic-any-search-mcp --goal-plus-stop-hook`.
+This repository ships Claude Code Goal Plus host hooks:
+`.claude/settings.json` runs `agentic-any-search-mcp --goal-plus-host-hook`
+for `PostToolUse` and `Stop`.
 
 ## Config
 
@@ -58,17 +59,27 @@ The MCP server is configured as:
 ## Goal Plus Hook Status
 
 Claude Code assets provide Search Mode worker orchestration, manual Goal Plus
-gate calls through the `goal-plus` skill, and one Stop hook backstop.
+gate calls through the `goal-plus` skill, and session-scoped Goal Plus host
+hooks.
 
 Concretely, the checked-in assets wire:
 
-- a `Stop` hook that calls `agentic-any-search-mcp --goal-plus-stop-hook`
+- a `PostToolUse(goal_plus_create)` hook that binds the created Goal Plus
+  record to the current top-level Claude Code `session_id`
+- a `Stop` hook that calls `agentic-any-search-mcp --goal-plus-host-hook`
 
-The project does not wire PreToolUse or SubagentStop hooks. The agent must still call `goal_plus_gate(event="pre_tool_use", ...)` before Search Mode tools and call the stop gate manually before the final response. The hook exists to catch a missed final stop gate, not to supervise foreground workers.
+Subagent tool events are ignored for ownership binding. The Stop hook gates
+only an explicitly selected `GOAL_PLUS_ID` or an active Goal Plus record whose
+bound session matches the current Claude Code session.
+
+The project does not wire PreToolUse or SubagentStop hooks. The agent must
+still call `goal_plus_gate(event="pre_tool_use", ...)` before Search Mode tools
+and call the stop gate manually before the final response. The hook exists to
+catch a missed final stop gate, not to supervise foreground workers.
 
 Set `GOAL_PLUS_ID=gp_...` to force the hook to gate a specific active goal when
-multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` to
-temporarily bypass the Stop hook.
+multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` or
+`GOAL_PLUS_HOST_HOOK_DISABLED=1` to temporarily bypass the hooks.
 
 ## Supported Strategies
 

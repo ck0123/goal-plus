@@ -24,15 +24,22 @@ Use `goal-plus` as the user-facing skill. The `search` skill is the internal
 Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
 verifier-backed spec.
 
-This repository ships one project-local Stop hook for Goal Plus:
-`.codex/hooks.json` runs `agentic-any-search-mcp --goal-plus-stop-hook`. Codex
-project hooks must be reviewed and trusted through `/hooks` before they run.
+This repository ships project-local Goal Plus host hooks:
+`.codex/hooks.json` runs `agentic-any-search-mcp --goal-plus-host-hook` for
+`PostToolUse` and `Stop`. Codex project hooks must be reviewed and trusted
+through `/hooks` before they run.
 
-The hook only gates top-level Stop. It does not wire PreToolUse or SubagentStop hooks. The skill still calls `goal_plus_gate` manually before Search Mode tools and before the final response.
+`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
+current top-level Codex `session_id`. Subagent tool events are ignored for
+ownership binding. The Stop hook gates only an explicitly selected
+`GOAL_PLUS_ID` or an active Goal Plus record whose bound session matches the
+current Codex session. It does not wire PreToolUse or SubagentStop hooks. The
+skill still calls `goal_plus_gate` manually before Search Mode tools and
+before the final response.
 
 Set `GOAL_PLUS_ID=gp_...` to force the hook to gate a specific active goal when
-multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` to
-temporarily bypass the Stop hook.
+multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` or
+`GOAL_PLUS_HOST_HOOK_DISABLED=1` to temporarily bypass the hooks.
 
 The MCP server is configured as:
 

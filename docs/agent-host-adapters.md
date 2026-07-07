@@ -54,24 +54,27 @@ control.
 
 Search Mode support means a host can launch foreground candidate workers and
 the runtime can record verifier-backed search results. Goal Plus lifecycle
-enforcement means a host hook automatically calls `goal_plus_gate` at
+enforcement means a host hook or skill call checks Goal Plus phase state at
 checkpoints such as:
 
 - before `search_*` tools that create or run search state
 - before the top-level agent stops
 - before a subagent stop, if the host exposes that hook
 
-Current repository assets include one narrow Stop hook for Codex and Claude
-Code. Host settings run `agentic-any-search-mcp --goal-plus-stop-hook`, which
-reads local `.search/goal-plus` state and calls the same
-`goal_plus_gate(event="stop")` semantics as the MCP tool. If the active Goal
-Plus record still has a required next action, the hook returns a host-native
-block decision with the continuation prompt.
+Current repository assets include Goal Plus host hooks for Codex and Claude
+Code. Host settings run `agentic-any-search-mcp --goal-plus-host-hook`.
+`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
+current top-level host `session_id`; subagent tool events do not bind
+ownership. `Stop` then reads local `.search/goal-plus` state and applies the
+same `goal_plus_gate(event="stop")` semantics only to an explicit
+`GOAL_PLUS_ID` or a record whose bound session matches the current host
+session. If that record still has a required next action, the hook returns a
+host-native block decision with the continuation prompt.
 
 OpenCode still has no shipped hook. No host currently has a shipped
 `PreToolUse` or `SubagentStop` hook. Those gate calls remain manual /
-instruction-driven in the skills, so this is a Stop backstop rather than full
-process supervision.
+instruction-driven in the skills, so this is session-scoped Stop backstop plus
+ownership binding rather than full process supervision.
 
 ## Host Selection
 
@@ -112,7 +115,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface |
 | Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts |
 | Trace export | supported for OpenCode logs | not implemented | not implemented |
-| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | project Stop hook backstop; PreToolUse/SubagentStop manual | project Stop hook backstop; PreToolUse/SubagentStop manual |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only |
 
 Portable builtin strategies are:

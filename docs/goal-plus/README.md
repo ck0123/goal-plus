@@ -37,7 +37,10 @@ the Search MCP runtime; it sits above it. The host agent or skill performs
 intake, decides whether a frozen spec is available, and only then calls the
 existing search tools.
 
-Codex and Claude Code also ship a narrow Stop hook backstop through
-`agentic-any-search-mcp --goal-plus-stop-hook`. It catches unfinished active
-Goal Plus records before the top-level agent stops. OpenCode and all PreToolUse
-/ SubagentStop checkpoints remain instruction-driven.
+Codex and Claude Code also ship Goal Plus host hooks through
+`agentic-any-search-mcp --goal-plus-host-hook`.
+`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
+current top-level session, and `Stop` catches unfinished records only when the
+bound session matches or `GOAL_PLUS_ID` explicitly selects the record.
+OpenCode and all PreToolUse / SubagentStop checkpoints remain
+instruction-driven.

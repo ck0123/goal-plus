@@ -15,7 +15,7 @@ HOOK_CLI = [
     sys.executable,
     "-m",
     "agentic_any_search_mcp.server",
-    "--goal-plus-stop-hook",
+    "--goal-plus-host-hook",
 ]
 
 
@@ -70,7 +70,7 @@ def test_stop_hook_allows_when_no_goal_state_and_does_not_create_state(tmp_path:
     assert not search_root.exists()
 
 
-def test_stop_hook_blocks_latest_active_goal_with_required_next_action(
+def test_stop_hook_allows_unbound_active_goal_without_session_match(
     tmp_path: Path,
 ) -> None:
     search_root = tmp_path / ".search"
@@ -80,13 +80,11 @@ def test_stop_hook_blocks_latest_active_goal_with_required_next_action(
     result = _run_hook(tmp_path, search_root, {"stop_reason": "done"})
 
     assert result.returncode == 0
-    payload = json.loads(result.stdout)
-    assert payload["decision"] == "block"
-    assert "Goal Plus is still active" in payload["reason"]
-    assert "Classify whether the raw goal" in payload["reason"]
+    assert result.stdout == ""
 
     events = runtime.list_events(record.goal_plus_id)
-    assert events[-1]["event_type"] == "gate_blocked"
+    assert events[-1]["event_type"] == "session_gate_skipped"
+    assert events[-1]["payload"]["reason"] == "no_matching_session"
 
 
 def test_stop_hook_allows_goal_mode_without_required_next_action(tmp_path: Path) -> None:
@@ -103,7 +101,20 @@ def test_stop_hook_allows_goal_mode_without_required_next_action(tmp_path: Path)
         },
     )
 
-    result = _run_hook(tmp_path, search_root)
+    runtime.activate_session(
+        record.goal_plus_id,
+        {
+            "host": "codex",
+            "session_id": "session-current",
+            "transcript_path": "/tmp/current.jsonl",
+        },
+    )
+
+    result = _run_hook(
+        tmp_path,
+        search_root,
+        {"hook_event_name": "Stop", "session_id": "session-current"},
+    )
 
     assert result.returncode == 0
     assert result.stdout == ""
@@ -131,6 +142,94 @@ def test_stop_hook_can_target_explicit_goal_id(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
     assert runtime.list_events(first.goal_plus_id)[-1]["event_type"] == "gate_blocked"
+
+
+def test_post_tool_use_goal_plus_create_binds_main_session(tmp_path: Path) -> None:
+    search_root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(search_root)
+    record = runtime.create_goal("Optimize model throughput")
+
+    result = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "session-main",
+            "transcript_path": "/tmp/main.jsonl",
+            "tool_name": "mcp__search-runtime__goal_plus_create",
+            "tool_response": {"goal_plus_id": record.goal_plus_id},
+        },
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    updated = runtime.status(record.goal_plus_id)
+    assert updated.active_session is not None
+    assert updated.active_session.host == "codex"
+    assert updated.active_session.session_id == "session-main"
+    assert updated.active_session.transcript_path == "/tmp/main.jsonl"
+    assert updated.active_session.state == "attached"
+
+
+def test_post_tool_use_goal_plus_create_ignores_subagent_context(tmp_path: Path) -> None:
+    search_root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(search_root)
+    record = runtime.create_goal("Optimize model throughput")
+
+    result = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "session-main",
+            "agent_id": "agent-sub",
+            "agent_type": "any-search-agent",
+            "agent_transcript_path": "/tmp/subagent.jsonl",
+            "tool_name": "mcp__search-runtime__goal_plus_create",
+            "tool_response": {"goal_plus_id": record.goal_plus_id},
+        },
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert runtime.status(record.goal_plus_id).active_session is None
+
+
+def test_stop_hook_blocks_only_current_bound_session(tmp_path: Path) -> None:
+    search_root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(search_root)
+    record = runtime.create_goal("Optimize model throughput")
+    runtime.activate_session(
+        record.goal_plus_id,
+        {
+            "host": "claude-code",
+            "session_id": "session-a",
+            "transcript_path": "/tmp/session-a.jsonl",
+        },
+    )
+
+    interrupted = _run_hook(
+        tmp_path,
+        search_root,
+        {"hook_event_name": "Stop", "session_id": "session-b"},
+    )
+
+    assert interrupted.returncode == 0
+    assert interrupted.stdout == ""
+    events = runtime.list_events(record.goal_plus_id)
+    assert events[-1]["event_type"] == "session_gate_skipped"
+    assert events[-1]["payload"]["current_session_id"] == "session-b"
+
+    same_session = _run_hook(
+        tmp_path,
+        search_root,
+        {"hook_event_name": "Stop", "session_id": "session-a"},
+    )
+
+    assert same_session.returncode == 0
+    payload = json.loads(same_session.stdout)
+    assert payload["decision"] == "block"
+    assert "Classify whether the raw goal" in payload["reason"]
 
 
 def test_stop_hook_disable_env_allows_without_gate_event(tmp_path: Path) -> None:
