@@ -1,0 +1,14 @@
+{
+  "benchmark": "formal_logic",
+  "task_id": "formal_logic:demo",
+  "question": "If all valid arguments preserve truth and this argument preserves truth, which choice is the intended answer?",
+  "choices": [
+    {"label": "A", "text": "It is invalid."},
+    {"label": "B", "text": "It is valid."},
+    {"label": "C", "text": "It is unrelated."},
+    {"label": "D", "text": "No choice can be selected."}
+  ],
+  "gold": "B",
+  "answer_type": "mcq",
+  "metadata": {"source": "local_demo"}
+}

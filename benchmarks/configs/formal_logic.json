@@ -1,0 +1,6 @@
+{
+  "benchmark": "formal_logic",
+  "dataset": {"path": "cais/mmlu", "name": "formal_logic", "split": "test"},
+  "answer_type": "mcq",
+  "metric_name": "accuracy"
+}

@@ -1,0 +1,6 @@
+{
+  "benchmark": "gsm8k",
+  "dataset": {"path": "openai/gsm8k", "name": "main", "split": "test"},
+  "answer_type": "numeric",
+  "metric_name": "accuracy"
+}

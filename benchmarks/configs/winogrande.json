@@ -1,0 +1,6 @@
+{
+  "benchmark": "winogrande",
+  "dataset": {"path": "allenai/winogrande", "name": "winogrande_xl", "split": "validation"},
+  "answer_type": "mcq",
+  "metric_name": "accuracy"
+}

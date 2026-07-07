@@ -1,0 +1,6 @@
+{
+  "benchmark": "truthfulqa",
+  "dataset": {"path": "truthfulqa/truthful_qa", "name": "multiple_choice", "split": "validation"},
+  "answer_type": "mcq",
+  "metric_name": "accuracy"
+}
