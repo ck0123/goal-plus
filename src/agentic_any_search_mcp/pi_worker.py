@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +127,146 @@ def _safe_session_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value)
 
 
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _number(value: Any) -> int | float:
+    return value if isinstance(value, int | float) else 0
+
+
+def summarize_pi_entries(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "assistantMessages": 0,
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "costTotal": 0.0,
+        "latestCacheHitRate": None,
+    }
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("role") != "assistant":
+            continue
+        usage = message.get("usage") or {}
+        input_tokens = int(_number(usage.get("input")))
+        output_tokens = int(_number(usage.get("output")))
+        cache_read = int(_number(usage.get("cacheRead")))
+        cache_write = int(_number(usage.get("cacheWrite")))
+        cost = usage.get("cost") or {}
+        cost_total = _number(cost.get("total")) if isinstance(cost, dict) else 0
+
+        summary["assistantMessages"] += 1
+        summary["input"] += input_tokens
+        summary["output"] += output_tokens
+        summary["cacheRead"] += cache_read
+        summary["cacheWrite"] += cache_write
+        summary["costTotal"] += float(cost_total)
+
+        prompt_tokens = input_tokens + cache_read + cache_write
+        summary["latestCacheHitRate"] = (
+            (cache_read / prompt_tokens) * 100 if prompt_tokens else None
+        )
+
+    summary["costTotal"] = round(float(summary["costTotal"]), 12)
+    return summary
+
+
+def _rpc_data(
+    rpc: Any,
+    payload: dict[str, Any],
+    *,
+    timeout: float,
+) -> dict[str, Any]:
+    response = rpc.command(payload, timeout=timeout)
+    return dict((response or {}).get("data") or {})
+
+
+def _rpc_entries(rpc: Any, *, timeout: float) -> list[dict[str, Any]]:
+    data = _rpc_data(rpc, {"type": "get_entries"}, timeout=timeout)
+    entries = data.get("entries")
+    return entries if isinstance(entries, list) else []
+
+
+def _last_entry_id(entries: list[dict[str, Any]]) -> str | None:
+    if not entries:
+        return None
+    value = entries[-1].get("id")
+    return str(value) if value is not None else None
+
+
+def _find_session_file(session_dir: Path, session_id: str) -> str | None:
+    matches = sorted(
+        session_dir.glob(f"*_{session_id}.jsonl"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return str(matches[0]) if matches else None
+
+
+def _collect_pi_metrics(
+    rpc: Any,
+    *,
+    session_dir: Path,
+    session_id: str,
+    baseline_entries: list[dict[str, Any]],
+    baseline_error: str | None,
+    last_state_data: dict[str, Any],
+    started_at: str,
+    ended_at: str,
+    duration_seconds: float,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    if baseline_error:
+        errors.append(f"baseline_entries: {baseline_error}")
+
+    state_data = dict(last_state_data)
+    try:
+        state_data.update(_rpc_data(rpc, {"type": "get_state"}, timeout=5))
+    except Exception as exc:
+        errors.append(f"get_state: {exc}")
+
+    try:
+        final_entries = _rpc_entries(rpc, timeout=10)
+    except Exception as exc:
+        errors.append(f"get_entries: {exc}")
+        final_entries = []
+
+    try:
+        session_stats: dict[str, Any] | None = _rpc_data(
+            rpc,
+            {"type": "get_session_stats"},
+            timeout=10,
+        )
+    except Exception as exc:
+        errors.append(f"get_session_stats: {exc}")
+        session_stats = None
+
+    session_file = state_data.get("sessionFile") or _find_session_file(session_dir, session_id)
+    baseline_count = len(baseline_entries)
+    delta_entries = final_entries[baseline_count:] if len(final_entries) >= baseline_count else []
+    scope = "run_delta" if not baseline_error and final_entries else "session_total_fallback"
+    metrics: dict[str, Any] = {
+        "scope": scope,
+        "session_id": session_id,
+        "session_file": session_file,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_seconds": duration_seconds,
+        "baseline_entry_count": baseline_count,
+        "final_entry_count": len(final_entries),
+        "baseline_last_entry_id": _last_entry_id(baseline_entries),
+        "final_last_entry_id": _last_entry_id(final_entries),
+        "usage_delta": summarize_pi_entries(delta_entries),
+        "usage_total": summarize_pi_entries(final_entries),
+        "session_stats": session_stats,
+    }
+    if errors:
+        metrics["errors"] = errors
+    return metrics
+
+
 def run_pi_rpc_worker(
     launch: dict[str, Any],
     *,
@@ -188,7 +329,13 @@ def run_pi_rpc_worker(
 
     assistant_text: str | None = None
     timed_out = False
-    deadline = time.monotonic() + timeout_seconds
+    started_at = _utc_timestamp()
+    started_monotonic = time.monotonic()
+    deadline = started_monotonic + timeout_seconds
+    baseline_entries: list[dict[str, Any]] = []
+    baseline_error: str | None = None
+    last_state_data: dict[str, Any] = {}
+    pi_metrics: dict[str, Any] | None = None
 
     def _abort_for_timeout() -> None:
         nonlocal timed_out
@@ -210,6 +357,10 @@ def run_pi_rpc_worker(
                 {"type": "set_thinking_level", "level": selected_thinking},
                 timeout=min(30, timeout_seconds),
             )
+        try:
+            baseline_entries = _rpc_entries(rpc, timeout=min(10, timeout_seconds))
+        except Exception as exc:
+            baseline_error = str(exc)
         rpc.command(
             {"type": "prompt", "message": str(launch["prompt"])},
             timeout=min(60, timeout_seconds),
@@ -222,6 +373,7 @@ def run_pi_rpc_worker(
                 break
             state = rpc.command({"type": "get_state"}, timeout=min(10, remaining))
             data = dict(state.get("data") or {})
+            last_state_data = data
             if (
                 not data.get("isStreaming", False)
                 and not data.get("isCompacting", False)
@@ -240,6 +392,29 @@ def run_pi_rpc_worker(
             except TimeoutError:
                 assistant_text = None
     finally:
+        ended_at = _utc_timestamp()
+        duration_seconds = time.monotonic() - started_monotonic
+        try:
+            pi_metrics = _collect_pi_metrics(
+                rpc,
+                session_dir=session_dir,
+                session_id=session_id,
+                baseline_entries=baseline_entries,
+                baseline_error=baseline_error,
+                last_state_data=last_state_data,
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_seconds=duration_seconds,
+            )
+        except Exception as exc:
+            pi_metrics = {
+                "scope": "unavailable",
+                "session_id": session_id,
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": duration_seconds,
+                "errors": [str(exc)],
+            }
         _kill_process_group(proc)
 
     return {
@@ -249,6 +424,8 @@ def run_pi_rpc_worker(
             "session_dir": str(session_dir),
             "event_log": str(event_log),
             "text_log": str(text_log),
+            "session_file": pi_metrics.get("session_file") if pi_metrics else None,
+            "pi_metrics": pi_metrics,
             "assistant_text": assistant_text,
             "timed_out": timed_out,
             "exit_code": proc.returncode,

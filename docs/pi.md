@@ -126,6 +126,29 @@ Pi worker logs are written under:
 - `.search/host-logs/pi-rpc-<agent_session_id>.txt`
 - `.search/host-logs/pi-rpc-sessions/`
 
+Each completed `pi_rpc_run_worker` call also returns `metadata.pi_metrics`.
+When the handle is passed to `search_bind_agent_handle`, those metrics are
+persisted in `AgentSessionRecord.host_handle.metadata` with the rest of the Pi
+handle. This is the place to read per-worker cost and timing data for later
+reports, benchmark tables, or strategy analysis.
+
+`metadata.pi_metrics` includes:
+
+| Field | Meaning |
+|---|---|
+| `usage_delta` | Tokens and estimated cost for this runner invocation only. Computed from Pi session entries added after the pre-prompt baseline. |
+| `usage_total` | Tokens and estimated cost for the whole Pi JSONL session. Useful for continued sessions and rough historical accounting. |
+| `duration_seconds` | Wall-clock runtime measured by `agentic-any-search-pi-worker`, including waiting for the Pi RPC worker to finish. |
+| `session_file` | Pi JSONL session file used for transcript/resume and offline inspection. |
+| `baseline_entry_count`, `final_entry_count` | Entry boundaries used to compute `usage_delta`. |
+| `session_stats` | Pi RPC `get_session_stats` output, kept as host-native context. |
+
+The token and cost fields use the same persisted Pi assistant-message usage that
+drives Pi's footer display. Cost is Pi's local estimate from model pricing, not
+an external billing statement. If a worker is interrupted before Pi records
+assistant usage for the request, the delta can be empty while `duration_seconds`
+and timeout metadata still describe the run.
+
 Same-worker continuation means `session_jsonl_restart`: the runner starts a new
 Pi RPC process with the same `--session-id`. It is not a live stdin
 continuation. `search_redispatch_candidate` still creates a new
