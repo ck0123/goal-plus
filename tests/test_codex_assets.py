@@ -38,7 +38,7 @@ def test_codex_assets_wire_goal_plus_host_hooks() -> None:
 
 
 def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
-    text = (ROOT / ".agents" / "skills" / "search" / "SKILL.md").read_text(
+    text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
 
@@ -51,7 +51,7 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
 
 
 def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
-    text = (ROOT / ".agents" / "skills" / "goal-plus" / "SKILL.md").read_text(
+    text = (ROOT / ".codex" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"
     )
 
@@ -76,7 +76,7 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
 
 
 def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
-    text = (ROOT / ".agents" / "skills" / "search" / "SKILL.md").read_text(
+    text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
 
@@ -89,7 +89,7 @@ def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
 
 
 def test_codex_search_skill_documents_state_level_resume() -> None:
-    text = (ROOT / ".agents" / "skills" / "search" / "SKILL.md").read_text(
+    text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     agent = (ROOT / ".codex" / "agents" / "any_search_agent.toml").read_text(
@@ -125,3 +125,7 @@ def test_codex_docs_record_log_inspection_paths() -> None:
     assert "rollout-*.jsonl" in combined
     assert "RUST_LOG=debug" in combined
     assert "log_dir=./.codex-log" in combined
+
+
+def test_shared_agents_skill_directory_is_not_used() -> None:
+    assert not (ROOT / ".agents").exists()

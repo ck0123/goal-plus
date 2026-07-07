@@ -14,8 +14,8 @@ Project-local MCP configuration lives in:
 ```text
 .codex/config.toml
 .codex/hooks.json
-.agents/skills/goal-plus/SKILL.md
-.agents/skills/search/SKILL.md
+.codex/skills/goal-plus/SKILL.md
+.codex/skills/search/SKILL.md
 .codex/agents/any_search_agent.toml
 scripts/hooks/goal_plus_stop.py
 ```

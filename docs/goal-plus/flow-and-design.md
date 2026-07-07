@@ -281,7 +281,7 @@ src/agentic_any_search_mcp/tools.py / server.py
   - call the internal search skill only when Search Mode is selected
   - call gate checkpoints manually; no OpenCode hook is installed
 
-.agents/skills/goal-plus/SKILL.md
+.codex/skills/goal-plus/SKILL.md
 .claude/skills/goal-plus/SKILL.md
   - host-specific workflow text
   - same triage model

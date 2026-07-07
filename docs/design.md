@@ -233,7 +233,7 @@ Workers must not modify denied files, frozen verifier artifacts, or the main sou
 - `server.py`: FastMCP stdio server for host clients
 - `.opencode/skills/search/SKILL.md`: host-agent workflow guide
 - `.opencode/agents/AnySearchAgent*.md`: managed subagent prompts
-- `.agents/skills/search/SKILL.md`, `.codex/agents/any_search_agent.toml`: Codex host assets
+- `.codex/skills/search/SKILL.md`, `.codex/agents/any_search_agent.toml`: Codex host assets
 - `.claude/skills/search/SKILL.md`, `.claude/agents/any-search-agent.md`: Claude Code host assets
 
 ## Current Boundary

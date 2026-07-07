@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -73,6 +74,8 @@ def st_model_for_host(host: HostKind) -> str | None:
 def _replace_path(target: Path) -> None:
     if target.is_symlink() or target.is_file():
         target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
 
 
 def _link_if_present(project_root: Path, source_root: Path, name: str) -> None:
@@ -88,10 +91,10 @@ def _link_if_present(project_root: Path, source_root: Path, name: str) -> None:
 
 def link_host_assets(project_root: Path, source_root: Path) -> None:
     """Expose project-local host configs inside an isolated ST workdir."""
+    _replace_path(project_root / ".agents")
     for name in (
         "opencode.json",
         ".codex",
-        ".agents",
         ".mcp.json",
         ".claude",
         ".pi",

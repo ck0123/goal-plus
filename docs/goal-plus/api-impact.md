@@ -393,7 +393,7 @@ Files changed by the baseline implementation:
 | `tests/test_server.py` | Update exact MCP tool registration expectations. |
 | `tests/test_tools.py` | Add JSON facade tests; keep lifecycle-exclusion tests for `search_*`. |
 | `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then the internal search skill only in Search Mode. |
-| `.agents/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
+| `.codex/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
 | `.claude/skills/goal-plus/SKILL.md` | Claude Code workflow instructions. |
 | `agentic-any-search-mcp --goal-plus-host-hook`, `.codex/hooks.json`, `.claude/settings.json`, `scripts/hooks/goal_plus_stop.py` | Session-binding `PostToolUse(goal_plus_create)` hook plus session-scoped Stop hook backstop for Codex and Claude Code; the script is a legacy wrapper for local testing. Future host-specific `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
 

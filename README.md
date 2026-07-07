@@ -67,7 +67,7 @@ This repository already includes project-local config for all supported hosts.
 
 | Host | Project config | User entrypoint | Notes |
 |---|---|---|---|
-| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/` | Use the `goal-plus` skill / `/goal-plus` prompt from Codex | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
+| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.codex/skills/` | Use the `goal-plus` skill / `/goal-plus` prompt from Codex | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
 | Pi | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in Pi | Uses extension tools plus `agentic-any-search-pi-worker` for `worker_host="pi-rpc"`. Pi has no Codex Stop hook parity. |
@@ -169,7 +169,7 @@ opencode.json                         # project-local OpenCode MCP config
 .pi/                                  # Pi prompts, skills, and extension
 scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 .opencode/                            # OpenCode commands, skills, worker agents
-.agents/                              # Codex skills
+.codex/skills/                        # Codex skills
 .codex/agents/                        # Codex worker agent config
 .claude/                              # Claude Code settings, skills, worker agents
 docs/                                 # design, host, debug, and strategy docs

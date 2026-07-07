@@ -100,8 +100,7 @@ worker through the selected host.
   `src/agentic_any_search_mcp/pi_worker.py`: Pi extension facade and Pi RPC
   worker runner.
 - `.opencode/`: OpenCode goal-plus/search skills, commands, and worker agents.
-- `.agents/` and `.codex/`: Codex goal-plus/search skills and worker agent
-  assets.
+- `.codex/`: Codex goal-plus/search skills and worker agent assets.
 - `.claude/`: Claude Code goal-plus/search skills and worker agents.
 - `.pi/`: Pi prompt templates, skills, and extension tools.
 - `docs/`: design, adapter, host, debug, and strategy documentation.
@@ -180,8 +179,8 @@ the runtime contract, update the matching assets and tests:
   `.opencode/agents/AnySearchAgent*.md`,
   `.opencode/agents/search-orchestrator.md`, and
   `tests/test_opencode_assets.py`.
-- Codex: `.agents/skills/goal-plus/SKILL.md`,
-  `.agents/skills/search/SKILL.md`,
+- Codex: `.codex/skills/goal-plus/SKILL.md`,
+  `.codex/skills/search/SKILL.md`,
   `.codex/agents/any_search_agent.toml`, `.codex/config.toml`, and
   `tests/test_codex_assets.py`.
 - Claude Code: `.claude/skills/goal-plus/SKILL.md`,

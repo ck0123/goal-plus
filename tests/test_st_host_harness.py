@@ -69,22 +69,25 @@ def test_st_active_env_guard_name_is_stable() -> None:
     assert ST_ACTIVE_ENV == "AGENTIC_ANY_SEARCH_ST_ACTIVE"
 
 
-def test_link_host_assets_supports_all_three_agents(tmp_path: Path) -> None:
+def test_link_host_assets_supports_all_agent_hosts(tmp_path: Path) -> None:
     source = tmp_path / "repo"
     source.mkdir()
-    for name in ("opencode.json", ".codex", ".agents", ".mcp.json", ".claude", ".pi"):
+    for name in ("opencode.json", ".codex", ".mcp.json", ".claude", ".pi"):
         path = source / name
-        if name in {".codex", ".agents", ".claude", ".pi"}:
+        if name in {".codex", ".claude", ".pi"}:
             path.mkdir()
         else:
             path.write_text("{}", encoding="utf-8")
     project = tmp_path / "run"
     project.mkdir()
+    (project / ".agents").symlink_to(source / ".agents", target_is_directory=True)
 
     link_host_assets(project, source)
 
-    for name in ("opencode.json", ".codex", ".agents", ".mcp.json", ".claude", ".pi"):
+    for name in ("opencode.json", ".codex", ".mcp.json", ".claude", ".pi"):
         assert (project / name).exists()
+    assert not (project / ".agents").is_symlink()
+    assert not (project / ".agents").exists()
 
 
 def test_codex_redispatch_prompt_names_required_runtime_evidence() -> None:
