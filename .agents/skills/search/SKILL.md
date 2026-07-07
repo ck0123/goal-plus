@@ -37,8 +37,9 @@ logical tool name.
 8. If no `budget_control` is present, wait for candidate workers according to Codex foreground subagent behavior.
 9. If a worker stops before useful verifier evidence, call
    `search_redispatch_candidate(run_id, candidate_id, directive?,
-   worker_budget={"max_runtime_seconds": <larger seconds>, ...})` and launch
-   the returned payload as a new foreground worker for the same candidate.
+   worker_agent_type?, worker_budget={"max_runtime_seconds": <larger seconds>, ...})`
+   and launch the returned payload as a new foreground worker for the same
+   candidate.
 10. Run final `search_run_verifier` from the main agent before selecting.
 11. Use `search_select`, `search_report`, and `search_promote` when appropriate.
 
@@ -52,11 +53,13 @@ Treat `budget_control.max_turns_hint` as a prompt-level hint only. The hard
 control for Codex is `budget_control.wait_timeout_ms` plus interruption.
 
 Choose the worker budget before freezing the spec. Codex does not expose a
-hard per-subagent step tier like OpenCode, so escalation means choosing a larger
-`worker_budget.max_runtime_seconds` for the next search run or later planned
-work, not asking `spawn_agent` for more steps. If a watchdog stops a worker
-before it records any verifier iteration or usable final score, do not repeat
-the same underpowered budget unless the user explicitly wants a cheap probe.
+hard per-subagent step tier like OpenCode, so the enforceable escalation is a
+larger `worker_budget.max_runtime_seconds` for the next search run or a
+redispatch. You may also override `worker_agent_type` when local Codex agent
+variants exist, but that is prompt/agent selection, not a hard step cap. If a
+watchdog stops a worker before it records any verifier iteration or usable
+final score, do not repeat the same underpowered budget unless the user
+explicitly wants a cheap probe.
 
 ## Runtime History And Resume
 
@@ -67,10 +70,11 @@ candidate results through `search_list_history`; workers recover state through
 
 Codex does not expose an equivalent same-worker continuation in this adapter.
 Use `search_redispatch_candidate` to start a new foreground Codex worker for
-the same candidate, optionally overriding `worker_budget.max_runtime_seconds`
-for that dispatch. The returned prompt tells the worker to treat
-`search_get_agent_context` as the authoritative resume context. Do not ask the
-worker to infer prior attempts from chat transcript.
+the same candidate, optionally overriding `worker_agent_type` and
+`worker_budget.max_runtime_seconds` for that dispatch. The returned prompt
+tells the worker to treat `search_get_agent_context` as the authoritative
+resume context. Do not ask the worker to infer prior attempts from chat
+transcript.
 
 ## Continuation
 

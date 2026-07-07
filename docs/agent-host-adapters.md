@@ -202,7 +202,9 @@ selected tier was too small and it records no verifier iteration or usable
 score, call `search_redispatch_candidate` for the same candidate and raise the
 worker size for that dispatch: OpenCode raises `worker_agent_type`, Claude Code
 raises `worker_budget.max_turns` / `worker_agent_type`, and Codex raises
-`worker_budget.max_runtime_seconds` because Codex has no hard step tier.
+`worker_budget.max_runtime_seconds` as the enforceable control. Codex may also
+override `worker_agent_type` when local agent variants exist, but that is not a
+hard step cap.
 
 ## State-Level Resume
 

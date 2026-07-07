@@ -1,282 +1,160 @@
 # Agentic Any Search MCP
 
-`agentic-any-search-mcp` is a small MCP-first runtime for `/goal-plus`: a
-goal-like agent entrypoint that can upgrade measurable optimization work into
-verifiable multi-candidate search.
+`agentic-any-search-mcp` is the MCP runtime behind `/goal-plus`.
 
-The goal of V0 is not to control one specific coding agent. The runtime exposes
-a generic MCP control plane, while the host agent uses `/goal-plus` as the
-user-facing workflow. Ordinary tasks stay goal-like. Search-shaped tasks freeze
-the verifier and metric, ask the active strategy to plan the next batch, create
-isolated candidate workspaces, verify candidates through runtime-owned checks,
-select the best candidate, and export a promotion patch.
+`/goal-plus` is the default user-facing workflow. It behaves like an ordinary
+goal for normal coding, docs, review, and investigation tasks. When the task is
+measurable optimization, it can upgrade into Search Mode: freeze the verifier
+and metric, create isolated candidate workspaces, launch host-native workers,
+score candidates with runtime-owned checks, select the best result, write a
+report, and export a promotion patch.
 
-Strategies are run-level settings. The default is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch by picking parents and writing one proposal per slot. Built-in alternatives include `independent_branches` (no lineage), `evolve` (runtime picks best-score parent + inspirations), `openevolve` (OpenEvolve-style parent/archive/inspiration sampling), `mcts` (best-score frontier expansion), and `random` (random verified parent). Custom strategies can enter through a local Python `module:Class` planner or through the standard external proposal contract; the bundled `adaptevolve` Python planner adds evolve-style parent selection plus dynamic worker-tier routing. See `examples/README.md` for the full strategy comparison table, `docs/strategy-adaptevolve.md` for the AdaptEvolve code path, and `docs/strategy-openevolve.md` for the OpenEvolve path.
+The project is not OpenCode-only. Current checked-in host assets target:
 
-Candidate execution always runs through `strategy.worker_mode: agent-session-pool`. The runtime creates an `AgentSessionRecord` and returns a host-native launch payload; the main agent dispatches one foreground worker in OpenCode, Codex, or Claude Code. The host owns worker lifecycle and return values. The runtime owns candidate workspaces, verifier scoring, history, reports, and promotion patches. `budget.max_parallel` is a batch planning hint; the runtime does not provide a wait loop or lifecycle supervisor. `strategy.worker_host` selects the adapter, and `strategy.worker_agent_type` gives that host its default worker type. The launch payload from `search_start_agent_session` is authoritative; `search_redispatch_candidate` creates a fresh session for the same candidate workspace when a worker needs state-level resume or a larger tier/budget. See [docs/agent-host-adapters.md](docs/agent-host-adapters.md) for the adapter design and current host differences.
+- Codex
+- Claude Code
+- OpenCode
 
-## Getting Started
+The MCP runtime stays host-neutral. Host-specific behavior is in the checked-in
+host configs, skills, hooks, and worker-agent prompts.
 
-`agentic-any-search-mcp` is a stdio MCP server. Install the Python package so the
-`agentic-any-search-mcp` command is on your `PATH`, then point your MCP client at
-that command.
+## Install
 
-Standard MCP client config:
+Install the Python package so the `agentic-any-search-mcp` command is on
+`PATH`.
 
-```json
-{
-  "mcpServers": {
-    "search-runtime": {
-      "command": "agentic-any-search-mcp",
-      "args": ["--root", ".search"]
-    }
-  }
-}
-```
-
-Install from Git when you do not already have the repository checked out:
+From Git:
 
 ```bash
 python -m pip install --user "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
 agentic-any-search-mcp --help
 ```
 
-If `agentic-any-search-mcp` is not found after installation, add the Python user
-scripts directory to `PATH`. Common locations:
+From an existing checkout:
 
 ```bash
-# macOS/Linux
-export PATH="$HOME/.local/bin:$PATH"
+cd agentic-any-search-mcp
+python -m pip install -e ".[dev]"
+agentic-any-search-mcp --help
+```
 
-# macOS framework Python sometimes uses:
+If the command is not found after a user-level install, add the Python user
+scripts directory to `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+macOS framework Python may use:
+
+```bash
 export PATH="$HOME/Library/Python/3.11/bin:$PATH"
 ```
 
-Install from an existing checkout for local development:
+This package is not published to PyPI yet, so use the Git or editable install
+path.
 
-```bash
-cd agentic-any-search-mcp
-python -m pip install -e .
-agentic-any-search-mcp --help
-```
+## Configure A Host
 
-For an installed package, use the same command in your MCP client:
+The runtime is a stdio MCP server. All hosts should launch the same command:
 
 ```text
 agentic-any-search-mcp --root .search
 ```
 
-## Agent Hosts
+This repository already includes project-local config for all supported hosts.
 
-The runtime currently supports three host clients through adapters:
+| Host | Project config | User entrypoint | Notes |
+|---|---|---|---|
+| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/` | Use the `goal-plus` skill / `/goal-plus` prompt from Codex | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
+| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
+| OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
 
-| Host | `strategy.worker_host` | Worker launch | Continuation | Goal Plus gate enforcement | Strategy scope |
-|---|---|---|---|---|---|
-| OpenCode | `opencode` | foreground `Task` | `Task(task_id=...)` | manual / instruction-driven | compatibility baseline |
-| Codex | `codex` | foreground `spawn_agent` | not supported by this adapter | PostToolUse session binding, session-scoped Stop hook, manual PreToolUse gate | portable builtin modes |
-| Claude Code | `claude-code` | foreground `Agent`, `background: false` | `SendMessage` when a handle is bound | PostToolUse session binding, session-scoped Stop hook, manual PreToolUse gate | portable builtin modes |
+Host-specific setup and debugging details live in:
 
-Portable builtin modes for Codex and Claude Code are `agent_guided`, `agent`,
-`default`, `random`, and `random_mode`. OpenCode remains the baseline for existing
-OpenCode-tested strategies and trace export.
-
-Goal Plus has two support levels:
-
-- **Search Mode orchestration**: host assets can launch candidate workers,
-  verify scores, bind handles, select, report, and promote. This is implemented
-  for the hosts above.
-- **Lifecycle gate enforcement**: Codex and Claude Code ship host hooks through
-  `agentic-any-search-mcp --goal-plus-host-hook`.
-  `PostToolUse(goal_plus_create)` binds the Goal Plus record to the current
-  top-level session, and `Stop` blocks only an explicitly selected
-  `GOAL_PLUS_ID` or a session-bound Goal Plus record with a required next
-  action. OpenCode has no shipped hook, and `PreToolUse`/`SubagentStop` are
-  still manual gate calls in all hosts.
-
-Host references:
-
-- [OpenCode](docs/opencode.md)
-- [Codex](docs/codex.md)
-- [Claude Code](docs/claude-code.md)
-- [Adapter design and host differences](docs/agent-host-adapters.md)
+- [Codex reference](docs/codex.md)
+- [Claude Code reference](docs/claude-code.md)
+- [OpenCode reference](docs/opencode.md)
+- [Host adapter capability matrix](docs/agent-host-adapters.md)
 - [Runtime and host log debugging](docs/debugging-runtime.md)
 
-## OpenCode
+## Run `/goal-plus`
 
-Assumption: OpenCode is already installed and has model credentials configured.
+Use `/goal-plus` for both ordinary goals and optimization-shaped goals. The
+workflow starts with `goal_plus_create`, records triage, and only enters Search
+Mode after the goal has a verifier-backed spec.
 
-This repository ships project-local OpenCode assets:
-
-```text
-opencode.json
-.opencode/command/goal-plus.md
-.opencode/command/goal-any-optimize.md        # legacy alias to goal-plus
-.opencode/skills/goal-plus/SKILL.md
-.opencode/skills/search/SKILL.md              # internal Search Mode engine
-.opencode/agents/goal-plus-orchestrator.md
-.opencode/agents/search-orchestrator.md       # internal Search Mode dispatcher
-.opencode/agents/AnySearchAgent*.md
-```
-
-The MCP server entry in `opencode.json` uses the installed console script:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "search-runtime": {
-      "type": "local",
-      "command": ["agentic-any-search-mcp", "--root", ".search"],
-      "cwd": ".",
-      "timeout": 300000,
-      "enabled": true
-    }
-  }
-}
-```
-
-Verify the connection from the project root:
-
-```bash
-opencode mcp list
-```
-
-Expected entry:
+Examples:
 
 ```text
-search-runtime connected
-agentic-any-search-mcp --root .search
+Use /goal-plus. Fix this bug and verify the test suite.
 ```
-
-Then run the toy search from the OpenCode TUI:
-
-```bash
-opencode
-```
-
-Inside OpenCode:
 
 ```text
-Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Show and confirm that frozen verifier, metric, edit surface, and promotion rule before Search Mode. Then run the k_module smoke test end-to-end.
+Use /goal-plus. Optimize this model-serving path for lower p95 latency. First
+identify the benchmark, correctness gate, editable files, and promotion rule.
+If the verifier is frozen and search-ready, run Search Mode with Codex workers.
 ```
 
-For a headless command-line run:
+OpenCode also keeps `/goal-any-optimize` as a legacy alias, but `/goal-plus` is
+the canonical entrypoint.
 
-```bash
-opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. This prompt explicitly confirms the frozen verifier, metric, edit surface, and promotion rule. Keep all edits inside candidate workspaces."
-```
+## Search Mode Flow
 
-OpenCode `Task` does not currently expose a `timeout` parameter; subagents run until their OpenCode step cap hits or the user interrupts them. The MCP runtime does not provide wait or abort tools.
+After `/goal-plus` upgrades a task to Search Mode, the main agent drives this
+common MCP flow:
 
-OpenCode currently has no project hook that automatically calls
-`goal_plus_gate` on `Stop` or `PreToolUse`. `/goal-plus` works as an
-instruction-driven command, but final raw-goal audit and phase gates are not
-strongly enforced by OpenCode itself.
+1. `search_freeze_spec`
+2. `search_create`
+3. `search_plan_next`
+4. `search_start_batch`
+5. `search_start_agent_session`
+6. launch the returned foreground worker in Codex, Claude Code, or OpenCode
+7. bind the host handle with `search_bind_agent_handle` or
+   `search_bind_opencode_session`
+8. worker calls `search_get_agent_context`
+9. worker self-scores with `search_run_verifier(..., agent_session_id=...)`
+10. main agent confirms the final score, selects, reports, and optionally
+    promotes
 
-See [docs/toy-example.md](docs/toy-example.md) for the complete step-by-step flow and expected artifacts.
+The runtime owns `.search/` state, candidate workspaces, verifier scoring,
+history, reports, and promotion artifacts. The host owns worker launch,
+interrupts, step/turn/time limits, foreground returns, and native transcripts.
+There are no MCP wait, abort, submit, observe, or host-sync tools.
 
-Additional bundled specs are listed in [examples/README.md](examples/README.md), including a `circle_packing` fork-style continuation smoke test and multi-batch `circle_packing` / `signal_processing` scenarios.
+## Task Continuation And Resume
 
-## Installation Notes
+There are two different continuation concepts:
 
-This project is structured like a normal Python command-line MCP package:
+| Concept | Portable? | What it does |
+|---|---|---|
+| State-level resume with `search_redispatch_candidate` | yes, all hosts | Creates a fresh `agent_session_id` for the same candidate workspace. The new worker reads `search_get_agent_context`, including runtime history and previous iterations. It can override `worker_agent_type` or `worker_budget` for that dispatch. |
+| Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Codex is explicitly unsupported in this adapter. |
 
-- `pyproject.toml` declares the package, dependencies, and the
-  `agentic-any-search-mcp` console script.
-- `src/agentic_any_search_mcp/server.py` owns FastMCP stdio startup.
-- `src/agentic_any_search_mcp/tools.py` exposes JSON-friendly tool methods.
-- `src/agentic_any_search_mcp/runtime.py` owns file-backed runtime state.
-- `src/agentic_any_search_mcp/models.py` defines the Pydantic API models.
+Default to state-level resume when a worker hits a step/turn/time cap, returns
+without useful verifier evidence, or needs a larger worker tier. Same-worker
+continuation is an optimization, not the portable recovery model.
 
-The current repository-local host setup is for development and examples.
-This package is not published to PyPI yet; use the Git or editable install
-commands below.
+Search history is runtime-owned under `.search/runs/...`; it is not stored in a
+`plan.md` file. See [agent-host-adapters.md](docs/agent-host-adapters.md) for
+the detailed resume and continuation matrix.
 
-### Python Package Install Scope
+## Strategies
 
-User-level install from Git, recommended when you want the command available
-across projects:
+The portable strategy subset for Codex and Claude Code is:
 
-```bash
-python -m pip install --user "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
-```
+- `agent_guided`
+- `agent`
+- `default`
+- `random`
+- `random_mode`
 
-Project or directory-local development install from a clone:
-
-```bash
-git clone https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git
-cd agentic-any-search-mcp
-python -m pip install -e ".[dev]"
-```
-
-Machine-wide installs should be managed by the administrator's Python tooling.
-The only requirement is that `agentic-any-search-mcp` is available on every
-target user's `PATH`. Avoid relying on `PYTHONPATH` for normal users.
-
-PyPI install commands should not be documented until the package is actually
-published.
-
-### OpenCode Config Scope
-
-Project-level config, recommended for this repository:
-
-```text
-opencode.json
-```
-
-User/global OpenCode config:
-
-```text
-~/.config/opencode/opencode.json
-```
-
-Custom config file for one-off runs:
-
-```bash
-OPENCODE_CONFIG=/path/to/opencode.json opencode
-```
-
-Admin-managed config locations are supported by OpenCode for organization-wide
-defaults, but this project does not ship managed config.
-
-All scopes should call the same installed command:
-
-```json
-{
-  "mcp": {
-    "search-runtime": {
-      "type": "local",
-      "command": ["agentic-any-search-mcp", "--root", ".search"],
-      "enabled": true
-    }
-  }
-}
-```
-
-### Updating
-
-Git install through `pip --user`:
-
-```bash
-python -m pip install --user -U "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
-```
-
-Editable development install:
-
-```bash
-cd agentic-any-search-mcp
-git pull
-python -m pip install -e ".[dev]"
-python -m pytest -q
-opencode mcp list
-```
-
-Not yet covered by this prototype:
-
-- PyPI release metadata and install badges
-- one-click installer links for individual MCP clients
-- generated CLI option tables
-- Docker image and remote transport examples
+OpenCode remains the compatibility baseline for existing OpenCode-tested
+strategies such as `independent_branches`, `evolve`, `openevolve`, `mcts`,
+Python strategy plugins, and trace export. See
+[examples/README.md](examples/README.md),
+[docs/strategy-openevolve.md](docs/strategy-openevolve.md), and
+[docs/strategy-adaptevolve.md](docs/strategy-adaptevolve.md).
 
 ## Repository Layout
 
@@ -286,91 +164,21 @@ opencode.json                         # project-local OpenCode MCP config
 .codex/config.toml                    # project-local Codex MCP config
 .codex/hooks.json                     # Codex Goal Plus host hooks
 scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
-.opencode/
-  command/goal-plus.md                # canonical OpenCode goal entrypoint
-  command/goal-any-optimize.md        # legacy alias to goal-plus
-  skills/goal-plus/SKILL.md           # goal-plus workflow guide
-  skills/search/SKILL.md              # internal Search Mode workflow guide
-  agents/goal-plus-orchestrator.md    # canonical host-agent prompt
-  agents/search-orchestrator.md       # internal Search Mode dispatcher
-  agents/AnySearchAgent.md            # candidate worker subagent prompt
-.agents/
-  skills/goal-plus/SKILL.md           # Codex goal-plus skill
-  skills/search/SKILL.md              # Codex internal search skill
-.codex/
-  agents/any_search_agent.toml        # Codex worker agent config
-.claude/
-  settings.json                       # Claude Code Goal Plus host hooks
-  skills/goal-plus/SKILL.md           # Claude Code goal-plus skill
-  skills/search/SKILL.md              # Claude Code internal search skill
-  agents/any-search-agent.md          # Claude Code worker agent config
-docs/
-  agent-host-adapters.md              # host adapter design and OpenCode/Codex/Claude differences
-  design.md                           # architecture and control-plane design
-  toy-example.md                      # step-by-step k_module walkthrough
-  opencode.md                         # OpenCode-specific reference
-  codex.md                            # Codex-specific reference
-  claude-code.md                      # Claude Code-specific reference
-examples/
-  README.md                           # bundled example index
-  k_module_search_spec.json           # single-round toy SearchSpec
-  circle_packing_search_spec.json     # multi-batch geometric optimization SearchSpec
-  signal_processing_search_spec.json  # multi-batch filtering algorithm SearchSpec
-src/agentic_any_search_mcp/
-  models.py                           # Pydantic API models
-  runtime.py                          # file-backed runtime state machine
-  tools.py                            # JSON-friendly tool facade
-  server.py                           # FastMCP stdio server
-tests/
-  fixtures/k_module_problem/          # toy project
-  fixtures/circle_packing/            # circle packing example project
-  fixtures/signal_processing/         # signal filtering example project
+.opencode/                            # OpenCode commands, skills, worker agents
+.agents/                              # Codex skills
+.codex/agents/                        # Codex worker agent config
+.claude/                              # Claude Code settings, skills, worker agents
+docs/                                 # design, host, debug, and strategy docs
+examples/                             # bundled SearchSpec examples
+src/agentic_any_search_mcp/           # runtime, models, tools, server
+tests/                                # unit, integration, asset, and opt-in ST tests
 ```
-
-## Runtime Surface
-
-OpenCode registers the MCP server as `search-runtime`, so tools appear with
-that prefix. Codex and Claude Code expose the same logical tool names through
-their own MCP tool naming conventions.
-
-- `search-runtime_goal_plus_create`
-- `search-runtime_goal_plus_status`
-- `search-runtime_goal_plus_record_triage`
-- `search-runtime_goal_plus_save_spec_draft`
-- `search-runtime_goal_plus_confirm_frozen_verifier`
-- `search-runtime_goal_plus_link_search_run`
-- `search-runtime_goal_plus_record_search_result`
-- `search-runtime_goal_plus_set_status`
-- `search-runtime_goal_plus_gate`
-- `search-runtime_search_freeze_spec`
-- `search-runtime_search_create`
-- `search-runtime_search_status`
-- `search-runtime_search_list_history`
-- `search-runtime_search_plan_next`
-- `search-runtime_search_start_batch`
-- `search-runtime_search_start_agent_session`
-- `search-runtime_search_redispatch_candidate`
-- `search-runtime_search_bind_agent_handle`
-- `search-runtime_search_bind_opencode_session`
-- `search-runtime_search_continue_agent_session`
-- `search-runtime_search_get_agent_context`
-- `search-runtime_search_run_verifier`
-- `search-runtime_search_list_iterations`
-- `search-runtime_search_select`
-- `search-runtime_search_report`
-- `search-runtime_search_promote`
-
-The `goal_plus_*` tools are the user-facing orchestration surface. The
-`search_*` tools remain the internal Search Mode engine after `/goal-plus`
-freezes a verifier-backed spec. The same methods are available through the
-Python `GoalPlusTools` and `SearchTools` facades for unit tests and non-OpenCode
-hosts.
 
 ## Development Checks
 
 ```bash
 python -m pytest -q
-python -m compileall src tests
+git diff --check
 ```
 
 Runtime state is written under `.search/`, which is ignored by git.
