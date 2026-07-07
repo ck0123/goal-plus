@@ -89,6 +89,7 @@ def test_strategy_spec_accepts_supported_worker_hosts() -> None:
     assert StrategySpec(worker_host="opencode").worker_host == "opencode"
     assert StrategySpec(worker_host="codex").worker_host == "codex"
     assert StrategySpec(worker_host="claude-code").worker_host == "claude-code"
+    assert StrategySpec(worker_host="pi-rpc").worker_host == "pi-rpc"
 
     with pytest.raises(ValidationError):
         StrategySpec(worker_host="unsupported")  # type: ignore[arg-type]

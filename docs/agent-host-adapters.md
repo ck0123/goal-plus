@@ -21,13 +21,14 @@ Host setup references:
 - [OpenCode](opencode.md)
 - [Codex](codex.md)
 - [Claude Code](claude-code.md)
+- [Pi](pi.md)
 - [Runtime and host log debugging](debugging-runtime.md)
 
 ---
 
 ## Common Runtime Contract
 
-After `/goal-plus` has frozen or linked a verifier-backed SearchSpec, all three
+After `/goal-plus` has frozen or linked a verifier-backed SearchSpec, all four
 hosts use the same Search Mode MCP control plane:
 
 1. `search_freeze_spec`
@@ -97,6 +98,7 @@ Valid host values are:
 - `opencode`
 - `codex`
 - `claude-code`
+- `pi-rpc`
 
 If `worker_host` is omitted, the runtime defaults to `opencode`.
 
@@ -104,19 +106,19 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 
 ## Current Host Differences
 
-| Capability | OpenCode | Codex | Claude Code |
-|---|---|---|---|
-| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/goal-plus/`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` |
-| Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` |
-| Launch tool | `Task` | `spawn_agent` | `Agent` |
-| Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` |
-| Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` |
-| Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise |
-| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface |
-| Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts |
-| Trace export | supported for OpenCode logs | not implemented | not implemented |
-| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual |
-| Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only |
+| Capability | OpenCode | Codex | Claude Code | Pi RPC |
+|---|---|---|---|---|
+| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/goal-plus/`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts` |
+| Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
+| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
+| Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
+| Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
+| Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text |
+| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | `session_jsonl_restart`; restarts Pi RPC with the same session id |
+| Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | `.search/host-logs/pi-rpc-*.jsonl`, `.txt`, Pi session JSONL |
+| Trace export | supported for OpenCode logs | not implemented | not implemented | not implemented |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | extension pre-tool guard plus skill stop gate; no Codex Stop hook parity |
+| Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only | portable builtin strategies only |
 
 Portable builtin strategies are:
 
@@ -147,6 +149,7 @@ Runtime length control is not currently equivalent across hosts:
 | OpenCode | supported with the full `AnySearchAgent` loop | yes, `steps` in `.opencode/agents/*.md` | host step budget per Task; current tiers are 15, 50, 100, and 150 steps |
 | Codex | supported with the project Codex worker prompt | yes, through `worker_budget.max_runtime_seconds` and a parent watchdog | parent waits with `wait_agent(timeout_ms=...)`, then interrupts the child if the deadline expires |
 | Claude Code | supported with the project Claude worker prompt | yes, through `worker_budget.max_turns` and bounded `.claude/agents/*.md` definitions | host turn budget per foreground Agent; current tiers are 4, 8, and 16 turns |
+| Pi RPC | supported with `.pi/prompts/any-search-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | `agentic-any-search-pi-worker` aborts then kills the Pi RPC process group after the deadline; `max_turns` is only a prompt hint |
 
 `budget.max_candidates`, `budget.max_parallel`, and strategy round settings
 control how many workers the runtime plans. They do not bound how long an
@@ -193,6 +196,7 @@ Host-specific validation prevents unsupported budget shapes:
 
 - Codex `worker_budget` requires `max_runtime_seconds`.
 - Claude Code `worker_budget` requires `max_turns`.
+- Pi RPC `worker_budget` requires `max_runtime_seconds`.
 - Known Claude Code agent types must match their configured `maxTurns`; custom
   Claude agent types are allowed when specified explicitly.
 
@@ -228,16 +232,16 @@ not in a `plan.md` file.
 
 ## Strategy Support Matrix
 
-| Strategy or driver | OpenCode | Codex | Claude Code | Notes |
-|---|---|---|---|---|
-| `agent_guided`, `agent`, `default` | supported | supported | supported | proposal-based; main agent must pass proposals to `search_start_batch` |
-| `random`, `random_mode`, `random-mode` | supported | supported | supported | fixed work orders; `search_start_batch` needs no proposals |
-| `independent_branches` | supported | not supported | not supported | treated as OpenCode-only for now, even though it is builtin |
-| `evolve` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
-| `openevolve` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
-| `mcts` | supported | not supported | not supported | OpenCode-tested strategy behavior only |
-| Python strategy driver, including `adaptevolve` | supported | not supported | not supported | non-OpenCode hosts reject non-builtin drivers |
-| `external_mcp` strategy driver | OpenCode-only boundary | not supported | not supported | requires explicit host adaptation before use outside OpenCode |
+| Strategy or driver | OpenCode | Codex | Claude Code | Pi RPC | Notes |
+|---|---|---|---|---|---|
+| `agent_guided`, `agent`, `default` | supported | supported | supported | supported | proposal-based; main agent must pass proposals to `search_start_batch` |
+| `random`, `random_mode`, `random-mode` | supported | supported | supported | supported | fixed work orders; `search_start_batch` needs no proposals |
+| `independent_branches` | supported | not supported | not supported | not supported | treated as OpenCode-only for now, even though it is builtin |
+| `evolve` | supported | not supported | not supported | not supported | OpenCode-tested strategy behavior only |
+| `openevolve` | supported | not supported | not supported | not supported | OpenCode-tested strategy behavior only |
+| `mcts` | supported | not supported | not supported | not supported | OpenCode-tested strategy behavior only |
+| Python strategy driver, including `adaptevolve` | supported | not supported | not supported | not supported | non-OpenCode hosts reject non-builtin drivers |
+| `external_mcp` strategy driver | OpenCode-only boundary | not supported | not supported | not supported | requires explicit host adaptation before use outside OpenCode |
 
 ## Missing Strategy Completion Limits
 

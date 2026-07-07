@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 
-HostKind = Literal["opencode", "codex", "claude-code"]
+HostKind = Literal["opencode", "codex", "claude-code", "pi-rpc"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,13 @@ HOSTS: dict[HostKind, StHost] = {
         display_name="Claude Code",
         binary="claude",
         model_env="ST_CLAUDE_MODEL",
+    ),
+    "pi-rpc": StHost(
+        kind="pi-rpc",
+        marker="st_pi_rpc",
+        display_name="Pi RPC",
+        binary="pi",
+        model_env="ST_PI_MODEL",
     ),
 }
 
@@ -87,5 +94,6 @@ def link_host_assets(project_root: Path, source_root: Path) -> None:
         ".agents",
         ".mcp.json",
         ".claude",
+        ".pi",
     ):
         _link_if_present(project_root, source_root, name)

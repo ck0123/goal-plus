@@ -70,7 +70,7 @@ class HistoryPolicy(SearchModel):
     )
 
 
-AgentHostKind = Literal["opencode", "codex", "claude-code"]
+AgentHostKind = Literal["opencode", "codex", "claude-code", "pi-rpc"]
 
 
 class AgentHostHandle(SearchModel):

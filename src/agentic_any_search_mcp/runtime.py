@@ -167,6 +167,52 @@ def copy_source_tree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, ignore=ignore)
 
 
+def initialize_workspace_git_baseline(workspace: Path) -> None:
+    try:
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return
+
+    files = [path.relative_to(workspace).as_posix() for path in list_files(workspace)]
+    if not files:
+        return
+
+    try:
+        subprocess.run(
+            ["git", "add", "--", *files],
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=agentic-any-search",
+                "-c",
+                "user.email=agentic-any-search@example.invalid",
+                "commit",
+                "-q",
+                "--no-verify",
+                "-m",
+                "search candidate baseline",
+            ],
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return
+
+
 def path_matches(path: str, patterns: list[str]) -> bool:
     normalized = path.replace(os.sep, "/")
     for pattern in patterns:
@@ -543,6 +589,16 @@ class FileSearchRuntime:
         if host == "codex":
             host_handle = host_handle.model_copy(
                 update={"task_name": launch.get("task_name")}
+            )
+        elif host == "pi-rpc":
+            host_handle = host_handle.model_copy(
+                update={
+                    "external_id": launch.get("session_id", agent_session_id),
+                    "metadata": {
+                        "session_dir": launch.get("session_dir"),
+                        "continuation": "session_jsonl_restart",
+                    },
+                }
             )
         session = AgentSessionRecord(
             agent_session_id=agent_session_id,
@@ -1017,6 +1073,13 @@ class FileSearchRuntime:
         worker_agent_type: str | None,
         worker_budget: WorkerBudget | None,
     ) -> None:
+        if worker_host == "pi-rpc" and (
+            worker_budget is None or worker_budget.max_runtime_seconds is None
+        ):
+            raise ValueError(
+                "pi-rpc worker_budget requires max_runtime_seconds so the "
+                "Pi RPC runner can enforce a process deadline"
+            )
         if worker_budget is None:
             return
         if worker_host == "codex" and worker_budget.max_runtime_seconds is None:
@@ -1079,6 +1142,7 @@ class FileSearchRuntime:
             "supports_same_worker_continue": adapter.capabilities.supports_same_worker_continue,
             "supports_trace_export": adapter.capabilities.supports_trace_export,
             "uses_background_workers": adapter.capabilities.uses_background_workers,
+            "continuation": adapter.capabilities.continuation,
             "directive_rule": (
                 "Worker directives should describe the candidate idea and deliverable, not score "
                 "targets or baseline scores. Workers must treat any score target in a directive as "
@@ -1119,6 +1183,8 @@ class FileSearchRuntime:
             return "any_search_agent"
         if host == "claude-code":
             return "any-search-agent"
+        if host == "pi-rpc":
+            return "any-search-worker"
         return "AnySearchAgent"
 
     def _candidate_worker_agent_type(
@@ -1226,6 +1292,9 @@ class FileSearchRuntime:
                 if worker_budget_override is not None
                 else self._candidate_worker_budget(frozen, candidate_record)
             ),
+            root=str(self.root_dir),
+            cwd=str(candidate_record.task.workspace),
+            worker_prompt=self._worker_prompt_for_host(frozen.spec.strategy.worker_host),
         )
 
     def _build_continue_launch_payload(
@@ -1259,6 +1328,22 @@ class FileSearchRuntime:
             task_name=session.host_handle.task_name,
             short_intent=short_intent,
             one_paragraph_idea=directive_text,
+            root=str(self.root_dir),
+            cwd=str(candidate_record.task.workspace),
+            worker_prompt=self._worker_prompt_for_host(session.host),
+            worker_budget=self._candidate_worker_budget(frozen, candidate_record),
+        )
+
+    def _worker_prompt_for_host(self, host: str) -> str | None:
+        if host != "pi-rpc":
+            return None
+        prompt_path = Path(__file__).resolve().parents[2] / ".pi" / "prompts" / "any-search-worker.md"
+        if prompt_path.exists():
+            return prompt_path.read_text(encoding="utf-8")
+        return (
+            "First call search_get_agent_context. Work in the candidate workspace only. "
+            "Before final response call search_run_verifier. Use runtime history; "
+            "do not rely on transcript."
         )
 
     def _next_plan_id(self, run: RunRecord) -> str:
@@ -1924,6 +2009,7 @@ class FileSearchRuntime:
             copy_source_tree(Path(run.source_path), workspace)
         scratch_dir = workspace / ".tmp"
         scratch_dir.mkdir(parents=True, exist_ok=True)
+        initialize_workspace_git_baseline(workspace)
 
         instructions = [
             "Work only inside this candidate workspace.",
@@ -1931,11 +2017,11 @@ class FileSearchRuntime:
             "Do not use /tmp, home directories, or paths outside the candidate workspace for candidate work.",
             "Modify only files listed in allowed_files; never touch denied_files or frozen verifier artifacts.",
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
-            "You may git init, git add, git commit, git reset, git restore, and git checkout INSIDE this workspace to advance and revert iterations.",
+            "A local git repository has already been initialized with the copied baseline; use git status, git diff, git add, git commit, git reset, git restore, and git checkout only inside this workspace.",
             "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
             "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
             "Iterate freely within your OpenCode step budget; each run_verifier call records an iteration. When steps run out OpenCode will ask you to summarize and stop.",
-            "Inside the workspace, git init and use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed.",
+            "Use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed.",
             "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). Commit each iteration before verifying so the commit hash is real; on discard, reset with git reset --hard HEAD~1 (the discarded hash stays recoverable via git reflog).",
         ]
         if plan.worker_policy.get("subagent_type"):

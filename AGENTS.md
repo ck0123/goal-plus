@@ -20,7 +20,8 @@ Before changing behavior, read the smallest relevant set of docs:
   host-native logs, OpenCode SQLite inspection, Codex rollout logs, and Claude
   Code transcript/debug paths.
 - [docs/opencode.md](docs/opencode.md), [docs/codex.md](docs/codex.md), and
-  [docs/claude-code.md](docs/claude-code.md): host-specific setup and behavior.
+  [docs/claude-code.md](docs/claude-code.md), and [docs/pi.md](docs/pi.md):
+  host-specific setup and behavior.
 - [examples/README.md](examples/README.md): example specs, strategy modes, and
   scenario prompts.
 - [tests/README.md](tests/README.md): unit/integration/system test layout and
@@ -95,10 +96,14 @@ worker through the selected host.
 - `src/agentic_any_search_mcp/server.py`: FastMCP stdio server.
 - `src/agentic_any_search_mcp/strategies/`: strategy plugins and helpers.
 - `src/agentic_any_search_mcp/trace_export.py`: OpenCode trace export tooling.
+- `src/agentic_any_search_mcp/pi_tool.py` and
+  `src/agentic_any_search_mcp/pi_worker.py`: Pi extension facade and Pi RPC
+  worker runner.
 - `.opencode/`: OpenCode goal-plus/search skills, commands, and worker agents.
 - `.agents/` and `.codex/`: Codex goal-plus/search skills and worker agent
   assets.
 - `.claude/`: Claude Code goal-plus/search skills and worker agents.
+- `.pi/`: Pi prompt templates, skills, and extension tools.
 - `docs/`: design, adapter, host, debug, and strategy documentation.
 - `examples/`: example SearchSpec files.
 - `tests/`: unit/integration tests, asset tests, fixtures, and opt-in
@@ -134,6 +139,13 @@ Current host expectations:
   `maxTurns` definitions. Claude Code ships `PostToolUse(goal_plus_create)`
   session binding and a session-scoped Stop hook backstop;
   PreToolUse/SubagentStop gates remain manual.
+- Pi RPC supports the portable builtin strategy subset. `worker_budget`
+  requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
+  `agentic-any-search-pi-worker` to launch foreground `pi --mode rpc` workers
+  from candidate workspaces and explicitly loads `.pi/extensions/search-runtime.ts`.
+  Same-worker continuation is `session_jsonl_restart`, not a live process
+  continuation. Pi has extension pre-tool guarding and skill stop gates, but no
+  Codex Stop hook parity.
 
 Portable strategy names for non-OpenCode hosts are currently:
 
@@ -176,6 +188,9 @@ the runtime contract, update the matching assets and tests:
   `.claude/skills/search/SKILL.md`,
   `.claude/agents/any-search-agent*.md`, `.mcp.json`, and
   `tests/test_claude_assets.py`.
+- Pi: `.pi/prompts/goal-plus.md`, `.pi/prompts/any-search-worker.md`,
+  `.pi/skills/goal-plus/SKILL.md`, `.pi/skills/search/SKILL.md`,
+  `.pi/extensions/search-runtime.ts`, and `tests/test_pi_assets.py`.
 
 Do not let agents rediscover retired runtime APIs. The deleted lifecycle,
 observation, submit, abort, and host-sync APIs must not reappear in host assets.
@@ -227,6 +242,9 @@ Host log sources:
   optional `RUST_LOG=debug codex -c log_dir=./.codex-log`.
 - Claude Code: `claude -p --output-format stream-json`, `--debug-file`, and
   `~/.claude/projects/<encoded-project>/...`.
+- Pi RPC: `.search/host-logs/pi-rpc-<agent_session_id>.jsonl`,
+  `.search/host-logs/pi-rpc-<agent_session_id>.txt`, and
+  `.search/host-logs/pi-rpc-sessions/`.
 
 Never commit raw logs, transcripts, `.search/`, or credentials.
 

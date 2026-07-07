@@ -176,6 +176,52 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     assert saved_plan.started_candidate_ids == ["c001", "c002"]
 
 
+def test_candidate_workspace_has_isolated_git_baseline_under_ignored_parent(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=parent, check=True)
+    (parent / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
+
+    project = make_project(parent)
+    runtime = FileSearchRuntime(parent / ".tmp" / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    root = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=task.workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert Path(root) == task.workspace
+
+    (task.workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    status = subprocess.run(
+        ["git", "status", "--short", "initial_program.py"],
+        cwd=task.workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "--", "initial_program.py"],
+        cwd=task.workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert status.startswith("M ")
+    assert "VALUE = 1" in diff
+    assert runtime._detect_changed_files(project, task.workspace) == ["initial_program.py"]
+
+
 def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -205,7 +251,8 @@ def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
         "search_run_verifier" in instruction for instruction in tasks[0].instructions
     )
     assert any(
-        "git init" in instruction for instruction in tasks[0].instructions
+        "git repository has already been initialized" in instruction
+        for instruction in tasks[0].instructions
     )
     assert any(
         "iteration log" in instruction for instruction in tasks[0].instructions
@@ -223,6 +270,34 @@ def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> N
 
     assert plan.worker_policy["host"] == "codex"
     assert plan.worker_policy["supports_same_worker_continue"] is False
+    assert plan.worker_policy["uses_background_workers"] is False
+
+
+def test_worker_policy_includes_pi_rpc_session_jsonl_continue(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {
+                "max_runtime_seconds": 600,
+                "max_turns": 8,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, requested_k=1)
+
+    assert plan.worker_policy["host"] == "pi-rpc"
+    assert plan.worker_policy["supports_same_worker_continue"] is True
+    assert plan.worker_policy["continuation"] == "session_jsonl_restart"
     assert plan.worker_policy["uses_background_workers"] is False
 
 
@@ -315,6 +390,44 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
     assert session.launch["agent_type"] == "any_search_agent"
     assert session.launch["fork_turns"] == "none"
     assert "agent_session_id=" in session.launch["message"]
+
+
+def test_start_agent_session_returns_pi_rpc_launch_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {
+                "max_runtime_seconds": 600,
+                "max_turns": 8,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert session.host == "pi-rpc"
+    assert session.host_handle.host == "pi-rpc"
+    assert session.host_handle.external_id == session.agent_session_id
+    assert session.launch["tool"] == "pi_rpc_worker"
+    assert session.launch["root"] == str(runtime.root_dir)
+    assert session.launch["cwd"] == str(task.workspace)
+    assert session.launch["session_id"] == session.agent_session_id
+    assert session.launch["budget_control"]["mode"] == "pi_rpc_process_watchdog"
+    assert session.launch["budget_control"]["max_runtime_seconds"] == 600
+    assert session.launch["budget_control"]["max_turns_hint"] == 8
+    assert "search_get_agent_context" in session.launch["prompt"]
+    assert str(task.workspace) not in session.launch["prompt"]
 
 
 def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> None:
@@ -585,6 +698,22 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
     with pytest.raises(ValueError, match="claude-code worker_budget requires max_turns"):
         claude_runtime.plan_next(run_id, requested_k=1)
 
+    pi_runtime = FileSearchRuntime(tmp_path / ".search-pi")
+    pi_spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_turns": 8},
+        },
+        max_candidates=1,
+    )
+    frozen = pi_runtime.freeze_spec(pi_spec, [project / "evaluator.py"])
+    run_id = pi_runtime.create_run(frozen.frozen_spec_id)
+    with pytest.raises(ValueError, match="pi-rpc worker_budget requires max_runtime_seconds"):
+        pi_runtime.plan_next(run_id, requested_k=1)
+
 
 def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
     project = make_project(tmp_path)
@@ -643,6 +772,52 @@ def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path)
     assert continued.launch["tool"] == "SendMessage"
     assert continued.launch["agent"] == "agent_123"
     assert "continue_existing_agent_session=true" in continued.launch["message"]
+
+
+def test_pi_rpc_continue_agent_session_restarts_same_jsonl_session(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {
+                "max_runtime_seconds": 600,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        session.agent_session_id,
+        {
+            "host": "pi-rpc",
+            "external_id": session.agent_session_id,
+            "metadata": {"event_log": "/tmp/pi-rpc-agent_0001.jsonl"},
+        },
+    )
+
+    continued = runtime.continue_agent_session(
+        session.agent_session_id,
+        {"goal": "continue"},
+    )
+
+    assert continued.agent_session_id == session.agent_session_id
+    assert continued.launch["tool"] == "pi_rpc_worker"
+    assert continued.launch["resume"] is True
+    assert continued.launch["session_id"] == session.agent_session_id
+    assert continued.launch["continuation"] == "session_jsonl_restart"
+    assert continued.launch["budget_control"]["max_runtime_seconds"] == 600
+    assert continued.launch["budget_control"]["mode"] == "pi_rpc_process_watchdog"
+    assert continued.launch["cwd"] == str(task.workspace)
+    assert "continue_existing_agent_session=true" in continued.launch["prompt"]
 
 
 def test_bind_and_continue_agent_session_reuses_existing_opencode_session(

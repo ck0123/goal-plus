@@ -20,6 +20,8 @@ tests/
 ├── test_example_scenarios.py          # Examples + runtime integration (no real opencode)
 ├── test_k_module_runtime.py           # k_module end-to-end on runtime (no real opencode)
 ├── test_opencode_assets.py            # Bundled agents / skills are well-formed
+├── test_pi_assets.py                  # Pi prompts / skills / extension are well-formed
+├── test_pi_tool.py                    # Pi JSON CLI facade
 └── st/                                # System tests (real host code-agent run)
     ├── conftest.py                    # Pre-flight checks + fixtures
     ├── hosts.py                       # Host marker mapping and asset linking
@@ -63,6 +65,7 @@ markers select the runner:
 | `st_opencode` | `opencode run --command goal-plus` | OpenCode default unless `$ST_OPENCODE_MODEL` is set |
 | `st_codex` | `codex exec` | `gpt-5.3-codex-spark` unless `$ST_CODEX_MODEL` is set |
 | `st_claude` | `claude -p` | Claude default unless `$ST_CLAUDE_MODEL` is set |
+| `st_pi_rpc` | `agentic-any-search-pi-worker` launching `pi --mode rpc` | Pi default unless runner args override it |
 
 The runner prepends a non-interactive confirmation preamble for Initial
 Search-Ready tasks so the frozen verifier, metric, edit surface, and promotion
@@ -87,6 +90,9 @@ pytest -m "st and st_opencode" -k k_module_smoke -v -s
 
 # Codex redispatch scenario, default model gpt-5.3-codex-spark
 pytest -m "st and st_codex" -k codex_redispatch -v -s
+
+# Pi RPC worker smoke
+pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
 
 # Two-run isolation scenario (k_module then circle_packing, ~5-8 min)
 pytest -m "st and st_opencode" -k k_module_then_circle_packing -v -s
@@ -116,7 +122,7 @@ single skip reason so you see all problems at once:
 
 | Check | How |
 |---|---|
-| Host binary on PATH | `shutil.which` for `opencode`, `codex`, or `claude` based on marker |
+| Host binary on PATH | `shutil.which` for `opencode`, `codex`, `claude`, or `pi` based on marker |
 | `agentic-any-search-mcp` server binary on PATH | `shutil.which` |
 | `search-runtime` MCP connected/configured | host-native MCP listing for the selected marker |
 | Configured model available | OpenCode only, via `opencode models`; Codex/Claude validate model during the real run |
@@ -197,6 +203,7 @@ markers =
     st_opencode: ST case that runs through OpenCode
     st_codex: ST case that runs through Codex
     st_claude: ST case that runs through Claude Code
+    st_pi_rpc: ST case that runs a Pi RPC worker
 ```
 
 The `st` marker is what gates the opt-in behavior. Without `-m st`, every ST

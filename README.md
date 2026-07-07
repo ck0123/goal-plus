@@ -14,6 +14,7 @@ The project is not OpenCode-only. Current checked-in host assets target:
 - Codex
 - Claude Code
 - OpenCode
+- Pi
 
 The MCP runtime stays host-neutral. Host-specific behavior is in the checked-in
 host configs, skills, hooks, and worker-agent prompts.
@@ -69,12 +70,14 @@ This repository already includes project-local config for all supported hosts.
 | Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/` | Use the `goal-plus` skill / `/goal-plus` prompt from Codex | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
+| Pi | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in Pi | Uses extension tools plus `agentic-any-search-pi-worker` for `worker_host="pi-rpc"`. Pi has no Codex Stop hook parity. |
 
 Host-specific setup and debugging details live in:
 
 - [Codex reference](docs/codex.md)
 - [Claude Code reference](docs/claude-code.md)
 - [OpenCode reference](docs/opencode.md)
+- [Pi reference](docs/pi.md)
 - [Host adapter capability matrix](docs/agent-host-adapters.md)
 - [Runtime and host log debugging](docs/debugging-runtime.md)
 
@@ -109,7 +112,7 @@ common MCP flow:
 3. `search_plan_next`
 4. `search_start_batch`
 5. `search_start_agent_session`
-6. launch the returned foreground worker in Codex, Claude Code, or OpenCode
+6. launch the returned foreground worker in Codex, Claude Code, OpenCode, or Pi RPC
 7. bind the host handle with `search_bind_agent_handle` or
    `search_bind_opencode_session`
 8. worker calls `search_get_agent_context`
@@ -129,7 +132,7 @@ There are two different continuation concepts:
 | Concept | Portable? | What it does |
 |---|---|---|
 | State-level resume with `search_redispatch_candidate` | yes, all hosts | Creates a fresh `agent_session_id` for the same candidate workspace. The new worker reads `search_get_agent_context`, including runtime history and previous iterations. It can override `worker_agent_type` or `worker_budget` for that dispatch. |
-| Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Codex is explicitly unsupported in this adapter. |
+| Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Pi RPC restarts the same JSONL session with `session_jsonl_restart`; Codex is explicitly unsupported in this adapter. |
 
 Default to state-level resume when a worker hits a step/turn/time cap, returns
 without useful verifier evidence, or needs a larger worker tier. Same-worker
@@ -141,7 +144,7 @@ the detailed resume and continuation matrix.
 
 ## Strategies
 
-The portable strategy subset for Codex and Claude Code is:
+The portable strategy subset for Codex, Claude Code, and Pi RPC is:
 
 - `agent_guided`
 - `agent`
@@ -163,6 +166,7 @@ opencode.json                         # project-local OpenCode MCP config
 .mcp.json                             # project-local Claude Code MCP config
 .codex/config.toml                    # project-local Codex MCP config
 .codex/hooks.json                     # Codex Goal Plus host hooks
+.pi/                                  # Pi prompts, skills, and extension
 scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 .opencode/                            # OpenCode commands, skills, worker agents
 .agents/                              # Codex skills

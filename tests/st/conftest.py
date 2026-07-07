@@ -102,6 +102,18 @@ def _mcp_server_binary_available() -> tuple[bool, str]:
     return True, ""
 
 
+def _pi_console_scripts_available() -> list[tuple[bool, str]]:
+    checks = []
+    for command in ("agentic-any-search-pi-tool", "agentic-any-search-pi-worker"):
+        checks.append(
+            (
+                shutil.which(command) is not None,
+                f"{command} binary not on PATH. Install with: pip install -e .",
+            )
+        )
+    return checks
+
+
 def _model_available(model: str) -> tuple[bool, str]:
     """Verify the configured model appears in `opencode models` output.
 
@@ -171,8 +183,11 @@ def _host_checks(host: HostKind) -> list[tuple[bool, str]]:
     checks: list[tuple[bool, str]] = []
     config = HOSTS[host]
     checks.append((shutil.which(config.binary) is not None, f"{config.binary} binary not on PATH"))
-    binary_ok, binary_msg = _mcp_server_binary_available()
-    checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
+    if host == "pi-rpc":
+        checks.extend(_pi_console_scripts_available())
+    else:
+        binary_ok, binary_msg = _mcp_server_binary_available()
+        checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
 
     if host == "opencode" and _opencode_available():
         mcp_ok, mcp_msg = _opencode_mcp_runtime_connected()

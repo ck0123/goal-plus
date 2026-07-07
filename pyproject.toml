@@ -21,3 +21,5 @@ dev = [
 [project.scripts]
 agentic-any-search-mcp = "agentic_any_search_mcp.server:main"
 agentic-any-search-trace = "agentic_any_search_mcp.trace_export:main"
+agentic-any-search-pi-tool = "agentic_any_search_mcp.pi_tool:main"
+agentic-any-search-pi-worker = "agentic_any_search_mcp.pi_worker:main"

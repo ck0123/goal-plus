@@ -6,8 +6,8 @@ look when something goes wrong.
 
 For the general OpenCode inspection technique (SQLite DB, log files), see the
 `inspecting-opencode-runs` skill. This doc covers the project-specific runtime
-surface plus the host-native log entry points for OpenCode, Codex, and Claude
-Code.
+surface plus the host-native log entry points for OpenCode, Codex, Claude
+Code, and Pi RPC.
 
 ## Two Layers of State
 
@@ -29,7 +29,7 @@ goal/search state belongs in `.search/`.
 Goal-plus records live under `.search/goal-plus/<goal_plus_id>/`. Search runs
 live under `.search/runs/<run_id>/`.
 
-For Codex and Claude Code, substitute the host-native JSONL/debug files below
+For Codex, Claude Code, and Pi RPC, substitute the host-native JSONL/debug files below
 for the OpenCode process layer. The same rule still applies: host logs explain
 what the worker did, while `.search/` records goal/search facts such as
 candidates, iterations, scores, and verifier output.
@@ -182,6 +182,42 @@ The current adapter uses foreground `Agent` launches, not Claude Code
 background sessions. If you manually experiment with background sessions,
 Claude Code also exposes `claude agents --json`, `claude logs <id>`, and
 `claude stop <id>`, but those commands are outside the normal adapter path.
+
+### Pi RPC
+
+Pi workers are launched by `agentic-any-search-pi-worker`, not by the MCP
+server. The main Pi agent receives a `tool="pi_rpc_worker"` launch payload,
+calls `pi_rpc_run_worker`, then binds the returned handle with
+`search_bind_agent_handle`.
+
+The runner starts:
+
+```bash
+pi --mode rpc --approve \
+  --session-dir .search/host-logs/pi-rpc-sessions \
+  --session-id <agent_session_id> \
+  -e <repo>/.pi/extensions/search-runtime.ts
+```
+
+Important paths:
+
+- `.search/host-logs/pi-rpc-<agent_session_id>.jsonl`
+- `.search/host-logs/pi-rpc-<agent_session_id>.txt`
+- `.search/host-logs/pi-rpc-sessions/`
+
+Useful search pattern:
+
+```bash
+rg -n "agent_session_id|candidate_id|search_get_agent_context|search_run_verifier|tool_call|stderr|abort" \
+  .search/host-logs/pi-rpc-*.jsonl .search/host-logs/pi-rpc-*.txt
+```
+
+`session_jsonl_restart` means continuation restarts `pi --mode rpc` with the
+same `--session-id`. It is not a live process continuation. Search MCP
+`.search/runs/...` remains the authoritative state; Pi JSONL is transcript and
+resume evidence only. Pi has no Codex Stop hook parity, so debug Goal Plus
+completion through extension pre-tool guard events, manual skill stop gates,
+and `.search/goal-plus/...`.
 
 ## `.search/` Layout
 

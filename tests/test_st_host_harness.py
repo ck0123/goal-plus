@@ -18,9 +18,11 @@ def test_st_host_markers_select_one_agent() -> None:
     assert HOST_BY_MARKER["st_opencode"].kind == "opencode"
     assert HOST_BY_MARKER["st_codex"].kind == "codex"
     assert HOST_BY_MARKER["st_claude"].kind == "claude-code"
+    assert HOST_BY_MARKER["st_pi_rpc"].kind == "pi-rpc"
 
     assert st_host_from_marker_names(["st", "st_codex"]) == "codex"
     assert st_host_from_marker_names(["st", "st_opencode"]) == "opencode"
+    assert st_host_from_marker_names(["st", "st_pi_rpc"]) == "pi-rpc"
     assert st_host_from_marker_names(["st"]) == "opencode"
 
     with pytest.raises(ValueError, match="multiple ST host markers"):
@@ -70,9 +72,9 @@ def test_st_active_env_guard_name_is_stable() -> None:
 def test_link_host_assets_supports_all_three_agents(tmp_path: Path) -> None:
     source = tmp_path / "repo"
     source.mkdir()
-    for name in ("opencode.json", ".codex", ".agents", ".mcp.json", ".claude"):
+    for name in ("opencode.json", ".codex", ".agents", ".mcp.json", ".claude", ".pi"):
         path = source / name
-        if name in {".codex", ".agents", ".claude"}:
+        if name in {".codex", ".agents", ".claude", ".pi"}:
             path.mkdir()
         else:
             path.write_text("{}", encoding="utf-8")
@@ -81,7 +83,7 @@ def test_link_host_assets_supports_all_three_agents(tmp_path: Path) -> None:
 
     link_host_assets(project, source)
 
-    for name in ("opencode.json", ".codex", ".agents", ".mcp.json", ".claude"):
+    for name in ("opencode.json", ".codex", ".agents", ".mcp.json", ".claude", ".pi"):
         assert (project / name).exists()
 
 
