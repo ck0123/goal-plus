@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/hooks/goal_plus_stop.py\""
+            "command": "agentic-any-search-mcp --goal-plus-stop-hook"
           }
         ]
       }

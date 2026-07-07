@@ -46,6 +46,36 @@ prefix; match by the final logical tool name.
 14. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
 
+## Triage Schema
+
+`goal_plus_record_triage` expects this runtime schema:
+
+```json
+{
+  "is_optimization": false,
+  "confidence": "high",
+  "recommended_phase": "goal",
+  "identified_at": "initial",
+  "scenario": null,
+  "reasons": ["why this classification is correct"],
+  "missing": []
+}
+```
+
+Use only these `recommended_phase` values: `"goal"`, `"spec_discovery"`, or
+`"search"`. Do not send fields named `mode` or `reason`, and do not use values
+like `"goal_mode"`.
+
+Recommended mapping:
+
+- Goal Mode: `is_optimization=false`, `recommended_phase="goal"`,
+  `confidence="high"`.
+- Spec Discovery Mode: `is_optimization=true`,
+  `recommended_phase="spec_discovery"`, and list missing baseline, metric,
+  correctness gate, edit surface, verifier, budget, or promotion details.
+- Search Mode: `is_optimization=true`, `recommended_phase="search"`,
+  `confidence="high"`.
+
 ## Modes
 
 Goal Mode is for ordinary coding, docs, review, and investigation tasks. It
@@ -61,7 +91,7 @@ existing Search MCP flow.
 ## Hook Compatibility
 
 This repository ships a Claude Code `Stop` hook in `.claude/settings.json` that
-runs `scripts/hooks/goal_plus_stop.py`. It is a final backstop for
+runs `agentic-any-search-mcp --goal-plus-stop-hook`. It is a final backstop for
 `goal_plus_gate(event="stop")`: if the active Goal Plus record still has a
 required next action, Claude receives a continuation prompt instead of ending.
 

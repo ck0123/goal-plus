@@ -88,10 +88,10 @@ Goal Plus has two support levels:
 - **Lifecycle gate enforcement**: host hooks automatically call
   `goal_plus_gate` before Search Mode tools and before the agent stops. This
   repository ships a narrow Stop hook for Codex and Claude Code through
-  `scripts/hooks/goal_plus_stop.py`. It blocks top-level Stop when the latest
-  active Goal Plus record still has a required next action. OpenCode has no
-  shipped hook, and `PreToolUse`/`SubagentStop` are still manual gate calls in
-  all hosts.
+  `agentic-any-search-mcp --goal-plus-stop-hook`. It blocks top-level Stop
+  when the latest active Goal Plus record still has a required next action.
+  OpenCode has no shipped hook, and `PreToolUse`/`SubagentStop` are still
+  manual gate calls in all hosts.
 
 Host references:
 
@@ -285,7 +285,7 @@ opencode.json                         # project-local OpenCode MCP config
 .mcp.json                             # project-local Claude Code MCP config
 .codex/config.toml                    # project-local Codex MCP config
 .codex/hooks.json                     # Codex Stop hook for goal-plus
-scripts/hooks/goal_plus_stop.py       # shared Codex/Claude Stop hook helper
+scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 .opencode/
   command/goal-plus.md                # canonical OpenCode goal entrypoint
   command/goal-any-optimize.md        # legacy alias to goal-plus

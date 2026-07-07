@@ -38,6 +38,6 @@ intake, decides whether a frozen spec is available, and only then calls the
 existing search tools.
 
 Codex and Claude Code also ship a narrow Stop hook backstop through
-`scripts/hooks/goal_plus_stop.py`. It catches unfinished active Goal Plus
-records before the top-level agent stops. OpenCode and all PreToolUse /
-SubagentStop checkpoints remain instruction-driven.
+`agentic-any-search-mcp --goal-plus-stop-hook`. It catches unfinished active
+Goal Plus records before the top-level agent stops. OpenCode and all PreToolUse
+/ SubagentStop checkpoints remain instruction-driven.

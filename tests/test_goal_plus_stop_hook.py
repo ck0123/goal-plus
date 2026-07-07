@@ -11,6 +11,12 @@ from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "scripts" / "hooks" / "goal_plus_stop.py"
+HOOK_CLI = [
+    sys.executable,
+    "-m",
+    "agentic_any_search_mcp.server",
+    "--goal-plus-stop-hook",
+]
 
 
 def _run_hook(tmp_path: Path, search_root: Path, hook_input: dict | None = None, **env):
@@ -21,7 +27,7 @@ def _run_hook(tmp_path: Path, search_root: Path, hook_input: dict | None = None,
         **{key: str(value) for key, value in env.items()},
     }
     return subprocess.run(
-        [sys.executable, str(HOOK)],
+        HOOK_CLI,
         cwd=tmp_path,
         input=json.dumps(hook_input or {}),
         text=True,
@@ -29,6 +35,28 @@ def _run_hook(tmp_path: Path, search_root: Path, hook_input: dict | None = None,
         check=False,
         env=run_env,
     )
+
+
+def test_legacy_stop_hook_script_still_runs(tmp_path: Path) -> None:
+    search_root = tmp_path / ".search"
+
+    result = subprocess.run(
+        [sys.executable, str(HOOK)],
+        cwd=tmp_path,
+        input="{}",
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "GOAL_PLUS_SEARCH_ROOT": str(search_root),
+            "GOAL_PLUS_PROJECT_ROOT": str(tmp_path),
+        },
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
 
 
 def test_stop_hook_allows_when_no_goal_state_and_does_not_create_state(tmp_path: Path) -> None:

@@ -25,8 +25,8 @@ Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
 verifier-backed spec.
 
 This repository ships one project-local Stop hook for Goal Plus:
-`.codex/hooks.json` runs `scripts/hooks/goal_plus_stop.py`. Codex project hooks
-must be reviewed and trusted through `/hooks` before they run.
+`.codex/hooks.json` runs `agentic-any-search-mcp --goal-plus-stop-hook`. Codex
+project hooks must be reviewed and trusted through `/hooks` before they run.
 
 The hook only gates top-level Stop. It does not wire PreToolUse or SubagentStop hooks. The skill still calls `goal_plus_gate` manually before Search Mode tools and before the final response.
 

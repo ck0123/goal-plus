@@ -140,8 +140,8 @@ claude -p --verbose --output-format stream-json \
 
 Add `--include-hook-events` when diagnosing the shipped Stop hook or externally
 supplied hooks, or `--include-partial-messages` when token-level streaming
-matters. This repository ships `scripts/hooks/goal_plus_stop.py` for Stop only;
-PreToolUse and SubagentStop remain manual gate calls.
+matters. This repository ships `agentic-any-search-mcp --goal-plus-stop-hook`
+for Stop only; PreToolUse and SubagentStop remain manual gate calls.
 `--debug-file` implicitly enables debug mode. Use `--debug api,mcp` for a
 narrower debug filter when API or MCP traffic is the focus.
 

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/scripts/hooks/goal_plus_stop.py\"",
+            "command": "agentic-any-search-mcp --goal-plus-stop-hook",
             "timeout": 30,
             "statusMessage": "Checking Goal Plus stop gate"
           }

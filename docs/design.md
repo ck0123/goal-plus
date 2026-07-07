@@ -11,8 +11,8 @@ through MCP tool calls.
 
 `goal_plus_gate` records deterministic phase decisions, but those decisions are
 enforced only when a host actually calls the gate. Codex and Claude Code ship a
-narrow Stop hook backstop through `scripts/hooks/goal_plus_stop.py`; OpenCode
-and all PreToolUse/SubagentStop checkpoints remain instruction-driven.
+narrow Stop hook backstop through `agentic-any-search-mcp --goal-plus-stop-hook`;
+OpenCode and all PreToolUse/SubagentStop checkpoints remain instruction-driven.
 
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
 

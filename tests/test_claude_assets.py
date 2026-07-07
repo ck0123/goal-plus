@@ -23,12 +23,14 @@ def test_claude_assets_wire_stop_hook_only() -> None:
     assert settings["hooks"].keys() == {"Stop"}
     assert stop_hooks[0]["matcher"] == ""
     assert stop_hooks[0]["hooks"][0]["type"] == "command"
-    assert "scripts/hooks/goal_plus_stop.py" in stop_hooks[0]["hooks"][0]["command"]
+    command = stop_hooks[0]["hooks"][0]["command"]
+    assert command == "agentic-any-search-mcp --goal-plus-stop-hook"
+    assert "python3" not in command
 
     text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
     assert "ships one Claude Code Stop hook" in text
     assert "does not wire PreToolUse or SubagentStop hooks" in text
-    assert "scripts/hooks/goal_plus_stop.py" in text
+    assert "agentic-any-search-mcp --goal-plus-stop-hook" in text
 
 
 def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
@@ -60,6 +62,9 @@ def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert "Goal Mode" in text
     assert "Spec Discovery Mode" in text
     assert "Search Mode" in text
+    assert '"recommended_phase": "goal"' in text
+    assert "goal_mode" in text
+    assert "Do not send fields named `mode` or `reason`" in text
     assert "Initial Search-Ready" in text
     assert "In-Progress Search Discovery" in text
     assert "Do not create a SearchSpec in Goal Mode" in text

@@ -392,7 +392,7 @@ Files changed by the baseline implementation:
 | `.opencode/command/goal-plus.md` | New command that loads goal-plus instructions and then the internal search skill only in Search Mode. |
 | `.agents/skills/goal-plus/SKILL.md` | Codex workflow instructions. |
 | `.claude/skills/goal-plus/SKILL.md` | Claude Code workflow instructions. |
-| `scripts/hooks/goal_plus_stop.py`, `.codex/hooks.json`, `.claude/settings.json` | Narrow Stop hook backstop for Codex and Claude Code. Future host-specific `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
+| `agentic-any-search-mcp --goal-plus-stop-hook`, `.codex/hooks.json`, `.claude/settings.json`, `scripts/hooks/goal_plus_stop.py` | Narrow Stop hook backstop for Codex and Claude Code; the script is a legacy wrapper for local testing. Future host-specific `SubagentStop` / `PreToolUse` adapters could call `goal_plus_gate` or read its state. |
 
 ## Hook Integration Pattern
 

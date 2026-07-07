@@ -21,7 +21,7 @@ adapter only relies on foreground Agent launches and optional `SendMessage`
 continuation when Claude Code exposes a reusable agent handle.
 
 This repository ships one Claude Code Stop hook for Goal Plus:
-`.claude/settings.json` runs `scripts/hooks/goal_plus_stop.py`.
+`.claude/settings.json` runs `agentic-any-search-mcp --goal-plus-stop-hook`.
 
 ## Config
 
@@ -62,7 +62,7 @@ gate calls through the `goal-plus` skill, and one Stop hook backstop.
 
 Concretely, the checked-in assets wire:
 
-- a `Stop` hook that calls `scripts/hooks/goal_plus_stop.py`
+- a `Stop` hook that calls `agentic-any-search-mcp --goal-plus-stop-hook`
 
 The project does not wire PreToolUse or SubagentStop hooks. The agent must still call `goal_plus_gate(event="pre_tool_use", ...)` before Search Mode tools and call the stop gate manually before the final response. The hook exists to catch a missed final stop gate, not to supervise foreground workers.
 

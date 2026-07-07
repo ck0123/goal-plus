@@ -12,6 +12,9 @@ docs/superpowers/
 .opencode/package-lock.json
 .opencode/bun.lock
 .opencode/.gitignore
+.codex/agents/any-search-agent.toml
+.codex/agents/any-search-agent-flash.toml
+.codex/agents/any-search-agent-deep.toml
 dist/
 build/
 *.egg-info/

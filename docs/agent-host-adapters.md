@@ -62,10 +62,11 @@ checkpoints such as:
 - before a subagent stop, if the host exposes that hook
 
 Current repository assets include one narrow Stop hook for Codex and Claude
-Code. `scripts/hooks/goal_plus_stop.py` reads local `.search/goal-plus` state
-and calls the same `goal_plus_gate(event="stop")` semantics as the MCP tool. If
-the active Goal Plus record still has a required next action, the hook returns a
-host-native block decision with the continuation prompt.
+Code. Host settings run `agentic-any-search-mcp --goal-plus-stop-hook`, which
+reads local `.search/goal-plus` state and calls the same
+`goal_plus_gate(event="stop")` semantics as the MCP tool. If the active Goal
+Plus record still has a required next action, the hook returns a host-native
+block decision with the continuation prompt.
 
 OpenCode still has no shipped hook. No host currently has a shipped
 `PreToolUse` or `SubagentStop` hook. Those gate calls remain manual /

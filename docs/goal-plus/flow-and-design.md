@@ -251,10 +251,10 @@ frozen inputs, isolated candidates, verifier results, and promotion artifacts.
 
 The gate decisions are enforceable only when the host calls them. Current Codex
 and Claude Code assets ship one Stop hook backstop through
-`scripts/hooks/goal_plus_stop.py`; it calls the same `goal_plus_gate` semantics
-before the top-level agent ends. OpenCode has no shipped hook, and no host
-currently ships PreToolUse or SubagentStop hook wiring. Those checkpoints remain
-manual skill/orchestrator calls.
+`agentic-any-search-mcp --goal-plus-stop-hook`; it calls the same
+`goal_plus_gate` semantics before the top-level agent ends. OpenCode has no
+shipped hook, and no host currently ships PreToolUse or SubagentStop hook
+wiring. Those checkpoints remain manual skill/orchestrator calls.
 
 ## Natural Implementation Shape
 
@@ -286,7 +286,7 @@ src/agentic_any_search_mcp/tools.py / server.py
   - host-specific worker launch notes
   - manual gate checkpoints for PreToolUse and SubagentStop
 
-scripts/hooks/goal_plus_stop.py
+agentic-any-search-mcp --goal-plus-stop-hook
 .codex/hooks.json
 .claude/settings.json
   - Stop hook backstop for Codex and Claude Code

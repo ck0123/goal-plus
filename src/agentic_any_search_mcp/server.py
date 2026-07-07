@@ -4,8 +4,6 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from fastmcp import FastMCP
-
 from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
@@ -14,6 +12,8 @@ from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
 def create_mcp(
     root_dir: str | Path = ".search",
 ) -> FastMCP:
+    from fastmcp import FastMCP
+
     runtime = FileSearchRuntime(root_dir)
     goal_runtime = FileGoalPlusRuntime(root_dir)
     tools = SearchTools(runtime)
@@ -301,7 +301,16 @@ def create_mcp(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".search", help="Search runtime storage directory")
+    parser.add_argument(
+        "--goal-plus-stop-hook",
+        action="store_true",
+        help="Run the Goal Plus Stop hook instead of starting the MCP server",
+    )
     args = parser.parse_args()
+    if args.goal_plus_stop_hook:
+        from agentic_any_search_mcp.goal_plus_stop_hook import main as hook_main
+
+        raise SystemExit(hook_main())
     create_mcp(args.root).run(transport="stdio")
 
 
