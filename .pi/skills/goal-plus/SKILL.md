@@ -7,7 +7,7 @@ description: Run Goal Plus in Pi, including Goal Mode, Spec Discovery Mode, and 
 
 ## Entry Contract
 
-The first tool call for `/goal-plus` must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists.
+The native Pi `/goal-plus` command creates the Goal Plus record before the model turn starts. If a compatibility prompt path is used and no active `goal_plus_id` is already present, the first tool call must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists.
 
 ## Goal Mode
 
@@ -30,4 +30,4 @@ When the goal is search-ready:
 
 ## Gates
 
-Before Search Mode tool use, Pi's extension also calls `goal_plus_gate(event="pre_tool_use")`. At stop time, manually call `goal_plus_gate(event="stop")` and follow its allow/block decision. Pi does not provide Codex-style Stop hook parity here.
+Before Search Mode tool use, Pi's extension calls `goal_plus_gate(event="pre_tool_use")`. At turn end, the extension calls `goal_plus_gate(event="stop")`; if the gate blocks, it queues the continuation prompt and triggers another model turn. If the extension is unavailable, manually call the same gates and follow their allow/block decisions.

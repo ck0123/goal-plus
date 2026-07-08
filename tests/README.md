@@ -94,6 +94,9 @@ pytest -m "st and st_codex" -k codex_redispatch -v -s
 # Pi RPC worker smoke
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
 
+# Pi RPC worker smoke with explicit model and thinking level
+ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
+
 # Two-run isolation scenario (k_module then circle_packing, ~5-8 min)
 pytest -m "st and st_opencode" -k k_module_then_circle_packing -v -s
 
@@ -104,6 +107,7 @@ pytest -m st -v -s
 ST_OPENCODE_MODEL=anthropic/claude-sonnet-4-6 pytest -m st -v -s
 ST_CODEX_MODEL=gpt-5.3-codex-spark pytest -m "st and st_codex" -v -s
 ST_CLAUDE_MODEL=sonnet pytest -m "st and st_claude" -v -s
+ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high pytest -m "st and st_pi_rpc" -v -s
 
 # Raise per-run timeout (default 1800s)
 ST_OPENCODE_TIMEOUT=3600 pytest -m st -v -s

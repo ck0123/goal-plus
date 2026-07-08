@@ -45,6 +45,8 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "goal_plus_link_search_run" in text
     assert "goal_plus_record_search_result" in text
     assert "final raw-goal audit" in text
+    assert "native Pi `/goal-plus` command creates" in text
+    assert "queues the continuation prompt" in text
 
 
 def test_pi_search_skill_uses_rpc_worker_and_final_verifier() -> None:
@@ -96,13 +98,24 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
     assert "pi_rpc_run_worker" in text
+    assert 'pi.registerCommand("goal-plus"' in text
+    assert "goal-plus-native-state" in text
+    assert 'pi.on("session_start"' in text
+    assert 'pi.on("before_agent_start"' in text
+    assert 'pi.on("agent_end"' in text
     assert 'pi.on("tool_call"' in text
     assert 'goal_plus_gate' in text
+    assert "tool_name" in text
+    assert "goal-plus-stop-continuation" in text
+    assert "goal-plus-stats" in text
+    assert "assistantMessages" in text
+    assert "estimated_cost" in text
+    assert "sendUserMessage" in text
     assert "workspaceGuard" in text
     assert "block" in text
 
 
-def test_pi_docs_record_runner_logs_and_no_stop_hook_parity() -> None:
+def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     pi_doc = (ROOT / "docs" / "pi.md").read_text(encoding="utf-8")
     adapters = (ROOT / "docs" / "agent-host-adapters.md").read_text(encoding="utf-8")
     debug = (ROOT / "docs" / "debugging-runtime.md").read_text(encoding="utf-8")
@@ -114,4 +127,6 @@ def test_pi_docs_record_runner_logs_and_no_stop_hook_parity() -> None:
     assert "agentic-any-search-pi-tool" in combined
     assert "session_jsonl_restart" in combined
     assert ".search/host-logs/pi-rpc-" in combined
-    assert "no Codex Stop hook parity" in combined
+    assert "native turn-level stop gate" in combined
+    assert "Goal Plus stats" in combined
+    assert "no host process Stop hook" in combined

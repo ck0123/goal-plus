@@ -248,3 +248,17 @@ def test_pre_tool_use_blocks_search_before_high_confidence_spec(tmp_path) -> Non
 
     assert gate.decision == "block"
     assert "frozen spec draft" in gate.reason
+
+
+def test_pre_tool_use_accepts_camel_case_tool_name(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Maybe optimize something")
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"toolName": "search_freeze_spec"},
+    )
+
+    assert gate.decision == "block"
+    assert "frozen spec draft" in gate.reason

@@ -31,6 +31,7 @@ class _RpcClient:
         self._condition = threading.Condition()
         self._responses: dict[str, dict[str, Any]] = {}
         self._counter = 0
+        self._auto_retry_until = 0.0
         self._stdout_thread = threading.Thread(target=self._read_stdout, daemon=True)
         self._stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
 
@@ -85,6 +86,18 @@ class _RpcClient:
                 with self._condition:
                     self._responses[str(event["id"])] = event
                     self._condition.notify_all()
+            if event.get("type") == "auto_retry_start":
+                delay_seconds = _number(event.get("delayMs")) / 1000
+                with self._condition:
+                    self._auto_retry_until = max(
+                        self._auto_retry_until,
+                        time.monotonic() + max(float(delay_seconds), 1.0),
+                    )
+                    self._condition.notify_all()
+            if event.get("type") == "agent_start":
+                with self._condition:
+                    self._auto_retry_until = 0.0
+                    self._condition.notify_all()
 
     def _read_stderr(self) -> None:
         assert self.proc.stderr is not None
@@ -99,6 +112,10 @@ class _RpcClient:
     def _append_text(self, line: str) -> None:
         with self.text_log.open("a", encoding="utf-8") as handle:
             handle.write(line)
+
+    def auto_retry_pending(self) -> bool:
+        with self._condition:
+            return time.monotonic() < self._auto_retry_until
 
 
 def default_extension_path() -> Path:
@@ -273,6 +290,7 @@ def run_pi_rpc_worker(
     pi_binary: str = "pi",
     extension_path: Path | str | None = None,
     thinking_level: str | None = None,
+    model_pattern: str | None = None,
     provider: str | None = None,
     model_id: str | None = None,
 ) -> dict[str, Any]:
@@ -301,18 +319,23 @@ def run_pi_rpc_worker(
         "AGENTIC_ANY_SEARCH_ROOT": str(root),
         "AGENTIC_ANY_SEARCH_PI_ROLE": "worker",
     }
-    cmd = [
-        pi_binary,
-        "--mode",
-        "rpc",
-        "--approve",
-        "--session-dir",
-        str(session_dir),
-        "--session-id",
-        session_id,
-        "-e",
-        str(extension),
-    ]
+    selected_model_pattern = model_pattern or os.environ.get("AGENTIC_ANY_SEARCH_PI_MODEL")
+    cmd = [pi_binary]
+    if selected_model_pattern:
+        cmd.extend(["--model", selected_model_pattern])
+    cmd.extend(
+        [
+            "--mode",
+            "rpc",
+            "--approve",
+            "--session-dir",
+            str(session_dir),
+            "--session-id",
+            session_id,
+            "-e",
+            str(extension),
+        ]
+    )
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -379,6 +402,10 @@ def run_pi_rpc_worker(
                 and not data.get("isCompacting", False)
                 and int(data.get("pendingMessageCount") or 0) == 0
             ):
+                auto_retry_pending = getattr(rpc, "auto_retry_pending", lambda: False)
+                if auto_retry_pending():
+                    time.sleep(min(1.0, max(0.1, remaining)))
+                    continue
                 break
             time.sleep(min(1.0, max(0.1, remaining)))
 
@@ -453,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--launch-json", help="Launch payload JSON. Defaults to stdin.")
     run_parser.add_argument("--pi-binary", default="pi")
     run_parser.add_argument("--extension", help="Path to search-runtime.ts")
+    run_parser.add_argument("--model")
     run_parser.add_argument("--provider")
     run_parser.add_argument("--model-id")
     run_parser.add_argument("--thinking")
@@ -467,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
             launch,
             pi_binary=getattr(parsed, "pi_binary", "pi"),
             extension_path=getattr(parsed, "extension", None),
+            model_pattern=getattr(parsed, "model", None),
             provider=getattr(parsed, "provider", None),
             model_id=getattr(parsed, "model_id", None),
             thinking_level=getattr(parsed, "thinking", None),

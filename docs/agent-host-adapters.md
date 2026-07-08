@@ -72,10 +72,12 @@ same `goal_plus_gate(event="stop")` semantics only to an explicit
 session. If that record still has a required next action, the hook returns a
 host-native block decision with the continuation prompt.
 
-OpenCode still has no shipped hook. No host currently has a shipped
-`PreToolUse` or `SubagentStop` hook. Those gate calls remain manual /
-instruction-driven in the skills, so this is session-scoped Stop backstop plus
-ownership binding rather than full process supervision.
+OpenCode still has no shipped hook. Codex and Claude Code use session-scoped
+Stop backstops plus ownership binding; their `PreToolUse` and `SubagentStop`
+gate calls remain manual / instruction-driven in the skills. Pi uses its
+extension event surface instead: `tool_call` runs the pre-tool gate and
+`agent_end` runs the turn-level stop gate. No host currently ships a
+`SubagentStop` hook.
 
 ## Host Selection
 
@@ -117,7 +119,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | `session_jsonl_restart`; restarts Pi RPC with the same session id |
 | Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | `.search/host-logs/pi-rpc-*.jsonl`, `.txt`, Pi session JSONL |
 | Trace export | supported for OpenCode logs | not implemented | not implemented | not implemented |
-| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | extension pre-tool guard plus skill stop gate; no Codex Stop hook parity |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | native extension command/state, pre-tool gate, and turn-level stop gate; no host process Stop hook |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only | portable builtin strategies only |
 
 Portable builtin strategies are:

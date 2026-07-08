@@ -18,20 +18,33 @@ not need to contain `.pi/extensions`.
 
 ## Main Agent
 
-Use `/goal-plus ...` from Pi. The prompt template requires the first tool call
-to be:
+Use `/goal-plus ...` from Pi. When the project `.pi/` extension is loaded, this
+is a native Pi command. The command calls:
 
 ```text
 goal_plus_create(raw_goal=...)
 ```
 
-The Pi extension runs as `AGENTIC_ANY_SEARCH_PI_ROLE=main` by default and
-exposes `goal_plus_*`, `search_*`, and `pi_rpc_run_worker`. Before main-role
-`search_*` tool calls, it attempts `goal_plus_gate(event="pre_tool_use")` when
-`AGENTIC_ANY_SEARCH_GOAL_PLUS_ID` is set.
+before the model turn starts, stores the active `goal_plus_id` in a Pi custom
+session entry, and sends the model a follow-up prompt to continue the Goal Plus
+flow. The prompt template remains as a compatibility path; in that path the
+first model tool call still must be `goal_plus_create(raw_goal=...)`.
 
-Pi has no Codex Stop hook parity. The v1 boundary is extension pre-tool guard,
-skill-level stop gate instructions, and runtime state audit.
+The Pi extension runs as `AGENTIC_ANY_SEARCH_PI_ROLE=main` by default and
+exposes `goal_plus_*`, `search_*`, and `pi_rpc_run_worker`. It restores the
+active Goal Plus state on session start, injects hidden Goal Plus context before
+agent starts, and calls `goal_plus_gate(event="pre_tool_use")` before main-role
+`search_*` tool calls.
+
+At turn end, the extension calls `goal_plus_gate(event="stop")`. If the gate
+blocks, it queues the runtime continuation prompt and triggers another Pi turn.
+This gives Pi a native turn-level stop gate. It is not a host process Stop hook
+that can block closing Pi, but it uses the same runtime gate semantics as the
+Codex and Claude Code Stop hooks.
+
+When a Goal Plus record reaches a terminal status, the extension prints a
+visible `Goal Plus stats` message with elapsed time, assistant messages, tool
+calls, token totals, and estimated cost calculated from Pi session usage.
 
 ## Worker Host
 
@@ -87,6 +100,10 @@ The runner sets:
 
 - `AGENTIC_ANY_SEARCH_ROOT=<abs .search>`
 - `AGENTIC_ANY_SEARCH_PI_ROLE=worker`
+
+If `--model` is passed to `agentic-any-search-pi-worker run`, or
+`AGENTIC_ANY_SEARCH_PI_MODEL` is set, the runner starts Pi with that model
+pattern.
 
 Worker-role extension tools are restricted to `search_get_agent_context`,
 `search_run_verifier`, and `search_list_iterations`. After
