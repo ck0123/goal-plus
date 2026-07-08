@@ -70,7 +70,7 @@ This repository already includes project-local config for all supported hosts.
 | Codex | `.codex/config.toml`, `.codex/hooks.json`, `.codex/skills/` | Use the `goal-plus` skill / `/goal-plus` prompt from Codex | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
-| Pi | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in Pi | Uses extension tools plus `agentic-any-search-pi-worker` for `worker_host="pi-rpc"`. Pi has no Codex Stop hook parity. |
+| Pi | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in Pi | Interactive/RPC Pi uses native `/goal-plus` pre-create, hidden context, pre-tool gates, and a turn-end gate. `pi -p` uses the prompt-template path. Pi RPC workers run through `agentic-any-search-pi-worker`; stats are Pi custom entries, not LLM messages. |
 
 Host-specific setup and debugging details live in:
 
