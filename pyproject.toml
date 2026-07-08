@@ -7,15 +7,16 @@ name = "agentic-any-search-mcp"
 version = "0.1.0"
 description = "A small MCP-first runtime for verifiable agentic search."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
-  "fastmcp>=2.3",
+  "fastmcp>=2.3,<3.0",
   "pydantic>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
+  "tomli>=2.0; python_version < '3.11'",
 ]
 bench = [
   "datasets>=2.18",

@@ -77,6 +77,8 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
         _assistant_usage(input_tokens=25, output_tokens=5, cache_read=75, cost_total=0.02),
     ]
     commands: list[str] = []
+    popen_cmd: list[str] = []
+    popen_env: dict[str, str] = {}
 
     class FakeProc:
         returncode = None
@@ -112,7 +114,9 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
                 return {"data": {"tokens": {"input": 125}}}
             raise AssertionError(f"unexpected command {command_type}")
 
-    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProc:
+    def fake_popen(cmd: list[str], *_args: Any, **kwargs: Any) -> FakeProc:
+        popen_cmd[:] = [str(part) for part in cmd]
+        popen_env.update(kwargs.get("env") or {})
         return FakeProc()
 
     def fake_kill_process_group(proc: FakeProc) -> None:
@@ -133,6 +137,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
             "budget_control": {"max_runtime_seconds": 30},
         },
         extension_path=extension,
+        model_pattern="gpt-5.4-mini",
     )
 
     metrics = handle["metadata"]["pi_metrics"]
@@ -160,3 +165,84 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     }
     assert metrics["session_stats"] == {"tokens": {"input": 125}}
     assert commands.count("get_entries") == 2
+    assert popen_cmd[0:3] == ["pi", "--model", "gpt-5.4-mini"]
+    assert popen_env["AGENTIC_ANY_SEARCH_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
+
+
+def test_run_pi_rpc_worker_waits_for_pi_auto_retry(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    extension = tmp_path / "search-runtime.ts"
+    extension.write_text("// fake extension\n", encoding="utf-8")
+    session_dir = tmp_path / "sessions"
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+
+    commands: list[str] = []
+    states = [
+        {"isStreaming": False, "isCompacting": False, "pendingMessageCount": 0},
+        {"isStreaming": True, "isCompacting": False, "pendingMessageCount": 0},
+        {
+            "isStreaming": False,
+            "isCompacting": False,
+            "pendingMessageCount": 0,
+            "sessionFile": str(session_dir / "2026_agent_retry.jsonl"),
+        },
+    ]
+
+    class FakeProc:
+        returncode = None
+
+    class FakeRpcClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.retry_checks = 0
+
+        def start(self) -> None:
+            return None
+
+        def auto_retry_pending(self) -> bool:
+            self.retry_checks += 1
+            return self.retry_checks == 1
+
+        def command(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            command_type = str(payload["type"])
+            commands.append(command_type)
+            if command_type == "get_entries":
+                return {"data": {"entries": [], "leafId": None}}
+            if command_type == "prompt":
+                return {"data": {}}
+            if command_type == "get_state":
+                return {"data": states.pop(0)}
+            if command_type == "get_last_assistant_text":
+                return {"data": {"text": "done after retry"}}
+            if command_type == "get_session_stats":
+                return {"data": {}}
+            raise AssertionError(f"unexpected command {command_type}")
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
+
+    def fake_kill_process_group(proc: FakeProc) -> None:
+        proc.returncode = 0
+
+    monkeypatch.setattr(pi_worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(pi_worker, "_RpcClient", FakeRpcClient)
+    monkeypatch.setattr(pi_worker, "_kill_process_group", fake_kill_process_group)
+    monkeypatch.setattr(pi_worker.time, "sleep", lambda _seconds: None)
+
+    handle = pi_worker.run_pi_rpc_worker(
+        {
+            "agent_session_id": "agent_retry",
+            "session_id": "agent_retry",
+            "session_dir": str(session_dir),
+            "root": str(tmp_path / ".search"),
+            "cwd": str(cwd),
+            "prompt": "do work",
+            "budget_control": {"max_runtime_seconds": 30},
+        },
+        extension_path=extension,
+    )
+
+    assert handle["metadata"]["assistant_text"] == "done after retry"
+    assert commands.count("get_state") >= 3

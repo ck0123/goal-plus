@@ -7,11 +7,11 @@ description: Run Goal Plus in Pi, including Goal Mode, Spec Discovery Mode, and 
 
 ## Entry Contract
 
-The first tool call for `/goal-plus` must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists.
+The native Pi `/goal-plus` command creates the Goal Plus record before the model turn starts. If a compatibility prompt path is used and no active `goal_plus_id` is already present, the first tool call must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists. Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.
 
 ## Goal Mode
 
-Use Goal Mode when the request is not yet a verifiable optimization/search task. Record triage with `goal_plus_record_triage` and keep the user-facing goal separate from implementation guesses. Do not create a SearchSpec in Goal Mode.
+Use Goal Mode when the request is not yet a verifiable optimization/search task. Record triage with `goal_plus_record_triage({ goal_plus_id, triage: { is_optimization, confidence, recommended_phase, identified_at, scenario, reasons, missing } })` and keep the user-facing goal separate from implementation guesses. Do not create a SearchSpec in Goal Mode.
 
 ## Spec Discovery Mode
 
@@ -30,4 +30,4 @@ When the goal is search-ready:
 
 ## Gates
 
-Before Search Mode tool use, Pi's extension also calls `goal_plus_gate(event="pre_tool_use")`. At stop time, manually call `goal_plus_gate(event="stop")` and follow its allow/block decision. Pi does not provide Codex-style Stop hook parity here.
+Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`, `write`, `pi_rpc_run_worker`), Pi's extension calls `goal_plus_gate(event="pre_tool_use")`. At turn end, the extension calls `goal_plus_gate(event="stop")`; if the gate blocks, it queues the continuation prompt and triggers another model turn. If the extension is unavailable, manually call the same gates and follow their allow/block decisions.

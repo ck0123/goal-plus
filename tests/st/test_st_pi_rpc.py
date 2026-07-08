@@ -151,6 +151,7 @@ def test_pi_rpc_k_module(st_project_root: Path) -> None:
     handle = run_pi_rpc_worker(
         session.launch,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+        model_pattern=os.environ.get("ST_PI_MODEL"),
         thinking_level=os.environ.get("ST_PI_THINKING"),
     )
     runtime.bind_agent_handle(session.agent_session_id, handle)
@@ -174,6 +175,8 @@ def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
     timed_out = run_pi_rpc_worker(
         session.launch,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+        model_pattern=os.environ.get("ST_PI_MODEL"),
+        thinking_level=os.environ.get("ST_PI_THINKING"),
     )
     runtime.bind_agent_handle(session.agent_session_id, timed_out)
     assert timed_out["metadata"]["timed_out"] is True
@@ -187,6 +190,8 @@ def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
     handle = run_pi_rpc_worker(
         redispatched.launch,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+        model_pattern=os.environ.get("ST_PI_MODEL"),
+        thinking_level=os.environ.get("ST_PI_THINKING"),
     )
     runtime.bind_agent_handle(redispatched.agent_session_id, handle)
 
@@ -207,6 +212,8 @@ def test_pi_rpc_continue_restarts_same_session_id(st_project_root: Path) -> None
     handle = run_pi_rpc_worker(
         session.launch,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+        model_pattern=os.environ.get("ST_PI_MODEL"),
+        thinking_level=os.environ.get("ST_PI_THINKING"),
     )
     runtime.bind_agent_handle(session.agent_session_id, handle)
 
@@ -217,6 +224,8 @@ def test_pi_rpc_continue_restarts_same_session_id(st_project_root: Path) -> None
     continued_handle = run_pi_rpc_worker(
         continued.launch,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+        model_pattern=os.environ.get("ST_PI_MODEL"),
+        thinking_level=os.environ.get("ST_PI_THINKING"),
     )
     runtime.bind_agent_handle(continued.agent_session_id, continued_handle)
 

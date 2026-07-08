@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
 
 from agentic_any_search_mcp.models import SearchSpec
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.trace_export import export_chrome_trace
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 
 def make_project(tmp_path: Path) -> Path:

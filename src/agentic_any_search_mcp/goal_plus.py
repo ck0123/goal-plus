@@ -23,12 +23,25 @@ TERMINAL_STATUSES: set[GoalPlusStatus] = {"blocked", "complete", "abandoned"}
 SEARCH_TOOL_SUFFIXES = (
     "search_freeze_spec",
     "search_create",
+    "search_status",
+    "search_list_history",
     "search_plan_next",
     "search_start_batch",
     "search_start_agent_session",
+    "search_redispatch_candidate",
+    "search_bind_opencode_session",
+    "search_bind_agent_handle",
+    "search_continue_agent_session",
+    "search_run_verifier",
     "search_select",
     "search_report",
     "search_promote",
+    "pi_rpc_run_worker",
+)
+MUTATING_TOOL_SUFFIXES = (
+    "bash",
+    "edit",
+    "write",
 )
 
 
@@ -386,6 +399,13 @@ class FileGoalPlusRuntime:
                     "block",
                     reason=self._search_block_reason(record),
                 )
+            if self._is_mutating_tool(tool_name) and self._should_block_mutation(record):
+                return self._record_gate(
+                    record,
+                    event,
+                    "block",
+                    reason=self._mutation_block_reason(record),
+                )
             if self._tool_matches(tool_name, "search_promote") and not (
                 record.linked_search and record.linked_search.selected_candidate_id
             ):
@@ -515,6 +535,20 @@ class FileGoalPlusRuntime:
 
     def _is_search_tool(self, tool_name: str) -> bool:
         return any(self._tool_matches(tool_name, suffix) for suffix in SEARCH_TOOL_SUFFIXES)
+
+    def _is_mutating_tool(self, tool_name: str) -> bool:
+        return any(self._tool_matches(tool_name, suffix) for suffix in MUTATING_TOOL_SUFFIXES)
+
+    def _should_block_mutation(self, record: GoalPlusRecord) -> bool:
+        if record.next_action is None or not record.next_action.required:
+            return False
+        return record.phase in {"intake", "spec_discovery", "final_audit"}
+
+    def _mutation_block_reason(self, record: GoalPlusRecord) -> str:
+        action = record.next_action
+        if action is None:
+            return "Goal Plus state is not ready for mutating tools."
+        return f"Complete the current Goal Plus next action before mutating tools: {action.description}"
 
     def _tool_matches(self, tool_name: str, suffix: str) -> bool:
         return tool_name == suffix or tool_name.endswith(f"__{suffix}") or tool_name.endswith(

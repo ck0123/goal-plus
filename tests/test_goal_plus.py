@@ -248,3 +248,78 @@ def test_pre_tool_use_blocks_search_before_high_confidence_spec(tmp_path) -> Non
 
     assert gate.decision == "block"
     assert "frozen spec draft" in gate.reason
+
+
+def test_pre_tool_use_blocks_mutation_before_triage(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Tidy docs wording")
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "bash"},
+    )
+
+    assert gate.decision == "block"
+    assert "before mutating tools" in gate.reason
+    assert "Classify whether the raw goal" in gate.reason
+
+
+def test_goal_mode_allows_mutation_after_triage(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Tidy docs wording")
+    runtime.record_triage(
+        record.goal_plus_id,
+        GoalPlusTriage(
+            is_optimization=False,
+            confidence="high",
+            recommended_phase="goal",
+            reasons=["qualitative documentation task"],
+        ),
+    )
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "edit"},
+    )
+
+    assert gate.decision == "allow"
+
+
+def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize kernel latency")
+    runtime.record_triage(
+        record.goal_plus_id,
+        GoalPlusTriage(
+            is_optimization=True,
+            confidence="high",
+            recommended_phase="search",
+            identified_at="initial",
+            reasons=["latency benchmark exists"],
+        ),
+    )
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "pi_rpc_run_worker"},
+    )
+
+    assert gate.decision == "block"
+    assert "user confirmation" in gate.reason or "frozen spec draft" in gate.reason
+
+
+def test_pre_tool_use_accepts_camel_case_tool_name(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Maybe optimize something")
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"toolName": "search_freeze_spec"},
+    )
+
+    assert gate.decision == "block"
+    assert "frozen spec draft" in gate.reason

@@ -215,8 +215,9 @@ rg -n "agent_session_id|candidate_id|search_get_agent_context|search_run_verifie
 `session_jsonl_restart` means continuation restarts `pi --mode rpc` with the
 same `--session-id`. It is not a live process continuation. Search MCP
 `.search/runs/...` remains the authoritative state; Pi JSONL is transcript and
-resume evidence only. Pi has no Codex Stop hook parity, so debug Goal Plus
-completion through extension pre-tool guard events, manual skill stop gates,
+resume evidence only. Pi has a native turn-level Goal Plus stop gate through
+the extension `agent_end` event, but no host process Stop hook. Debug Goal Plus
+completion through extension pre-tool guard events, stop continuation messages,
 and `.search/goal-plus/...`.
 
 ## `.search/` Layout
