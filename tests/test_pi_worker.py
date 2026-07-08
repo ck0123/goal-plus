@@ -78,6 +78,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     ]
     commands: list[str] = []
     popen_cmd: list[str] = []
+    popen_env: dict[str, str] = {}
 
     class FakeProc:
         returncode = None
@@ -113,8 +114,9 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
                 return {"data": {"tokens": {"input": 125}}}
             raise AssertionError(f"unexpected command {command_type}")
 
-    def fake_popen(cmd: list[str], *_args: Any, **_kwargs: Any) -> FakeProc:
+    def fake_popen(cmd: list[str], *_args: Any, **kwargs: Any) -> FakeProc:
         popen_cmd[:] = [str(part) for part in cmd]
+        popen_env.update(kwargs.get("env") or {})
         return FakeProc()
 
     def fake_kill_process_group(proc: FakeProc) -> None:
@@ -164,6 +166,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert metrics["session_stats"] == {"tokens": {"input": 125}}
     assert commands.count("get_entries") == 2
     assert popen_cmd[0:3] == ["pi", "--model", "gpt-5.4-mini"]
+    assert popen_env["AGENTIC_ANY_SEARCH_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
 
 
 def test_run_pi_rpc_worker_waits_for_pi_auto_retry(

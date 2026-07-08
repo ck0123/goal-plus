@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -145,7 +145,7 @@ def _safe_session_name(value: str) -> str:
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _number(value: Any) -> int | float:
@@ -318,6 +318,7 @@ def run_pi_rpc_worker(
         **os.environ,
         "AGENTIC_ANY_SEARCH_ROOT": str(root),
         "AGENTIC_ANY_SEARCH_PI_ROLE": "worker",
+        "AGENTIC_ANY_SEARCH_SOURCE_PATH": str(default_extension_path().parents[2]),
     }
     selected_model_pattern = model_pattern or os.environ.get("AGENTIC_ANY_SEARCH_PI_MODEL")
     cmd = [pi_binary]

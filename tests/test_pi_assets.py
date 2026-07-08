@@ -20,6 +20,7 @@ def test_pi_assets_exist() -> None:
 def test_pyproject_exposes_pi_console_scripts() -> None:
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
+    assert 'requires-python = ">=3.10"' in text
     assert 'agentic-any-search-pi-tool = "agentic_any_search_mcp.pi_tool:main"' in text
     assert 'agentic-any-search-pi-worker = "agentic_any_search_mcp.pi_worker:main"' in text
 
@@ -27,8 +28,11 @@ def test_pyproject_exposes_pi_console_scripts() -> None:
 def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
     text = (ROOT / ".pi" / "prompts" / "goal-plus.md").read_text(encoding="utf-8")
 
-    assert "goal_plus_create(raw_goal=" in text
+    assert 'goal_plus_create(raw_goal="$ARGUMENTS")' in text
+    assert "do not read or audit target files before `goal_plus_record_triage`" in text
+    assert "{{input}}" not in text
     assert text.index("goal_plus_create") < text.index("Goal Plus")
+    assert text.index("goal_plus_create") < text.index("goal_plus_record_triage")
 
 
 def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
@@ -47,6 +51,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "final raw-goal audit" in text
     assert "native Pi `/goal-plus` command creates" in text
     assert "queues the continuation prompt" in text
+    assert "do not read or audit target files before `goal_plus_record_triage`" in text
 
 
 def test_pi_search_skill_uses_rpc_worker_and_final_verifier() -> None:
@@ -108,11 +113,42 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "tool_name" in text
     assert "goal-plus-stop-continuation" in text
     assert "goal-plus-stats" in text
+    assert "registerEntryRenderer<GoalPlusStatsEntry>" in text
+    assert "appendEntry<GoalPlusStatsEntry>" in text
+    assert 'customType: "goal-plus-stats"' not in text
     assert "assistantMessages" in text
     assert "estimated_cost" in text
     assert "sendUserMessage" in text
+    assert "AGENTIC_ANY_SEARCH_SOURCE_PATH" in text
+    assert "sys.path.insert" in text
+    assert "agentic_any_search_mcp.pi_tool" in text
+    assert "agentic_any_search_mcp.pi_worker" in text
+    assert "isPrintInvocation" in text
+    assert 'process.argv.includes("-p")' in text
+    assert 'ctx.mode === "print"' in text
+    assert "buildGoalPlusCommandPrompt" in text
+    assert "do not read or audit target files before goal_plus_record_triage" in text
     assert "workspaceGuard" in text
+    assert "MAIN_GATED_TOOLS" in text
+    assert "pi_rpc_run_worker" in text
     assert "block" in text
+
+
+def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> None:
+    text = (ROOT / ".pi" / "extensions" / "search-runtime.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert "RuntimeToolSchemas" in text
+    assert "parameters: toolParameters(name)" in text
+    assert "parameters: JsonArgs" not in text
+    assert "goal_plus_record_triage: Type.Object" in text
+    assert "triage: GoalPlusTriage" in text
+    assert "is_optimization: Type.Boolean()" in text
+    assert 'Type.Literal("spec_discovery")' in text
+    assert "isEnvironmentFailure" in text
+    assert "ModuleNotFoundError" in text
+    assert "INSTALL_HINT" in text
 
 
 def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
@@ -129,4 +165,6 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert ".search/host-logs/pi-rpc-" in combined
     assert "native turn-level stop gate" in combined
     assert "Goal Plus stats" in combined
+    assert "custom entry" in combined
+    assert "does not trigger another assistant turn" in combined
     assert "no host process Stop hook" in combined

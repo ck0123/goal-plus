@@ -1,9 +1,15 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Box, Text } from "@earendil-works/pi-tui";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { type TSchema, Type } from "typebox";
 
 const role = process.env.AGENTIC_ANY_SEARCH_PI_ROLE || "main";
 const runtimeRoot = process.env.AGENTIC_ANY_SEARCH_ROOT || ".search";
+const sourcePath = process.env.AGENTIC_ANY_SEARCH_SOURCE_PATH;
+const isPrintInvocation = process.argv.includes("-p") || process.argv.includes("--print");
 const STATE_ENTRY_TYPE = "goal-plus-native-state";
+const GOAL_PLUS_STATS_ENTRY_TYPE = "goal-plus-stats";
 let workspaceRoot: string | undefined;
 let sawContext = false;
 let activeGoalPlusId = process.env.AGENTIC_ANY_SEARCH_GOAL_PLUS_ID;
@@ -12,7 +18,231 @@ let continuationCount = 0;
 let activeGoalStartedAt: string | undefined;
 let activeGoalStartEntryCount = 0;
 
-const JsonArgs = Type.Object({}, { additionalProperties: true });
+const INSTALL_HINT =
+	'Install this project into the Python environment that launches Pi: python -m pip install -e ".[dev]".';
+const LooseObject = Type.Object({}, { additionalProperties: true });
+const GoalPlusConfidence = Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]);
+const GoalPlusRecommendedPhase = Type.Union([
+	Type.Literal("goal"),
+	Type.Literal("spec_discovery"),
+	Type.Literal("search"),
+]);
+const GoalPlusDiscoveryOrigin = Type.Union([Type.Literal("initial"), Type.Literal("in_progress")]);
+const GoalPlusTriage = Type.Object(
+	{
+		is_optimization: Type.Boolean(),
+		confidence: GoalPlusConfidence,
+		recommended_phase: GoalPlusRecommendedPhase,
+		identified_at: Type.Optional(GoalPlusDiscoveryOrigin),
+		scenario: Type.Optional(Type.String()),
+		reasons: Type.Optional(Type.Array(Type.String())),
+		missing: Type.Optional(Type.Array(Type.String())),
+	},
+	{ additionalProperties: false },
+);
+const GoalPlusNextAction = Type.Object(
+	{
+		kind: Type.String(),
+		description: Type.String(),
+		required: Type.Optional(Type.Boolean()),
+		metadata: Type.Optional(LooseObject),
+	},
+	{ additionalProperties: false },
+);
+const GoalPlusSpecDraft = Type.Object(
+	{
+		baseline: LooseObject,
+		metric: LooseObject,
+		correctness_gate: LooseObject,
+		edit_surface: LooseObject,
+		verifier_artifacts: Type.Optional(Type.Array(Type.String())),
+		search_spec: LooseObject,
+		promotion_rule: Type.String(),
+		confidence: GoalPlusConfidence,
+		origin: Type.Optional(GoalPlusDiscoveryOrigin),
+		user_confirmed_frozen_verifier: Type.Optional(Type.Boolean()),
+		open_questions: Type.Optional(Type.Array(Type.String())),
+	},
+	{ additionalProperties: false },
+);
+const RuntimeToolSchemas: Record<string, TSchema> = {
+	goal_plus_create: Type.Object(
+		{
+			raw_goal: Type.String(),
+			source_path: Type.Optional(Type.String()),
+			policy: Type.Optional(LooseObject),
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_status: Type.Object({ goal_plus_id: Type.String() }, { additionalProperties: false }),
+	goal_plus_record_triage: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			triage: GoalPlusTriage,
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_save_spec_draft: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			spec_draft: GoalPlusSpecDraft,
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_confirm_frozen_verifier: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			confirmed_by: Type.Optional(Type.String()),
+			evidence: Type.Optional(LooseObject),
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_link_search_run: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			frozen_spec_id: Type.String(),
+			run_id: Type.String(),
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_record_search_result: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			run_id: Type.String(),
+			selected_candidate_id: Type.Optional(Type.String()),
+			report_path: Type.Optional(Type.String()),
+			promotion_artifact_path: Type.Optional(Type.String()),
+			summary: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_set_status: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			status: Type.Union([
+				Type.Literal("active"),
+				Type.Literal("needs_user"),
+				Type.Literal("blocked"),
+				Type.Literal("complete"),
+				Type.Literal("abandoned"),
+			]),
+			reason: Type.Optional(Type.String()),
+			evidence: Type.Optional(Type.Array(LooseObject)),
+			next_action: Type.Optional(GoalPlusNextAction),
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_gate: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			event: Type.Union([
+				Type.Literal("stop"),
+				Type.Literal("subagent_stop"),
+				Type.Literal("pre_tool_use"),
+				Type.Literal("user_prompt_submit"),
+			]),
+			context: LooseObject,
+		},
+		{ additionalProperties: false },
+	),
+	search_freeze_spec: Type.Object(
+		{
+			spec: LooseObject,
+			verifier_artifact_paths: Type.Array(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	search_create: Type.Object({ frozen_spec_id: Type.String() }, { additionalProperties: false }),
+	search_status: Type.Object({ run_id: Type.String() }, { additionalProperties: false }),
+	search_list_history: Type.Object(
+		{
+			run_id: Type.String(),
+			top_n: Type.Optional(Type.Number()),
+			sort_by: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	search_plan_next: Type.Object(
+		{
+			run_id: Type.String(),
+			requested_k: Type.Optional(Type.Number()),
+		},
+		{ additionalProperties: false },
+	),
+	search_start_batch: Type.Object(
+		{
+			run_id: Type.String(),
+			plan_id: Type.String(),
+			proposals: Type.Optional(Type.Array(LooseObject)),
+		},
+		{ additionalProperties: false },
+	),
+	search_start_agent_session: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_id: Type.String(),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+		},
+		{ additionalProperties: false },
+	),
+	search_redispatch_candidate: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_id: Type.String(),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			worker_agent_type: Type.Optional(Type.String()),
+			worker_budget: Type.Optional(LooseObject),
+		},
+		{ additionalProperties: false },
+	),
+	search_bind_agent_handle: Type.Object(
+		{
+			agent_session_id: Type.String(),
+			handle: LooseObject,
+		},
+		{ additionalProperties: false },
+	),
+	search_continue_agent_session: Type.Object(
+		{
+			agent_session_id: Type.String(),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+		},
+		{ additionalProperties: false },
+	),
+	search_get_agent_context: Type.Object({ agent_session_id: Type.String() }, { additionalProperties: false }),
+	search_run_verifier: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_id: Type.String(),
+			scope: Type.Optional(Type.Union([Type.Literal("process"), Type.Literal("promotion")])),
+			agent_session_id: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	search_list_iterations: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_id: Type.String(),
+		},
+		{ additionalProperties: false },
+	),
+	search_select: Type.Object(
+		{
+			run_id: Type.String(),
+			strategy: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	search_report: Type.Object({ run_id: Type.String() }, { additionalProperties: false }),
+	search_promote: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_id: Type.String(),
+		},
+		{ additionalProperties: false },
+	),
+};
+const MAIN_GATED_TOOLS = new Set(["bash", "edit", "write", "pi_rpc_run_worker"]);
 
 interface GoalPlusNativeState {
 	activeGoalPlusId?: string;
@@ -60,12 +290,102 @@ interface GoalPlusUsageTotals {
 	cost: number;
 }
 
+interface GoalPlusStatsEntry {
+	goal_plus_id?: string;
+	status?: string;
+	startedAt?: string;
+	endedAt: string;
+	usage: GoalPlusUsageTotals;
+	message: string;
+}
+
+interface CommandInvocation {
+	command: string;
+	argsPrefix: string[];
+	label: string;
+}
+
+interface CommandRuntimeContext {
+	cwd: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
 function numberFrom(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function commandContextFrom(ctx: ExtensionContext): CommandRuntimeContext {
+	return { cwd: ctx.cwd };
+}
+
+function sourceRoot(ctx: CommandRuntimeContext): string {
+	return sourcePath || ctx.cwd;
+}
+
+function projectModuleInvocation(ctx: CommandRuntimeContext, command: string, moduleName: string): CommandInvocation {
+	const root = sourceRoot(ctx);
+	const src = join(root, "src");
+	const packageDir = join(src, "agentic_any_search_mcp");
+	if (existsSync(packageDir)) {
+		const code = [
+			"import sys",
+			`sys.path.insert(0, ${JSON.stringify(src)})`,
+			`from ${moduleName} import main`,
+			"raise SystemExit(main())",
+		].join("; ");
+		return { command: "python", argsPrefix: ["-c", code], label: `python -c ${moduleName}` };
+	}
+	return { command, argsPrefix: [], label: command };
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+	const trimmed = text.trim();
+	if (!trimmed) return undefined;
+	try {
+		const parsed = JSON.parse(trimmed);
+		return isRecord(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isEnvironmentFailure(text: string): boolean {
+	const normalized = text.toLowerCase();
+	return (
+		text.includes("ModuleNotFoundError") ||
+		normalized.includes("no module named") ||
+		normalized.includes("cannot find module") ||
+		normalized.includes("command not found") ||
+		normalized.includes("enoent") ||
+		normalized.includes("not found:")
+	);
+}
+
+function commandFailure(
+	tool: string,
+	invocation: CommandInvocation,
+	result: { stdout: string; stderr: string; code: number },
+): { text: string; details: Record<string, unknown> } {
+	const output = (result.stderr || result.stdout || `${invocation.label} failed with exit code ${result.code}`).trim();
+	const parsed = parseJsonObject(output);
+	const baseError = typeof parsed?.error === "string" ? parsed.error : output;
+	const text = isEnvironmentFailure(baseError) ? `${baseError}\n\n${INSTALL_HINT}` : baseError;
+	return {
+		text,
+		details: {
+			...(parsed ?? {}),
+			tool: typeof parsed?.tool === "string" ? parsed.tool : tool,
+			ok: false,
+			error: text,
+		},
+	};
+}
+
+function toolParameters(name: string): TSchema {
+	return RuntimeToolSchemas[name] ?? LooseObject;
 }
 
 function goalPlusIdFrom(value: unknown): string | undefined {
@@ -84,8 +404,10 @@ function gateFrom(value: unknown): GoalPlusGatePayload | undefined {
 	return value as GoalPlusGatePayload;
 }
 
-async function runJsonCli(pi: ExtensionAPI, _ctx: ExtensionContext, tool: string, args: Record<string, unknown>) {
-	const result = await pi.exec("agentic-any-search-pi-tool", [
+async function runJsonCli(pi: ExtensionAPI, ctx: CommandRuntimeContext, tool: string, args: Record<string, unknown>) {
+	const invocation = projectModuleInvocation(ctx, "agentic-any-search-pi-tool", "agentic_any_search_mcp.pi_tool");
+	const result = await pi.exec(invocation.command, [
+		...invocation.argsPrefix,
 		"--root",
 		runtimeRoot,
 		"--args-json",
@@ -93,9 +415,10 @@ async function runJsonCli(pi: ExtensionAPI, _ctx: ExtensionContext, tool: string
 		tool,
 	]);
 	if (result.code !== 0) {
+		const failure = commandFailure(tool, invocation, result);
 		return {
-			content: [{ type: "text" as const, text: result.stderr || result.stdout || `${tool} failed` }],
-			details: { tool, ok: false },
+			content: [{ type: "text" as const, text: failure.text }],
+			details: failure.details,
 		};
 	}
 	const parsed = JSON.parse(result.stdout || "null");
@@ -129,12 +452,12 @@ function restoreGoalState(ctx: ExtensionContext) {
 	activeGoalStartEntryCount = stateEntry.data.startEntryCount ?? activeGoalStartEntryCount;
 }
 
-function activateGoal(pi: ExtensionAPI, ctx: ExtensionContext, details: unknown) {
+function activateGoal(pi: ExtensionAPI, details: unknown, startEntryCount?: number) {
 	const id = goalPlusIdFrom(details);
 	if (!id) return;
 	if (id !== activeGoalPlusId || !activeGoalStartedAt) {
 		activeGoalStartedAt = new Date().toISOString();
-		activeGoalStartEntryCount = ctx.sessionManager.getEntries().length;
+		activeGoalStartEntryCount = startEntryCount ?? activeGoalStartEntryCount;
 		continuationCount = 0;
 	}
 	activeGoalPlusId = id;
@@ -142,7 +465,7 @@ function activateGoal(pi: ExtensionAPI, ctx: ExtensionContext, details: unknown)
 	persistGoalState(pi);
 }
 
-async function refreshActiveGoal(pi: ExtensionAPI, ctx: ExtensionContext): Promise<GoalPlusStatusPayload | undefined> {
+async function refreshActiveGoal(pi: ExtensionAPI, ctx: CommandRuntimeContext): Promise<GoalPlusStatusPayload | undefined> {
 	if (!activeGoalPlusId) return undefined;
 	const result = await runJsonCli(pi, ctx, "goal_plus_status", { goal_plus_id: activeGoalPlusId });
 	const status = statusFrom(result.details);
@@ -173,8 +496,7 @@ function countToolCalls(content: unknown): number {
 	return content.filter((item) => isRecord(item) && item.type === "toolCall").length;
 }
 
-function collectGoalUsage(ctx: ExtensionContext): GoalPlusUsageTotals {
-	const entries = ctx.sessionManager.getEntries() as unknown[];
+function collectGoalUsageFromEntries(entries: unknown[]): GoalPlusUsageTotals {
 	const startIndex = Math.min(Math.max(0, activeGoalStartEntryCount), entries.length);
 	const totals: GoalPlusUsageTotals = {
 		assistantMessages: 0,
@@ -218,20 +540,18 @@ function buildGoalStatsMessage(status: GoalPlusStatusPayload, usage: GoalPlusUsa
 	].join("\n");
 }
 
-function sendGoalStats(pi: ExtensionAPI, ctx: ExtensionContext, status: GoalPlusStatusPayload) {
-	const usage = collectGoalUsage(ctx);
-	pi.sendMessage({
-		customType: "goal-plus-stats",
-		content: buildGoalStatsMessage(status, usage),
-		display: true,
-		details: {
-			goal_plus_id: status.goal_plus_id ?? activeGoalPlusId,
-			status: status.status,
-			startedAt: activeGoalStartedAt,
-			endedAt: new Date().toISOString(),
-			usage,
-		},
+function appendGoalStats(pi: ExtensionAPI, status: GoalPlusStatusPayload, usage: GoalPlusUsageTotals): string {
+	const endedAt = new Date().toISOString();
+	const message = buildGoalStatsMessage(status, usage);
+	pi.appendEntry<GoalPlusStatsEntry>(GOAL_PLUS_STATS_ENTRY_TYPE, {
+		goal_plus_id: status.goal_plus_id ?? activeGoalPlusId,
+		status: status.status,
+		startedAt: activeGoalStartedAt,
+		endedAt,
+		usage,
+		message,
 	});
+	return message;
 }
 
 function buildGoalPlusContext(status: GoalPlusStatusPayload): string {
@@ -275,14 +595,28 @@ function buildGoalStartPrompt(status: GoalPlusStatusPayload): string {
 		"Important:",
 		"- The goal_plus_create tool has already created this record. Do not call goal_plus_create again for this goal.",
 		"- Load and follow the goal-plus skill.",
+		"- Except for loading the goal-plus skill, do not read or audit target files before goal_plus_record_triage.",
 		"- Start by recording triage with goal_plus_record_triage.",
 		"- If the task is search-ready, follow the frozen-verifier and Search Mode gates.",
 		"- If it is not search-ready, continue in Goal Mode and update goal-plus state before stopping.",
 	].join("\n");
 }
 
-function sendUserMessage(pi: ExtensionAPI, ctx: ExtensionContext, message: string) {
-	if (ctx.isIdle()) {
+function buildGoalPlusCommandPrompt(rawGoal: string): string {
+	return [
+		`Call \`goal_plus_create(raw_goal=${JSON.stringify(rawGoal)})\` first, before triage, planning, editing, or search.`,
+		"Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.",
+		"",
+		"# Goal Plus",
+		"",
+		"Use `/skill:goal-plus` with this raw user goal:",
+		"",
+		rawGoal,
+	].join("\n");
+}
+
+function sendUserMessage(pi: ExtensionAPI, message: string, deliverAsFollowUp: boolean) {
+	if (!deliverAsFollowUp) {
 		pi.sendUserMessage(message);
 		return;
 	}
@@ -294,12 +628,15 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 		name,
 		label: name,
 		description: `Call search-runtime facade tool ${name}.`,
-		parameters: JsonArgs,
+		parameters: toolParameters(name),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await runJsonCli(pi, ctx, name, params as Record<string, unknown>);
-			if (name === "goal_plus_create") {
-				activateGoal(pi, ctx, result.details);
+			const commandCtx = commandContextFrom(ctx);
+			const startEntryCount = ctx.sessionManager.getEntries().length;
+			const canPersistPiState = ctx.mode !== "print" && ctx.mode !== "json";
+			const result = await runJsonCli(pi, commandCtx, name, params as Record<string, unknown>);
+			if (name === "goal_plus_create" && canPersistPiState) {
+				activateGoal(pi, result.details, startEntryCount);
 			}
 			if (name === "search_get_agent_context") {
 				const details = result.details as { workspace?: string } | undefined;
@@ -321,15 +658,19 @@ function registerPiWorkerTool(pi: ExtensionAPI) {
 		}),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await pi.exec("agentic-any-search-pi-worker", [
+			const commandCtx = commandContextFrom(ctx);
+			const invocation = projectModuleInvocation(commandCtx, "agentic-any-search-pi-worker", "agentic_any_search_mcp.pi_worker");
+			const result = await pi.exec(invocation.command, [
+				...invocation.argsPrefix,
 				"run",
 				"--launch-json",
 				JSON.stringify(params.launch),
 			]);
 			if (result.code !== 0) {
+				const failure = commandFailure("pi_rpc_run_worker", invocation, result);
 				return {
-					content: [{ type: "text" as const, text: result.stderr || result.stdout || "pi_rpc_run_worker failed" }],
-					details: { ok: false },
+					content: [{ type: "text" as const, text: failure.text }],
+					details: failure.details,
 				};
 			}
 			const handle = JSON.parse(result.stdout || "{}");
@@ -372,10 +713,11 @@ function workspaceGuard(event: ToolCallEvent) {
 
 async function mainGate(event: ToolCallEvent, ctx: ExtensionContext) {
 	if (role !== "main") return undefined;
-	if (!event.toolName.startsWith("search_")) return undefined;
+	if (!event.toolName.startsWith("search_") && !MAIN_GATED_TOOLS.has(event.toolName)) return undefined;
 	const goalPlusId = activeGoalPlusId;
 	if (!goalPlusId) return undefined;
-	const gate = await runJsonCli(piForGate, ctx, "goal_plus_gate", {
+	const commandCtx = commandContextFrom(ctx);
+	const gate = await runJsonCli(piForGate, commandCtx, "goal_plus_gate", {
 		goal_plus_id: goalPlusId,
 		event: "pre_tool_use",
 		context: { tool_name: event.toolName, input: event.input },
@@ -391,28 +733,62 @@ let piForGate: ExtensionAPI;
 
 export default function (pi: ExtensionAPI) {
 	piForGate = pi;
-	pi.registerCommand("goal-plus", {
-		description: "Run native Pi Goal Plus",
-		handler: async (args, ctx) => {
-			const rawGoal = args.trim();
-			if (!rawGoal) {
-				ctx.ui.notify("Usage: /goal-plus <goal>", "error");
-				return;
-			}
-			const result = await runJsonCli(pi, ctx, "goal_plus_create", {
-				raw_goal: rawGoal,
-				source_path: ctx.cwd,
+	if (typeof pi.registerEntryRenderer === "function") {
+		pi.registerEntryRenderer<GoalPlusStatsEntry>(GOAL_PLUS_STATS_ENTRY_TYPE, (entry, { expanded }, theme) => {
+			const data = entry.data;
+			const lines = (data?.message ?? "Goal Plus stats").split("\n");
+			const visibleLines = expanded ? lines : lines.slice(0, 2);
+			const box = new Box(1, visibleLines.length, (text) => theme.bg("customMessageBg", text));
+			visibleLines.forEach((line, index) => {
+				const rendered = index === 0 ? `${theme.fg("accent", "[goal-plus]")} ${line}` : theme.fg("dim", line);
+				box.addChild(new Text(rendered, 0, index));
 			});
-			const status = statusFrom(result.details);
-			if (!status?.goal_plus_id) {
-				ctx.ui.notify("goal_plus_create did not return a goal_plus_id", "error");
-				return;
-			}
-			activateGoal(pi, ctx, status);
-			ctx.ui.notify(`Goal Plus ${status.goal_plus_id} created`, "info");
-			sendUserMessage(pi, ctx, buildGoalStartPrompt(status));
-		},
-	});
+			return box;
+		});
+	}
+	if (!isPrintInvocation) {
+		pi.registerCommand("goal-plus", {
+			description: "Run native Pi Goal Plus",
+			handler: async (args, ctx) => {
+				const rawGoal = args.trim();
+				if (!rawGoal) {
+					ctx.ui.notify("Usage: /goal-plus <goal>", "error");
+					return;
+				}
+				if (ctx.mode === "print" || ctx.mode === "json") {
+					pi.sendUserMessage(buildGoalPlusCommandPrompt(rawGoal));
+					await ctx.waitForIdle();
+					return;
+				}
+				const commandCtx = commandContextFrom(ctx);
+				const startEntryCount = ctx.sessionManager.getEntries().length;
+				const deliverAsFollowUp = !ctx.isIdle();
+				const result = await runJsonCli(pi, commandCtx, "goal_plus_create", {
+					raw_goal: rawGoal,
+					source_path: ctx.cwd,
+				});
+				const status = statusFrom(result.details);
+				if (!status?.goal_plus_id) {
+					const details = isRecord(result.details) && typeof result.details.error === "string" ? result.details.error : "goal_plus_create did not return a goal_plus_id";
+					pi.sendMessage({
+						customType: "goal-plus-error",
+						content: details,
+						display: true,
+						details: { tool: "goal_plus_create" },
+					});
+					return;
+				}
+				activateGoal(pi, status, startEntryCount);
+				pi.sendMessage({
+					customType: "goal-plus-created",
+					content: `Goal Plus ${status.goal_plus_id} created`,
+					display: true,
+					details: { goal_plus_id: status.goal_plus_id },
+				});
+				sendUserMessage(pi, buildGoalStartPrompt(status), deliverAsFollowUp);
+			},
+		});
+	}
 
 	const mainTools = [
 		"goal_plus_create",
@@ -450,8 +826,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		restoreGoalState(ctx);
 		if (role !== "main" || !activeGoalPlusId) return;
+		const commandCtx = commandContextFrom(ctx);
 		try {
-			const status = await refreshActiveGoal(pi, ctx);
+			const status = await refreshActiveGoal(pi, commandCtx);
 			if (isTerminalStatus(status?.status)) {
 				activeGoalPlusId = undefined;
 				activeGoalStartedAt = undefined;
@@ -465,7 +842,8 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("before_agent_start", async (_event, ctx) => {
 		if (role !== "main" || !activeGoalPlusId) return;
-		const status = await refreshActiveGoal(pi, ctx);
+		const commandCtx = commandContextFrom(ctx);
+		const status = await refreshActiveGoal(pi, commandCtx);
 		if (!status || isTerminalStatus(status.status)) return;
 		return {
 			message: {
@@ -479,10 +857,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", async (_event, ctx) => {
 		if (role !== "main" || !activeGoalPlusId) return;
 		if (ctx.hasPendingMessages()) return;
-		const gate = await runJsonCli(pi, ctx, "goal_plus_gate", {
+		const commandCtx = commandContextFrom(ctx);
+		const mode = ctx.mode;
+		const usage = collectGoalUsageFromEntries(ctx.sessionManager.getEntries() as unknown[]);
+		const gate = await runJsonCli(pi, commandCtx, "goal_plus_gate", {
 			goal_plus_id: activeGoalPlusId,
 			event: "stop",
-			context: { mode: ctx.mode, continuationCount },
+			context: { mode, continuationCount },
 		});
 		const details = gateFrom(gate.details);
 		if (!details) return;
@@ -500,13 +881,15 @@ export default function (pi: ExtensionAPI) {
 			);
 			return;
 		}
-		const status = await refreshActiveGoal(pi, ctx);
+		const status = await refreshActiveGoal(pi, commandCtx);
 		if (isTerminalStatus(status?.status)) {
-			sendGoalStats(pi, ctx, status);
+			const statsMessage = appendGoalStats(pi, status, usage);
+			ctx.ui.notify(statsMessage, "info");
 			activeGoalPlusId = undefined;
 			activeGoalStartedAt = undefined;
 			activeGoalStartEntryCount = 0;
 			continuationCount = 0;
+			cachedGoalStatus = undefined;
 			persistGoalState(pi);
 		}
 	});

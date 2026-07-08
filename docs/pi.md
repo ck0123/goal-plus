@@ -6,15 +6,21 @@ two Python console scripts used by that extension.
 
 ## Setup
 
-Install this package in the environment that launches Pi:
+Install this package in the Python environment that launches Pi:
 
 ```bash
-pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
 Pi loads project-local `.pi/` resources after project trust. For RPC workers,
 the runner loads the extension explicitly with `-e`, so candidate workspaces do
 not need to contain `.pi/extensions`.
+
+When Pi is launched from this checkout, the extension runs
+`python -c ... agentic_any_search_mcp.pi_tool` with `src/` inserted into
+`sys.path`. That keeps local development on the same `python` Pi inherited from
+the shell, even before the console scripts are on `PATH`. Installed checkouts
+can still use the console scripts directly.
 
 ## Main Agent
 
@@ -30,11 +36,19 @@ session entry, and sends the model a follow-up prompt to continue the Goal Plus
 flow. The prompt template remains as a compatibility path; in that path the
 first model tool call still must be `goal_plus_create(raw_goal=...)`.
 
+In `pi -p` print mode, Pi's prompt-template expansion is the reliable command
+path. The extension intentionally does not register the native `/goal-plus`
+command for `-p/--print` invocations, so the checked-in
+`.pi/prompts/goal-plus.md` template handles the slash command and asks the model
+to call `goal_plus_create` first. Interactive TUI/RPC sessions keep the native
+pre-create path.
+
 The Pi extension runs as `AGENTIC_ANY_SEARCH_PI_ROLE=main` by default and
 exposes `goal_plus_*`, `search_*`, and `pi_rpc_run_worker`. It restores the
 active Goal Plus state on session start, injects hidden Goal Plus context before
 agent starts, and calls `goal_plus_gate(event="pre_tool_use")` before main-role
-`search_*` tool calls.
+`search_*` tool calls, `pi_rpc_run_worker`, and mutating built-ins (`bash`,
+`edit`, `write`).
 
 At turn end, the extension calls `goal_plus_gate(event="stop")`. If the gate
 blocks, it queues the runtime continuation prompt and triggers another Pi turn.
@@ -43,8 +57,10 @@ that can block closing Pi, but it uses the same runtime gate semantics as the
 Codex and Claude Code Stop hooks.
 
 When a Goal Plus record reaches a terminal status, the extension prints a
-visible `Goal Plus stats` message with elapsed time, assistant messages, tool
-calls, token totals, and estimated cost calculated from Pi session usage.
+visible `Goal Plus stats` custom entry with elapsed time, assistant messages,
+tool calls, token totals, and estimated cost calculated from Pi session usage.
+The stats entry is persisted in Pi JSONL but is not injected as an LLM message,
+so it does not trigger another assistant turn after completion.
 
 ## Worker Host
 

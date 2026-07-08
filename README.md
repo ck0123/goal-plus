@@ -49,7 +49,7 @@ export PATH="$HOME/.local/bin:$PATH"
 macOS framework Python may use:
 
 ```bash
-export PATH="$HOME/Library/Python/3.11/bin:$PATH"
+export PATH="$HOME/Library/Python/3.10/bin:$PATH"
 ```
 
 This package is not published to PyPI yet, so use the Git or editable install
