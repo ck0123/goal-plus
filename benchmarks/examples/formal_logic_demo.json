@@ -10,5 +10,9 @@
   ],
   "gold": "B",
   "answer_type": "mcq",
-  "metadata": {"source": "local_demo"}
+  "metadata": {
+    "source": "local_demo",
+    "visibility": "private_grader_fixture_not_worker_visible",
+    "note": "This example contains gold for offline scoring only. Do not place this file in a candidate workspace or worker-visible frozen spec."
+  }
 }

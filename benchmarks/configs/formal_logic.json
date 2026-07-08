@@ -2,5 +2,50 @@
   "benchmark": "formal_logic",
   "dataset": {"path": "cais/mmlu", "name": "formal_logic", "split": "test"},
   "answer_type": "mcq",
-  "metric_name": "accuracy"
+  "metric_name": "accuracy",
+  "sample_policy": {
+    "selection": "case_identity_manifest",
+    "case_identity_manifest": "benchmarks/manifests/gpt54mini_n2_r3_persona_full126.case_ids.jsonl",
+    "manifest_cases_for_benchmark": 126,
+    "loader_data_size": 126,
+    "loader_split_arg": "test",
+    "missing_manifest_policy": "stop_do_not_fallback_to_first_126"
+  },
+  "hidden_answer_protocol": {
+    "purpose": "QA benchmark with hidden gold answers",
+    "worker_visible_verifier": {
+      "kind": "format_only",
+      "submission_file": "answer.json",
+      "accepted_shape": {"answer": "A"},
+      "requirements": [
+        "answer.json must contain exactly one final answer field.",
+        "answer must be a string choice label from the displayed options, for example A, B, C, or D.",
+        "the verifier may check JSON shape and label validity only.",
+        "the verifier must not return correctness, score, gold, prediction-vs-gold details, or answer-key hints."
+      ]
+    },
+    "private_grader": {
+      "visible_to_workers": false,
+      "runs_after_final_answers": true,
+      "may_use_hidden_gold": true,
+      "must_not_appear_in_frozen_spec": true
+    },
+    "main_agent_constraints": [
+      "do not modify this verifier protocol, submission format, sample policy, or private-grader boundary during a run.",
+      "do not place gold labels, answer keys, gold-file paths, or hidden scoring commands in the frozen spec, worker context, or candidate workspace.",
+      "do not select the final answer using hidden-gold score; use a gold-independent aggregation rule such as majority vote with a fixed tie-break."
+    ],
+    "answer_source_policy": {
+      "web_search_allowed": false,
+      "external_lookup_allowed": false,
+      "local_answer_search_allowed": false,
+      "allowed_materials": ["candidate workspace question files", "worker-visible format verifier output"],
+      "forbidden_materials": [
+        "internet search",
+        "Hugging Face cache inspection for answers",
+        "benchmark reports or runs",
+        "other local repositories or datasets used to recover answers"
+      ]
+    }
+  }
 }

@@ -80,6 +80,45 @@ redesigned and documented.
 agent must treat that launch payload as authoritative and spawn a foreground
 worker through the selected host.
 
+## Hidden-Answer Benchmarking
+
+Standard-answer benchmarks such as MMLU/formal_logic, ARC, WinoGrande,
+TruthfulQA, and GSM8K require a benchmark protocol that keeps correctness
+feedback hidden from workers. Do not report those results from normal Search
+Mode when workers can call a verifier that returns correctness, score, gold
+labels, predictions, or any other hidden-answer signal. Even a bare correct /
+incorrect result is an oracle for multiple-choice tasks.
+
+It is fine to expose a public verifier that only checks submission format, such
+as `answer.json` shape, a valid choice label, or a parseable numeric answer.
+For hidden-answer benchmarks, keep the scoring grader outside the worker-visible
+SearchSpec and run it only after all candidate answers are final.
+
+When building or running such benchmarks:
+
+- For comparison against an existing completed run, reuse the repository case
+  identity manifest and verify `benchmark`, `case_index`, and
+  `question_sha256`. Do not silently replace it with "first N" cases. The
+  checked-in manifest must not include raw questions, gold answers, result
+  history, or local filesystem paths.
+- Do not put gold labels, answer keys, gold-file paths, or hidden-answer scoring
+  commands in frozen specs, worker context, candidate workspaces, public
+  process verifiers, or promotion verifiers visible to workers.
+- Answering agents must not use web search, external lookup, or local answer
+  search outside the candidate workspace. Do not inspect Hugging Face caches,
+  benchmark reports/runs, other repositories, or dataset files to recover
+  answers.
+- Do not select a final answer by verifier score or `search_select` when the
+  score uses hidden gold. Use a gold-independent rule such as majority vote,
+  first valid answer with a fixed tie-break, or another predeclared aggregator.
+- Store hidden gold only in the parent evaluator after worker execution, or keep
+  it in memory until scoring. Do not create adjacent `_gold` files before worker
+  runs.
+- If a user asks to benchmark `/goal-plus` on hidden-answer datasets, explain
+  this protocol distinction before running: normal verifier-guided Search Mode
+  measures optimization with feedback, while hidden-answer QA benchmarks measure
+  answer quality under verifier-hidden evaluation.
+
 ## Directory Map
 
 - `src/agentic_any_search_mcp/models.py`: strict Pydantic data models and

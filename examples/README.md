@@ -252,3 +252,32 @@ cd tests/fixtures/swe_bench_20212 && python3 -c "from evaluator import evaluate;
 ```
 
 The buggy baseline returns `combined_score = 0.0`; after applying the two-line gold patch described in the fixture README the score reaches `1.0`.
+
+## Hidden-Answer QA Benchmarks
+
+Benchmarks with fixed hidden answers, such as formal_logic, ARC, WinoGrande,
+TruthfulQA, and GSM8K, should not be evaluated with normal verifier-guided
+Search Mode. In Search Mode, workers are expected to call verifiers and use the
+feedback to iterate. If the verifier returns correctness, score, gold labels, or
+prediction-vs-gold details, the feedback becomes an answer oracle. For
+multiple-choice tasks, even a visible correct / incorrect bit can be used to
+try labels until the answer is found.
+
+A clean QA benchmark can still use the same worker-launch machinery, but split
+public validation from private scoring:
+
+- Public worker-visible verifier: checks only submission format, for example
+  `answer.json` exists, the answer is a valid label, or a numeric answer is
+  parseable.
+- Private grader: runs after all workers have stopped and compares final
+  answers against hidden gold.
+- Final aggregation: chooses an answer without looking at hidden gold, such as
+  majority vote with a fixed tie-break or first valid answer.
+
+Do not include gold files, answer keys, hidden-answer grader commands, or
+gold-file paths in the frozen spec, candidate workspace, worker context, or
+worker-visible verifier output. Keep hidden gold in the parent evaluator, or
+load it only after worker execution has finished. Answering agents must not use
+internet search, external lookup, Hugging Face caches, previous reports/runs,
+other local repositories, or dataset files outside the candidate workspace to
+recover answers.

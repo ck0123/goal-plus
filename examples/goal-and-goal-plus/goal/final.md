@@ -1,6 +1,6 @@
 Stayed in ordinary goal mode: yes.
 
-Changed file: [initial_program.py]( /Users/qiaolina/Code/oh-my-knowledge/code/agentic-any-search-mcp/examples/goal-and-goal-plus/goal/initial_program.py)
+Changed file: [initial_program.py](initial_program.py)
 
 Verifier summary after edit:
 - `combined_score`: `1.0`
