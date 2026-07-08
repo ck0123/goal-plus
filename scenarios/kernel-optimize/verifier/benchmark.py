@@ -352,6 +352,22 @@ def benchmark(op_name: str, verify_dir: str, impl_name: str,
     return result
 
 
+def _runtime_metrics_summary(result: dict) -> dict:
+    framework = result.get("framework") or {}
+    implementation = result.get("implementation") or {}
+    return {
+        "op_name": result.get("op_name"),
+        "avg_latency_ms": implementation.get("avg_latency_ms"),
+        "framework_avg_latency_ms": framework.get("avg_latency_ms"),
+        "implementation_peak_memory_mb": implementation.get("peak_memory_mb"),
+        "framework_peak_memory_mb": framework.get("peak_memory_mb"),
+        "speedup_vs_torch": result.get("speedup_vs_torch"),
+        "total_cases": result.get("total_cases"),
+        "passed_cases": result.get("passed_cases"),
+        "failed_cases": result.get("failed_cases"),
+    }
+
+
 def main() -> None:
     _setup()
     parser = argparse.ArgumentParser(description="kernel-optimize latency benchmark")
@@ -379,8 +395,9 @@ def main() -> None:
         logger.warning("[L1 gate] skipped via --verify_not_required")
 
     try:
-        benchmark(args.op_name, verify_dir, args.impl_name,
-                  args.warmup, args.repeats, args.output)
+        result = benchmark(args.op_name, verify_dir, args.impl_name,
+                           args.warmup, args.repeats, args.output)
+        print(json.dumps(_runtime_metrics_summary(result), ensure_ascii=False, sort_keys=True))
     except Exception:
         logger.error("benchmark crashed:\n%s", traceback.format_exc())
         sys.exit(1)

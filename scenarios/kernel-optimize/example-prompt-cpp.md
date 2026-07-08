@@ -43,7 +43,7 @@ Step 3 — fill and freeze this SearchSpec:
   "process_verifiers": [
     {
       "name": "correctness",
-      "role": "ranking_signal",
+      "role": "process_gate",
       "command": ["python", "_verifier/verify.py",
                   "--op_name", "matmul", "--verify_dir", "_verifier",
                   "--impl_name", "impl"],

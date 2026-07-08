@@ -56,7 +56,7 @@ a single `{op_name}_impl.py` that imports the binding and defines `ModelNew`.
   "process_verifiers": [
     {
       "name": "correctness",
-      "role": "ranking_signal",
+      "role": "process_gate",
       "command": ["python", "_verifier/verify.py", "--op_name", "<op>", "--verify_dir", "_verifier", "--impl_name", "impl"],
       "timeout_seconds": 600
     },
