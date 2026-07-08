@@ -62,6 +62,40 @@ tool calls, token totals, and estimated cost calculated from Pi session usage.
 The stats entry is persisted in Pi JSONL but is not injected as an LLM message,
 so it does not trigger another assistant turn after completion.
 
+## How Pi Differs From Other Hosts
+
+Pi support has two surfaces in this project: a main-agent extension surface and
+the `pi-rpc` worker host.
+
+For the main agent, Codex and Claude Code enforce Goal Plus with project hook
+files that wrap host lifecycle events. OpenCode currently relies on
+instruction-driven skill calls. Pi uses extension events instead. The extension
+registers the native `/goal-plus` command for interactive/RPC sessions,
+pre-creates the Goal Plus record before the model turn, restores active state
+from Pi custom entries, injects hidden Goal Plus context, gates selected tool
+calls through `tool_call`, and runs the final stop gate through `agent_end`.
+`pi -p` is the exception: print mode uses the `.pi/prompts/goal-plus.md`
+compatibility prompt and asks the model to call `goal_plus_create` first.
+
+For workers, Pi RPC is a foreground `pi --mode rpc` process started by
+`agentic-any-search-pi-worker`, not a host-managed background subagent. The
+main agent still receives a normal Search Mode launch payload and binds the
+returned handle with `search_bind_agent_handle`, but the runner owns the
+process watchdog, Pi session directory, event log, text log, and
+`metadata.pi_metrics`.
+
+For continuation, Pi can restart the same Pi JSONL session with the same
+`--session-id`. That is `session_jsonl_restart`, not a live stdin
+continuation. The portable recovery path is still `search_redispatch_candidate`
+with a fresh `agent_session_id`.
+
+For ecosystem compatibility, this implementation is project-local and does not
+patch Pi core. External Pi packages can still register overlapping commands or
+tools, so do not install another Pi goal package alongside this project unless
+its semantics are intentionally compatible. A package that exposes an unrelated
+`goal_complete` flow can confuse the model into ending Goal Plus outside the
+runtime-owned state machine.
+
 ## Worker Host
 
 Set the SearchSpec strategy to `worker_host="pi-rpc"`:
