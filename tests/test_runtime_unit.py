@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -105,6 +106,29 @@ def create_candidate(
     return run_id, task.candidate_id, task.workspace
 
 
+def git_commit_all(workspace: Path, message: str) -> str:
+    subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "--no-verify",
+            "-m",
+            message,
+        ],
+        cwd=workspace,
+        check=True,
+    )
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
+    ).strip()
+
+
 def test_hash_json_and_path_helpers(tmp_path: Path) -> None:
     file_path = tmp_path / "a.txt"
     file_path.write_text("hello\n", encoding="utf-8")
@@ -120,6 +144,8 @@ def test_copy_source_tree_and_list_files_ignore_runtime_noise(tmp_path: Path) ->
     source = tmp_path / "source"
     source.mkdir()
     (source / "keep.py").write_text("x = 1\n", encoding="utf-8")
+    (source / ".gp").mkdir()
+    (source / ".gp" / "run.json").write_text("{}", encoding="utf-8")
     (source / ".search").mkdir()
     (source / ".search" / "run.json").write_text("{}", encoding="utf-8")
     (source / ".tmp").mkdir()
@@ -132,6 +158,16 @@ def test_copy_source_tree_and_list_files_ignore_runtime_noise(tmp_path: Path) ->
 
     listed = [path.relative_to(destination).as_posix() for path in list_files(destination)]
     assert listed == ["keep.py"]
+
+
+def test_file_search_runtime_defaults_to_gp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    runtime = FileSearchRuntime()
+
+    assert runtime.root_dir == tmp_path / ".gp"
+    assert runtime.specs_dir == tmp_path / ".gp" / "specs"
+    assert runtime.runs_dir == tmp_path / ".gp" / "runs"
 
 
 def test_write_json_is_readable(tmp_path: Path) -> None:
@@ -2015,6 +2051,271 @@ def test_select_uses_metric_direction_for_minimize(
 
     assert selection["selected_candidate_id"] == "c002"
     assert selection["selected_score"] == 0.1
+
+
+def test_select_uses_best_iteration_when_artifact_is_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    for task in tasks:
+        (task.workspace / "initial_program.py").write_text(
+            f"VALUE = {task.candidate_id!r}\n", encoding="utf-8"
+        )
+
+    scores_by_candidate = {
+        "c001": [0.9, 0.4, 0.9],
+        "c002": [0.7],
+    }
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command and command[0] != "python":
+            return real_run(*args, **kwargs)
+        candidate_id = Path(kwargs["cwd"]).name
+        score = scores_by_candidate[candidate_id].pop(0)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c001"
+    assert selection["selected_score"] == 0.9
+    assert selection["selected_iteration"] == 1
+
+
+def test_select_can_recover_best_iteration_after_artifact_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    scores_by_candidate = {
+        "c001": [0.9, 0.4, 0.9],
+        "c002": [0.7, 0.7],
+    }
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command and command[0] != "python":
+            return real_run(*args, **kwargs)
+        candidate_id = Path(kwargs["cwd"]).name
+        score = scores_by_candidate[candidate_id].pop(0)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    c001_workspace = tasks[0].workspace
+    c001_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'fast'\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c001")
+    c001_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'slow'\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c001")
+
+    tasks[1].workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'middle'\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c002")
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c001"
+    assert selection["selected_iteration"] == 1
+    assert selection["selected_score"] == 0.9
+    assert tasks[0].workspace.joinpath("initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 'fast'\n"
+
+
+def test_select_ignores_old_artifact_without_git_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    shutil.rmtree(tasks[0].workspace / ".git")
+
+    scores_by_candidate = {
+        "c001": [0.9, 0.4],
+        "c002": [0.7, 0.7],
+    }
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command and command[0] != "python":
+            return real_run(*args, **kwargs)
+        candidate_id = Path(kwargs["cwd"]).name
+        score = scores_by_candidate[candidate_id].pop(0)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    c001_workspace = tasks[0].workspace
+    c001_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'fast'\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c001")
+    c001_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'slow'\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c001")
+
+    tasks[1].workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'middle'\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c002")
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c002"
+    assert selection["selected_score"] == 0.7
+
+
+def test_run_verifier_records_real_git_commit_for_iteration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'committed'\n", encoding="utf-8"
+    )
+
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command and command[0] != "python":
+            return real_run(*args, **kwargs)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='{"combined_score": 0.9, "valid": true}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    runtime.run_verifier(run_id, candidate_id)
+
+    iteration = runtime.list_iterations(run_id, candidate_id)[0]
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
+    ).strip()
+    assert iteration["git_head"] == head
+    assert iteration["git_artifact_clean"] is True
+
+
+def test_select_checks_out_best_git_commit_before_final_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    c001_workspace = tasks[0].workspace
+    c002_workspace = tasks[1].workspace
+
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command and command[0] == "python":
+            content = Path(kwargs["cwd"], "initial_program.py").read_text(
+                encoding="utf-8"
+            )
+            score = 0.9 if "fast" in content else 0.4 if "slow" in content else 0.7
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout=f'{{"combined_score": {score}, "valid": true}}\n',
+                stderr="",
+            )
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    c001_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'fast'\n", encoding="utf-8"
+    )
+    fast_commit = git_commit_all(c001_workspace, "fast version")
+    runtime.run_verifier(run_id, "c001")
+
+    c001_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'slow'\n", encoding="utf-8"
+    )
+    git_commit_all(c001_workspace, "slow version")
+    runtime.run_verifier(run_id, "c001")
+
+    c002_workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 'middle'\n", encoding="utf-8"
+    )
+    git_commit_all(c002_workspace, "middle version")
+    runtime.run_verifier(run_id, "c002")
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c001"
+    assert selection["selected_iteration"] == 1
+    assert selection["selected_git_head"] == fast_commit
+    assert selection["selected_score"] == 0.9
+    assert c001_workspace.joinpath("initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 'fast'\n"
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=c001_workspace, text=True
+    ).strip() == fast_commit
 
 
 def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:

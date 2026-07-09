@@ -60,7 +60,7 @@ path.
 The runtime is a stdio MCP server. All hosts should launch the same command:
 
 ```text
-agentic-any-search-mcp --root .search
+agentic-any-search-mcp --root .gp
 ```
 
 This repository already includes project-local config for all supported hosts.
@@ -120,7 +120,7 @@ common MCP flow:
 10. main agent confirms the final score, selects, reports, and optionally
     promotes
 
-The runtime owns `.search/` state, candidate workspaces, verifier scoring,
+The runtime owns `.gp/` state, candidate workspaces, verifier scoring,
 history, reports, and promotion artifacts. The host owns worker launch,
 interrupts, step/turn/time limits, foreground returns, and native transcripts.
 There are no MCP wait, abort, submit, observe, or host-sync tools.
@@ -138,7 +138,7 @@ Default to state-level resume when a worker hits a step/turn/time cap, returns
 without useful verifier evidence, or needs a larger worker tier. Same-worker
 continuation is an optimization, not the portable recovery model.
 
-Search history is runtime-owned under `.search/runs/...`; it is not stored in a
+Search history is runtime-owned under `.gp/runs/...`; it is not stored in a
 `plan.md` file. See [agent-host-adapters.md](docs/agent-host-adapters.md) for
 the detailed resume and continuation matrix.
 
@@ -185,4 +185,4 @@ python -m pytest -q
 git diff --check
 ```
 
-Runtime state is written under `.search/`, which is ignored by git.
+Runtime state is written under `.gp/`, which is ignored by git.

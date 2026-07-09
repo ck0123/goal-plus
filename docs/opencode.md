@@ -82,7 +82,7 @@ All scopes should configure the same installed command:
       "command": [
         "agentic-any-search-mcp",
         "--root",
-        ".search"
+        ".gp"
       ],
       "cwd": ".",
       "timeout": 300000,
@@ -121,7 +121,7 @@ opencode
 OpenCode should start the local MCP server named `search-runtime` using:
 
 ```bash
-agentic-any-search-mcp --root .search
+agentic-any-search-mcp --root .gp
 ```
 
 The server uses stdio transport.
@@ -163,7 +163,7 @@ Expected entry:
 
 ```text
 search-runtime connected
-agentic-any-search-mcp --root .search
+agentic-any-search-mcp --root .gp
 ```
 
 You can also run a safe negative probe:
@@ -193,7 +193,7 @@ Expected behavior:
 1. The `goal-plus` skill creates a goal-plus record and records triage.
 2. For this initial search-ready task, the agent saves a spec draft and records frozen-verifier confirmation.
 3. The internal `search` skill freezes `tests/fixtures/k_module_problem/evaluator.py`.
-4. Runtime plans the next strategy step and creates candidate workspaces under `.search/runs/<run_id>/workspace/`.
+4. Runtime plans the next strategy step and creates candidate workspaces under `.gp/runs/<run_id>/workspace/`.
 5. The host edits each candidate workspace.
 6. Runtime verifies candidates and selects the score `1.0` candidate.
 7. Runtime writes `report.md` with strategy/candidate details and exports a promotion patch.

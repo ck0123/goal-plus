@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
+
 
 class PiRpcError(RuntimeError):
     pass
@@ -296,7 +298,9 @@ def run_pi_rpc_worker(
 ) -> dict[str, Any]:
     agent_session_id = str(launch["agent_session_id"])
     session_id = _safe_session_name(str(launch.get("session_id") or agent_session_id))
-    root = Path(str(launch.get("root") or os.environ.get("AGENTIC_ANY_SEARCH_ROOT", ".search"))).resolve()
+    root = Path(
+        str(launch.get("root") or os.environ.get("AGENTIC_ANY_SEARCH_ROOT", DEFAULT_RUNTIME_ROOT))
+    ).resolve()
     cwd = Path(str(launch["cwd"])).resolve()
     budget = dict(launch.get("budget_control") or {})
     max_runtime_seconds = budget.get("max_runtime_seconds")

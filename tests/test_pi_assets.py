@@ -203,7 +203,7 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "pi -p" in combined
     assert "session_jsonl_restart" in combined
     assert "not a live stdin continuation" in combined
-    assert ".search/host-logs/pi-rpc-" in combined
+    assert ".gp/host-logs/pi-rpc-" in combined
     assert "native turn-level stop gate" in combined
     assert "Goal Plus stats" in combined
     assert "custom entry" in combined

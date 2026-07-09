@@ -234,7 +234,7 @@ def main() -> int:
     cann_bench_root = Path(args.cann_bench_root).expanduser().resolve()
     akg_root = Path(args.akg_agents_root).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
-    spec_out = Path(args.spec_out).expanduser().resolve() if args.spec_out else output_dir.with_suffix(".search_spec.json")
+    spec_out = Path(args.spec_out).expanduser().resolve() if args.spec_out else output_dir.with_suffix(".gp_spec.json")
     function_name = args.function_name or _snake_case(args.operator)
 
     source_template = cann_bench_root / "examples" / "tilelang_cann_example"

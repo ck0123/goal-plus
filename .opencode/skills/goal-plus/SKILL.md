@@ -36,7 +36,7 @@ Use the internal `search` skill for Search Mode tools such as
 `search_report`, and `search_promote`.
 
 If any required MCP tool is unavailable, stop and report that the search-runtime
-MCP server is not connected. Do not simulate `.search` state in chat.
+MCP server is not connected. Do not simulate `.gp` state in chat.
 
 ## Workflow
 

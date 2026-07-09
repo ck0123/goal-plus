@@ -41,7 +41,7 @@ hosts use the same Search Mode MCP control plane:
 8. worker `search_get_agent_context`
 9. worker `search_run_verifier(..., agent_session_id=...)`
 10. main-agent final `search_run_verifier(...)`
-11. `search_select`
+11. `search_select` checks out the best committed iteration and final-verifies it
 12. `search_report`
 
 The runtime does not wait for, abort, supervise, or synchronize host workers.
@@ -72,7 +72,7 @@ Current repository assets include Goal Plus host hooks for Codex and Claude
 Code. Host settings run `agentic-any-search-mcp --goal-plus-host-hook`.
 `PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
 current top-level host `session_id`; subagent tool events do not bind
-ownership. `Stop` then reads local `.search/goal-plus` state and applies the
+ownership. `Stop` then reads local `.gp/goal-plus` state and applies the
 same `goal_plus_gate(event="stop")` semantics only to an explicit
 `GOAL_PLUS_ID` or a record whose bound session matches the current host
 session. If that record still has a required next action, the hook returns a
@@ -132,7 +132,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics` |
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | `session_jsonl_restart`; restarts Pi RPC with the same session id, not a live stdin continuation |
-| Host-native debug evidence | OpenCode DB/log plus `.search` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | `.search/host-logs/pi-rpc-*.jsonl`, `.txt`, Pi session JSONL, Goal Plus stats custom entry |
+| Host-native debug evidence | OpenCode DB/log plus `.gp` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | `.gp/host-logs/pi-rpc-*.jsonl`, `.txt`, Pi session JSONL, Goal Plus stats custom entry |
 | Trace export | supported for OpenCode logs | not implemented | not implemented | not implemented |
 | Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | native `/goal-plus` pre-create, persistent custom state, pre-tool gate for search/worker/mutating tools, turn-level stop gate, stats custom entry; no host process Stop or SubagentStop hook |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only | portable builtin strategies only |
@@ -245,7 +245,7 @@ model. The portable model is state-level resume:
 5. The main agent uses `search_list_history` and `search_list_iterations` for
    audit and follow-up planning.
 
-Search history lives in the MCP runtime's `.search/runs/...` candidate records,
+Search history lives in the MCP runtime's `.gp/runs/...` candidate records,
 not in a `plan.md` file.
 
 ## Strategy Support Matrix
@@ -362,8 +362,8 @@ Pi RPC launch payload:
 ```json
 {
   "tool": "pi_rpc_worker",
-  "root": "/abs/project/.search",
-  "cwd": "/abs/project/.search/workspaces/run_001/c001",
+  "root": "/abs/project/.gp",
+  "cwd": "/abs/project/.gp/workspaces/run_001/c001",
   "agent_session_id": "agent_001",
   "candidate_id": "c001",
   "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: ...",

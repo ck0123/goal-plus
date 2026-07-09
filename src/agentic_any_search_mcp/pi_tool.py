@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
 from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
@@ -156,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("tool", help="Tool name, e.g. search_get_agent_context")
     parser.add_argument(
         "--root",
-        default=os.environ.get("AGENTIC_ANY_SEARCH_ROOT", ".search"),
+        default=os.environ.get("AGENTIC_ANY_SEARCH_ROOT", DEFAULT_RUNTIME_ROOT),
         help="Search runtime storage directory",
     )
     parser.add_argument(

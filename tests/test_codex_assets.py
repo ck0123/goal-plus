@@ -12,7 +12,7 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
 
     assert "[mcp_servers.search-runtime]" in text
     assert 'command = "agentic-any-search-mcp"' in text
-    assert 'args = ["--root", ".search"]' in text
+    assert 'args = ["--root", ".gp"]' in text
 
 
 def test_codex_assets_wire_goal_plus_host_hooks() -> None:

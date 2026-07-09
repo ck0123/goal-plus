@@ -112,10 +112,11 @@ Each step lists **who acts** and **what they see**.
       → pick next hypothesis
       → edit allowed_files
       → search_run_verifier(..., agent_session_id=self)
-        (runtime appends an IterationRecord, returns ScoreReport)
-      → if improved: git commit; else: git reset --hard HEAD~1
+        (runtime auto-commits changed artifact files, appends an
+         IterationRecord with git_head, returns ScoreReport)
+      → keep exploring from the current or intentionally checked-out state
     finish:
-      leave best workspace state checked out and summarize in text.
+      summarize the best verifier-recorded iteration in text.
       No finalize MCP call exists; OpenCode Task return is the
       lifecycle signal.
 

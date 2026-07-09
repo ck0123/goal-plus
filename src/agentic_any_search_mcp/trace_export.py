@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .paths import DEFAULT_RUNTIME_ROOT
 from .runtime import load_json, parse_utc_timestamp, write_json
 
 
@@ -67,7 +68,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Export a Search MCP run as Chrome Trace Event JSON.",
     )
-    parser.add_argument("--root", default=".search", help="Search runtime root directory.")
+    parser.add_argument(
+        "--root",
+        default=DEFAULT_RUNTIME_ROOT,
+        help="Search runtime root directory.",
+    )
     parser.add_argument("--run-id", required=True, help="Run id to export.")
     parser.add_argument("--out", default=None, help="Output path. Defaults to <run>/trace.json.")
     parser.add_argument(

@@ -263,7 +263,7 @@ remain manual skill/orchestrator calls.
 The baseline implementation has these pieces:
 
 ```text
-.search/goal-plus/<goal_plus_id>/
+.gp/goal-plus/<goal_plus_id>/
   - goal.json
   - events.jsonl
 

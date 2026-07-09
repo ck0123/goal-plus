@@ -158,22 +158,51 @@ suite when time allows:
 python -m pytest -q
 ```
 
-## 6. Real Pi Goal Plus Attempt
+## 6. Commit-Backed Search Selection
+
+Goal: make each verifier iteration a recoverable code version, not just a
+score row.
+
+Requirements:
+
+- Candidate workspaces are initialized as git repositories with a baseline
+  commit.
+- `search_run_verifier` automatically commits changed candidate artifact files
+  before running the verifier.
+- `IterationRecord` exposes the real `git_head`, artifact cleanliness, and git
+  status through MCP, monitor snapshots, and reports.
+- `search_select` ranks verifier-recorded iterations, checks out the best
+  committed `git_head`, and runs a main-agent final verifier on that exact
+  commit before recording selection.
+- `search_promote` generates the patch from the selected commit, not from a
+  later workspace state.
+
+Acceptance:
+
+```bash
+python -m pytest tests/test_runtime_unit.py::test_run_verifier_records_real_git_commit_for_iteration -q
+python -m pytest tests/test_runtime_unit.py::test_select_checks_out_best_git_commit_before_final_verify -q
+```
+
+The monitor output for a completed run should include `selected_git_head`,
+`last_git_head`, and `best_iteration_git_head`.
+
+## 7. Real Pi Goal Plus Attempt
 
 Goal: try the actual Pi GP path from this checkout.
 
 Expected command shape:
 
 ```bash
-pi --approve --session-dir .tmp/model-opt-pi-sessions \
+pi --approve --session-dir .gp/host-logs/pi-rpc-sessions \
   --session-id model-opt-pi-gp \
   -p "$(cat examples/model-optimize/pi-goal-prompt.md)"
 ```
 
-Use a local ignored search root if needed:
+Use the local ignored Goal Plus/Search root:
 
 ```bash
-AGENTIC_ANY_SEARCH_ROOT=.tmp/model-opt-pi-search
+AGENTIC_ANY_SEARCH_ROOT=.gp
 AGENTIC_ANY_SEARCH_SOURCE_PATH="$PWD"
 ```
 
@@ -181,13 +210,13 @@ Acceptance:
 
 - If Pi starts, record whether GP created a goal, inspected the workspace, and
   opened Search Mode.
-- If Search runs, record selected candidate evidence and final
-  `tokens_per_second`.
+- If Search runs, record selected candidate evidence, selected `git_head`, and
+  final `tokens_per_second`.
 - If Pi, credentials, or MCP wiring are unavailable, record the exact blocker
   and leave the local target verified.
 - Stop any long-running session before finishing the turn.
 
-## 7. Near-Term GP Gaps To Evaluate
+## 8. Near-Term GP Gaps To Evaluate
 
 Only after the real run, decide whether GP needs small generic improvements.
 Current likely gaps are audit-level, not orchestration-level:
@@ -199,7 +228,7 @@ Current likely gaps are audit-level, not orchestration-level:
 Do not add GP APIs for nested scheduling, lifecycle supervision, or hardware
 allocation based only on this first CPU scenario.
 
-## 8. First Milestone Exit Criteria
+## 9. First Milestone Exit Criteria
 
 The first milestone is complete when:
 
@@ -210,4 +239,5 @@ The first milestone is complete when:
 - `.pi/skills/goal-plus/SKILL.md` is the only Pi skill
 - `pi-goal-prompt.md` is the only user prompt artifact
 - a real Pi GP attempt has been made
-- final notes state whether GP opened Search and what evidence was produced
+- final notes state whether GP opened Search, which `git_head` was selected,
+  and what evidence was produced

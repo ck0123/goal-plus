@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from agentic_any_search_mcp.models import AgentHostKind
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
 
 
 PORTABLE_STRATEGY_MODES = {
@@ -288,7 +289,7 @@ class PiRpcAdapter:
     )
 
     def _session_dir(self, root: str | None) -> str:
-        return str((Path(root or ".search") / "host-logs" / "pi-rpc-sessions"))
+        return str((Path(root or DEFAULT_RUNTIME_ROOT) / "host-logs" / "pi-rpc-sessions"))
 
     def _budget_control(
         self,
@@ -344,7 +345,7 @@ class PiRpcAdapter:
             "candidate_id": candidate_id,
             "session_id": agent_session_id,
             "session_dir": self._session_dir(root),
-            "root": root or ".search",
+            "root": root or DEFAULT_RUNTIME_ROOT,
             "cwd": cwd or ".",
             "description": f"{candidate_id} {short_intent}",
             "continuation": "session_jsonl_restart",
@@ -385,7 +386,7 @@ class PiRpcAdapter:
             "candidate_id": candidate_id,
             "session_id": session_id,
             "session_dir": self._session_dir(root),
-            "root": root or ".search",
+            "root": root or DEFAULT_RUNTIME_ROOT,
             "cwd": cwd or ".",
             "description": f"{candidate_id} continue {short_intent}",
             "continuation": "session_jsonl_restart",

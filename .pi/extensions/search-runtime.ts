@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type TSchema, Type } from "typebox";
 
 const role = process.env.AGENTIC_ANY_SEARCH_PI_ROLE || "main";
-const runtimeRoot = process.env.AGENTIC_ANY_SEARCH_ROOT || ".search";
+const runtimeRoot = process.env.AGENTIC_ANY_SEARCH_ROOT || ".gp";
 const sourcePath = process.env.AGENTIC_ANY_SEARCH_SOURCE_PATH;
 const exposeLowLevelWorker = process.env.AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER === "1";
 const isPrintInvocation = process.argv.includes("-p") || process.argv.includes("--print");

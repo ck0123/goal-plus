@@ -286,7 +286,7 @@ The gate should be conservative and deterministic:
 Implemented file layout:
 
 ```text
-.search/
+.gp/
   goal-plus/
     gp_0001/
       goal.json
@@ -369,7 +369,7 @@ When `goal-plus` creates a `SearchSpec`, it may set:
 ```
 
 This is a backlink only. The authoritative state stays under
-`.search/goal-plus/<goal_plus_id>/`.
+`.gp/goal-plus/<goal_plus_id>/`.
 
 ### No Deletions
 

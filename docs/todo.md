@@ -128,7 +128,7 @@ with self._run_transaction(run_id) as txn:
 Implementation notes:
 
 - A stdlib file lock is enough for macOS/Linux hosts (`fcntl.flock` on a
-  `.search/runs/<run_id>/run.lock` file). If Windows support is required, use a
+  `.gp/runs/<run_id>/run.lock` file). If Windows support is required, use a
   small cross-platform lock dependency or an atomic lock-directory fallback.
 - The transaction should be a runtime-internal helper, not part of the MCP API.
 - Keep lock scope narrow. Long-running verifier subprocesses should run outside

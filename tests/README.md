@@ -200,7 +200,7 @@ a fenced JSON block tagged `st_report` as the LAST thing in its final message.
   ],
   "selected_candidate_id": "c001",
   "best_score": 1.0,
-  "report_path": "/abs/path/to/.search/runs/run_.../report.md",
+  "report_path": "/abs/path/to/.gp/runs/run_.../report.md",
   "extra": {}
 }
 ```
@@ -219,9 +219,9 @@ the path. To find the latest log:
 find .tmp/st-logs -name "*.log" -print
 ```
 
-The runtime also writes `report.md` and run state under `<repo>/.search/runs/`
-(that path comes from `opencode.json`'s `--root .search`). Multiple ST runs
-accumulate there; clear with `rm -rf .search/` if needed.
+The runtime also writes `report.md` and run state under `<repo>/.gp/runs/`
+(that path comes from `opencode.json`'s `--root .gp`). Multiple ST runs
+accumulate there; clear with `rm -rf .gp/` if needed.
 
 ## First-time Setup on a New Machine
 

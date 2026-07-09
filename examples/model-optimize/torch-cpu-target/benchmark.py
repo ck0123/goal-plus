@@ -16,7 +16,7 @@ from verify import verify
 configure_torch_threads(torch)
 
 
-def benchmark(repetitions: int = 16) -> dict:
+def benchmark(repetitions: int = 24) -> dict:
     workload = load_workload()
     run_workload(workload)
 

@@ -5,12 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
 
 
 def create_mcp(
-    root_dir: str | Path = ".search",
+    root_dir: str | Path = DEFAULT_RUNTIME_ROOT,
 ) -> FastMCP:
     from fastmcp import FastMCP
 
@@ -49,7 +50,7 @@ def create_mcp(
         """Read-only Goal Plus/Search monitoring snapshot for polling agents.
 
         Returns run, candidate, agent-session, verifier, host-log, and Pi usage
-        evidence from durable `.search` state. It does not start, wait for, or
+        evidence from durable `.gp` state. It does not start, wait for, or
         interrupt workers.
         """
         return tools.goal_plus_monitor_snapshot(
@@ -318,7 +319,11 @@ def create_mcp(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default=".search", help="Search runtime storage directory")
+    parser.add_argument(
+        "--root",
+        default=DEFAULT_RUNTIME_ROOT,
+        help="Search runtime storage directory",
+    )
     parser.add_argument(
         "--goal-plus-stop-hook",
         action="store_true",

@@ -5,7 +5,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.models import AgentSessionRecord, CandidateRecord, GoalPlusRecord, RunRecord
+from agentic_any_search_mcp.models import (
+    AgentSessionRecord,
+    CandidateRecord,
+    FrozenSpec,
+    GoalPlusRecord,
+    IterationRecord,
+    RunRecord,
+)
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
 from agentic_any_search_mcp.runtime import load_json, utc_timestamp, utc_timestamp_from_epoch
 
 
@@ -94,6 +102,24 @@ def _load_agent_sessions(run_dir: Path) -> list[AgentSessionRecord]:
     ]
 
 
+def _best_iteration(
+    candidate: CandidateRecord,
+    metric_direction: str,
+) -> IterationRecord | None:
+    scored = [
+        iteration
+        for iteration in candidate.iterations
+        if iteration.process_passed is not False
+        and iteration.score is not None
+        and not iteration.touched_denied_files
+        and not iteration.changed_outside_allowed
+    ]
+    if not scored:
+        return None
+    reverse = metric_direction == "maximize"
+    return sorted(scored, key=lambda iteration: iteration.score, reverse=reverse)[0]
+
+
 def _goal_payload(record: GoalPlusRecord | None) -> dict[str, Any] | None:
     if record is None:
         return None
@@ -167,7 +193,7 @@ def _session_liveness(
 
 
 def goal_plus_monitor_snapshot(
-    root_dir: Path | str = ".search",
+    root_dir: Path | str = DEFAULT_RUNTIME_ROOT,
     *,
     goal_plus_id: str | None = None,
     run_id: str | None = None,
@@ -176,7 +202,7 @@ def goal_plus_monitor_snapshot(
     """Read-only monitoring snapshot for Goal Plus/Search runs.
 
     This function intentionally does not wait for workers, inspect live
-    processes, or mutate runtime state. It summarizes durable `.search` and
+    processes, or mutate runtime state. It summarizes durable `.gp` and
     host-handle evidence so a monitoring agent can poll cheaply.
     """
 
@@ -217,6 +243,9 @@ def goal_plus_monitor_snapshot(
     if run_id is not None:
         run_path = _run_dir(root, run_id)
         run = RunRecord.model_validate(load_json(run_path / "run.json"))
+        frozen = FrozenSpec.model_validate(
+            load_json(root / "specs" / run.frozen_spec_id / "frozen_spec.json")
+        )
         candidates = _load_candidates(run_path)
         sessions = _load_agent_sessions(run_path)
         plans_count = len(list((run_path / "plans").glob("*.json")))
@@ -241,12 +270,16 @@ def goal_plus_monitor_snapshot(
             "best_candidate_id": run.best_candidate_id,
             "best_score": run.best_score,
             "selected_candidate_id": run.selected_candidate_id,
+            "selected_score": run.selected_score,
+            "selected_iteration": run.selected_iteration,
+            "selected_git_head": run.selected_git_head,
             "budget_used": run.budget_used,
         }
 
         for candidate in candidates:
             candidate_sessions = sessions_by_candidate.get(candidate.candidate_id, [])
             last_iteration = candidate.iterations[-1] if candidate.iterations else None
+            best_iteration = _best_iteration(candidate, frozen.spec.metric_direction)
             candidates_payload[candidate.candidate_id] = {
                 "candidate_id": candidate.candidate_id,
                 "status": candidate.status,
@@ -254,6 +287,11 @@ def goal_plus_monitor_snapshot(
                 "verifier_count": len(candidate.iterations),
                 "last_score": last_iteration.score if last_iteration else None,
                 "last_verifier_at": last_iteration.created_at if last_iteration else None,
+                "last_git_head": last_iteration.git_head if last_iteration else None,
+                "best_iteration": best_iteration.iteration if best_iteration else None,
+                "best_iteration_score": best_iteration.score if best_iteration else None,
+                "best_iteration_at": best_iteration.created_at if best_iteration else None,
+                "best_iteration_git_head": best_iteration.git_head if best_iteration else None,
                 "changed_files": candidate.detected_changed_files,
                 "touched_denied_files": candidate.touched_denied_files,
                 "changed_outside_allowed": candidate.changed_outside_allowed,

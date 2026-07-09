@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import pytest
+
 from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 from agentic_any_search_mcp.models import GoalPlusSpecDraft, GoalPlusTriage
+
+
+def test_goal_plus_runtime_defaults_to_gp_root(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    runtime = FileGoalPlusRuntime()
+
+    assert runtime.root_dir == tmp_path / ".gp"
+    assert runtime.goals_dir == tmp_path / ".gp" / "goal-plus"
 
 
 def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
@@ -234,6 +245,27 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
     )
     assert completed.status == "complete"
     assert runtime.gate(record.goal_plus_id, event="stop", context={}).decision == "allow"
+
+
+def test_link_search_run_is_idempotent_but_does_not_overwrite(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize model")
+
+    linked = runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    assert linked.linked_search is not None
+    assert linked.linked_search.run_id == "run_001"
+
+    linked_again = runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    assert linked_again.linked_search is not None
+    assert linked_again.linked_search.run_id == "run_001"
+
+    with pytest.raises(RuntimeError, match="already linked to search run run_001"):
+        runtime.link_search_run(record.goal_plus_id, "spec_def", "run_002")
+
+    final = runtime.status(record.goal_plus_id)
+    assert final.linked_search is not None
+    assert final.linked_search.frozen_spec_id == "spec_abc"
+    assert final.linked_search.run_id == "run_001"
 
 
 def test_record_search_result_prefers_existing_runtime_artifact_paths(tmp_path) -> None:

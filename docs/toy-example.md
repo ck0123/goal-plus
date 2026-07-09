@@ -65,7 +65,7 @@ Expected:
 
 ```text
 search-runtime connected
-agentic-any-search-mcp --root .search
+agentic-any-search-mcp --root .gp
 ```
 
 If `search-runtime` is missing, run the command from the project root and check `opencode.json`.
@@ -88,7 +88,7 @@ Expected behavior:
 
 - OpenCode calls `search-runtime_search_status`
 - the tool is available
-- the runtime reports that `.search/runs/missing-opencode-smoke/run.json` does not exist
+- the runtime reports that `.gp/runs/missing-opencode-smoke/run.json` does not exist
 
 That error is expected because the run was never created.
 
@@ -149,22 +149,22 @@ opencode run --command goal-plus "Run the k_module smoke test with 4 candidates.
 After freeze and run creation:
 
 ```text
-.search/specs/<frozen_spec_id>/frozen_spec.json
-.search/specs/<frozen_spec_id>/frozen_verifiers/evaluator.py
-.search/runs/<run_id>/run.json
-.search/runs/<run_id>/plans/<plan_id>.json
+.gp/specs/<frozen_spec_id>/frozen_spec.json
+.gp/specs/<frozen_spec_id>/frozen_verifiers/evaluator.py
+.gp/runs/<run_id>/run.json
+.gp/runs/<run_id>/plans/<plan_id>.json
 ```
 
 After candidate creation:
 
 ```text
-.search/runs/<run_id>/workspace/c001/
-.search/runs/<run_id>/workspace/c002/
-.search/runs/<run_id>/workspace/c003/
-.search/runs/<run_id>/workspace/c004/
-.search/runs/<run_id>/workspace/c001/.tmp/
-.search/runs/<run_id>/candidates/c001/candidate.json
-.search/runs/<run_id>/candidates/c001/task.json
+.gp/runs/<run_id>/workspace/c001/
+.gp/runs/<run_id>/workspace/c002/
+.gp/runs/<run_id>/workspace/c003/
+.gp/runs/<run_id>/workspace/c004/
+.gp/runs/<run_id>/workspace/c001/.tmp/
+.gp/runs/<run_id>/candidates/c001/candidate.json
+.gp/runs/<run_id>/candidates/c001/task.json
 ```
 
 Use each workspace's `.tmp/` directory for temporary files. Runtime change detection ignores `.tmp/`, and promotion patches do not include it.
@@ -172,7 +172,7 @@ Use each workspace's `.tmp/` directory for temporary files. Runtime change detec
 If agent sessions are used:
 
 ```text
-.search/runs/<run_id>/agent_sessions/<agent_session_id>.json
+.gp/runs/<run_id>/agent_sessions/<agent_session_id>.json
 ```
 
 The session file stores candidate linkage, optional `opencode_session_id`, workspace, launch payload, directive, and a `verifier_runs` counter. There is no event queue or observation store; OpenCode owns lifecycle state.
@@ -180,14 +180,14 @@ The session file stores candidate linkage, optional `opencode_session_id`, works
 After verification and reporting:
 
 ```text
-.search/runs/<run_id>/report.md
-.search/runs/<run_id>/candidates/<candidate_id>/logs/k_module_score.log
+.gp/runs/<run_id>/report.md
+.gp/runs/<run_id>/candidates/<candidate_id>/logs/k_module_score.log
 ```
 
 After promotion:
 
 ```text
-.search/runs/<run_id>/promotion/<candidate_id>.patch
+.gp/runs/<run_id>/promotion/<candidate_id>.patch
 ```
 
 Promotion writes a patch only. It does not modify `tests/fixtures/k_module_problem/initial_program.py`.
@@ -214,4 +214,4 @@ The report should show the selected candidate with score `1.0` and no denied-fil
 
 `subagent still running after I asked it to stop`: stopping a running subagent is an OpenCode/user interruption concern. There is no MCP abort tool. Stop the Task from OpenCode and let the user interrupt.
 
-Need a clean run: remove `.search/` if you do not need previous runtime state.
+Need a clean run: remove `.gp/` if you do not need previous runtime state.

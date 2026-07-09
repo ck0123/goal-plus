@@ -17,6 +17,7 @@ from agentic_any_search_mcp.models import (
     GoalPlusStatus,
     GoalPlusTriage,
 )
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
 
 
 TERMINAL_STATUSES: set[GoalPlusStatus] = {"blocked", "complete", "abandoned"}
@@ -67,7 +68,7 @@ def write_json(path: Path, data: Any) -> None:
 class FileGoalPlusRuntime:
     """Small file-backed state machine for goal-plus orchestration."""
 
-    def __init__(self, root_dir: Path | str = ".search") -> None:
+    def __init__(self, root_dir: Path | str = DEFAULT_RUNTIME_ROOT) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.goals_dir = self.root_dir / "goal-plus"
         self.goals_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +280,15 @@ class FileGoalPlusRuntime:
         run_id: str,
     ) -> GoalPlusRecord:
         record = self._load_record(goal_plus_id)
+        if (
+            record.linked_search
+            and record.linked_search.run_id
+            and record.linked_search.run_id != run_id
+        ):
+            raise RuntimeError(
+                "goal-plus record is already linked to search run "
+                f"{record.linked_search.run_id}; refusing to overwrite with {run_id}"
+            )
         linked = (record.linked_search or GoalPlusLinkedSearch()).model_copy(
             update={"frozen_spec_id": frozen_spec_id, "run_id": run_id}
         )

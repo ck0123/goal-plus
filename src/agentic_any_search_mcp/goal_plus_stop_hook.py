@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+
 
 GOAL_ID_RE = re.compile(r"\bgp_\d+\b")
 DISABLE_VALUES = {"1", "true", "yes", "on"}
@@ -43,7 +45,11 @@ def _find_session_root() -> Path:
 
     cwd = Path.cwd().resolve()
     for candidate in (cwd, *cwd.parents):
-        if (candidate / ".search").exists() or (candidate / ".git").exists():
+        if (
+            (candidate / DEFAULT_RUNTIME_ROOT).exists()
+            or (candidate / LEGACY_RUNTIME_ROOT).exists()
+            or (candidate / ".git").exists()
+        ):
             return candidate
     return cwd
 
@@ -53,7 +59,13 @@ def _search_root(session_root: Path) -> Path:
     if override:
         root = Path(override).expanduser()
         return root.resolve() if root.is_absolute() else (session_root / root).resolve()
-    return (session_root / ".search").resolve()
+    default_root = (session_root / DEFAULT_RUNTIME_ROOT).resolve()
+    if default_root.exists():
+        return default_root
+    legacy_root = (session_root / LEGACY_RUNTIME_ROOT).resolve()
+    if legacy_root.exists():
+        return legacy_root
+    return default_root
 
 
 def _first_goal_id(value: Any) -> str | None:

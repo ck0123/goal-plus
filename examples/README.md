@@ -54,7 +54,7 @@ Before requesting a follow-up batch, the host can call `search_list_history(run_
 
 Subagents run until the host cap hits or the user/runner interrupts them. Pi
 RPC requires `worker_host="pi-rpc"` and `worker_budget.max_runtime_seconds`;
-the runner writes `.search/host-logs/pi-rpc-<agent_session_id>.jsonl` and uses
+the runner writes `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl` and uses
 `session_jsonl_restart` for same-session resume.
 
 If a candidate needs more work after a step-cap hit, call `search_redispatch_candidate` for the same candidate and optionally raise `worker_agent_type` / `worker_budget`. This creates a new session for the same workspace and relies on runtime history/iterations for resume.

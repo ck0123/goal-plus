@@ -2,8 +2,7 @@
   "mcpServers": {
     "search-runtime": {
       "command": "agentic-any-search-mcp",
-      "args": ["--root", ".search"]
+      "args": ["--root", ".gp"]
     }
   }
 }
-

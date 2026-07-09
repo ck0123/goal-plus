@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ...models import SearchSpec
+from ...paths import DEFAULT_RUNTIME_ROOT
 from ...pi_worker import run_pi_rpc_worker
 from ...runtime import FileSearchRuntime
 from ..adapters.search_spec import build_search_spec, prepare_case_workspace
@@ -44,7 +45,7 @@ def run_search_case(
         max_runtime_seconds=max_runtime_seconds,
         max_turns=max_turns,
     )
-    runtime = FileSearchRuntime(root_dir / ".search")
+    runtime = FileSearchRuntime(root_dir / DEFAULT_RUNTIME_ROOT)
     frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_dict), [])
     run_id = runtime.create_run(frozen.frozen_spec_id)
     plan = runtime.plan_next(run_id, requested_k=max_candidates)

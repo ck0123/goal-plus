@@ -147,6 +147,12 @@ is enabled. The main agent should not call the low-level worker tool in normal
 Search Mode. To expose it for manual debugging, start Pi with
 `AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1`.
 
+Before each verifier call, the runtime automatically commits changed candidate
+artifact files in the candidate workspace. It records each iteration's real
+`git_head`; `search_select` checks out the best committed iteration and runs a
+main-agent final verifier on that exact commit before selection is recorded.
+`search_promote` then generates the patch from the selected commit.
+
 The launch payload uses `tool="pi_rpc_worker"` and contains `root`, `cwd`,
 `agent_session_id`, `candidate_id`, `prompt`, `session_id`, and
 `budget_control`.
@@ -157,14 +163,14 @@ The launch payload uses `tool="pi_rpc_worker"` and contains `root`, `cwd`,
 
 ```bash
 pi --mode rpc --approve \
-  --session-dir .search/host-logs/pi-rpc-sessions \
+  --session-dir .gp/host-logs/pi-rpc-sessions \
   --session-id <agent_session_id> \
   -e <repo>/.pi/extensions/search-runtime.ts
 ```
 
 The runner sets:
 
-- `AGENTIC_ANY_SEARCH_ROOT=<abs .search>`
+- `AGENTIC_ANY_SEARCH_ROOT=<abs .gp>`
 - `AGENTIC_ANY_SEARCH_PI_ROLE=worker`
 
 If `--model` is passed to `agentic-any-search-pi-worker run`, or
@@ -191,7 +197,7 @@ operate on the candidate workspace instead of an enclosing repository.
 
 ```bash
 agentic-any-search-pi-tool search_get_agent_context \
-  --root .search \
+  --root .gp \
   --args-json '{"agent_session_id":"agent_..."}'
 ```
 
@@ -205,7 +211,7 @@ The same facade exposes the generic read-only monitor tool:
 
 ```bash
 agentic-any-search-pi-tool goal_plus_monitor_snapshot \
-  --root .search \
+  --root .gp \
   --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
   --pretty
 ```
@@ -218,14 +224,14 @@ workers.
 
 ## State And Logs
 
-Search MCP `.search/runs/...` is the authoritative search state. Pi JSONL
+Search MCP `.gp/runs/...` is the authoritative search state. Pi JSONL
 session state is a transcript/resume surface only.
 
 Pi worker logs are written under:
 
-- `.search/host-logs/pi-rpc-<agent_session_id>.jsonl`
-- `.search/host-logs/pi-rpc-<agent_session_id>.txt`
-- `.search/host-logs/pi-rpc-sessions/`
+- `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`
+- `.gp/host-logs/pi-rpc-<agent_session_id>.txt`
+- `.gp/host-logs/pi-rpc-sessions/`
 
 Each completed `pi_rpc_run_worker` call also returns `metadata.pi_metrics`.
 When the handle is passed to `search_bind_agent_handle`, those metrics are

@@ -1,15 +1,15 @@
 ---
 name: search-result-dump
 description: >
-  Dump a completed Agentic Search result by exporting its .search runtime
+  Dump a completed Agentic Search result by exporting its .gp runtime
   artifacts as Chrome Trace Event JSON for Perfetto or chrome://tracing.
 argument-hint: >
-  run_id, optional .search root, optional opencode/ST log path.
+  run_id, optional .gp root, optional opencode/ST log path.
 ---
 
 # Search Result Dump
 
-Use this skill after an Agentic Search run has produced a `.search/runs/<run_id>/`
+Use this skill after an Agentic Search run has produced a `.gp/runs/<run_id>/`
 directory. It exports a lightweight timeline file rather than building a custom
 dashboard.
 
@@ -21,28 +21,28 @@ Required:
 
 Optional:
 
-- runtime root, default `.search`
+- runtime root, default `.gp`
 - OpenCode log path, default `~/.local/share/opencode/log/opencode.log`
 
 ## Workflow
 
-1. Confirm `.search/runs/<run_id>/run.json` exists.
+1. Confirm `.gp/runs/<run_id>/run.json` exists.
 2. Export the trace:
 
 ```bash
-agentic-any-search-trace --root .search --run-id <run_id>
+agentic-any-search-trace --root .gp --run-id <run_id>
 ```
 
 Use `--opencode-log <path>` when the run came from a non-default OpenCode log:
 
 ```bash
-agentic-any-search-trace --root .search --run-id <run_id> --opencode-log <path>
+agentic-any-search-trace --root .gp --run-id <run_id> --opencode-log <path>
 ```
 
 The default output is:
 
 ```text
-.search/runs/<run_id>/trace.json
+.gp/runs/<run_id>/trace.json
 ```
 
 3. Tell the user to open the generated trace in one of:

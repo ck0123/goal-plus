@@ -122,8 +122,8 @@ The script creates:
   _skills/tilelang-ascend/    # copied from AKG, read-only context
   _verifier/cannbench_eval.py # frozen process verifier
 
-.tmp/cannbench-tilelang-gemm/workspace.search_spec.json
-.tmp/cannbench-tilelang-gemm/workspace.search_spec.verifier_artifacts.json
+.tmp/cannbench-tilelang-gemm/workspace.gp_spec.json
+.tmp/cannbench-tilelang-gemm/workspace.gp_spec.verifier_artifacts.json
 ```
 
 `source_path` in the generated SearchSpec is the submission workspace, not the
@@ -213,10 +213,10 @@ Prepare the workspace by running:
     --force
 
 Then use the generated SearchSpec:
-  .tmp/cannbench-tilelang-gemm/workspace.search_spec.json
+  .tmp/cannbench-tilelang-gemm/workspace.gp_spec.json
 
 And the generated verifier artifact list:
-  .tmp/cannbench-tilelang-gemm/workspace.search_spec.verifier_artifacts.json
+  .tmp/cannbench-tilelang-gemm/workspace.gp_spec.verifier_artifacts.json
 
 Goal:
   Generate and tune a TileLang-Ascend implementation for CANNBench Gemm.

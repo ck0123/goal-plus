@@ -12,7 +12,7 @@ def test_claude_mcp_json_registers_search_runtime() -> None:
 
     server = data["mcpServers"]["search-runtime"]
     assert server["command"] == "agentic-any-search-mcp"
-    assert server["args"] == ["--root", ".search"]
+    assert server["args"] == ["--root", ".gp"]
 
 
 def test_claude_assets_wire_goal_plus_host_hooks() -> None:

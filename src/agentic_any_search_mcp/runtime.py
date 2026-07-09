@@ -49,9 +49,17 @@ from agentic_any_search_mcp.models import (
     VerifierRole,
     WorkerBudget,
 )
+from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
 
 
-IGNORED_NAMES = {".git", ".search", ".tmp", ".pytest_cache", "__pycache__"}
+IGNORED_NAMES = {
+    ".git",
+    DEFAULT_RUNTIME_ROOT,
+    LEGACY_RUNTIME_ROOT,
+    ".tmp",
+    ".pytest_cache",
+    "__pycache__",
+}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
 CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS = {
     "any-search-agent-flash": 4,
@@ -259,7 +267,7 @@ def _normalize_verifier_cwds_for_candidate_workspace(spec: SearchSpec) -> Search
 class FileSearchRuntime:
     def __init__(
         self,
-        root_dir: Path | str = ".search",
+        root_dir: Path | str = DEFAULT_RUNTIME_ROOT,
     ) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.specs_dir = self.root_dir / "specs"
@@ -825,6 +833,19 @@ class FileSearchRuntime:
         detected_changed = self._detect_changed_files(
             Path(run.source_path), record.task.workspace
         )
+        self._commit_workspace_iteration(
+            record.task.workspace,
+            detected_changed,
+            f"search verifier iteration {candidate_id}:{len(record.iterations) + 1}",
+        )
+        artifact_hash = self._artifact_hash(record.task.workspace, detected_changed)
+        git_head = self._git_head(record.task.workspace)
+        git_status = self._git_status(record.task.workspace)
+        git_artifact_clean = self._git_artifact_clean(
+            record.task.workspace,
+            detected_changed,
+            git_head,
+        )
         touched_denied = any(
             path_matches(path, frozen.spec.edit_surface.deny) for path in detected_changed
         )
@@ -868,6 +889,10 @@ class FileSearchRuntime:
                         iteration=len(record.iterations) + 1,
                         agent_session_id=agent_session_id,
                         score=report.aggregate_score,
+                        process_passed=report.process_passed,
+                        git_head=git_head,
+                        git_artifact_clean=git_artifact_clean,
+                        git_status=git_status,
                         failure_class=(
                             next(
                                 (
@@ -882,6 +907,7 @@ class FileSearchRuntime:
                         changed_files=list(detected_changed),
                         touched_denied_files=touched_denied,
                         changed_outside_allowed=outside_allowed,
+                        artifact_hash=artifact_hash,
                         metrics={r.name: r.metrics for r in report.verifier_results},
                         created_at=utc_timestamp(),
                     )
@@ -923,27 +949,60 @@ class FileSearchRuntime:
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
-        scored = [
-            record
-            for record in records
-            if record.score_report
-            and record.score_report.process_passed
-            and record.score_report.aggregate_score is not None
-        ]
-        if not scored:
+        options = self._selection_options(run, records, frozen.spec.metric_direction)
+        if not options:
             raise RuntimeError("no verified candidates available for selection")
 
         reverse = frozen.spec.metric_direction == "maximize"
-        selected = sorted(scored, key=lambda r: r.score_report.aggregate_score, reverse=reverse)[0]  # type: ignore[union-attr,return-value]
+        ranked = sorted(options, key=lambda item: item[0], reverse=reverse)
+        selected_score: float | None = None
+        selected_record: CandidateRecord | None = None
+        selected_iteration: int | None = None
+        selected_git_head: str | None = None
+        final_report: ScoreReport | None = None
+        for option_score, option_record, option_iteration, option_git_head in ranked:
+            if option_git_head:
+                self._checkout_git_revision(option_record.task.workspace, option_git_head)
+            report = self.run_verifier(run_id, option_record.candidate_id)
+            if report.process_passed and report.aggregate_score is not None:
+                selected_score = report.aggregate_score
+                selected_record = option_record
+                selected_iteration = option_iteration
+                selected_git_head = option_git_head
+                final_report = report
+                break
+
+        if selected_record is None or selected_score is None:
+            raise RuntimeError("no selected candidate passed final verification")
+
+        run = self._load_run(run_id)
         run.state = RunState.READY_TO_PROMOTE
-        run.selected_candidate_id = selected.candidate_id
-        run.best_candidate_id = selected.candidate_id
-        run.best_score = selected.score_report.aggregate_score
+        run.selected_candidate_id = selected_record.candidate_id
+        run.best_candidate_id = selected_record.candidate_id
+        run.best_score = selected_score
+        run.selected_score = selected_score
+        run.selected_iteration = selected_iteration
+        run.selected_git_head = selected_git_head
         self._write_run(run)
         return {
             "strategy": strategy,
-            "selected_candidate_id": selected.candidate_id,
-            "selected_score": selected.score_report.aggregate_score,
+            "selected_candidate_id": selected_record.candidate_id,
+            "selected_score": selected_score,
+            "selected_iteration": selected_iteration,
+            "selected_git_head": selected_git_head,
+            "selection_basis_score": (
+                next(
+                    (
+                        score
+                        for score, record, iteration, git_head in ranked
+                        if record.candidate_id == selected_record.candidate_id
+                        and iteration == selected_iteration
+                        and git_head == selected_git_head
+                    ),
+                    selected_score,
+                )
+            ),
+            "final_verifier_score": final_report.aggregate_score if final_report else None,
             "best_candidate_id": run.best_candidate_id,
             "best_score": run.best_score,
         }
@@ -965,6 +1024,9 @@ class FileSearchRuntime:
             f"- Strategy: `{frozen.spec.strategy.name}` ({frozen.spec.strategy.driver})",
             f"- Best candidate: `{run.best_candidate_id}`",
             f"- Best score: `{run.best_score}`",
+            f"- Selected score: `{run.selected_score}`",
+            f"- Selected iteration: `{run.selected_iteration}`",
+            f"- Selected git head: `{run.selected_git_head}`",
             "",
             "## Strategy Plans",
             "",
@@ -985,13 +1047,15 @@ class FileSearchRuntime:
                 "",
                 "## Candidates",
                 "",
-                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Process | Summary | Key Metrics | Changed Files |",
-                "|---|---|---|---|---|---:|---|---|---|---|",
+                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Git Head | Best Iteration | Best Score | Best Git Head | Process | Summary | Key Metrics | Changed Files |",
+                "|---|---|---|---|---|---:|---|---:|---:|---|---|---|---|---|",
             ]
         )
         for record in records:
             score = ""
             passed = ""
+            latest_iteration = record.iterations[-1] if record.iterations else None
+            git_head = latest_iteration.git_head if latest_iteration else ""
             if record.score_report:
                 score = "" if record.score_report.aggregate_score is None else str(record.score_report.aggregate_score)
                 passed = str(record.score_report.process_passed)
@@ -1003,6 +1067,16 @@ class FileSearchRuntime:
             agent_sessions = ", ".join(
                 session["agent_session_id"] for session in payload["agent_sessions"]
             )
+            best_iteration = self._best_iteration_record(record, frozen.spec.metric_direction)
+            best_iteration_value = (
+                "" if best_iteration is None else str(best_iteration.iteration)
+            )
+            best_score_value = (
+                ""
+                if best_iteration is None or best_iteration.score is None
+                else str(best_iteration.score)
+            )
+            best_git_head = "" if best_iteration is None else best_iteration.git_head or ""
             parent_base = ", ".join(
                 part
                 for part in [
@@ -1014,7 +1088,10 @@ class FileSearchRuntime:
             lines.append(
                 f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
                 f"{self._markdown_cell(agent_sessions)} | "
-                f"{self._markdown_cell(parent_base)} | {record.status} | {score} | {passed} | "
+                f"{self._markdown_cell(parent_base)} | {record.status} | {score} | "
+                f"{self._markdown_cell(git_head or '')} | "
+                f"{best_iteration_value} | {best_score_value} | "
+                f"{self._markdown_cell(best_git_head)} | {passed} | "
                 f"{self._markdown_cell(payload['summary'])} | "
                 f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} |"
             )
@@ -1070,6 +1147,13 @@ class FileSearchRuntime:
     def promote(self, run_id: str, candidate_id: str) -> Path:
         run = self._load_run(run_id)
         record = self._load_candidate_record(run_id, candidate_id)
+        if run.selected_candidate_id == candidate_id and run.selected_git_head:
+            self._checkout_git_revision(record.task.workspace, run.selected_git_head)
+            detected_changed = self._detect_changed_files(
+                Path(run.source_path), record.task.workspace
+            )
+            record.detected_changed_files = detected_changed
+            self._write_candidate_record(run_id, record)
         if not record.score_report or not record.score_report.process_passed:
             raise RuntimeError("cannot promote candidate without a passing score report")
         if record.touched_denied_files or record.changed_outside_allowed:
@@ -2069,9 +2153,9 @@ class FileSearchRuntime:
             "A local git repository has already been initialized with the copied baseline; use git status, git diff, git add, git commit, git reset, git restore, and git checkout only inside this workspace.",
             "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
             "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
-            "Iterate freely within your OpenCode step budget; each run_verifier call records an iteration. When steps run out OpenCode will ask you to summarize and stop.",
-            "Use git commit to mark iterations that improved, and git reset --hard HEAD~1 to discard iterations that regressed.",
-            "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). Commit each iteration before verifying so the commit hash is real; on discard, reset with git reset --hard HEAD~1 (the discarded hash stays recoverable via git reflog).",
+            "Iterate freely within your host step budget; each run_verifier call records an iteration. When steps run out the host will ask you to summarize and stop.",
+            "search_run_verifier automatically commits changed candidate artifact files before running the verifier; use git status, git diff, and git log to inspect iteration provenance.",
+            "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). After each verifier call, use the returned/runtime-recorded git_head as the commit column.",
         ]
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
@@ -2428,6 +2512,100 @@ class FileSearchRuntime:
             run.best_score = report.aggregate_score
             run.best_candidate_id = report.candidate_id
 
+    def _best_current_artifact_iteration(
+        self,
+        run: RunRecord,
+        record: CandidateRecord,
+        metric_direction: Literal["maximize", "minimize"],
+    ) -> IterationRecord | None:
+        current_changed = self._detect_changed_files(
+            Path(run.source_path), record.task.workspace
+        )
+        current_artifact_hash = self._artifact_hash(
+            record.task.workspace, current_changed
+        )
+        selectable = [
+            iteration
+            for iteration in record.iterations
+            if iteration.process_passed is True
+            and iteration.score is not None
+            and iteration.artifact_hash == current_artifact_hash
+            and not iteration.touched_denied_files
+            and not iteration.changed_outside_allowed
+        ]
+        if not selectable:
+            return None
+        reverse = metric_direction == "maximize"
+        return sorted(
+            selectable, key=lambda iteration: iteration.score, reverse=reverse
+        )[0]
+
+    def _best_iteration_record(
+        self,
+        record: CandidateRecord,
+        metric_direction: Literal["maximize", "minimize"],
+    ) -> IterationRecord | None:
+        scored = [
+            iteration
+            for iteration in record.iterations
+            if iteration.process_passed is not False
+            and iteration.score is not None
+            and not iteration.touched_denied_files
+            and not iteration.changed_outside_allowed
+        ]
+        if not scored:
+            return None
+        reverse = metric_direction == "maximize"
+        return sorted(
+            scored, key=lambda iteration: iteration.score, reverse=reverse
+        )[0]
+
+    def _selection_options(
+        self,
+        run: RunRecord,
+        records: list[CandidateRecord],
+        metric_direction: Literal["maximize", "minimize"],
+    ) -> list[tuple[float, CandidateRecord, int | None, str | None]]:
+        options: list[tuple[float, CandidateRecord, int | None, str | None]] = []
+        for record in records:
+            current_changed = self._detect_changed_files(
+                Path(run.source_path), record.task.workspace
+            )
+            current_artifact_hash = self._artifact_hash(
+                record.task.workspace, current_changed
+            )
+            for iteration in record.iterations:
+                if (
+                    iteration.process_passed is not True
+                    or iteration.score is None
+                    or iteration.touched_denied_files
+                    or iteration.changed_outside_allowed
+                ):
+                    continue
+                if iteration.git_head and iteration.git_artifact_clean is True:
+                    options.append(
+                        (
+                            iteration.score,
+                            record,
+                            iteration.iteration,
+                            iteration.git_head,
+                        )
+                    )
+                elif iteration.artifact_hash == current_artifact_hash:
+                    options.append((iteration.score, record, iteration.iteration, None))
+
+            if (
+                record.score_report
+                and record.score_report.process_passed
+                and record.score_report.aggregate_score is not None
+                and not record.touched_denied_files
+                and not record.changed_outside_allowed
+            ):
+                options.append(
+                    (record.score_report.aggregate_score, record, None, None)
+                )
+        return options
+
     def _history_candidate_payload(self, record: CandidateRecord, metric_name: str) -> dict[str, Any]:
         score_report = record.score_report
         metrics: dict[str, Any] = {}
@@ -2539,6 +2717,137 @@ class FileSearchRuntime:
             if source_hashes.get(rel_path) != workspace_hashes.get(rel_path):
                 changed.append(rel_path)
         return changed
+
+    def _artifact_hash(self, workspace: Path, changed_files: list[str]) -> str:
+        payload: dict[str, str | None] = {}
+        for rel_path in sorted(changed_files):
+            path = workspace / rel_path
+            payload[rel_path] = sha256_file(path) if path.is_file() else None
+        return sha256_text(canonical_json(payload))
+
+    def _git_head(self, workspace: Path) -> str | None:
+        try:
+            value = self._git_output(
+                workspace, ["git", "rev-parse", "--verify", "HEAD"]
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+        return value.strip() or None
+
+    def _git_status(self, workspace: Path) -> list[str]:
+        try:
+            value = self._git_output(
+                workspace,
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return []
+        return [line for line in value.splitlines() if line.strip()]
+
+    def _git_artifact_clean(
+        self,
+        workspace: Path,
+        changed_files: list[str],
+        git_head: str | None,
+    ) -> bool:
+        if not git_head:
+            return False
+        if not changed_files:
+            return True
+        try:
+            value = self._git_output(
+                workspace,
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                    "--",
+                    *changed_files,
+                ],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
+        return not value.strip()
+
+    def _git_output(self, workspace: Path, command: list[str]) -> str:
+        process = subprocess.Popen(
+            command,
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = process.communicate()
+        if process.returncode:
+            raise subprocess.CalledProcessError(
+                process.returncode,
+                command,
+                output=stdout,
+                stderr=stderr,
+            )
+        return stdout
+
+    def _git_returncode(self, workspace: Path, command: list[str]) -> int:
+        process = subprocess.Popen(
+            command,
+            cwd=workspace,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        process.communicate()
+        return process.returncode
+
+    def _commit_workspace_iteration(
+        self,
+        workspace: Path,
+        changed_files: list[str],
+        message: str,
+    ) -> str | None:
+        if not changed_files:
+            return self._git_head(workspace)
+        try:
+            self._git_output(workspace, ["git", "add", "--", *changed_files])
+            staged_returncode = self._git_returncode(
+                workspace,
+                ["git", "diff", "--cached", "--quiet", "--", *changed_files],
+            )
+            if staged_returncode == 0:
+                return self._git_head(workspace)
+            if staged_returncode != 1:
+                return None
+            self._git_output(
+                workspace,
+                [
+                    "git",
+                    "-c",
+                    "user.name=agentic-any-search",
+                    "-c",
+                    "user.email=agentic-any-search@example.invalid",
+                    "commit",
+                    "-q",
+                    "--no-verify",
+                    "-m",
+                    message,
+                ],
+            )
+            return self._git_head(workspace)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+
+    def _checkout_git_revision(self, workspace: Path, revision: str) -> None:
+        try:
+            subprocess.check_call(
+                ["git", "checkout", "-q", "--detach", revision],
+                cwd=workspace,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                f"failed to checkout candidate revision {revision}"
+            ) from exc
 
     def _hash_tree(self, root: Path) -> dict[str, str]:
         hashes: dict[str, str] = {}

@@ -346,11 +346,16 @@ class IterationRecord(SearchModel):
     iteration: int
     agent_session_id: str | None = None
     score: float | None = None
+    process_passed: bool | None = None
+    git_head: str | None = None
+    git_artifact_clean: bool | None = None
+    git_status: list[str] = Field(default_factory=list)
     failure_class: str | None = None
     summary: str = ""
     changed_files: list[str] = Field(default_factory=list)
     touched_denied_files: bool = False
     changed_outside_allowed: bool = False
+    artifact_hash: str | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     created_at: str
 
@@ -380,6 +385,9 @@ class RunRecord(SearchModel):
     best_candidate_id: str | None = None
     best_score: float | None = None
     selected_candidate_id: str | None = None
+    selected_score: float | None = None
+    selected_iteration: int | None = None
+    selected_git_head: str | None = None
     budget_used: dict[str, Any] = Field(default_factory=dict)
 
 

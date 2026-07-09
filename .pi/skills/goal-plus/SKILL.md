@@ -38,7 +38,9 @@ runtime default is OpenCode and is wrong for Pi.
 7. Review the returned `steps`, `handle.metadata.pi_metrics`, and
    `final_score_report` for each result.
 8. Call `search_select`, `search_report`, and `search_promote` when promotion is
-   requested.
+   requested. `search_select` ranks verifier-recorded iterations, checks out the
+   best committed candidate `git_head`, and runs a main-agent final verifier on
+   that exact commit before recording the selected candidate.
 9. Call `goal_plus_record_search_result`.
 10. Run the final raw-goal audit and then `goal_plus_set_status`.
 
@@ -73,7 +75,9 @@ For optimization tasks, require workers to create a complete candidate artifact
 and run an early `search_run_verifier` before any long local optimization loop.
 For fix/target tasks, require the allowed-file edit before the verifier call; do
 not count verification of the unmodified starting point as worker evidence.
-Search progress must be visible as verifier-recorded runtime iterations, not
+`search_run_verifier` automatically commits changed candidate artifact files in
+the candidate workspace before running the verifier, so search progress must be
+visible as verifier-recorded runtime iterations with real `git_head` values, not
 hidden in the worker transcript or scratch scripts.
 
 ## Skill Boundary
@@ -100,21 +104,22 @@ For active or completed Goal Plus/Search runs, use
 `goal_plus_monitor_snapshot(goal_plus_id?, run_id?, stale_after_seconds?)`
 first. It is the primary read-only monitoring path.
 
-The monitor summarizes durable `.search` evidence including goal status, linked
-run state, selected candidate, report and promotion paths, candidate scores,
-agent sessions, verifier iterations, Pi RPC token/cost/context metrics, and
-stale/timed-out warnings. It does not start, wait for, or stop workers.
+The monitor summarizes durable `.gp` evidence including goal status, linked
+run state, selected candidate, selected commit, report and promotion paths,
+candidate scores, per-iteration git heads, agent sessions, verifier iterations,
+Pi RPC token/cost/context metrics, and stale/timed-out warnings. It does not
+start, wait for, or stop workers.
 
 If the MCP tool is not directly exposed in the current host, use the matching
 Pi facade instead of manually tailing state files:
 
 ```bash
 agentic-any-search-pi-tool goal_plus_monitor_snapshot \
-  --root .search \
+  --root .gp \
   --args-json '{"goal_plus_id":"gp_...","run_id":"run_...","stale_after_seconds":120}' \
   --pretty
 ```
 
-Read raw `.search/` files or host logs only when the monitor output is missing
+Read raw `.gp/` files or host logs only when the monitor output is missing
 the field you need, or when debugging a specific transcript, verifier log, or
 host failure. Do not use manual file tailing as the primary monitoring path.

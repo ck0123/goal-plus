@@ -50,7 +50,7 @@ The MCP server is configured as:
   "mcpServers": {
     "search-runtime": {
       "command": "agentic-any-search-mcp",
-      "args": ["--root", ".search"]
+      "args": ["--root", ".gp"]
     }
   }
 }
@@ -179,11 +179,11 @@ For the cross-host debugging workflow, see
 For reproducible adapter runs, capture both stream output and debug logs:
 
 ```bash
-mkdir -p .search/host-logs
+mkdir -p .gp/host-logs
 claude -p --verbose --output-format stream-json \
-  --debug-file .search/host-logs/claude-debug.log \
+  --debug-file .gp/host-logs/claude-debug.log \
   "<search prompt>" \
-  > .search/host-logs/claude.jsonl
+  > .gp/host-logs/claude.jsonl
 ```
 
 Add `--include-hook-events` for hook debugging or

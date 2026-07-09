@@ -11,8 +11,8 @@ from single_thread import configure_torch_threads
 configure_torch_threads(torch)
 
 
-FEATURE_DIM = 32
-HIDDEN_DIM = 32
+FEATURE_DIM = 64
+HIDDEN_DIM = 64
 
 
 class TinyCpuModel:

@@ -16,7 +16,7 @@ Before changing behavior, read the smallest relevant set of docs:
 - [docs/agent-host-adapters.md](docs/agent-host-adapters.md): OpenCode, Codex,
   and Claude Code adapter contract, capability matrix, budget rules, and
   current strategy support.
-- [docs/debugging-runtime.md](docs/debugging-runtime.md): `.search` state,
+- [docs/debugging-runtime.md](docs/debugging-runtime.md): `.gp` state,
   host-native logs, OpenCode SQLite inspection, Codex rollout logs, and Claude
   Code transcript/debug paths.
 - [docs/opencode.md](docs/opencode.md), [docs/codex.md](docs/codex.md), and
@@ -62,7 +62,7 @@ The runtime owns:
 - candidate workspace creation
 - planning and strategy state
 - verifier execution and score reports
-- durable `.search/` run state
+- durable `.gp/` run state
 - report generation and promotion patches
 
 The host code-agent owns:
@@ -149,11 +149,11 @@ When building or running such benchmarks:
 
 Generated or local-only state:
 
-- `.search/` is runtime output and is gitignored.
+- `.gp/` is runtime output and is gitignored.
 - `.tmp/` is local scratch and is gitignored.
 - `docs/superpowers/` is gitignored.
 - Raw host logs and transcripts should stay in ignored locations such as
-  `.search/host-logs/`.
+  `.gp/host-logs/`.
 
 ## Host Adapter Rules
 
@@ -269,7 +269,7 @@ entry point.
 High-level rule:
 
 1. Use the read-only monitor tool first for Goal Plus/Search status.
-2. Inspect `.search/runs/<run_id>/...` only when the monitor output does not
+2. Inspect `.gp/runs/<run_id>/...` only when the monitor output does not
    include the field or artifact you need.
 3. Inspect the host-native transcript/log only when debugging worker behavior.
 4. Cross-reference by `agent_session_id`, `candidate_id`, and host handle.
@@ -285,12 +285,12 @@ Goal Plus/Search monitoring:
 
   ```bash
   agentic-any-search-pi-tool goal_plus_monitor_snapshot \
-    --root .search \
+    --root .gp \
     --args-json '{"goal_plus_id":"gp_...","run_id":"run_...","stale_after_seconds":120}' \
     --pretty
   ```
 
-- Use raw `.search/` files and host logs as a fallback for missing fields,
+- Use raw `.gp/` files and host logs as a fallback for missing fields,
   transcript details, or verifier log inspection. Do not use manual file tailing
   as the primary monitoring path.
 
@@ -302,11 +302,11 @@ Host log sources:
   optional `RUST_LOG=debug codex -c log_dir=./.codex-log`.
 - Claude Code: `claude -p --output-format stream-json`, `--debug-file`, and
   `~/.claude/projects/<encoded-project>/...`.
-- Pi RPC: `.search/host-logs/pi-rpc-<agent_session_id>.jsonl`,
-  `.search/host-logs/pi-rpc-<agent_session_id>.txt`, and
-  `.search/host-logs/pi-rpc-sessions/`.
+- Pi RPC: `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`,
+  `.gp/host-logs/pi-rpc-<agent_session_id>.txt`, and
+  `.gp/host-logs/pi-rpc-sessions/`.
 
-Never commit raw logs, transcripts, `.search/`, or credentials.
+Never commit raw logs, transcripts, `.gp/`, or credentials.
 
 ## Implementation Style
 
@@ -314,7 +314,7 @@ Never commit raw logs, transcripts, `.search/`, or credentials.
   task.
 - Prefer existing Pydantic models and runtime helper methods over ad hoc JSON
   manipulation.
-- Keep `.search` state shape backward-readable unless a migration is explicitly
+- Keep `.gp` state shape backward-readable unless a migration is explicitly
   designed.
 - Keep verifier execution deterministic and runtime-owned.
 - Do not edit frozen verifier artifacts or candidate workspaces by hand except
@@ -326,7 +326,7 @@ Never commit raw logs, transcripts, `.search/`, or credentials.
 ## Commit Hygiene
 
 - Keep commits focused.
-- Do not commit `.search/`, `.tmp/`, raw host logs, local transcripts, auth
+- Do not commit `.gp/`, `.tmp/`, raw host logs, local transcripts, auth
   files, or generated caches.
 - Before committing behavior changes, run `python -m pytest -q` and
   `git diff --check`.

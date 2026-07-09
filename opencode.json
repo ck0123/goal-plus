@@ -6,7 +6,7 @@
       "command": [
         "agentic-any-search-mcp",
         "--root",
-        ".search"
+        ".gp"
       ],
       "timeout": 300000,
       "enabled": true

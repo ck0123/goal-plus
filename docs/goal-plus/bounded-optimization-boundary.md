@@ -105,7 +105,7 @@ harness runner until more than one scenario repeats the same shape.
 For `examples/model-optimize/`, keep the extra state scenario-local:
 
 ```text
-.search/goal-plus/<goal_plus_id>/model-optimize/
+.gp/goal-plus/<goal_plus_id>/model-optimize/
   opportunities.jsonl
   resource_ledger.json
   integration/

@@ -17,7 +17,7 @@ def test_opencode_config_registers_search_runtime_mcp() -> None:
     assert server["command"] == [
         "agentic-any-search-mcp",
         "--root",
-        ".search",
+        ".gp",
     ]
     assert "environment" not in server
     assert server["timeout"] >= 300000
@@ -156,7 +156,7 @@ def test_search_result_dump_skill_exports_chrome_trace() -> None:
     assert "name: search-result-dump" in skill
     assert "agentic-any-search-trace" in skill
     assert "--opencode-log" in skill
-    assert ".search/runs/<run_id>/trace.json" in skill
+    assert ".gp/runs/<run_id>/trace.json" in skill
     assert "ui.perfetto.dev" in skill
     assert "chrome://tracing" in skill
     assert 'message="exiting loop"' in skill

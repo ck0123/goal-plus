@@ -16,7 +16,7 @@ OpenCode process
   ├─ SQLite DB (~/.local/share/opencode/opencode.db)   ← agent actions, tool calls, bash cmds, child-session lifecycle
   ├─ Log file  (~/.local/share/opencode/log/opencode.log) ← permission decisions, errors
   └─ MCP server subprocess
-       └─ .search/  ← runtime-owned durable state (this project)
+       └─ .gp/  ← runtime-owned durable state (this project)
 ```
 
 The runtime owns goal-plus records, specs, plans, candidate workspaces,
@@ -24,19 +24,19 @@ iteration history, verifier scoring, reports, and promotion patches. OpenCode
 owns subagent lifecycle — start, run, step cap, stop/interrupt, Task return.
 The MCP runtime does not maintain lifecycle status, host-sync state, or process
 cancellation. Debugging lifecycle state belongs in OpenCode; debugging
-goal/search state belongs in `.search/`.
+goal/search state belongs in `.gp/`.
 
-Goal-plus records live under `.search/goal-plus/<goal_plus_id>/`. Search runs
-live under `.search/runs/<run_id>/`.
+Goal-plus records live under `.gp/goal-plus/<goal_plus_id>/`. Search runs
+live under `.gp/runs/<run_id>/`.
 
 For Codex, Claude Code, and Pi RPC, substitute the host-native JSONL/debug files below
 for the OpenCode process layer. The same rule still applies: host logs explain
-what the worker did, while `.search/` records goal/search facts such as
+what the worker did, while `.gp/` records goal/search facts such as
 candidates, iterations, scores, and verifier output.
 
 ## Host-Native Log Inspection
 
-Keep raw host logs under `.search/host-logs/` or another ignored directory. They
+Keep raw host logs under `.gp/host-logs/` or another ignored directory. They
 can include prompts, tool inputs, command output, file contents, and credentials
 that a tool printed. Do not commit raw logs.
 
@@ -55,7 +55,7 @@ OpenCode is still the baseline host for the most complete inspection path:
 - Agent actions and child-session lifecycle: `~/.local/share/opencode/opencode.db`
 - OpenCode errors and permission/runtime decisions:
   `~/.local/share/opencode/log/opencode.log`
-- Project runtime state: `.search/runs/<run_id>/...`
+- Project runtime state: `.gp/runs/<run_id>/...`
 
 Useful checks:
 
@@ -70,7 +70,7 @@ sqlite3 ~/.local/share/opencode/opencode.db \
    GROUP BY 1;"
 ```
 
-Use OpenCode logs when a Task returned but `.search` has no iteration, when a
+Use OpenCode logs when a Task returned but `.gp` has no iteration, when a
 worker hit its `steps` cap, or when a worker used Bash instead of
 `search_run_verifier`.
 
@@ -79,9 +79,9 @@ worker hit its `steps` cap, or when a worker used Bash instead of
 For scripted or reproducible runs, capture Codex's event stream directly:
 
 ```bash
-mkdir -p .search/host-logs
+mkdir -p .gp/host-logs
 codex exec --json --cd "$PWD" "<goal-plus or search prompt>" \
-  > ".search/host-logs/codex-$(date +%Y%m%d-%H%M%S).jsonl"
+  > ".gp/host-logs/codex-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
 `codex exec --json` emits JSONL events such as `thread.started`,
@@ -115,7 +115,7 @@ Useful search patterns for this adapter:
 
 ```bash
 rg -n "agent_session_id|candidate_id|spawn_agent|wait_agent|send_input|interrupt|budget_control|turn.completed|turn.failed|error" \
-  .search/host-logs/codex-*.jsonl
+  .gp/host-logs/codex-*.jsonl
 ```
 
 If you are debugging Codex itself from the local `../codex` source checkout,
@@ -131,11 +131,11 @@ For scripted or reproducible runs, capture both the stream output and the debug
 file:
 
 ```bash
-mkdir -p .search/host-logs
+mkdir -p .gp/host-logs
 claude -p --verbose --output-format stream-json \
-  --debug-file ".search/host-logs/claude-debug-$(date +%Y%m%d-%H%M%S).log" \
+  --debug-file ".gp/host-logs/claude-debug-$(date +%Y%m%d-%H%M%S).log" \
   "<search prompt>" \
-  > ".search/host-logs/claude-$(date +%Y%m%d-%H%M%S).jsonl"
+  > ".gp/host-logs/claude-$(date +%Y%m%d-%H%M%S).jsonl"
 ```
 
 Add `--include-hook-events` when diagnosing the shipped Goal Plus host hooks or
@@ -175,7 +175,7 @@ Useful search patterns for this adapter:
 
 ```bash
 rg -n "agent_session_id|candidate_id|task_started|task_progress|task_notification|subagent_type|Reached max turns limit|Agent:" \
-  .search/host-logs/claude-*.jsonl .search/host-logs/claude-debug-*.log
+  .gp/host-logs/claude-*.jsonl .gp/host-logs/claude-debug-*.log
 ```
 
 The current adapter uses foreground `Agent` launches, not Claude Code
@@ -196,22 +196,22 @@ The runner starts:
 
 ```bash
 pi --mode rpc --approve \
-  --session-dir .search/host-logs/pi-rpc-sessions \
+  --session-dir .gp/host-logs/pi-rpc-sessions \
   --session-id <agent_session_id> \
   -e <repo>/.pi/extensions/search-runtime.ts
 ```
 
 Important paths:
 
-- `.search/host-logs/pi-rpc-<agent_session_id>.jsonl`
-- `.search/host-logs/pi-rpc-<agent_session_id>.txt`
-- `.search/host-logs/pi-rpc-sessions/`
+- `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`
+- `.gp/host-logs/pi-rpc-<agent_session_id>.txt`
+- `.gp/host-logs/pi-rpc-sessions/`
 
 Useful search pattern:
 
 ```bash
 rg -n "agent_session_id|candidate_id|search_get_agent_context|search_run_verifier|tool_call|stderr|abort" \
-  .search/host-logs/pi-rpc-*.jsonl .search/host-logs/pi-rpc-*.txt
+  .gp/host-logs/pi-rpc-*.jsonl .gp/host-logs/pi-rpc-*.txt
 ```
 
 For periodic monitoring, prefer the read-only MCP/Pi facade snapshot instead
@@ -219,27 +219,27 @@ of repeatedly opening logs:
 
 ```bash
 agentic-any-search-pi-tool goal_plus_monitor_snapshot \
-  --root .search \
+  --root .gp \
   --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
   --pretty
 ```
 
 The snapshot summarizes run state, candidate counts, agent sessions, verifier
 counts, Pi RPC duration/cost/context metrics, file mtimes, and stale/timed-out
-warnings from durable `.search` state.
+warnings from durable `.gp` state.
 
 `session_jsonl_restart` means continuation restarts `pi --mode rpc` with the
 same `--session-id`. It is not a live process continuation. Search MCP
-`.search/runs/...` remains the authoritative state; Pi JSONL is transcript and
+`.gp/runs/...` remains the authoritative state; Pi JSONL is transcript and
 resume evidence only. Pi has a native turn-level Goal Plus stop gate through
 the extension `agent_end` event, but no host process Stop hook. Debug Goal Plus
 completion through extension pre-tool guard events, stop continuation messages,
-and `.search/goal-plus/...`.
+and `.gp/goal-plus/...`.
 
-## `.search/` Layout
+## `.gp/` Layout
 
 ```
-.search/
+.gp/
 ├── specs/<frozen_spec_id>/
 │   ├── frozen_spec.json                          # the frozen SearchSpec
 │   └── verifier_artifacts/<path>                 # frozen verifier files (hash-pinned)
@@ -265,7 +265,7 @@ There is no `agent_events/` or `observations/` directory. The session record car
 ### Run summary
 
 ```bash
-RUN=$(ls -td .search/runs/* | head -1)
+RUN=$(ls -td .gp/runs/* | head -1)
 python3 -c "
 import json
 d = json.load(open('$RUN/run.json'))
@@ -341,7 +341,7 @@ print(f\\\"{d['candidate_id']}: {len(iters)} iters, scores={[i['score'] for i in
 
 ## Checking OpenCode Step Count
 
-OpenCode enforces the per-agent `steps` cap (defined in each `.opencode/agents/*.md` frontmatter). Step count lives in OpenCode's session inspection tools (see the `inspecting-opencode-runs` skill), not in `.search/`. The runtime does not sync host state into MCP records.
+OpenCode enforces the per-agent `steps` cap (defined in each `.opencode/agents/*.md` frontmatter). Step count lives in OpenCode's session inspection tools (see the `inspecting-opencode-runs` skill), not in `.gp/`. The runtime does not sync host state into MCP records.
 
 When the step cap is reached OpenCode injects a system prompt instructing the agent to summarize and stop. Tools may be disabled during that final summary. OpenCode then notifies the main agent that the Task returned; the main agent runs `search_run_verifier` (without `agent_session_id`) to record the final score.
 
@@ -349,7 +349,7 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
 
 ### Subagent appears idle in OpenCode but no iteration history
 
-- **Look at**: `.search/runs/<run_id>/candidates/<id>/candidate.json` `iterations` and OpenCode SQLite `session` / `part` rows containing the `agent_session_id`.
+- **Look at**: `.gp/runs/<run_id>/candidates/<id>/candidate.json` `iterations` and OpenCode SQLite `session` / `part` rows containing the `agent_session_id`.
 - **Cause**: The subagent never called `search_run_verifier`. Inspect OpenCode SQLite for what it actually did (bash commands, tool calls).
 - **Verification**: Confirm the OpenCode child session exists and ran to step cap or self-decision. The runtime only records what verifier calls actually happened.
 
@@ -404,7 +404,7 @@ These tools are safe to call anytime — they're read-only:
 When something goes wrong, cross-reference both layers:
 
 1. **Host-native transcript/log** — what the agent *did* (tool calls, bash commands, messages) and what the host lifecycle did (start, step cap or turn cap, stop/interrupt)
-2. **`.search/` runtime state** — what the runtime *recorded* (scores, iterations, verifier logs)
+2. **`.gp/` runtime state** — what the runtime *recorded* (scores, iterations, verifier logs)
 
 Example: "OpenCode child session finished but the candidate shows no score"
 - Host logs show: matching OpenCode child session has equal `step-start` / `step-finish` counts and the agent never called `search_run_verifier`

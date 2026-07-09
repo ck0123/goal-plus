@@ -44,9 +44,9 @@ multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` or
 The MCP server is configured as:
 
 ```toml
-[mcp_servers.search-runtime]
+[mcp_servers.gp-runtime]
 command = "agentic-any-search-mcp"
-args = ["--root", ".search"]
+args = ["--root", ".gp"]
 cwd = "."
 startup_timeout_sec = 10
 tool_timeout_sec = 300
@@ -150,7 +150,7 @@ For the cross-host debugging workflow, see
 
 Codex has two useful log surfaces for this adapter:
 
-- `codex exec --json ... > .search/host-logs/codex-<timestamp>.jsonl` captures
+- `codex exec --json ... > .gp/host-logs/codex-<timestamp>.jsonl` captures
   the full non-interactive event stream for a reproducible run.
 - `${CODEX_HOME:-~/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` stores persisted
   local rollout transcripts unless the run used `codex exec --ephemeral`.

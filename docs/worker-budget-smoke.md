@@ -2,11 +2,11 @@
 
 This file records the manual smoke tests used to verify Codex and Claude Code
 worker budget behavior for the adapter implementation. Raw logs are under the
-gitignored `.search/smoke-logs/` directory in this workspace.
+gitignored `.gp/smoke-logs/` directory in this workspace.
 
 ## Codex Parent Watchdog
 
-Command log: `.search/smoke-logs/codex-worker-budget.jsonl`
+Command log: `.gp/smoke-logs/codex-worker-budget.jsonl`
 
 Observed behavior:
 
@@ -28,8 +28,8 @@ Final child status: completed - sleep 60 was interrupted/aborted and did not com
 
 ## Claude Code Subagent Max Turns
 
-Command log: `.search/smoke-logs/claude-subagent-budget.jsonl`
-Debug log: `.search/smoke-logs/claude-subagent-budget-debug.log`
+Command log: `.gp/smoke-logs/claude-subagent-budget.jsonl`
+Debug log: `.gp/smoke-logs/claude-subagent-budget-debug.log`
 
 Observed behavior:
 

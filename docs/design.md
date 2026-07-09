@@ -61,7 +61,7 @@ FileSearchRuntime
   |
   | writes durable state
   v
-.search/
+.gp/
   goal-plus/<goal_plus_id>/
     goal.json
     events.jsonl
@@ -101,7 +101,13 @@ Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-sea
 
 `AgentSessionRecord` is produced by `search_start_agent_session` or `search_redispatch_candidate`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, host, host_handle, optional legacy opencode_session_id, workspace, directive, host-native launch payload, and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to the host client.
 
-`IterationRecord` is produced by every `search_run_verifier` call. It records the iteration number, agent_session_id (or None for main final verify), score, failure_class, changed files, and metrics. There is no separate submit step.
+`IterationRecord` is produced by every `search_run_verifier` call. It records
+the iteration number, agent_session_id (or None for main final verify), score,
+failure_class, changed files, metrics, and the candidate workspace's real
+`git_head` when available. Before running the verifier, the runtime
+automatically commits changed candidate artifact files in the candidate
+workspace so it can later checkout the best committed iteration.
+There is no separate submit step.
 
 `ScoreReport` is produced by `search_run_verifier`. It records pass/fail state, aggregate score, raw metrics, changed-file violations, frozen verifier violations, and failure class.
 
@@ -159,7 +165,7 @@ Host foreground worker runs the same candidate workspace with optional tier/budg
 search_plan_next  (optional follow-up batch)
   |
   v
-search_select
+search_select  (ranks verifier iterations, checks out selected git_head, final-verifies)
   |
   v
 search_report
@@ -218,8 +224,8 @@ Verifier commands run from each candidate workspace. The runtime adds the worksp
 Candidate workspaces are copied from `source_path`:
 
 ```text
-.search/runs/<run_id>/workspace/c001/
-.search/runs/<run_id>/workspace/c002/
+.gp/runs/<run_id>/workspace/c001/
+.gp/runs/<run_id>/workspace/c002/
 ```
 
 Each candidate workspace contains `.tmp/` for notes and non-scoring static drafts. Runtime tree hashing ignores `.tmp/`.
