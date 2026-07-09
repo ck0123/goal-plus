@@ -819,6 +819,10 @@ def test_pi_rpc_continue_agent_session_restarts_same_jsonl_session(tmp_path: Pat
     assert continued.launch["cwd"] == str(task.workspace)
     assert "continue_existing_agent_session=true" in continued.launch["prompt"]
 
+    report = runtime.report(run_id).read_text(encoding="utf-8")
+    assert "| Session | Host | Candidate | Verifier Runs |" in report
+    assert "| Session | Host | Handle | Candidate | Verifier Runs |" not in report
+
 
 def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
     tmp_path: Path,

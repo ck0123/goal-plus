@@ -992,21 +992,45 @@ class FileSearchRuntime:
             )
         agent_sessions = self._load_agent_sessions(run_id)
         if agent_sessions:
+            session_rows = [
+                (session, self._display_host_handle(session)) for session in agent_sessions
+            ]
+            include_handle = any(
+                handle and handle != session.agent_session_id
+                for session, handle in session_rows
+            )
             lines.extend(
                 [
                     "",
                     "## Agent Sessions",
                     "",
-                    "| Session | Host | Handle | Candidate | Verifier Runs | Created | Updated |",
-                    "|---|---|---|---|---:|---|---|",
                 ]
             )
-            for session in agent_sessions:
-                lines.append(
+            if include_handle:
+                lines.extend(
+                    [
+                        "| Session | Host | Handle | Candidate | Verifier Runs | Created | Updated |",
+                        "|---|---|---|---|---:|---|---|",
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        "| Session | Host | Candidate | Verifier Runs | Created | Updated |",
+                        "|---|---|---|---:|---|---|",
+                    ]
+                )
+            for session, handle in session_rows:
+                common = (
                     f"| `{session.agent_session_id}` | "
                     f"`{session.host}` | "
-                    f"{self._markdown_cell(self._display_host_handle(session))} | "
-                    f"`{session.candidate_id or ''}` | "
+                )
+                if include_handle:
+                    display_handle = handle if handle != session.agent_session_id else ""
+                    common += f"{self._markdown_cell(display_handle)} | "
+                lines.append(
+                    common
+                    + f"`{session.candidate_id or ''}` | "
                     f"{session.counters.get('verifier_runs', 0)} | "
                     f"{session.created_at} | {session.updated_at} |"
                 )
