@@ -311,6 +311,30 @@ def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> N
     assert "user confirmation" in gate.reason or "frozen spec draft" in gate.reason
 
 
+def test_pre_tool_use_blocks_pi_candidate_driver_before_search_ready(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize kernel latency")
+    runtime.record_triage(
+        record.goal_plus_id,
+        GoalPlusTriage(
+            is_optimization=True,
+            confidence="high",
+            recommended_phase="search",
+            identified_at="initial",
+            reasons=["latency benchmark exists"],
+        ),
+    )
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "pi_search_run_candidate"},
+    )
+
+    assert gate.decision == "block"
+    assert "user confirmation" in gate.reason or "frozen spec draft" in gate.reason
+
+
 def test_pre_tool_use_accepts_camel_case_tool_name(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Maybe optimize something")

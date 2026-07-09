@@ -48,6 +48,11 @@ The runtime does not wait for, abort, supervise, or synchronize host workers.
 It records provenance and verifier counters only after the host or worker calls
 the corresponding MCP tools.
 
+Pi main-agent assets expose `pi_search_run_candidate` as a host-native
+convenience driver for steps 5 through 10. It still uses the same runtime
+records and returns step evidence; it does not plan batches, select winners,
+write reports, or promote patches.
+
 ## Goal Plus Enforcement Levels
 
 Do not conflate Search Mode worker support with enforced Goal Plus lifecycle
@@ -120,7 +125,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 |---|---|---|---|---|
 | Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/goal-plus/`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
-| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
+| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_candidate` convenience driver, or low-level `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics` |

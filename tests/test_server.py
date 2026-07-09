@@ -39,6 +39,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_promote",
         "goal_plus_create",
         "goal_plus_status",
+        "goal_plus_monitor_snapshot",
         "goal_plus_record_triage",
         "goal_plus_save_spec_draft",
         "goal_plus_confirm_frozen_verifier",
@@ -106,6 +107,17 @@ def test_goal_plus_gate_exposes_hook_friendly_schema(tmp_path: Path) -> None:
     assert "goal_plus_id" in schema["properties"]
     assert "event" in schema["properties"]
     assert "context" in schema["properties"]
+
+
+def test_goal_plus_monitor_snapshot_exposes_read_only_schema(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    schema = tools["goal_plus_monitor_snapshot"].parameters
+
+    assert "goal_plus_id" in schema["properties"]
+    assert "run_id" in schema["properties"]
+    assert "stale_after_seconds" in schema["properties"]
 
 
 def test_goal_plus_create_has_no_mode_hint_and_confirm_tool_is_registered(

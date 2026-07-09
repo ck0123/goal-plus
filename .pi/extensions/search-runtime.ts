@@ -75,6 +75,14 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{ additionalProperties: false },
 	),
 	goal_plus_status: Type.Object({ goal_plus_id: Type.String() }, { additionalProperties: false }),
+	goal_plus_monitor_snapshot: Type.Object(
+		{
+			goal_plus_id: Type.Optional(Type.String()),
+			run_id: Type.Optional(Type.String()),
+			stale_after_seconds: Type.Optional(Type.Number()),
+		},
+		{ additionalProperties: false },
+	),
 	goal_plus_record_triage: Type.Object(
 		{
 			goal_plus_id: Type.String(),
@@ -241,8 +249,23 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
+	pi_search_run_candidate: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_id: Type.String(),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			final_verify: Type.Optional(Type.Boolean()),
+			pi_binary: Type.Optional(Type.String()),
+			extension_path: Type.Optional(Type.String()),
+			thinking_level: Type.Optional(Type.String()),
+			model_pattern: Type.Optional(Type.String()),
+			provider: Type.Optional(Type.String()),
+			model_id: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
 };
-const MAIN_GATED_TOOLS = new Set(["bash", "edit", "write", "pi_rpc_run_worker"]);
+const MAIN_GATED_TOOLS = new Set(["bash", "edit", "write", "pi_rpc_run_worker", "pi_search_run_candidate"]);
 
 interface GoalPlusNativeState {
 	activeGoalPlusId?: string;
@@ -793,6 +816,7 @@ export default function (pi: ExtensionAPI) {
 	const mainTools = [
 		"goal_plus_create",
 		"goal_plus_status",
+		"goal_plus_monitor_snapshot",
 		"goal_plus_record_triage",
 		"goal_plus_save_spec_draft",
 		"goal_plus_confirm_frozen_verifier",
@@ -814,6 +838,7 @@ export default function (pi: ExtensionAPI) {
 		"search_select",
 		"search_report",
 		"search_promote",
+		"pi_search_run_candidate",
 	];
 	const workerTools = ["search_get_agent_context", "search_run_verifier", "search_list_iterations"];
 	for (const tool of role === "worker" ? workerTools : mainTools) {

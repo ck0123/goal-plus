@@ -125,11 +125,16 @@ Pi Search Mode uses the same durable Search runtime as other hosts:
 
 1. `search_plan_next`
 2. `search_start_batch`
-3. `search_start_agent_session`
-4. `pi_rpc_run_worker(launch=session.launch)`
-5. `search_bind_agent_handle(agent_session_id, handle)`
-6. final `search_run_verifier` from the main agent
-7. `search_select`, `search_report`, `search_promote`
+3. `pi_search_run_candidate(run_id, candidate_id, directive?, final_verify=true)`
+4. inspect the returned step evidence, handle metadata, and final score report
+5. `search_select`, `search_report`, `search_promote`
+
+`pi_search_run_candidate` automatically starts the agent session, runs the Pi RPC worker, binds the handle, and can run the final verifier. The returned
+`steps` array records the exact tool chain:
+`search_start_agent_session`, `pi_rpc_run_worker`,
+`search_bind_agent_handle`, and `search_run_verifier` when final verification
+is enabled. Use the low-level tools directly only for manual debugging,
+custom recovery, or same-session continuation experiments.
 
 The launch payload uses `tool="pi_rpc_worker"` and contains `root`, `cwd`,
 `agent_session_id`, `candidate_id`, `prompt`, `session_id`, and
@@ -180,7 +185,25 @@ agentic-any-search-pi-tool search_get_agent_context \
 ```
 
 It dispatches to the same `SearchTools` and `GoalPlusTools` Python facade used
-by the MCP server.
+by the MCP server. It also exposes `pi_search_run_candidate`, a Pi-native
+candidate driver that wraps the mechanical Search Mode worker chain while
+leaving planning, selection, reporting, and promotion as explicit runtime
+steps.
+
+The same facade exposes the generic read-only monitor tool:
+
+```bash
+agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+  --root .search \
+  --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
+  --pretty
+```
+
+`goal_plus_monitor_snapshot` is also registered on the MCP server, so it is not
+Pi-specific. Pi runs get richer fields because `search_bind_agent_handle`
+persists `metadata.pi_metrics`, including per-worker token, cost, duration, and
+context usage data. The tool is read-only: it never starts, waits for, or stops
+workers.
 
 ## State And Logs
 

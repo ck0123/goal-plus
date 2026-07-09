@@ -11,6 +11,7 @@ from agentic_any_search_mcp.models import (
     GoalPlusTriage,
     SearchSpec,
 )
+from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
@@ -151,6 +152,19 @@ class SearchTools:
 
     def search_promote(self, run_id: str, candidate_id: str) -> dict[str, str]:
         return {"artifact_path": str(self.runtime.promote(run_id, candidate_id))}
+
+    def goal_plus_monitor_snapshot(
+        self,
+        goal_plus_id: str | None = None,
+        run_id: str | None = None,
+        stale_after_seconds: int = 600,
+    ) -> dict[str, Any]:
+        return goal_plus_monitor_snapshot(
+            root_dir=self.runtime.root_dir,
+            goal_plus_id=goal_plus_id,
+            run_id=run_id,
+            stale_after_seconds=stale_after_seconds,
+        )
 
 
 class GoalPlusTools:

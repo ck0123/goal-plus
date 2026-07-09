@@ -22,27 +22,64 @@ tests/
 ├── test_opencode_assets.py            # Bundled agents / skills are well-formed
 ├── test_pi_assets.py                  # Pi prompts / skills / extension are well-formed
 ├── test_pi_tool.py                    # Pi JSON CLI facade
-└── st/                                # System tests (real host code-agent run)
-    ├── conftest.py                    # Pre-flight checks + fixtures
-    ├── hosts.py                       # Host marker mapping and asset linking
-    ├── helpers/
-    │   ├── codex_runner.py            # subprocess wrapper for `codex exec`
-    │   ├── claude_runner.py           # subprocess wrapper for `claude -p`
-    │   ├── opencode_runner.py         # subprocess wrapper for `opencode run`
-    │   └── report_parser.py           # Parse st_report JSON block from stdout
-    ├── prompts/                       # Scenario prompt templates (with {{PROJECT_ROOT}})
-    │   ├── _schema.md                 # ST output contract docs
-    │   ├── circle_packing_continue.md
-    │   ├── circle_packing_two_batch.md
-    │   ├── circle_packing_random.md
-    │   ├── claude_k_module_smoke.md
-    │   ├── codex_redispatch.md
-    │   ├── k_module_smoke.md
-    │   ├── k_module_then_circle_packing.md
-    │   ├── signal_processing_multi.md
-    │   └── swe_bench_20212.md
-    └── test_st_scenarios.py           # Parametrized ST cases
+├── test_pi_driver.py                  # Pi native candidate driver orchestration
+├── test_pi_worker.py                  # Pi RPC worker runner metrics and retries
+├── st/                                # System tests (real host code-agent run)
+│   ├── conftest.py                    # Pre-flight checks + fixtures
+│   ├── hosts.py                       # Host marker mapping and asset linking
+│   ├── helpers/
+│   │   ├── codex_runner.py            # subprocess wrapper for `codex exec`
+│   │   ├── claude_runner.py           # subprocess wrapper for `claude -p`
+│   │   ├── opencode_runner.py         # subprocess wrapper for `opencode run`
+│   │   └── report_parser.py           # Parse st_report JSON block from stdout
+│   ├── prompts/                       # Scenario prompt templates (with {{PROJECT_ROOT}})
+│   │   ├── _schema.md                 # ST output contract docs
+│   │   ├── circle_packing_continue.md
+│   │   ├── circle_packing_two_batch.md
+│   │   ├── circle_packing_random.md
+│   │   ├── claude_k_module_smoke.md
+│   │   ├── codex_redispatch.md
+│   │   ├── k_module_smoke.md
+│   │   ├── k_module_then_circle_packing.md
+│   │   ├── signal_processing_multi.md
+│   │   └── swe_bench_20212.md
+│   └── test_st_scenarios.py           # Parametrized ST cases
+└── st_pi/                             # Pi native /goal-plus print/TUI ST
+    ├── conftest.py                    # Pi binary checks + per-test run root
+    └── test_goal_plus_pi.py           # Real Pi command/TUI Goal Plus cases
 ```
+
+## Testing Contract
+
+Use this contract when adding coverage, reviewing changes, or deciding what to
+run before merging.
+
+| Tier | Command | What it proves | What it does not prove |
+|---|---|---|---|
+| Default gate | `python -m pytest -q` | Models, runtime state machine, facades, bundled assets, example specs, and mock/fixture integration still behave | A real host agent can finish the user-visible workflow |
+| Runtime E2E | Included in default tests, e.g. `test_k_module_runtime.py` | Candidate workspaces, frozen verifier artifacts, selection, reports, and promotion logic work without a host agent | Host launch, prompt following, MCP wiring, native hooks, or real worker lifecycle |
+| System tests | `python -m pytest -m "st or st_pi" -v -s` | Real host/Pi entrypoints can drive the workflow and produce final runtime evidence | Full exhaustive strategy quality; ST is a slow final-effect gate |
+
+Rules:
+
+- Default tests must stay fast and must not launch real OpenCode, Codex,
+  Claude Code, or Pi workers.
+- Only ST results can be cited as proof that a user-visible host workflow works
+  end to end.
+- Any change to host assets, worker launch/budget/continuation, MCP/tool
+  gating, Pi native extension code, or `/goal-plus` command behavior must run a
+  matching ST before claiming final behavior.
+- If a matching ST cannot be run, the final report must say exactly which ST
+  was skipped and why.
+- New host-native paths need an ST smoke. New batch/round behavior needs an ST
+  cycle test that asserts the expected candidate count unless the test is
+  explicitly documented as link-level.
+- Every `tests/st/` ST must have `st` plus exactly one host marker:
+  `st_opencode`, `st_codex`, `st_claude`, or `st_pi_rpc`.
+- Pi native `/goal-plus` print/TUI tests live under `tests/st_pi/` and use
+  `st_pi`; Pi RPC worker tests live under `tests/st/` and use `st_pi_rpc`.
+- When adding, renaming, or deleting an ST, update this README's layout, run
+  commands, and marker list in the same change.
 
 ## Unit / Integration Tests (default)
 
@@ -80,7 +117,9 @@ host agent accidentally tries to run `pytest -m st` from inside an active ST,
 the correct path is for the host agent to call `search-runtime` MCP tools
 directly, then launch foreground workers from runtime launch payloads.
 
-ST tests are skipped by default. Pass `-m st` to enable them.
+ST tests are skipped by default. Pass `-m st` to enable `tests/st`, pass
+`-m st_pi` to enable Pi native `/goal-plus` tests, or pass
+`-m "st or st_pi"` for the complete real-host gate.
 
 ### Run
 
@@ -94,14 +133,23 @@ pytest -m "st and st_codex" -k codex_redispatch -v -s
 # Pi RPC worker smoke
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
 
+# Pi RPC circle-packing cycle, batch=2 and round=2
+pytest -m "st and st_pi_rpc" -k circle_packing_two_batch -v -s
+
+# Pi native /goal-plus print/TUI entrypoints
+pytest -m st_pi -v -s
+
 # Pi RPC worker smoke with explicit model and thinking level
 ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
 
 # Two-run isolation scenario (k_module then circle_packing, ~5-8 min)
 pytest -m "st and st_opencode" -k k_module_then_circle_packing -v -s
 
-# All scenarios for every installed/configured host
+# All tests/st scenarios for every installed/configured host
 pytest -m st -v -s
+
+# Complete real-host gate, including Pi native /goal-plus print/TUI ST
+pytest -m "st or st_pi" -v -s
 
 # Use a different host model
 ST_OPENCODE_MODEL=anthropic/claude-sonnet-4-6 pytest -m st -v -s
@@ -113,6 +161,7 @@ ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high pytest -m "st and st_p
 ST_OPENCODE_TIMEOUT=3600 pytest -m st -v -s
 ST_CODEX_TIMEOUT=3600 pytest -m "st and st_codex" -v -s
 ST_CLAUDE_TIMEOUT=3600 pytest -m "st and st_claude" -v -s
+ST_PI_CYCLE_WORKER_SECONDS=120 pytest -m "st and st_pi_rpc" -k circle_packing_two_batch -v -s
 ```
 
 `-s` is required: ST tests print the log path on failure, and pytest swallows
@@ -207,9 +256,10 @@ markers =
     st_opencode: ST case that runs through OpenCode
     st_codex: ST case that runs through Codex
     st_claude: ST case that runs through Claude Code
-    st_pi_rpc: ST case that runs a Pi RPC worker
+    st_pi_rpc: ST case that runs through Pi RPC
+    st_pi: ST case that runs through Pi native/print Goal Plus
 ```
 
-The `st` marker is what gates the opt-in behavior. Without `-m st`, every ST
-test is skipped with `ST tests not selected (use -m st to run)` — no preflight
-checks run, so normal `pytest` stays fast.
+The `st` and `st_pi` markers gate opt-in behavior. Without `-m st` or
+`-m st_pi`, every real-host test is skipped before expensive pre-flight checks,
+so normal `pytest` stays fast.

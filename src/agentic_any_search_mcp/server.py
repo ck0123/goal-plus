@@ -41,6 +41,24 @@ def create_mcp(
         return tools.search_status(run_id)
 
     @mcp.tool()
+    def goal_plus_monitor_snapshot(
+        goal_plus_id: str | None = None,
+        run_id: str | None = None,
+        stale_after_seconds: int = 600,
+    ) -> dict[str, Any]:
+        """Read-only Goal Plus/Search monitoring snapshot for polling agents.
+
+        Returns run, candidate, agent-session, verifier, host-log, and Pi usage
+        evidence from durable `.search` state. It does not start, wait for, or
+        interrupt workers.
+        """
+        return tools.goal_plus_monitor_snapshot(
+            goal_plus_id=goal_plus_id,
+            run_id=run_id,
+            stale_after_seconds=stale_after_seconds,
+        )
+
+    @mcp.tool()
     def search_list_history(
         run_id: str,
         top_n: int = 5,

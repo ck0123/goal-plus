@@ -37,6 +37,7 @@ SEARCH_TOOL_SUFFIXES = (
     "search_report",
     "search_promote",
     "pi_rpc_run_worker",
+    "pi_search_run_candidate",
 )
 MUTATING_TOOL_SUFFIXES = (
     "bash",

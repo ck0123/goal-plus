@@ -9,11 +9,16 @@ Use this flow exactly for `worker_host="pi-rpc"`:
 
 1. `search_plan_next`
 2. `search_start_batch`
-3. For each candidate, call `search_start_agent_session`.
-4. Pass the returned `launch` object to `pi_rpc_run_worker`.
-5. Immediately call `search_bind_agent_handle(agent_session_id, handle)` with the handle returned by `pi_rpc_run_worker`.
-6. After workers return, run final search_run_verifier without `agent_session_id` for each candidate that should be selected.
-7. Call `search_select`, `search_report`, and `search_promote` when promotion is requested.
+3. For each candidate, call `pi_search_run_candidate(run_id, candidate_id, directive?, final_verify=true)`.
+4. Review the returned `steps`, `handle.metadata.pi_metrics`, and `final_score_report`.
+5. Call `search_select`, `search_report`, and `search_promote` when promotion is requested.
+
+`pi_search_run_candidate` automatically performs the mechanical worker chain:
+`search_start_agent_session`, `pi_rpc_run_worker`,
+`search_bind_agent_handle`, and the final search_run_verifier without
+`agent_session_id` when `final_verify=true`. Use the low-level tools directly
+only for manual debugging, custom recovery, or a deliberate same-session
+continuation path.
 
 Worker launch is foreground and synchronous. `worker_budget.max_runtime_seconds` is required and maps to the Pi RPC process watchdog. `worker_budget.max_turns` is only a prompt hint.
 

@@ -46,6 +46,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "Search Mode" in text
     assert "goal_plus_create" in text
     assert "goal_plus_gate" in text
+    assert "goal_plus_monitor_snapshot" in text
     assert "goal_plus_link_search_run" in text
     assert "goal_plus_record_search_result" in text
     assert "final raw-goal audit" in text
@@ -59,10 +60,12 @@ def test_pi_search_skill_uses_rpc_worker_and_final_verifier() -> None:
         encoding="utf-8"
     )
 
+    assert "pi_search_run_candidate" in text
     assert "search_start_agent_session" in text
     assert "pi_rpc_run_worker" in text
     assert "search_bind_agent_handle" in text
     assert "final search_run_verifier" in text
+    assert "automatically" in text
     assert "search_select" in text
     assert "search_report" in text
     assert "search_promote" in text
@@ -103,6 +106,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
     assert "pi_rpc_run_worker" in text
+    assert "pi_search_run_candidate" in text
     assert 'pi.registerCommand("goal-plus"' in text
     assert "goal-plus-native-state" in text
     assert 'pi.on("session_start"' in text
@@ -131,6 +135,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "workspaceGuard" in text
     assert "MAIN_GATED_TOOLS" in text
     assert "pi_rpc_run_worker" in text
+    assert '"pi_search_run_candidate"' in text
     assert "block" in text
 
 
@@ -143,6 +148,9 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "parameters: toolParameters(name)" in text
     assert "parameters: JsonArgs" not in text
     assert "goal_plus_record_triage: Type.Object" in text
+    assert "goal_plus_monitor_snapshot: Type.Object" in text
+    assert "pi_search_run_candidate: Type.Object" in text
+    assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
     assert "is_optimization: Type.Boolean()" in text
     assert 'Type.Literal("spec_discovery")' in text
@@ -161,6 +169,10 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "worker_host=\"pi-rpc\"" in combined
     assert "agentic-any-search-pi-worker" in combined
     assert "agentic-any-search-pi-tool" in combined
+    assert "pi_search_run_candidate" in combined
+    assert "goal_plus_monitor_snapshot" in combined
+    assert "read-only" in combined
+    assert "automatically starts the agent session, runs the Pi RPC worker, binds the handle, and can run the final verifier" in combined
     assert "How Pi Differs From Other Hosts" in combined
     assert "native `/goal-plus` pre-create" in combined
     assert "pi -p" in combined

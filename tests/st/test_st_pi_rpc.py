@@ -7,12 +7,14 @@ from pathlib import Path
 import pytest
 
 from agentic_any_search_mcp.models import SearchSpec
+from agentic_any_search_mcp.pi_driver import run_pi_search_candidate
 from agentic_any_search_mcp.pi_worker import run_pi_rpc_worker
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
 ROOT = Path(__file__).resolve().parents[2]
 K_MODULE = ROOT / "tests" / "st" / "fixtures" / "k_module_problem"
+CIRCLE_PACKING = ROOT / "tests" / "st" / "fixtures" / "circle_packing"
 
 
 def _event_log_tool_calls(handle: dict, *, min_agent_starts: int = 1) -> list[tuple[str, dict]]:
@@ -120,6 +122,25 @@ def _pi_spec(*, max_runtime_seconds: int = 300) -> SearchSpec:
     return SearchSpec.model_validate(data)
 
 
+def _circle_packing_pi_spec(*, max_runtime_seconds: int = 300) -> SearchSpec:
+    data = json.loads((CIRCLE_PACKING / "spec.json").read_text(encoding="utf-8"))
+    data["source_path"] = str(CIRCLE_PACKING)
+    data["strategy"] = {
+        "name": "random",
+        "driver": "builtin",
+        "worker_mode": "agent-session-pool",
+        "worker_host": "pi-rpc",
+        "worker_budget": {
+            "max_runtime_seconds": max_runtime_seconds,
+            "max_turns": 8,
+            "on_exceed": "interrupt",
+        },
+        "config": {"seed": 42},
+    }
+    data["budget"] = {"max_candidates": 4, "max_parallel": 2}
+    return SearchSpec.model_validate(data)
+
+
 def _start_pi_candidate(
     runtime: FileSearchRuntime,
     *,
@@ -140,6 +161,87 @@ def _start_pi_candidate(
         },
     )
     return run_id, task, session
+
+
+def _candidate_summary(runtime: FileSearchRuntime, run_id: str) -> list[dict]:
+    return [
+        {
+            "candidate_id": record.candidate_id,
+            "status": record.status,
+            "score": (
+                record.score_report.aggregate_score
+                if record.score_report is not None
+                else None
+            ),
+            "iterations": len(record.iterations),
+        }
+        for record in runtime._load_candidate_records(run_id)
+    ]
+
+
+@pytest.mark.st
+@pytest.mark.st_pi_rpc
+def test_pi_rpc_circle_packing_two_batch(st_project_root: Path) -> None:
+    runtime = FileSearchRuntime(st_project_root / ".search")
+    spec = _circle_packing_pi_spec(
+        max_runtime_seconds=int(os.environ.get("ST_PI_CYCLE_WORKER_SECONDS", "300"))
+    )
+    frozen = runtime.freeze_spec(spec, [CIRCLE_PACKING / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    directives = [
+        "Implement a hexagonal lattice for 26 circles; edit initial_program.py and run the verifier.",
+        "Implement a square-grid shrink-to-fit packing for 26 circles; edit initial_program.py and run the verifier.",
+        "Implement concentric rings for 26 circles; edit initial_program.py and run the verifier.",
+        "Implement a boundary-hugging packing for 26 circles; edit initial_program.py and run the verifier.",
+    ]
+    completed_results: list[dict] = []
+
+    for round_index in (1, 2):
+        plan = runtime.plan_next(run_id, requested_k=2)
+        tasks = runtime.start_batch(run_id, plan.plan_id)
+        assert len(tasks) == 2
+        assert plan.planned_k == 2
+
+        for task in tasks:
+            directive = {
+                "goal": directives[len(completed_results)],
+                "round_index": round_index,
+                "batch_size": 2,
+            }
+            result = run_pi_search_candidate(
+                root_dir=runtime.root_dir,
+                run_id=run_id,
+                candidate_id=task.candidate_id,
+                directive=directive,
+                final_verify=True,
+                pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+                model_pattern=os.environ.get("ST_PI_MODEL"),
+                thinking_level=os.environ.get("ST_PI_THINKING"),
+            )
+            assert [step["tool"] for step in result["steps"]] == [
+                "search_start_agent_session",
+                "pi_rpc_run_worker",
+                "search_bind_agent_handle",
+                "search_run_verifier",
+            ]
+            completed_results.append(result)
+
+    selection = runtime.select(run_id)
+    report_path = runtime.report(run_id)
+    candidates = _candidate_summary(runtime, run_id)
+
+    assert len(completed_results) == 4
+    assert [result["candidate_id"] for result in completed_results] == [
+        "c001",
+        "c002",
+        "c003",
+        "c004",
+    ]
+    assert len(candidates) == 4
+    assert all(candidate["status"] == "evaluated" for candidate in candidates)
+    assert all(candidate["iterations"] >= 1 for candidate in candidates)
+    assert selection["selected_candidate_id"]
+    assert report_path.exists()
 
 
 @pytest.mark.st

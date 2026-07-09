@@ -110,3 +110,12 @@ def test_st_scenario_cases_cover_all_agent_hosts() -> None:
     }
 
     assert {"st_opencode", "st_codex", "st_claude"} <= marker_names
+
+
+def test_pi_rpc_circle_packing_cycle_is_selectable_by_marker() -> None:
+    from tests.st import test_st_pi_rpc
+
+    test_func = test_st_pi_rpc.test_pi_rpc_circle_packing_two_batch
+    marker_names = {mark.name for mark in getattr(test_func, "pytestmark", [])}
+
+    assert {"st", "st_pi_rpc"} <= marker_names

@@ -31,3 +31,7 @@ When the goal is search-ready:
 ## Gates
 
 Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`, `write`, `pi_rpc_run_worker`), Pi's extension calls `goal_plus_gate(event="pre_tool_use")`. At turn end, the extension calls `goal_plus_gate(event="stop")`; if the gate blocks, it queues the continuation prompt and triggers another model turn. If the extension is unavailable, manually call the same gates and follow their allow/block decisions.
+
+## Monitoring
+
+For read-only progress checks, use `goal_plus_monitor_snapshot(goal_plus_id?, run_id?, stale_after_seconds?)`. It summarizes durable `.search` evidence including run state, candidate counts, agent sessions, verifier iterations, Pi RPC token/cost/context metrics, and stale/timed-out warnings. It does not start, wait for, or stop workers.

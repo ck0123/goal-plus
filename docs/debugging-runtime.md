@@ -212,6 +212,20 @@ rg -n "agent_session_id|candidate_id|search_get_agent_context|search_run_verifie
   .search/host-logs/pi-rpc-*.jsonl .search/host-logs/pi-rpc-*.txt
 ```
 
+For periodic monitoring, prefer the read-only MCP/Pi facade snapshot instead
+of repeatedly opening logs:
+
+```bash
+agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+  --root .search \
+  --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
+  --pretty
+```
+
+The snapshot summarizes run state, candidate counts, agent sessions, verifier
+counts, Pi RPC duration/cost/context metrics, file mtimes, and stale/timed-out
+warnings from durable `.search` state.
+
 `session_jsonl_restart` means continuation restarts `pi --mode rpc` with the
 same `--session-id`. It is not a live process continuation. Search MCP
 `.search/runs/...` remains the authoritative state; Pi JSONL is transcript and
