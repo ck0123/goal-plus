@@ -190,10 +190,17 @@ def goal_plus_monitor_snapshot(
         if run_id is None and linked and linked.run_id:
             run_id = linked.run_id
 
-    if run_id is None:
+    if run_id is None and goal_plus_id is None:
         run_id = _latest_run_id(root)
         if run_id:
             warnings.append({"kind": "inferred_latest_run", "run_id": run_id})
+    elif run_id is None and goal_record is not None:
+        warnings.append(
+            {
+                "kind": "goal_without_linked_search",
+                "goal_plus_id": goal_record.goal_plus_id,
+            }
+        )
 
     run_payload: dict[str, Any] | None = None
     candidates_payload: dict[str, dict[str, Any]] = {}

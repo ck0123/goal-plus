@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
 from agentic_any_search_mcp.pi_tool import call_pi_tool
 from agentic_any_search_mcp.runtime import FileSearchRuntime
@@ -114,6 +115,32 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert snapshot["candidates"][second.candidate_id]["status"] == "created"
     assert snapshot["candidates"][second.candidate_id]["agent_session_count"] == 0
     assert any(warning["kind"] == "candidate_without_agent_session" for warning in snapshot["warnings"])
+
+
+def test_goal_plus_monitor_snapshot_does_not_attach_unlinked_latest_run(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime_root = tmp_path / ".search"
+    goal_runtime = FileGoalPlusRuntime(runtime_root)
+    goal = goal_runtime.create_goal("Analyze a model optimization target")
+
+    search_runtime = FileSearchRuntime(runtime_root)
+    frozen = search_runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    unrelated_run_id = search_runtime.create_run(frozen.frozen_spec_id)
+
+    snapshot = goal_plus_monitor_snapshot(
+        root_dir=runtime_root,
+        goal_plus_id=goal.goal_plus_id,
+    )
+
+    assert snapshot["goal_plus"]["goal_plus_id"] == goal.goal_plus_id
+    assert snapshot["goal_plus"]["linked_search"] is None
+    assert snapshot["run"] is None
+    assert snapshot["subagents"] == []
+    assert snapshot["candidates"] == {}
+    assert not any(warning["kind"] == "inferred_latest_run" for warning in snapshot["warnings"])
+    assert unrelated_run_id is not None
 
 
 def test_goal_plus_monitor_snapshot_is_exposed_to_mcp_and_pi_facade(tmp_path: Path) -> None:

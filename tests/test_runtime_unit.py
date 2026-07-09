@@ -883,7 +883,8 @@ def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
     assert candidate["agent_sessions"][0]["opencode_session_id"] == "opencode_session_001"
 
     report = runtime.report(run_id).read_text(encoding="utf-8")
-    assert "OpenCode Session" in report
+    assert "| Session | Host | Handle | Candidate | Verifier Runs |" in report
+    assert "Handle / OpenCode Session" not in report
     assert "opencode_session_001" in report
 
     with pytest.raises(ValueError, match="different OpenCode session"):

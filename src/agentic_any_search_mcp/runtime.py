@@ -997,10 +997,7 @@ class FileSearchRuntime:
                     "",
                     "## Agent Sessions",
                     "",
-                    (
-                        "| Session | Host | Handle / OpenCode Session | Candidate | Verifier Runs | "
-                        "Created | Updated |"
-                    ),
+                    "| Session | Host | Handle | Candidate | Verifier Runs | Created | Updated |",
                     "|---|---|---|---|---:|---|---|",
                 ]
             )
