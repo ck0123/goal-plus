@@ -34,6 +34,8 @@ def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
     text = (ROOT / ".pi" / "prompts" / "goal-plus.md").read_text(encoding="utf-8")
 
     assert 'goal_plus_create(raw_goal="$ARGUMENTS")' in text
+    assert 'worker_host: "pi-rpc"' in text
+    assert 'worker_mode: "agent-session-pool"' in text
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
     assert "{{input}}" not in text
     assert text.index("goal_plus_create") < text.index("Goal Plus")
@@ -56,8 +58,12 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "agentic-any-search-pi-tool goal_plus_monitor_snapshot" in text
     assert "Do not use manual file tailing as the primary monitoring path" in text
     assert "goal_plus_link_search_run" in text
+    assert 'worker_host: "pi-rpc"' in text
+    assert 'worker_mode: "agent-session-pool"' in text
+    assert "runtime default is OpenCode and is wrong for Pi" in text
     assert "pi_search_run_batch" in text
     assert "max_parallel=<budget.max_parallel>" in text
+    assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1" in text
     assert "pi_search_run_candidate" in text
     assert "search_start_agent_session" in text
     assert "pi_rpc_run_worker" in text
@@ -74,7 +80,8 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "goal_plus_record_search_result" in text
     assert "final raw-goal audit" in text
     assert "native Pi `/goal-plus` command creates" in text
-    assert "queues the continuation prompt" in text
+    assert "queues" in text
+    assert "the continuation prompt" in text
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
 
 
@@ -139,6 +146,9 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "workspaceGuard" in text
     assert "MAIN_GATED_TOOLS" in text
     assert "pi_rpc_run_worker" in text
+    assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER" in text
+    assert 'process.env.AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER === "1"' in text
+    assert "role === \"main\" && exposeLowLevelWorker" in text
     assert '"pi_search_run_candidate"' in text
     assert '"pi_search_run_batch"' in text
     assert "block" in text
@@ -178,6 +188,7 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "agentic-any-search-pi-worker" in combined
     assert "agentic-any-search-pi-tool" in combined
     assert "pi_search_run_batch" in combined
+    assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1" in combined
     assert "pi_search_run_candidate" in combined
     assert "goal_plus_monitor_snapshot" in combined
     assert "read-only" in combined

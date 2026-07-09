@@ -236,6 +236,32 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
     assert runtime.gate(record.goal_plus_id, event="stop", context={}).decision == "allow"
 
 
+def test_record_search_result_prefers_existing_runtime_artifact_paths(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize model")
+    runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    run_dir = tmp_path / ".search" / "runs" / "run_001"
+    report_path = run_dir / "report.md"
+    promotion_path = run_dir / "promotion" / "c001.patch"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text("# report\n", encoding="utf-8")
+    promotion_path.parent.mkdir(parents=True)
+    promotion_path.write_text("patch\n", encoding="utf-8")
+
+    final = runtime.record_search_result(
+        record.goal_plus_id,
+        run_id="run_001",
+        selected_candidate_id="c001",
+        report_path="/tmp/model-filled-report.md",
+        promotion_artifact_path="/tmp/model-filled-c001.patch",
+        summary="c001 won",
+    )
+
+    assert final.linked_search is not None
+    assert final.linked_search.report_path == str(report_path.resolve())
+    assert final.linked_search.promotion_artifact_path == str(promotion_path.resolve())
+
+
 def test_pre_tool_use_blocks_search_before_high_confidence_spec(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Maybe optimize something")

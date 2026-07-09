@@ -6,3 +6,7 @@ Except for loading the goal-plus skill, do not read or audit target files before
 Use `/skill:goal-plus` with this raw user goal:
 
 $ARGUMENTS
+
+When this Pi prompt opens Search Mode, the SearchSpec strategy must set
+`worker_host: "pi-rpc"` and `worker_mode: "agent-session-pool"` so workers run
+through the Pi RPC driver, not the default OpenCode host.

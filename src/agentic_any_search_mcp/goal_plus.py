@@ -312,6 +312,12 @@ class FileGoalPlusRuntime:
         summary: str | None = None,
     ) -> GoalPlusRecord:
         record = self._load_record(goal_plus_id)
+        report_path = self._canonical_report_path(run_id, report_path)
+        promotion_artifact_path = self._canonical_promotion_artifact_path(
+            run_id,
+            selected_candidate_id,
+            promotion_artifact_path,
+        )
         linked = (record.linked_search or GoalPlusLinkedSearch()).model_copy(
             update={
                 "run_id": run_id,
@@ -340,6 +346,24 @@ class FileGoalPlusRuntime:
             linked.model_dump(mode="json"),
         )
         return updated
+
+    def _canonical_report_path(self, run_id: str, fallback: str | None) -> str | None:
+        report_path = self.root_dir / "runs" / run_id / "report.md"
+        if report_path.exists():
+            return str(report_path.resolve())
+        return fallback
+
+    def _canonical_promotion_artifact_path(
+        self,
+        run_id: str,
+        selected_candidate_id: str | None,
+        fallback: str | None,
+    ) -> str | None:
+        if selected_candidate_id:
+            patch_path = self.root_dir / "runs" / run_id / "promotion" / f"{selected_candidate_id}.patch"
+            if patch_path.exists():
+                return str(patch_path.resolve())
+        return fallback
 
     def set_status(
         self,

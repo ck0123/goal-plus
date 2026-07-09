@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import threading
 from pathlib import Path
@@ -150,6 +151,42 @@ def test_freeze_spec_is_stable_and_copies_verifier(tmp_path: Path) -> None:
     assert first.frozen_spec_id == second.frozen_spec_id
     assert first.verifier_hashes["evaluator.py"] == sha256_file(project / "evaluator.py")
     assert Path(first.frozen_verifier_paths["evaluator.py"]).exists()
+
+
+def test_freeze_spec_normalizes_verifier_cwd_equal_to_source_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    project = repo / "examples" / "model-optimize" / "torch-cpu-target"
+    project.mkdir(parents=True)
+    (project / "initial_program.py").write_text("VALUE = 0\n", encoding="utf-8")
+    (project / "evaluator.py").write_text(
+        "import json\nprint(json.dumps({'combined_score': 1.0}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["source_path"] = "examples/model-optimize/torch-cpu-target"
+    spec_data["process_verifiers"][0]["cwd"] = "examples/model-optimize/torch-cpu-target"
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "promotion",
+            "role": "promotion_gate",
+            "command": ["python", "evaluator.py"],
+            "cwd": "examples/model-optimize/torch-cpu-target",
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+
+    assert frozen.spec.process_verifiers[0].cwd == "."
+    assert frozen.spec.promotion_verifiers[0].cwd == "."
 
 
 def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
@@ -952,6 +989,59 @@ def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path)
 
     assert first.candidate_id == first_task.candidate_id
     assert second.candidate_id == second_task.candidate_id
+
+
+def test_start_agent_session_allocates_unique_ids_under_parallel_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_for(project, max_candidates=2).model_dump(mode="json")
+    spec_data["budget"]["max_parallel"] = 2
+    frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    original_load_run = runtime._load_run
+    loaded_count = 0
+    loaded_lock = threading.Lock()
+    second_loaded = threading.Event()
+
+    def load_run_with_overlap(load_run_id: str):
+        nonlocal loaded_count
+        run = original_load_run(load_run_id)
+        if load_run_id == run_id:
+            with loaded_lock:
+                loaded_count += 1
+                current_count = loaded_count
+                if loaded_count == 2:
+                    second_loaded.set()
+            if current_count == 1:
+                second_loaded.wait(timeout=0.25)
+        return run
+
+    monkeypatch.setattr(runtime, "_load_run", load_run_with_overlap)
+    start_barrier = threading.Barrier(2)
+
+    def start(candidate_id: str):
+        start_barrier.wait(timeout=5)
+        return runtime.start_agent_session(run_id, candidate_id, {"goal": candidate_id})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        sessions = list(pool.map(start, [task.candidate_id for task in tasks]))
+
+    assert sorted(session.agent_session_id for session in sessions) == [
+        FileSearchRuntime._make_agent_session_id(run_id, 1),
+        FileSearchRuntime._make_agent_session_id(run_id, 2),
+    ]
+    assert sorted(session.candidate_id for session in sessions) == ["c001", "c002"]
+    assert sorted(session.agent_session_id for session in runtime._load_agent_sessions(run_id)) == [
+        FileSearchRuntime._make_agent_session_id(run_id, 1),
+        FileSearchRuntime._make_agent_session_id(run_id, 2),
+    ]
+    assert original_load_run(run_id).next_agent_session_index == 3
 
 
 def test_get_agent_context_has_only_authoritative_worker_fields(tmp_path: Path) -> None:

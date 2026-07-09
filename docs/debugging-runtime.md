@@ -186,9 +186,11 @@ Claude Code also exposes `claude agents --json`, `claude logs <id>`, and
 ### Pi RPC
 
 Pi workers are launched by `agentic-any-search-pi-worker`, not by the MCP
-server. The main Pi agent receives a `tool="pi_rpc_worker"` launch payload,
-calls `pi_rpc_run_worker`, then binds the returned handle with
-`search_bind_agent_handle`.
+server. Normal Pi Search Mode uses `pi_search_run_batch`, which starts agent
+sessions, runs foreground Pi RPC worker processes, binds returned handles, and
+can run final verifiers. The low-level `pi_rpc_run_worker` tool is hidden from
+the main Pi agent unless `AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is
+set for manual debugging.
 
 The runner starts:
 

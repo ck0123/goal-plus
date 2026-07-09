@@ -9,6 +9,20 @@ from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.tools import SearchTools
 
 
+def _search_tools_for_pi_rpc_run(root_dir: Path | str, run_id: str) -> SearchTools:
+    runtime = FileSearchRuntime(root_dir)
+    run = runtime._load_run(run_id)
+    frozen = runtime._load_frozen_spec(run.frozen_spec_id)
+    worker_host = frozen.spec.strategy.worker_host
+    if worker_host != "pi-rpc":
+        raise ValueError(
+            "Pi search drivers require SearchSpec strategy.worker_host='pi-rpc'; "
+            f"got {worker_host!r}. Freeze a Pi SearchSpec before calling "
+            "pi_search_run_candidate or pi_search_run_batch."
+        )
+    return SearchTools(runtime)
+
+
 def _worker_kwargs(
     *,
     pi_binary: str,
@@ -43,7 +57,7 @@ def run_pi_search_candidate(
     provider: str | None = None,
     model_id: str | None = None,
 ) -> dict[str, Any]:
-    tools = SearchTools(FileSearchRuntime(root_dir))
+    tools = _search_tools_for_pi_rpc_run(root_dir, run_id)
     steps: list[dict[str, Any]] = []
 
     session = tools.search_start_agent_session(
@@ -141,6 +155,7 @@ def run_pi_search_batch(
 ) -> dict[str, Any]:
     if not candidate_ids:
         raise ValueError("candidate_ids must not be empty")
+    _search_tools_for_pi_rpc_run(root_dir, run_id)
     worker_count = max_parallel or len(candidate_ids)
     if worker_count <= 0:
         raise ValueError("max_parallel must be > 0")

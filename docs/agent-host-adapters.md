@@ -85,9 +85,10 @@ the project extension owns the native `/goal-plus` command for interactive/RPC
 sessions, pre-creates the Goal Plus record, persists the active
 `goal_plus_id` in Pi custom session entries, injects hidden Goal Plus context
 on `before_agent_start`, runs the pre-tool gate from `tool_call` for
-`search_*`, `pi_rpc_run_worker`, and mutating built-ins, then runs the
-turn-level stop gate from `agent_end`. Completion statistics are emitted as a
-Pi custom entry/notification, not as an LLM message. In `pi -p` print mode, the
+`search_*`, explicitly exposed `pi_rpc_run_worker` debugging calls, and
+mutating built-ins, then runs the turn-level stop gate from `agent_end`.
+Completion statistics are emitted as a Pi custom entry/notification, not as an
+LLM message. In `pi -p` print mode, the
 checked-in prompt template is the compatibility path because the native command
 is intentionally not registered for print. No host currently ships a
 `SubagentStop` hook; Pi also has no host process Stop hook that can block
@@ -126,7 +127,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 |---|---|---|---|---|
 | Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
-| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or low-level `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
+| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or debug-only `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics` |

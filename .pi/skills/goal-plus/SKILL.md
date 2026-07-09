@@ -21,6 +21,11 @@ Use Spec Discovery Mode when the target needs a frozen verifier or edit surface.
 
 When the goal is search-ready:
 
+Before `search_freeze_spec`, ensure the SearchSpec strategy sets
+`worker_host: "pi-rpc"` and `worker_mode: "agent-session-pool"`. Pi Search Mode
+must run workers through the Pi RPC driver. Do not omit `worker_host`; the
+runtime default is OpenCode and is wrong for Pi.
+
 1. `search_freeze_spec`
 2. `search_create`
 3. `goal_plus_link_search_run`
@@ -44,8 +49,10 @@ or lifecycle supervision. `pi_search_run_candidate` performs the same chain for
 a single candidate:
 `search_start_agent_session`, `pi_rpc_run_worker`,
 `search_bind_agent_handle`, and the final `search_run_verifier` without
-`agent_session_id` when `final_verify=true`. Use the low-level tools directly
-only for manual debugging, custom recovery, or a deliberate same-session
+`agent_session_id` when `final_verify=true`. Normal Goal Plus/Search flow must
+not call the low-level `pi_rpc_run_worker` tool directly. It is hidden from the
+main Pi agent unless `AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set
+for manual debugging, custom recovery, or a deliberate same-session
 continuation path.
 
 Worker launch is foreground and synchronous. `worker_budget.max_runtime_seconds`
@@ -79,7 +86,13 @@ SearchSpec before opening Search Mode.
 
 ## Gates
 
-Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`, `write`, `pi_rpc_run_worker`), Pi's extension calls `goal_plus_gate(event="pre_tool_use")`. At turn end, the extension calls `goal_plus_gate(event="stop")`; if the gate blocks, it queues the continuation prompt and triggers another model turn. If the extension is unavailable, manually call the same gates and follow their allow/block decisions.
+Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`,
+`write`, and `pi_rpc_run_worker` when explicitly exposed for debugging), Pi's
+extension calls `goal_plus_gate(event="pre_tool_use")`. At turn end, the
+extension calls `goal_plus_gate(event="stop")`; if the gate blocks, it queues
+the continuation prompt and triggers another model turn. If the extension is
+unavailable, manually call the same gates and follow their allow/block
+decisions.
 
 ## Monitoring
 

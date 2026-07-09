@@ -44,11 +44,15 @@ to call `goal_plus_create` first. Interactive TUI/RPC sessions keep the native
 pre-create path.
 
 The Pi extension runs as `AGENTIC_ANY_SEARCH_PI_ROLE=main` by default and
-exposes `goal_plus_*`, `search_*`, and `pi_rpc_run_worker`. It restores the
-active Goal Plus state on session start, injects hidden Goal Plus context before
-agent starts, and calls `goal_plus_gate(event="pre_tool_use")` before main-role
-`search_*` tool calls, `pi_rpc_run_worker`, and mutating built-ins (`bash`,
-`edit`, `write`).
+exposes `goal_plus_*`, `search_*`, `pi_search_run_batch`, and
+`pi_search_run_candidate`. The low-level `pi_rpc_run_worker` tool is hidden in
+normal main-agent flow and is registered only when
+`AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set for manual debugging.
+The extension restores the active Goal Plus state on session start, injects
+hidden Goal Plus context before agent starts, and calls
+`goal_plus_gate(event="pre_tool_use")` before main-role `search_*` tool calls,
+explicitly exposed `pi_rpc_run_worker` debugging calls, and mutating built-ins
+(`bash`, `edit`, `write`).
 
 At turn end, the extension calls `goal_plus_gate(event="stop")`. If the gate
 blocks, it queues the runtime continuation prompt and triggers another Pi turn.
@@ -139,8 +143,9 @@ RPC worker, bind the handle, and can run the final verifier. The returned
 `steps` arrays record the exact tool chain:
 `search_start_agent_session`, `pi_rpc_run_worker`,
 `search_bind_agent_handle`, and `search_run_verifier` when final verification
-is enabled. Use the low-level tools directly only for manual debugging,
-custom recovery, or same-session continuation experiments.
+is enabled. The main agent should not call the low-level worker tool in normal
+Search Mode. To expose it for manual debugging, start Pi with
+`AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1`.
 
 The launch payload uses `tool="pi_rpc_worker"` and contains `root`, `cwd`,
 `agent_session_id`, `candidate_id`, `prompt`, `session_id`, and

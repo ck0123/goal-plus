@@ -4,9 +4,12 @@ from pathlib import Path
 import time
 from typing import Any
 
+import pytest
+
 from agentic_any_search_mcp.models import SearchSpec
 from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from agentic_any_search_mcp.runtime import FileSearchRuntime
+from tests.test_runtime_unit import spec_for
 
 
 def _make_project(tmp_path: Path) -> Path:
@@ -143,6 +146,26 @@ def test_run_pi_search_candidate_binds_worker_handle_and_final_verifies(
     assert record.score_report.aggregate_score == 7.0
     assert record.iterations[-1].agent_session_id is None
     assert record.iterations[-1].score == 7.0
+
+
+def test_run_pi_search_candidate_rejects_non_pi_rpc_search_spec(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    with pytest.raises(ValueError, match="worker_host.*pi-rpc"):
+        run_pi_search_candidate(
+            root_dir=runtime.root_dir,
+            run_id=run_id,
+            candidate_id=candidate.candidate_id,
+            worker_runner=lambda _launch, **_kwargs: {
+                "host": "pi-rpc",
+                "external_id": "should-not-run",
+            },
+        )
 
 
 def test_run_pi_search_batch_runs_worker_processes_in_parallel(tmp_path: Path) -> None:

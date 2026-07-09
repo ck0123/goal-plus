@@ -234,6 +234,28 @@ def relative_artifact_path(source_root: Path, artifact_path: Path) -> str:
         return artifact.name
 
 
+def _normalize_verifier_cwds_for_candidate_workspace(spec: SearchSpec) -> SearchSpec:
+    source_root = Path(spec.source_path).resolve()
+
+    def normalize_command(command: VerifierCommand) -> VerifierCommand:
+        cwd_path = Path(command.cwd)
+        if cwd_path.resolve() == source_root:
+            return command.model_copy(update={"cwd": "."})
+        return command
+
+    return spec.model_copy(
+        deep=True,
+        update={
+            "process_verifiers": [
+                normalize_command(command) for command in spec.process_verifiers
+            ],
+            "promotion_verifiers": [
+                normalize_command(command) for command in spec.promotion_verifiers
+            ],
+        },
+    )
+
+
 class FileSearchRuntime:
     def __init__(
         self,
@@ -246,6 +268,7 @@ class FileSearchRuntime:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
 
     def freeze_spec(self, spec: SearchSpec, verifier_artifacts: list[Path]) -> FrozenSpec:
+        spec = _normalize_verifier_cwds_for_candidate_workspace(spec)
         source_root = Path(spec.source_path).resolve()
         verifier_hashes: dict[str, str] = {}
 
@@ -563,59 +586,64 @@ class FileSearchRuntime:
         worker_agent_type_override: str | None = None,
         worker_budget_override: dict[str, Any] | None = None,
     ) -> AgentSessionRecord:
-        run = self._load_run(run_id)
-        if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
-            raise RuntimeError(f"cannot start agent session from state {run.state}")
-        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if run.state not in {
+                RunState.RUNNING,
+                RunState.WAITING_FOR_WORKERS,
+                RunState.SELECTING,
+            }:
+                raise RuntimeError(f"cannot start agent session from state {run.state}")
+            frozen = self._load_frozen_spec(run.frozen_spec_id)
 
-        candidate_record = self._load_candidate_record(run_id, candidate_id)
-        workspace = candidate_record.task.workspace
+            candidate_record = self._load_candidate_record(run_id, candidate_id)
+            workspace = candidate_record.task.workspace
 
-        agent_session_id = self._make_agent_session_id(run_id, run.next_agent_session_index)
-        run.next_agent_session_index += 1
-        now = utc_timestamp()
-        normalized_directive = self._normalize_main_directive(directive)
-        launch = self._build_launch_payload(
-            frozen=frozen,
-            candidate_id=candidate_id,
-            agent_session_id=agent_session_id,
-            directive=normalized_directive,
-            candidate_record=candidate_record,
-            worker_agent_type_override=worker_agent_type_override,
-            worker_budget_override=worker_budget_override,
-        )
-        host = frozen.spec.strategy.worker_host
-        host_handle = AgentHostHandle(host=host)
-        if host == "codex":
-            host_handle = host_handle.model_copy(
-                update={"task_name": launch.get("task_name")}
+            agent_session_id = self._make_agent_session_id(run_id, run.next_agent_session_index)
+            run.next_agent_session_index += 1
+            now = utc_timestamp()
+            normalized_directive = self._normalize_main_directive(directive)
+            launch = self._build_launch_payload(
+                frozen=frozen,
+                candidate_id=candidate_id,
+                agent_session_id=agent_session_id,
+                directive=normalized_directive,
+                candidate_record=candidate_record,
+                worker_agent_type_override=worker_agent_type_override,
+                worker_budget_override=worker_budget_override,
             )
-        elif host == "pi-rpc":
-            host_handle = host_handle.model_copy(
-                update={
-                    "external_id": launch.get("session_id", agent_session_id),
-                    "metadata": {
-                        "session_dir": launch.get("session_dir"),
-                        "continuation": "session_jsonl_restart",
-                    },
-                }
+            host = frozen.spec.strategy.worker_host
+            host_handle = AgentHostHandle(host=host)
+            if host == "codex":
+                host_handle = host_handle.model_copy(
+                    update={"task_name": launch.get("task_name")}
+                )
+            elif host == "pi-rpc":
+                host_handle = host_handle.model_copy(
+                    update={
+                        "external_id": launch.get("session_id", agent_session_id),
+                        "metadata": {
+                            "session_dir": launch.get("session_dir"),
+                            "continuation": "session_jsonl_restart",
+                        },
+                    }
+                )
+            session = AgentSessionRecord(
+                agent_session_id=agent_session_id,
+                run_id=run_id,
+                candidate_id=candidate_id,
+                host=host,
+                host_handle=host_handle,
+                created_at=now,
+                updated_at=now,
+                directive=normalized_directive,
+                workspace=workspace,
+                launch=launch,
+                counters={},
             )
-        session = AgentSessionRecord(
-            agent_session_id=agent_session_id,
-            run_id=run_id,
-            candidate_id=candidate_id,
-            host=host,
-            host_handle=host_handle,
-            created_at=now,
-            updated_at=now,
-            directive=normalized_directive,
-            workspace=workspace,
-            launch=launch,
-            counters={},
-        )
-        self._write_run(run)
-        self._write_agent_session(session)
-        return session
+            self._write_run(run)
+            self._write_agent_session(session)
+            return session
 
     def bind_opencode_session(
         self,

@@ -7,6 +7,7 @@ import { type TSchema, Type } from "typebox";
 const role = process.env.AGENTIC_ANY_SEARCH_PI_ROLE || "main";
 const runtimeRoot = process.env.AGENTIC_ANY_SEARCH_ROOT || ".search";
 const sourcePath = process.env.AGENTIC_ANY_SEARCH_SOURCE_PATH;
+const exposeLowLevelWorker = process.env.AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER === "1";
 const isPrintInvocation = process.argv.includes("-p") || process.argv.includes("--print");
 const STATE_ENTRY_TYPE = "goal-plus-native-state";
 const GOAL_PLUS_STATS_ENTRY_TYPE = "goal-plus-stats";
@@ -868,7 +869,7 @@ export default function (pi: ExtensionAPI) {
 	for (const tool of role === "worker" ? workerTools : mainTools) {
 		registerRuntimeTool(pi, tool);
 	}
-	if (role === "main") registerPiWorkerTool(pi);
+	if (role === "main" && exposeLowLevelWorker) registerPiWorkerTool(pi);
 	pi.on("tool_call", async (event, ctx) => {
 		return workspaceGuard(event) || (await mainGate(event, ctx));
 	});
