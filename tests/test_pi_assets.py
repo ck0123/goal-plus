@@ -10,11 +10,16 @@ def test_pi_assets_exist() -> None:
     for path in (
         ".pi/prompts/goal-plus.md",
         ".pi/skills/goal-plus/SKILL.md",
-        ".pi/skills/search/SKILL.md",
         ".pi/prompts/any-search-worker.md",
         ".pi/extensions/search-runtime.ts",
     ):
         assert (ROOT / path).exists(), f"missing {path}"
+
+    skill_files = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / ".pi" / "skills").glob("*/SKILL.md")
+    )
+    assert skill_files == [".pi/skills/goal-plus/SKILL.md"]
 
 
 def test_pyproject_exposes_pi_console_scripts() -> None:
@@ -47,25 +52,15 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "goal_plus_create" in text
     assert "goal_plus_gate" in text
     assert "goal_plus_monitor_snapshot" in text
+    assert "primary read-only monitoring path" in text
+    assert "agentic-any-search-pi-tool goal_plus_monitor_snapshot" in text
+    assert "Do not use manual file tailing as the primary monitoring path" in text
     assert "goal_plus_link_search_run" in text
-    assert "goal_plus_record_search_result" in text
-    assert "final raw-goal audit" in text
-    assert "native Pi `/goal-plus` command creates" in text
-    assert "queues the continuation prompt" in text
-    assert "do not read or audit target files before `goal_plus_record_triage`" in text
-
-
-def test_pi_search_skill_uses_rpc_worker_and_final_verifier() -> None:
-    text = (ROOT / ".pi" / "skills" / "search" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
-
     assert "pi_search_run_candidate" in text
     assert "search_start_agent_session" in text
     assert "pi_rpc_run_worker" in text
     assert "search_bind_agent_handle" in text
-    assert "final search_run_verifier" in text
-    assert "automatically" in text
+    assert "final `search_run_verifier`" in text
     assert "search_select" in text
     assert "search_report" in text
     assert "search_promote" in text
@@ -73,6 +68,12 @@ def test_pi_search_skill_uses_rpc_worker_and_final_verifier() -> None:
     assert "early `search_run_verifier`" in text
     assert "verification of the unmodified starting point" in text
     assert "verifier-recorded runtime iterations" in text
+    assert "complete user-facing skill" in text
+    assert "goal_plus_record_search_result" in text
+    assert "final raw-goal audit" in text
+    assert "native Pi `/goal-plus` command creates" in text
+    assert "queues the continuation prompt" in text
+    assert "do not read or audit target files before `goal_plus_record_triage`" in text
 
 
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
@@ -172,6 +173,9 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "pi_search_run_candidate" in combined
     assert "goal_plus_monitor_snapshot" in combined
     assert "read-only" in combined
+    assert "one user-facing `goal-plus` skill" in combined
+    assert "does not expose a separate user-facing `search` skill" in combined
+    assert ".pi/skills/goal-plus/" in combined
     assert "automatically starts the agent session, runs the Pi RPC worker, binds the handle, and can run the final verifier" in combined
     assert "How Pi Differs From Other Hosts" in combined
     assert "native `/goal-plus` pre-create" in combined

@@ -16,6 +16,9 @@ to start as a fully specified search problem.
 
 - [Flow and Design](flow-and-design.md): modes, triage flow, MCP
   boundary, frozen-spec rules, and implementation shape.
+- [Bounded Optimization Boundary](bounded-optimization-boundary.md): narrow
+  Goal Plus boundaries for root harness evidence, resource audit links, and
+  multi-card allocation without adding nested orchestration.
 - [MCP API Impact](api-impact.md): current `search_*` API assessment and the
   implemented minimal `goal_plus_*` API surface.
 
@@ -37,10 +40,12 @@ the Search MCP runtime; it sits above it. The host agent or skill performs
 intake, decides whether a frozen spec is available, and only then calls the
 existing search tools.
 
-Codex and Claude Code also ship Goal Plus host hooks through
+Codex and Claude Code ship Goal Plus host hooks through
 `agentic-any-search-mcp --goal-plus-host-hook`.
 `PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
 current top-level session, and `Stop` catches unfinished records only when the
 bound session matches or `GOAL_PLUS_ID` explicitly selects the record.
-OpenCode and all PreToolUse / SubagentStop checkpoints remain
-instruction-driven.
+Pi uses its project extension instead: native `/goal-plus` pre-create for
+interactive/RPC sessions, pre-tool gates for Search Mode and mutating tools,
+and a turn-end gate. OpenCode and Codex/Claude PreToolUse or SubagentStop
+checkpoints remain instruction-driven.

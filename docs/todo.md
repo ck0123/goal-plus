@@ -8,6 +8,10 @@ the runtime to more host and hardware-heavy scenarios.
 Resource allocation for scenario-specific assets belongs to the main agent or
 strategy layer, not to the runtime state machine.
 
+The broader Goal Plus boundary for optimization-shaped scenarios is tracked in
+[goal-plus/bounded-optimization-boundary.md](goal-plus/bounded-optimization-boundary.md).
+This TODO captures the near-term resource-allocation slice of that boundary.
+
 Examples include:
 
 - NPU/GPU card assignment for KernelAgent-style runs.

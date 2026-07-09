@@ -41,8 +41,8 @@ the final completion audit still checks whether the original goal is satisfied.
    verification, history, reports, and promotion. It does not become a generic
    lifecycle supervisor for all goals.
 4. **Domain scenarios should be thin.** A scenario contributes detection hints,
-   verifier bootstrap steps, spec templates, and edit-surface heuristics. It
-   should not fork the runtime.
+   verifier bootstrap guidance, and edit-surface heuristics. It should not fork
+   the runtime.
 5. **Final success is broader than best score.** Selecting a best candidate is
    not automatically the same as completing the user's original goal.
 
@@ -288,6 +288,11 @@ src/agentic_any_search_mcp/tools.py / server.py
   - host-specific worker launch notes
   - manual gate checkpoints for PreToolUse and SubagentStop
 
+.pi/skills/goal-plus/SKILL.md
+  - single Pi skill for Goal Mode, Spec Discovery Mode, and Search Mode
+  - Pi RPC worker flow is folded into this skill instead of a separate
+    user-facing search skill
+
 agentic-any-search-mcp --goal-plus-host-hook
 .codex/hooks.json
 .claude/settings.json
@@ -307,6 +312,10 @@ Likely future additions, if needed, are:
   `SearchSpec`
 - host asset tests that ensure the `goal-plus` commands do not bypass the
   required search workflow
+
+For bounded optimization gaps such as root harness evidence, resource ledger
+links, and multi-card allocation audit without nested orchestration, see
+[bounded-optimization-boundary.md](bounded-optimization-boundary.md).
 
 ## Scenario Packs
 

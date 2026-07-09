@@ -227,8 +227,8 @@ the runtime contract, update the matching assets and tests:
   `.claude/agents/any-search-agent*.md`, `.mcp.json`, and
   `tests/test_claude_assets.py`.
 - Pi: `.pi/prompts/goal-plus.md`, `.pi/prompts/any-search-worker.md`,
-  `.pi/skills/goal-plus/SKILL.md`, `.pi/skills/search/SKILL.md`,
-  `.pi/extensions/search-runtime.ts`, and `tests/test_pi_assets.py`.
+  `.pi/skills/goal-plus/SKILL.md`, `.pi/extensions/search-runtime.ts`, and
+  `tests/test_pi_assets.py`.
 
 Do not let agents rediscover retired runtime APIs. The deleted lifecycle,
 observation, submit, abort, and host-sync APIs must not reappear in host assets.
@@ -268,9 +268,31 @@ entry point.
 
 High-level rule:
 
-1. Inspect `.search/runs/<run_id>/...` to see what the runtime recorded.
-2. Inspect the host-native transcript/log to see what the worker actually did.
-3. Cross-reference by `agent_session_id`, `candidate_id`, and host handle.
+1. Use the read-only monitor tool first for Goal Plus/Search status.
+2. Inspect `.search/runs/<run_id>/...` only when the monitor output does not
+   include the field or artifact you need.
+3. Inspect the host-native transcript/log only when debugging worker behavior.
+4. Cross-reference by `agent_session_id`, `candidate_id`, and host handle.
+
+Goal Plus/Search monitoring:
+
+- Prefer the MCP monitor tool `goal_plus_monitor_snapshot` for active or
+  completed Goal Plus/Search runs. It summarizes goal status, linked run state,
+  selected candidate, candidate scores, verifier counts, subagent liveness,
+  Pi token/cost/context metrics, stale warnings, and report/promotion paths.
+- If the MCP tool is not directly exposed in the current host, use the matching
+  facade instead of manually tailing files, for example:
+
+  ```bash
+  agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+    --root .search \
+    --args-json '{"goal_plus_id":"gp_...","run_id":"run_...","stale_after_seconds":120}' \
+    --pretty
+  ```
+
+- Use raw `.search/` files and host logs as a fallback for missing fields,
+  transcript details, or verifier log inspection. Do not use manual file tailing
+  as the primary monitoring path.
 
 Host log sources:
 

@@ -1,6 +1,6 @@
 ---
 name: goal-plus
-description: Run Goal Plus in Pi, including Goal Mode, Spec Discovery Mode, and Search Mode through agentic-any-search-mcp.
+description: Use when Pi receives a /goal-plus request that may need Goal Mode, Spec Discovery Mode, or bounded Search Mode.
 ---
 
 # Goal Plus For Pi
@@ -24,9 +24,52 @@ When the goal is search-ready:
 1. `search_freeze_spec`
 2. `search_create`
 3. `goal_plus_link_search_run`
-4. Use `/skill:search` for Pi Search Mode.
-5. After selection/promotion, call `goal_plus_record_search_result`.
-6. Run the final raw-goal audit and then `goal_plus_set_status`.
+4. `search_plan_next`
+5. `search_start_batch`
+6. For each candidate, call
+   `pi_search_run_candidate(run_id, candidate_id, directive?, final_verify=true)`.
+7. Review the returned `steps`, `handle.metadata.pi_metrics`, and
+   `final_score_report`.
+8. Call `search_select`, `search_report`, and `search_promote` when promotion is
+   requested.
+9. Call `goal_plus_record_search_result`.
+10. Run the final raw-goal audit and then `goal_plus_set_status`.
+
+`pi_search_run_candidate` automatically performs the mechanical worker chain:
+`search_start_agent_session`, `pi_rpc_run_worker`,
+`search_bind_agent_handle`, and the final `search_run_verifier` without
+`agent_session_id` when `final_verify=true`. Use the low-level tools directly
+only for manual debugging, custom recovery, or a deliberate same-session
+continuation path.
+
+Worker launch is foreground and synchronous. `worker_budget.max_runtime_seconds`
+is required and maps to the Pi RPC process watchdog. `worker_budget.max_turns`
+is only a prompt hint.
+
+Continuation uses `session_jsonl_restart`: `search_continue_agent_session`
+returns another `pi_rpc_run_worker` launch using the same Pi `--session-id`; it
+is not a live stdin continuation. If a worker times out or exits before
+producing useful verifier evidence, prefer `search_redispatch_candidate` to
+create a new `agent_session_id` for the same candidate workspace.
+
+History is runtime-owned, not a local plan file. Workers must call
+`search_get_agent_context` first and use `context.history` plus
+`context.iterations` as the resume source.
+
+For optimization tasks, require workers to create a complete candidate artifact
+and run an early `search_run_verifier` before any long local optimization loop.
+For fix/target tasks, require the allowed-file edit before the verifier call; do
+not count verification of the unmodified starting point as worker evidence.
+Search progress must be visible as verifier-recorded runtime iterations, not
+hidden in the worker transcript or scratch scripts.
+
+## Skill Boundary
+
+Pi exposes `goal-plus` as the complete user-facing skill. Do not split Search
+Mode or scenario-specific optimization guidance into additional visible Pi
+skills. Keep domain constraints in the raw user goal, target workspace docs, or
+example documentation, and let Goal Plus discover the verifier-backed
+SearchSpec before opening Search Mode.
 
 ## Gates
 
@@ -34,4 +77,25 @@ Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`, `writ
 
 ## Monitoring
 
-For read-only progress checks, use `goal_plus_monitor_snapshot(goal_plus_id?, run_id?, stale_after_seconds?)`. It summarizes durable `.search` evidence including run state, candidate counts, agent sessions, verifier iterations, Pi RPC token/cost/context metrics, and stale/timed-out warnings. It does not start, wait for, or stop workers.
+For active or completed Goal Plus/Search runs, use
+`goal_plus_monitor_snapshot(goal_plus_id?, run_id?, stale_after_seconds?)`
+first. It is the primary read-only monitoring path.
+
+The monitor summarizes durable `.search` evidence including goal status, linked
+run state, selected candidate, report and promotion paths, candidate scores,
+agent sessions, verifier iterations, Pi RPC token/cost/context metrics, and
+stale/timed-out warnings. It does not start, wait for, or stop workers.
+
+If the MCP tool is not directly exposed in the current host, use the matching
+Pi facade instead of manually tailing state files:
+
+```bash
+agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+  --root .search \
+  --args-json '{"goal_plus_id":"gp_...","run_id":"run_...","stale_after_seconds":120}' \
+  --pretty
+```
+
+Read raw `.search/` files or host logs only when the monitor output is missing
+the field you need, or when debugging a specific transcript, verifier log, or
+host failure. Do not use manual file tailing as the primary monitoring path.

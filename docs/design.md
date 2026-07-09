@@ -235,6 +235,7 @@ Workers must not modify denied files, frozen verifier artifacts, or the main sou
 - `.opencode/agents/AnySearchAgent*.md`: managed subagent prompts
 - `.codex/skills/search/SKILL.md`, `.codex/agents/any_search_agent.toml`: Codex host assets
 - `.claude/skills/search/SKILL.md`, `.claude/agents/any-search-agent.md`: Claude Code host assets
+- `.pi/skills/goal-plus/SKILL.md`, `.pi/prompts/any-search-worker.md`, `.pi/extensions/search-runtime.ts`: Pi host assets; Pi folds Search Mode guidance into the single user-facing `goal-plus` skill
 
 ## Current Boundary
 

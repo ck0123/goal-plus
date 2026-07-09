@@ -229,9 +229,13 @@ Goal:
 Search requirements:
   - strategy.worker_host must be pi-rpc
   - use search_freeze_spec, search_create, goal_plus_link_search_run
-  - use the Pi search skill flow: search_plan_next, search_start_batch,
-    search_start_agent_session, pi_rpc_run_worker, search_bind_agent_handle
-  - after workers return, run final search_run_verifier without agent_session_id
+  - use the Pi Goal Plus Search Mode flow: search_plan_next,
+    search_start_batch, pi_search_run_candidate(final_verify=true)
+  - if debugging low-level worker launch, inspect the recorded
+    search_start_agent_session, pi_rpc_run_worker, and search_bind_agent_handle
+    steps from pi_search_run_candidate
+  - after workers return, ensure a final search_run_verifier exists without
+    agent_session_id
   - call search_select and search_report
   - do not promote automatically
 

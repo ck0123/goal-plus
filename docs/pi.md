@@ -1,8 +1,8 @@
 # Pi
 
 Pi support is implemented inside this repository without changing Pi core. The
-project ships Pi prompt templates, skills, and an extension under `.pi/`, plus
-two Python console scripts used by that extension.
+project ships Pi prompt templates, one user-facing `goal-plus` skill, and an
+extension under `.pi/`, plus two Python console scripts used by that extension.
 
 ## Setup
 
@@ -121,7 +121,9 @@ process watchdog. `max_turns` is only included as a prompt hint.
 
 ## Runtime Flow
 
-Pi Search Mode uses the same durable Search runtime as other hosts:
+Pi does not expose a separate user-facing `search` skill. After `goal-plus`
+opens Search Mode, the Pi main agent uses the same durable Search runtime as
+other hosts:
 
 1. `search_plan_next`
 2. `search_start_batch`

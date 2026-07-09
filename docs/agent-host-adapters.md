@@ -123,7 +123,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 
 | Capability | OpenCode | Codex | Claude Code | Pi RPC |
 |---|---|---|---|---|
-| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.agents/skills/goal-plus/`, `.agents/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
+| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
 | Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_candidate` convenience driver, or low-level `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
