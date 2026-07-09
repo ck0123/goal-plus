@@ -908,32 +908,50 @@ def test_continue_agent_session_requires_bound_opencode_session(tmp_path: Path) 
         runtime.continue_agent_session(session.agent_session_id)
 
 
-def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path) -> None:
-    """With max_parallel=1, the runtime must not refuse to start sessions
-    for additional candidates. OpenCode/main-agent is responsible for not
-    launching too many simultaneous Tasks."""
+def test_plan_next_caps_batch_size_to_max_parallel(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec_data = spec_for(project, max_candidates=4).model_dump(mode="json")
+    spec_data["budget"]["max_parallel"] = 2
+    frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=4)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    assert plan.requested_k == 4
+    assert plan.planned_k == 2
+    assert [task.candidate_id for task in tasks] == ["c001", "c002"]
+
+    next_plan = runtime.plan_next(run_id, requested_k=4)
+    next_tasks = runtime.start_batch(run_id, next_plan.plan_id)
+
+    assert next_plan.planned_k == 2
+    assert [task.candidate_id for task in next_tasks] == ["c003", "c004"]
+
+
+def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path) -> None:
+    """max_parallel sizes batches; the runtime does not supervise live workers."""
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_for(project, max_candidates=2).model_dump(mode="json")
     spec_data["budget"]["max_parallel"] = 1
     frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=3)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    first_plan = runtime.plan_next(run_id, requested_k=2)
+    first_task = runtime.start_batch(run_id, first_plan.plan_id)[0]
+    second_plan = runtime.plan_next(run_id, requested_k=2)
+    second_task = runtime.start_batch(run_id, second_plan.plan_id)[0]
 
     first = runtime.start_agent_session(
-        run_id, tasks[0].candidate_id, {"goal": "first"},
+        run_id, first_task.candidate_id, {"goal": "first"},
     )
     second = runtime.start_agent_session(
-        run_id, tasks[1].candidate_id, {"goal": "second"},
-    )
-    third = runtime.start_agent_session(
-        run_id, tasks[2].candidate_id, {"goal": "third"},
+        run_id, second_task.candidate_id, {"goal": "second"},
     )
 
-    assert first.candidate_id == tasks[0].candidate_id
-    assert second.candidate_id == tasks[1].candidate_id
-    assert third.candidate_id == tasks[2].candidate_id
+    assert first.candidate_id == first_task.candidate_id
+    assert second.candidate_id == second_task.candidate_id
 
 
 def test_get_agent_context_has_only_authoritative_worker_fields(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.pi_driver import run_pi_search_candidate
+from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
 
@@ -78,6 +78,40 @@ def _pi_search_run_candidate_tool(
     return call
 
 
+def _pi_search_run_batch_tool(
+    root_dir: Path | str,
+) -> Callable[..., dict[str, Any]]:
+    def call(
+        run_id: str,
+        candidate_ids: list[str],
+        directive: dict[str, Any] | str | None = None,
+        final_verify: bool = True,
+        max_parallel: int | None = None,
+        pi_binary: str = "pi",
+        extension_path: str | None = None,
+        thinking_level: str | None = None,
+        model_pattern: str | None = None,
+        provider: str | None = None,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        return run_pi_search_batch(
+            root_dir=root_dir,
+            run_id=run_id,
+            candidate_ids=candidate_ids,
+            directive=directive,
+            final_verify=final_verify,
+            max_parallel=max_parallel,
+            pi_binary=pi_binary,
+            extension_path=extension_path,
+            thinking_level=thinking_level,
+            model_pattern=model_pattern,
+            provider=provider,
+            model_id=model_id,
+        )
+
+    return call
+
+
 def _registry(root_dir: Path | str) -> dict[str, Callable[..., Any]]:
     search_tools = SearchTools(FileSearchRuntime(root_dir))
     goal_tools = GoalPlusTools(FileGoalPlusRuntime(root_dir))
@@ -87,6 +121,7 @@ def _registry(root_dir: Path | str) -> dict[str, Callable[..., Any]]:
     for name in GOAL_PLUS_TOOL_NAMES:
         tools[name] = getattr(goal_tools, name)
     tools["pi_search_run_candidate"] = _pi_search_run_candidate_tool(root_dir)
+    tools["pi_search_run_batch"] = _pi_search_run_batch_tool(root_dir)
     tools["goal_plus_monitor_snapshot"] = search_tools.goal_plus_monitor_snapshot
     return tools
 

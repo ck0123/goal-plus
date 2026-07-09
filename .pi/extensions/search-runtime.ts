@@ -264,8 +264,31 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
+	pi_search_run_batch: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_ids: Type.Array(Type.String()),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			final_verify: Type.Optional(Type.Boolean()),
+			max_parallel: Type.Optional(Type.Number()),
+			pi_binary: Type.Optional(Type.String()),
+			extension_path: Type.Optional(Type.String()),
+			thinking_level: Type.Optional(Type.String()),
+			model_pattern: Type.Optional(Type.String()),
+			provider: Type.Optional(Type.String()),
+			model_id: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
 };
-const MAIN_GATED_TOOLS = new Set(["bash", "edit", "write", "pi_rpc_run_worker", "pi_search_run_candidate"]);
+const MAIN_GATED_TOOLS = new Set([
+	"bash",
+	"edit",
+	"write",
+	"pi_rpc_run_worker",
+	"pi_search_run_candidate",
+	"pi_search_run_batch",
+]);
 
 interface GoalPlusNativeState {
 	activeGoalPlusId?: string;
@@ -839,6 +862,7 @@ export default function (pi: ExtensionAPI) {
 		"search_report",
 		"search_promote",
 		"pi_search_run_candidate",
+		"pi_search_run_batch",
 	];
 	const workerTools = ["search_get_agent_context", "search_run_verifier", "search_list_iterations"];
 	for (const tool of role === "worker" ? workerTools : mainTools) {

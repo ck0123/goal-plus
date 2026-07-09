@@ -48,10 +48,11 @@ The runtime does not wait for, abort, supervise, or synchronize host workers.
 It records provenance and verifier counters only after the host or worker calls
 the corresponding MCP tools.
 
-Pi main-agent assets expose `pi_search_run_candidate` as a host-native
-convenience driver for steps 5 through 10. It still uses the same runtime
-records and returns step evidence; it does not plan batches, select winners,
-write reports, or promote patches.
+Pi main-agent assets expose `pi_search_run_batch` as the default host-native
+driver for steps 5 through 10 across the candidate ids returned by
+`search_start_batch`; `pi_search_run_candidate` is the single-candidate
+fallback. Both still use the same runtime records and return step evidence;
+they do not plan batches, select winners, write reports, or promote patches.
 
 ## Goal Plus Enforcement Levels
 
@@ -125,7 +126,7 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 |---|---|---|---|---|
 | Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
-| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_candidate` convenience driver, or low-level `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
+| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or low-level `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics` |
@@ -167,8 +168,9 @@ Runtime length control is not currently equivalent across hosts:
 | Pi RPC | supported with `.pi/prompts/any-search-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | `agentic-any-search-pi-worker` aborts then kills the Pi RPC process group after the deadline; `max_turns` is only a prompt hint |
 
 `budget.max_candidates`, `budget.max_parallel`, and strategy round settings
-control how many workers the runtime plans. They do not bound how long an
-individual host worker thinks or edits once launched.
+control how many workers the runtime plans and how many candidates it puts in a
+planned batch. They do not bound how long an individual host worker thinks or
+edits once launched.
 
 Use `strategy.worker_budget` for host-neutral worker limits:
 

@@ -95,6 +95,56 @@ def test_pi_tool_dispatches_candidate_driver(monkeypatch, tmp_path: Path) -> Non
     ]
 
 
+def test_pi_tool_dispatches_batch_driver(monkeypatch, tmp_path: Path) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_run_pi_search_batch(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {
+            "ok": True,
+            "run_id": kwargs["run_id"],
+            "candidate_ids": kwargs["candidate_ids"],
+            "results": [],
+        }
+
+    monkeypatch.setattr(
+        "agentic_any_search_mcp.pi_tool.run_pi_search_batch",
+        fake_run_pi_search_batch,
+    )
+
+    result = call_pi_tool(
+        tmp_path / ".search",
+        "pi_search_run_batch",
+        {
+            "run_id": "run_1",
+            "candidate_ids": ["c001", "c002"],
+            "directive": {"goal": "try batch"},
+            "final_verify": True,
+            "max_parallel": 2,
+            "pi_binary": "fake-pi",
+            "model_pattern": "gpt-test",
+        },
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "root_dir": tmp_path / ".search",
+            "run_id": "run_1",
+            "candidate_ids": ["c001", "c002"],
+            "directive": {"goal": "try batch"},
+            "final_verify": True,
+            "max_parallel": 2,
+            "pi_binary": "fake-pi",
+            "extension_path": None,
+            "thinking_level": None,
+            "model_pattern": "gpt-test",
+            "provider": None,
+            "model_id": None,
+        }
+    ]
+
+
 def test_pi_tool_rejects_unknown_tool(tmp_path: Path) -> None:
     try:
         call_pi_tool(tmp_path / ".search", "search_abort_agent_session", {})

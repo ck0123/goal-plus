@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
@@ -119,4 +120,71 @@ def run_pi_search_candidate(
         "bound_session": bound_session,
         "final_score_report": final_score_report,
         "steps": steps,
+    }
+
+
+def run_pi_search_batch(
+    *,
+    root_dir: Path | str,
+    run_id: str,
+    candidate_ids: list[str],
+    directive: dict[str, Any] | str | None = None,
+    final_verify: bool = True,
+    max_parallel: int | None = None,
+    worker_runner: Callable[..., dict[str, Any]] | None = None,
+    pi_binary: str = "pi",
+    extension_path: Path | str | None = None,
+    thinking_level: str | None = None,
+    model_pattern: str | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    if not candidate_ids:
+        raise ValueError("candidate_ids must not be empty")
+    worker_count = max_parallel or len(candidate_ids)
+    if worker_count <= 0:
+        raise ValueError("max_parallel must be > 0")
+    worker_count = min(worker_count, len(candidate_ids))
+
+    def run_one(candidate_id: str) -> dict[str, Any]:
+        return run_pi_search_candidate(
+            root_dir=root_dir,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            directive=directive,
+            final_verify=final_verify,
+            worker_runner=worker_runner,
+            pi_binary=pi_binary,
+            extension_path=extension_path,
+            thinking_level=thinking_level,
+            model_pattern=model_pattern,
+            provider=provider,
+            model_id=model_id,
+        )
+
+    results_by_candidate: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(run_one, candidate_id): candidate_id
+            for candidate_id in candidate_ids
+        }
+        for future in as_completed(futures):
+            candidate_id = futures[future]
+            try:
+                results_by_candidate[candidate_id] = future.result()
+            except Exception as exc:
+                results_by_candidate[candidate_id] = {
+                    "ok": False,
+                    "run_id": run_id,
+                    "candidate_id": candidate_id,
+                    "error": str(exc),
+                }
+
+    ordered_results = [results_by_candidate[candidate_id] for candidate_id in candidate_ids]
+    return {
+        "ok": all(result.get("ok") is True for result in ordered_results),
+        "run_id": run_id,
+        "candidate_ids": candidate_ids,
+        "max_parallel": worker_count,
+        "results": ordered_results,
     }

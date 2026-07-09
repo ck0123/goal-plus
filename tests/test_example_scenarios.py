@@ -115,8 +115,21 @@ def test_two_round_examples_create_batches_and_verify_baseline(
 
     first_plan = tools.search_plan_next(run_id, 4)
     first_round = tools.search_start_batch(run_id, first_plan["plan_id"])
+    second_plan = tools.search_plan_next(run_id, 4)
+    second_round = tools.search_start_batch(run_id, second_plan["plan_id"])
 
-    assert [task["candidate_id"] for task in first_round] == ["c001", "c002", "c003", "c004"]
+    first_expected = [
+        f"c{index:03d}" for index in range(1, expected["max_parallel"] + 1)
+    ]
+    second_expected = [
+        f"c{index:03d}"
+        for index in range(expected["max_parallel"] + 1, expected["max_candidates"] + 1)
+    ]
+
+    assert first_plan["planned_k"] == expected["max_parallel"]
+    assert second_plan["planned_k"] == expected["max_parallel"]
+    assert [task["candidate_id"] for task in first_round] == first_expected
+    assert [task["candidate_id"] for task in second_round] == second_expected
     assert first_round[0]["hypothesis"] == "Independent candidate c001"
 
     for candidate_id in ("c001", "c002"):
@@ -138,8 +151,8 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         assert report["verifier_results"][0]["metrics"][metric_name] == report["aggregate_score"]
 
     history = tools.search_list_history(run_id)
-    assert history["total_candidates"] == 4
-    assert history["returned_candidates"] == min(4, expected["max_candidates"])
+    assert history["total_candidates"] == expected["max_candidates"]
+    assert history["returned_candidates"] == min(5, expected["max_candidates"])
     assert history["sort_by"] == "score"
     assert history["candidates"][0]["score"] >= history["candidates"][1]["score"]
     assert metric_name in history["candidates"][0]["key_metrics"]
@@ -148,5 +161,5 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert [item["candidate_id"] for item in created_history["candidates"]] == ["c001", "c002"]
 
     status = tools.search_status(run_id)
-    assert status["candidates_total"] == 4
+    assert status["candidates_total"] == expected["max_candidates"]
     assert status["candidates_evaluated"] == 2

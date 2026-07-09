@@ -159,7 +159,7 @@ Each step lists **who acts** and **what they see**.
 | `directive` (at session start or continuation) | Pass a goal to the worker | Mostly meaningful for `agent_guided`; in builtin evolve the proposal overrides it |
 | `search_continue_agent_session(agent_session_id)` | Reuse the same OpenCode session and candidate workspace | Requires `search_bind_opencode_session` with the Task `metadata.sessionId`; this is not a fork |
 | `search_redispatch_candidate(run_id, candidate_id)` | Start a new worker on the same candidate workspace | Portable state-level resume; may override `worker_agent_type` / `worker_budget` for the new launch |
-| `budget.max_parallel` | Batch planning hint | Used to size planned groups, not to supervise Task lifecycle |
+| `budget.max_parallel` | Batch planning cap | Used to size planned groups, not to supervise Task lifecycle |
 
 ## 5. OpenCode Platform Hard Constraints
 

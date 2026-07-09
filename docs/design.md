@@ -186,7 +186,9 @@ OpenCode/Codex/Claude Code capability matrix and adapter contract.
 
 `budget.max_candidates` limits total candidate workspaces and is enforced by planning/start APIs.
 
-`budget.max_parallel` is a batch planning hint. The runtime does not gate session creation on it and does not supervise Task lifecycle.
+`budget.max_parallel` caps how many candidates `search_plan_next` places in one
+planned batch. The runtime does not supervise host worker lifecycle after the
+host launches those workers.
 
 There are no runtime-owned time-based deadlines. Host workers run until their
 host-local budget, step cap, or user interruption stops them. OpenCode worker

@@ -390,7 +390,7 @@ class FileSearchRuntime:
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         spec = frozen.spec
         remaining = max(0, spec.budget.max_candidates - run.candidates_total)
-        planned_k = min(requested_k, remaining)
+        planned_k = min(requested_k, remaining, spec.budget.max_parallel)
         strategy = spec.strategy
         self._validate_host_strategy(strategy)
         mode = self._strategy_mode(strategy)

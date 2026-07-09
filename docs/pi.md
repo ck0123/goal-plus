@@ -127,12 +127,16 @@ other hosts:
 
 1. `search_plan_next`
 2. `search_start_batch`
-3. `pi_search_run_candidate(run_id, candidate_id, directive?, final_verify=true)`
-4. inspect the returned step evidence, handle metadata, and final score report
+3. `pi_search_run_batch(run_id, candidate_ids, directive?, final_verify=true, max_parallel=<budget.max_parallel>)`
+4. inspect the returned per-candidate step evidence, handle metadata, and final score reports
 5. `search_select`, `search_report`, `search_promote`
 
-`pi_search_run_candidate` automatically starts the agent session, runs the Pi RPC worker, binds the handle, and can run the final verifier. The returned
-`steps` array records the exact tool chain:
+`pi_search_run_batch` runs the candidate workers concurrently up to the planned
+`max_parallel` window and returns ordered per-candidate results.
+`pi_search_run_candidate` is the single-candidate fallback for manual recovery
+or debugging. Both drivers automatically start the agent session, run the Pi
+RPC worker, bind the handle, and can run the final verifier. The returned
+`steps` arrays record the exact tool chain:
 `search_start_agent_session`, `pi_rpc_run_worker`,
 `search_bind_agent_handle`, and `search_run_verifier` when final verification
 is enabled. Use the low-level tools directly only for manual debugging,
@@ -187,10 +191,10 @@ agentic-any-search-pi-tool search_get_agent_context \
 ```
 
 It dispatches to the same `SearchTools` and `GoalPlusTools` Python facade used
-by the MCP server. It also exposes `pi_search_run_candidate`, a Pi-native
-candidate driver that wraps the mechanical Search Mode worker chain while
-leaving planning, selection, reporting, and promotion as explicit runtime
-steps.
+by the MCP server. It also exposes `pi_search_run_batch` and
+`pi_search_run_candidate`, Pi-native candidate drivers that wrap the mechanical
+Search Mode worker chain while leaving planning, selection, reporting, and
+promotion as explicit runtime steps.
 
 The same facade exposes the generic read-only monitor tool:
 

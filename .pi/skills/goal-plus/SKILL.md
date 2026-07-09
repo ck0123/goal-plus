@@ -26,16 +26,22 @@ When the goal is search-ready:
 3. `goal_plus_link_search_run`
 4. `search_plan_next`
 5. `search_start_batch`
-6. For each candidate, call
+6. For a multi-candidate batch, call
+   `pi_search_run_batch(run_id, candidate_ids, directive?, final_verify=true, max_parallel=<budget.max_parallel>)`.
+   For a single candidate or manual recovery, call
    `pi_search_run_candidate(run_id, candidate_id, directive?, final_verify=true)`.
 7. Review the returned `steps`, `handle.metadata.pi_metrics`, and
-   `final_score_report`.
+   `final_score_report` for each result.
 8. Call `search_select`, `search_report`, and `search_promote` when promotion is
    requested.
 9. Call `goal_plus_record_search_result`.
 10. Run the final raw-goal audit and then `goal_plus_set_status`.
 
-`pi_search_run_candidate` automatically performs the mechanical worker chain:
+`pi_search_run_batch` runs candidate workers concurrently up to
+`max_parallel`, then returns ordered per-candidate results. It is still a
+foreground host driver: it does not add runtime-owned wait, abort, heartbeat,
+or lifecycle supervision. `pi_search_run_candidate` performs the same chain for
+a single candidate:
 `search_start_agent_session`, `pi_rpc_run_worker`,
 `search_bind_agent_handle`, and the final `search_run_verifier` without
 `agent_session_id` when `final_verify=true`. Use the low-level tools directly

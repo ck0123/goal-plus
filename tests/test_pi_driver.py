@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 from agentic_any_search_mcp.models import SearchSpec
-from agentic_any_search_mcp.pi_driver import run_pi_search_candidate
+from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
@@ -62,6 +63,18 @@ def _pi_rpc_spec(project: Path) -> SearchSpec:
             },
         }
     )
+
+
+def _pi_rpc_spec_with_budget(
+    project: Path,
+    *,
+    max_candidates: int,
+    max_parallel: int,
+) -> SearchSpec:
+    data = _pi_rpc_spec(project).model_dump(mode="json")
+    data["budget"]["max_candidates"] = max_candidates
+    data["budget"]["max_parallel"] = max_parallel
+    return SearchSpec.model_validate(data)
 
 
 def test_run_pi_search_candidate_binds_worker_handle_and_final_verifies(
@@ -130,3 +143,46 @@ def test_run_pi_search_candidate_binds_worker_handle_and_final_verifies(
     assert record.score_report.aggregate_score == 7.0
     assert record.iterations[-1].agent_session_id is None
     assert record.iterations[-1].score == 7.0
+
+
+def test_run_pi_search_batch_runs_worker_processes_in_parallel(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        _pi_rpc_spec_with_budget(project, max_candidates=2, max_parallel=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    candidates = runtime.start_batch(run_id, plan.plan_id)
+    events: list[tuple[str, str, float]] = []
+
+    def fake_worker(launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        candidate_id = str(launch["candidate_id"])
+        events.append((candidate_id, "start", time.monotonic()))
+        time.sleep(0.2)
+        events.append((candidate_id, "end", time.monotonic()))
+        Path(launch["cwd"], "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+        return {
+            "host": "pi-rpc",
+            "external_id": launch["session_id"],
+            "metadata": {"event_log": f"/tmp/{candidate_id}.jsonl"},
+        }
+
+    result = run_pi_search_batch(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_ids=[candidate.candidate_id for candidate in candidates],
+        final_verify=False,
+        max_parallel=2,
+        worker_runner=fake_worker,
+    )
+
+    starts = {candidate_id: at for candidate_id, phase, at in events if phase == "start"}
+    ends = {candidate_id: at for candidate_id, phase, at in events if phase == "end"}
+
+    assert result["ok"] is True
+    assert result["candidate_ids"] == ["c001", "c002"]
+    assert [item["ok"] for item in result["results"]] == [True, True]
+    assert starts["c002"] < ends["c001"]
+    assert starts["c001"] < ends["c002"]

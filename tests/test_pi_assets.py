@@ -56,6 +56,8 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "agentic-any-search-pi-tool goal_plus_monitor_snapshot" in text
     assert "Do not use manual file tailing as the primary monitoring path" in text
     assert "goal_plus_link_search_run" in text
+    assert "pi_search_run_batch" in text
+    assert "max_parallel=<budget.max_parallel>" in text
     assert "pi_search_run_candidate" in text
     assert "search_start_agent_session" in text
     assert "pi_rpc_run_worker" in text
@@ -107,6 +109,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
     assert "pi_rpc_run_worker" in text
+    assert "pi_search_run_batch" in text
     assert "pi_search_run_candidate" in text
     assert 'pi.registerCommand("goal-plus"' in text
     assert "goal-plus-native-state" in text
@@ -137,6 +140,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "MAIN_GATED_TOOLS" in text
     assert "pi_rpc_run_worker" in text
     assert '"pi_search_run_candidate"' in text
+    assert '"pi_search_run_batch"' in text
     assert "block" in text
 
 
@@ -151,6 +155,9 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "goal_plus_record_triage: Type.Object" in text
     assert "goal_plus_monitor_snapshot: Type.Object" in text
     assert "pi_search_run_candidate: Type.Object" in text
+    assert "pi_search_run_batch: Type.Object" in text
+    assert "candidate_ids: Type.Array(Type.String())" in text
+    assert "max_parallel: Type.Optional(Type.Number())" in text
     assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
     assert "is_optimization: Type.Boolean()" in text
@@ -170,13 +177,16 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "worker_host=\"pi-rpc\"" in combined
     assert "agentic-any-search-pi-worker" in combined
     assert "agentic-any-search-pi-tool" in combined
+    assert "pi_search_run_batch" in combined
     assert "pi_search_run_candidate" in combined
     assert "goal_plus_monitor_snapshot" in combined
     assert "read-only" in combined
     assert "one user-facing `goal-plus` skill" in combined
     assert "does not expose a separate user-facing `search` skill" in combined
     assert ".pi/skills/goal-plus/" in combined
-    assert "automatically starts the agent session, runs the Pi RPC worker, binds the handle, and can run the final verifier" in combined
+    assert "automatically start the agent session" in combined
+    assert "run the Pi" in combined
+    assert "RPC worker, bind the handle, and can run the final verifier" in combined
     assert "How Pi Differs From Other Hosts" in combined
     assert "native `/goal-plus` pre-create" in combined
     assert "pi -p" in combined
