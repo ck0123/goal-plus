@@ -54,6 +54,7 @@ from agentic_any_search_mcp.workspaces import (
     copy_source_tree,
     initialize_workspace_git_baseline,
     list_files,
+    materialize_candidate_workspace,
 )
 
 
@@ -2098,14 +2099,30 @@ class FileSearchRuntime:
         if base_candidate_id and base_candidate_id not in parent_candidate_ids:
             parent_candidate_ids.insert(0, base_candidate_id)
 
+        base_workspace: Path | None = None
+        base_revision: str | None = None
         if base_candidate_id:
             base_record = self._load_candidate_record(run.run_id, base_candidate_id)
-            copy_source_tree(base_record.task.workspace, workspace)
-        else:
-            copy_source_tree(Path(run.source_path), workspace)
-        scratch_dir = workspace / ".tmp"
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-        initialize_workspace_git_baseline(workspace)
+            base_workspace = base_record.task.workspace
+            if frozen.spec.workspace.backend == "git_worktree":
+                best_iteration = self._best_iteration_record(
+                    base_record, frozen.spec.metric_direction
+                )
+                if best_iteration is not None and best_iteration.git_head is not None:
+                    base_revision = best_iteration.git_head
+                else:
+                    base_revision = self._git_head(base_record.task.workspace)
+
+        materialization = materialize_candidate_workspace(
+            backend=frozen.spec.workspace.backend,
+            run_dir=self._run_dir(run.run_id),
+            source=Path(run.source_path),
+            workspace=workspace,
+            run_id=run.run_id,
+            candidate_id=candidate_id,
+            base_workspace=base_workspace,
+            base_revision=base_revision,
+        )
 
         instructions = [
             "Work only inside this candidate workspace.",
@@ -2137,6 +2154,9 @@ class FileSearchRuntime:
             plan_id=plan.plan_id,
             hypothesis=hypothesis,
             workspace=workspace,
+            workspace_backend=materialization.backend,
+            workspace_branch=materialization.branch,
+            workspace_base_revision=materialization.base_revision,
             allowed_files=frozen.spec.edit_surface.allow,
             denied_files=frozen.spec.edit_surface.deny,
             instructions=instructions,
@@ -2150,6 +2170,9 @@ class FileSearchRuntime:
                 "worker_policy": plan.worker_policy,
                 "plan_id": plan.plan_id,
                 "slot": slot,
+                "workspace_backend": materialization.backend,
+                "workspace_branch": materialization.branch,
+                "workspace_base_revision": materialization.base_revision,
             },
         )
 
