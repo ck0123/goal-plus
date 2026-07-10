@@ -193,11 +193,12 @@ def _ensure_worktree_repository(run_dir: Path, source: Path, run_id: str) -> Pat
                 try:
                     _git_output(repository, "rev-parse", "HEAD")
                 except RuntimeError as exc:
-                    raise RuntimeError(
-                        f"run workspace repository is incomplete or corrupt: {repository}"
-                    ) from exc
-                _git_run(repository, "branch", "-M", baseline_branch)
-                return repository
+                    if isinstance(exc.__cause__, FileNotFoundError):
+                        raise
+                    shutil.rmtree(repository)
+                else:
+                    _git_run(repository, "branch", "-M", baseline_branch)
+                    return repository
 
     staging = run_dir / "workspace-repository.init"
     copy_source_tree(source, staging)

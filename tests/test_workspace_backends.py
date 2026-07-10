@@ -172,6 +172,7 @@ def test_git_worktree_recovers_incomplete_run_repository(tmp_path: Path) -> None
     run_dir = tmp_path / "run"
     repository = run_dir / "workspace-repository"
     repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
     (repository / "partial.txt").write_text("incomplete\n", encoding="utf-8")
     workspace = run_dir / "workspace" / "c001"
 
