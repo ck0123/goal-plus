@@ -41,6 +41,7 @@ Pi RPC. See
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
 | `workspace-backends/` | tiny local Python source tree | none (runtime-only E2E) | 3 Git worktree candidates, including a follow-up from the best parent commit |
+| `model-opt-gpu/` | future standalone TorchBench `BERT_pytorch` source | `/goal-plus` host on V100 | **WIP, incomplete, not validated, and not recommended yet**; preparation prompt only |
 
 For each example, start through `/goal-plus`. The goal-plus layer records the
 raw goal, triage, frozen verifier confirmation, and final raw-goal audit. Once

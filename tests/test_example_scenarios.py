@@ -242,3 +242,43 @@ def test_git_worktree_workspace_demo_runs_end_to_end(tmp_path: Path) -> None:
     assert summary["child_base_revision"] == summary["parent_best_git_head"]
     assert summary["selected_candidate_id"] == "c003"
     assert Path(summary["report_path"]).exists()
+
+
+def test_model_opt_gpu_wip_docs_define_future_v100_goal_plus_contract() -> None:
+    example_dir = ROOT / "examples" / "model-opt-gpu"
+    readme = (example_dir / "README.md").read_text(encoding="utf-8")
+    prompt = (
+        example_dir / "bert_pytorch_v100_goal_plus.md"
+    ).read_text(encoding="utf-8")
+    examples_index = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+
+    assert "WIP" in readme
+    assert "not recommended" in readme.lower()
+    assert "not validated" in readme.lower()
+    assert "model-opt-gpu" in examples_index
+    assert "WIP" in examples_index
+
+    required_prompt_terms = (
+        "/goal-plus",
+        "pytorch/benchmark",
+        "BERT_pytorch",
+        "BenchmarkModel",
+        "standalone",
+        "CUDA_VISIBLE_DEVICES",
+        "detected_gpu_count",
+        "git_worktree",
+        "10%",
+        "torch.cuda.synchronize",
+        "median",
+        "correctness",
+        "non-finite",
+        "triton_ops/",
+        "AI-Infra-Auto-Driven-SKILLS",
+    )
+    for term in required_prompt_terms:
+        assert term in prompt
+
+    assert "max_parallel=1" not in prompt
+    assert '"max_parallel": 1' not in prompt
+    assert "Do not invent a baseline" in prompt
+    assert "Do not start Search Mode" in prompt
