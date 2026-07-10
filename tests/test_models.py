@@ -56,6 +56,22 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
 
 
+def test_search_spec_supports_copy_and_git_worktree_workspace_backends() -> None:
+    default_spec = SearchSpec.model_validate(valid_spec_dict())
+    assert default_spec.workspace.backend == "copy"
+    assert default_spec.model_dump(mode="json")["workspace"] == {"backend": "copy"}
+
+    worktree_data = valid_spec_dict()
+    worktree_data["workspace"] = {"backend": "git_worktree"}
+    worktree_spec = SearchSpec.model_validate(worktree_data)
+    assert worktree_spec.workspace.backend == "git_worktree"
+
+    invalid_data = valid_spec_dict()
+    invalid_data["workspace"] = {"backend": "overlay"}
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(invalid_data)
+
+
 def test_search_spec_requires_structured_strategy() -> None:
     data = valid_spec_dict()
     data["strategy"] = {"name": "agent_guided", "history_policy": {"scope": "top_n", "top_n": 3}}

@@ -44,6 +44,13 @@ class Budget(SearchModel):
     max_tokens: int | None = Field(default=None, gt=0)
 
 
+WorkspaceBackend = Literal["copy", "git_worktree"]
+
+
+class WorkspaceSpec(SearchModel):
+    backend: WorkspaceBackend = "copy"
+
+
 class EditSurface(SearchModel):
     allow: list[str] = Field(min_length=1)
     deny: list[str] = Field(default_factory=list)
@@ -145,6 +152,7 @@ class SearchSpec(SearchModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     root_hypotheses: list[str] = Field(default_factory=list)
     strategy: StrategySpec = Field(default_factory=StrategySpec)
+    workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
 
     @field_validator("source_path")
     @classmethod
@@ -258,6 +266,9 @@ class CandidateTask(SearchModel):
     plan_id: str | None = None
     hypothesis: str
     workspace: Path
+    workspace_backend: WorkspaceBackend = "copy"
+    workspace_branch: str | None = None
+    workspace_base_revision: str | None = None
     allowed_files: list[str]
     denied_files: list[str]
     instructions: list[str] = Field(default_factory=list)
