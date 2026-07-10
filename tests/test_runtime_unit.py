@@ -465,6 +465,71 @@ def test_redispatch_candidate_creates_new_session_with_tier_override(tmp_path: P
     assert worker_policy["worker_agent_type"] == "AnySearchAgentFlash"
 
 
+def test_redispatch_context_includes_previous_progress_handoff(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_with_host(
+        project, "pi-rpc", strategy_name="random", max_candidates=1
+    ).model_dump(mode="json")
+    spec_data["strategy"]["worker_budget"] = {
+        "max_runtime_seconds": 60,
+        "max_turns": 8,
+    }
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    first = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        first.agent_session_id,
+        {
+            "host": "pi-rpc",
+            "external_id": first.agent_session_id,
+            "metadata": {
+                "timed_out": True,
+                "assistant_text": None,
+                "progress_handoff": {
+                    "status": "timed_out",
+                    "summary": "implemented parser skeleton",
+                    "workspace": {"dirty": True, "changed_files": ["initial_program.py"]},
+                    "verifier": {"count": 0},
+                },
+            },
+        },
+    )
+    resumed = runtime.redispatch_candidate(
+        run_id,
+        task.candidate_id,
+        {"goal": "finish and verify"},
+        worker_budget={"max_runtime_seconds": 120, "max_turns": 8},
+    )
+
+    context = runtime.get_agent_context(resumed.agent_session_id)
+
+    assert context["resume"]["is_redispatch"] is True
+    assert context["resume"]["latest_handoff"]["summary"] == "implemented parser skeleton"
+    assert context["resume"]["previous_sessions"] == [
+        {
+            "agent_session_id": first.agent_session_id,
+            "timed_out": True,
+            "runner_failed": False,
+            "assistant_summary": None,
+            "progress_handoff": {
+                "status": "timed_out",
+                "summary": "implemented parser skeleton",
+                "workspace": {"dirty": True, "changed_files": ["initial_program.py"]},
+                "verifier": {"count": 0},
+            },
+            "error": None,
+        }
+    ]
+    assert context["resume"]["workspace"]["dirty"] is False
+    assert resumed.launch["budget_control"]["max_runtime_seconds"] == 120
+
+
 def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -513,6 +578,7 @@ def test_start_agent_session_returns_pi_rpc_launch_payload(tmp_path: Path) -> No
     assert session.host_handle.host == "pi-rpc"
     assert session.host_handle.external_id == session.agent_session_id
     assert session.launch["tool"] == "pi_rpc_worker"
+    assert session.launch["run_id"] == run_id
     assert session.launch["root"] == str(runtime.root_dir)
     assert session.launch["cwd"] == str(task.workspace)
     assert session.launch["session_id"] == session.agent_session_id

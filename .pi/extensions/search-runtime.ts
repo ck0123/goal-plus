@@ -261,6 +261,9 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			candidate_id: Type.String(),
 			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
 			redispatch: Type.Optional(Type.Boolean()),
+			runtime_multiplier: Type.Optional(
+				Type.Number({ exclusiveMinimum: 1, maximum: 2 }),
+			),
 			final_verify: Type.Optional(Type.Boolean()),
 		},
 		{ additionalProperties: false },

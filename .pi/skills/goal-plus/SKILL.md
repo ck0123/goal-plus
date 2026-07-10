@@ -93,6 +93,17 @@ evidence, use state-level resume by calling
 `agent_session_id` for the same candidate workspace, and recovers prior work
 from MCP history, verifier iterations, and Git state.
 
+Each worker also leaves a bounded `progress_handoff` in its bound handle. It
+combines the optional `.tmp/handoff.json` recovery note with a runner-owned Git
+and verifier snapshot. `search_get_agent_context` exposes it under
+`context.resume`; use this explicit resume object instead of relying on a Pi
+transcript or on whether the candidate appears in top-N history.
+
+When the previous attempt has no useful verifier evidence but its handoff shows
+real progress, the main agent may redispatch once with `runtime_multiplier`
+greater than 1 and at most 2. This scales only the frozen Pi
+`max_runtime_seconds` for that fresh launch; it does not mutate the spec.
+
 Do not redispatch only because the worker handle has `timed_out=true`. When the
 candidate already has a `process_passed=true` Git-backed iteration, that best
 iteration remains valid search evidence and eligible for later planning and
@@ -101,8 +112,8 @@ selection. Official history reports that best evidence in `score` and
 later timeout or regression for diagnosis.
 
 History is runtime-owned, not a local plan file. Workers must call
-`search_get_agent_context` first and use `context.history` plus
-`context.iterations` as the resume source.
+`search_get_agent_context` first and use `context.resume`, `context.history`,
+and `context.iterations` as the resume source.
 
 For optimization tasks, require workers to create a complete candidate artifact
 and run an early `search_run_verifier` before any long local optimization loop.

@@ -8,7 +8,7 @@ import pytest
 
 from agentic_any_search_mcp.models import SearchSpec
 from agentic_any_search_mcp.pi_driver import run_pi_search_candidate
-from agentic_any_search_mcp.pi_worker import run_pi_rpc_worker
+from agentic_any_search_mcp.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 
@@ -34,7 +34,7 @@ def _event_log_tool_calls(handle: dict, *, min_agent_starts: int = 1) -> list[tu
             if data.get("sessionId"):
                 state_session_ids.add(data["sessionId"])
         if event.get("type") == "tool_execution_start":
-            calls.append((event.get("toolName", ""), event.get("args") or {}))
+            calls.append((event.get("tool_name", ""), {}))
     assert agent_starts >= min_agent_starts
     assert thinking_levels <= {"high"}
     assert state_session_ids <= {handle["external_id"]}
@@ -53,33 +53,18 @@ def _assert_gp_worker_artifacts(
     record = runtime._load_candidate_record(run_id, candidate_id)
     workspace = Path(record.task.workspace).resolve()
 
-    def allowed_mutation_path(raw_path: str | None) -> bool:
-        if not raw_path:
-            return False
-        path = Path(raw_path)
-        resolved = path.resolve() if path.is_absolute() else (workspace / path).resolve()
-        return resolved == workspace / "initial_program.py" or resolved.is_relative_to(
-            workspace / ".tmp"
-        )
-
     assert calls[0][0] == "search_get_agent_context"
     assert any(name == "search_run_verifier" for name, _args in calls)
     edit_indexes = [
         index
-        for index, (name, args) in enumerate(calls)
+        for index, (name, _args) in enumerate(calls)
         if name in {"edit", "write"}
-        and Path(args.get("path", "")).name == "initial_program.py"
     ]
     assert edit_indexes
     assert any(
         index > edit_indexes[0] and name == "search_run_verifier"
         for index, (name, _args) in enumerate(calls)
     )
-    assert not [
-        (name, args)
-        for name, args in calls
-        if name in {"edit", "write"} and not allowed_mutation_path(args.get("path"))
-    ]
     assert "initial_program.py" in record.detected_changed_files
     assert record.touched_denied_files is False
     assert record.changed_outside_allowed is False
@@ -272,31 +257,92 @@ def test_pi_rpc_k_module(st_project_root: Path) -> None:
 )
 def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
     runtime = FileSearchRuntime(st_project_root / ".search")
-    run_id, task, session = _start_pi_candidate(runtime, max_runtime_seconds=1)
+    frozen = runtime.freeze_spec(
+        _pi_spec(max_runtime_seconds=150),
+        [K_MODULE / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
 
-    timed_out = run_pi_rpc_worker(
-        session.launch,
+    def interrupted_worker(launch: dict, **_kwargs: object) -> dict:
+        workspace = Path(launch["cwd"])
+        program = workspace / "initial_program.py"
+        program.write_text(
+            program.read_text(encoding="utf-8").replace(
+                '"loader": "json_reader"', '"loader": "csv_reader"'
+            ),
+            encoding="utf-8",
+        )
+        handoff_path = workspace / ".tmp" / "handoff.json"
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+        handoff_path.write_text(
+            json.dumps(
+                {
+                    "summary": "matched loader; three modules remain",
+                    "what_was_tried": ["updated loader to csv_reader"],
+                    "blockers": ["worker deadline"],
+                    "next_steps": ["inspect evaluator target and finish remaining modules"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "host": "pi-rpc",
+            "external_id": launch["session_id"],
+            "metadata": {
+                "timed_out": True,
+                "runner_failed": False,
+                "continuation": "state_redispatch",
+                "progress_handoff": _workspace_progress_handoff(
+                    workspace,
+                    root=Path(launch["root"]),
+                    run_id=run_id,
+                    candidate_id=task.candidate_id,
+                    timed_out=True,
+                    runner_failed=False,
+                    assistant_text=None,
+                ),
+            },
+        }
+
+    first = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=task.candidate_id,
+        directive={"goal": "Start the k_module fix."},
+        final_verify=False,
+        worker_runner=interrupted_worker,
+    )
+    assert first["handle"]["metadata"]["timed_out"] is True
+    assert runtime.list_iterations(run_id, task.candidate_id) == []
+
+    resumed = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=task.candidate_id,
+        directive={
+            "goal": (
+                "Resume from context.resume and the existing workspace. Read evaluator.py, "
+                "finish the remaining k_module target values, and verify immediately."
+            )
+        },
+        redispatch=True,
+        runtime_multiplier=2,
+        final_verify=True,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
         model_pattern=os.environ.get("ST_PI_MODEL"),
         thinking_level=os.environ.get("ST_PI_THINKING"),
     )
-    runtime.bind_agent_handle(session.agent_session_id, timed_out)
-    assert timed_out["metadata"]["timed_out"] is True
+    handle = resumed["handle"]
+    context = runtime.get_agent_context(resumed["agent_session_id"])
 
-    redispatched = runtime.redispatch_candidate(
-        run_id,
-        task.candidate_id,
-        {"goal": "Resume from runtime context and finish the k_module fix."},
-        worker_budget={"max_runtime_seconds": 300, "max_turns": 8, "on_exceed": "interrupt"},
+    assert resumed["agent_session_id"] != first["agent_session_id"]
+    assert resumed["launch"]["budget_control"]["max_runtime_seconds"] == 300
+    assert context["resume"]["latest_handoff"]["summary"] == (
+        "matched loader; three modules remain"
     )
-    handle = run_pi_rpc_worker(
-        redispatched.launch,
-        pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
-        model_pattern=os.environ.get("ST_PI_MODEL"),
-        thinking_level=os.environ.get("ST_PI_THINKING"),
-    )
-    runtime.bind_agent_handle(redispatched.agent_session_id, handle)
-
-    assert redispatched.agent_session_id != session.agent_session_id
     _assert_gp_worker_artifacts(runtime, run_id, task.candidate_id, handle)
-    assert runtime.run_verifier(run_id, task.candidate_id).aggregate_score == 1.0
+    assert handle["metadata"]["progress_handoff"]["verifier"]["count"] >= 1
+    assert handle["metadata"]["progress_handoff"]["workspace"]["dirty"] is False
+    assert resumed["final_score_report"]["aggregate_score"] == 1.0

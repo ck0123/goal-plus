@@ -182,9 +182,10 @@ Current host expectations:
   `agentic-any-search-pi-worker` to launch foreground `pi --mode rpc` workers
   with `--no-session` from candidate workspaces and explicitly loads
   `.pi/extensions/search-runtime.ts`. Pi RPC does not support same-worker
-  continuation; recover with `search_redispatch_candidate` and runtime/Git
-  state. Pi has extension pre-tool guarding and skill stop gates, but no Codex
-  Stop hook parity.
+  continuation; recover with `search_redispatch_candidate`, MCP history,
+  verifier evidence, Git state, and bounded progress handoff metadata. Pi has
+  extension pre-tool guarding and skill stop gates, but no Codex Stop hook
+  parity.
 
 Portable strategy names for non-OpenCode hosts are currently:
 

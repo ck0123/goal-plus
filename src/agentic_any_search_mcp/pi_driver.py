@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import math
 from pathlib import Path
 from typing import Any, Callable
 
-from agentic_any_search_mcp.pi_worker import run_pi_rpc_worker
+from agentic_any_search_mcp.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 from agentic_any_search_mcp.tools import SearchTools
 
@@ -90,6 +91,7 @@ def run_pi_search_candidate(
     candidate_id: str,
     directive: dict[str, Any] | str | None = None,
     redispatch: bool = False,
+    runtime_multiplier: float | None = None,
     final_verify: bool = True,
     worker_runner: Callable[..., dict[str, Any]] | None = None,
     pi_binary: str = "pi",
@@ -101,12 +103,33 @@ def run_pi_search_candidate(
 ) -> dict[str, Any]:
     tools = _search_tools_for_pi_rpc_run(root_dir, run_id)
     steps: list[dict[str, Any]] = []
+    if runtime_multiplier is not None:
+        if not redispatch:
+            raise ValueError("runtime_multiplier requires redispatch=true")
+        if runtime_multiplier <= 1 or runtime_multiplier > 2:
+            raise ValueError("runtime_multiplier must be greater than 1 and at most 2")
+
+    worker_budget_override: dict[str, Any] | None = None
+    if runtime_multiplier is not None:
+        run = tools.runtime._load_run(run_id)
+        frozen = tools.runtime._load_frozen_spec(run.frozen_spec_id)
+        candidate = tools.runtime._load_candidate_record(run_id, candidate_id)
+        base_budget = tools.runtime._candidate_worker_budget(frozen, candidate)
+        if base_budget is None or base_budget.get("max_runtime_seconds") is None:
+            raise ValueError(
+                "runtime_multiplier requires a base worker_budget.max_runtime_seconds"
+            )
+        worker_budget_override = dict(base_budget)
+        worker_budget_override["max_runtime_seconds"] = math.ceil(
+            float(base_budget["max_runtime_seconds"]) * runtime_multiplier
+        )
 
     session = (
         tools.search_redispatch_candidate(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
+            worker_budget=worker_budget_override,
         )
         if redispatch
         else tools.search_start_agent_session(
@@ -126,6 +149,7 @@ def run_pi_search_candidate(
             ),
             "agent_session_id": agent_session_id,
             "candidate_id": candidate_id,
+            "runtime_multiplier": runtime_multiplier,
         }
     )
 
@@ -144,6 +168,15 @@ def run_pi_search_candidate(
         )
     except Exception as exc:
         failure = _failure_details("worker_runner", exc)
+        progress_handoff = _workspace_progress_handoff(
+            Path(str(launch["cwd"])),
+            root=Path(str(launch.get("root") or root_dir)),
+            run_id=run_id,
+            candidate_id=candidate_id,
+            timed_out=False,
+            runner_failed=True,
+            assistant_text=None,
+        )
         handle = {
             "host": "pi-rpc",
             "external_id": agent_session_id,
@@ -152,6 +185,7 @@ def run_pi_search_candidate(
                 "failure_stage": failure["stage"],
                 "error_type": failure["error_type"],
                 "error": failure["message"],
+                "progress_handoff": progress_handoff,
                 "timed_out": False,
                 "continuation": "state_redispatch",
             },

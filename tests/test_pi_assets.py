@@ -99,6 +99,9 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "search_run_verifier" in text
     assert "complete candidate artifact early" in text
     assert "before any long optimization loop" in text
+    assert ".tmp/handoff.json" in text
+    assert "what_was_tried" in text
+    assert "next_steps" in text
     assert "edit the allowed candidate artifact first" in text
     assert "verifying the unmodified starting point" in text
     assert "valid baseline iteration first" in text
@@ -187,6 +190,7 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "goal_plus_record_triage: Type.Object" in text
     assert "goal_plus_monitor_snapshot: Type.Object" in text
     assert "pi_search_run_candidate: Type.Object" in text
+    assert "runtime_multiplier" in text
     assert "pi_search_run_batch: Type.Object" in text
     assert "redispatch: Type.Optional(Type.Boolean())" in text
     assert "candidate_ids: Type.Array(Type.String())" in text

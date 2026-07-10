@@ -140,6 +140,7 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert subagent["soft_closeout_sent"] is True
     assert subagent["raw_logging"] is False
     assert subagent["runner_failed"] is False
+    assert subagent["progress_handoff"] is None
     assert subagent["liveness"] == "evaluated"
 
     assert snapshot["candidates"][second.candidate_id]["status"] == "created"

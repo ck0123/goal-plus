@@ -216,6 +216,9 @@ Host-specific validation prevents unsupported budget shapes:
 - Codex `worker_budget` requires `max_runtime_seconds`.
 - Claude Code `worker_budget` requires `max_turns`.
 - Pi RPC `worker_budget` requires `max_runtime_seconds`.
+- Pi `pi_search_run_candidate` may scale that limit for a fresh state-level
+  redispatch with `runtime_multiplier` in `(1, 2]`; arbitrary budget overrides
+  remain outside the high-level Pi tool.
 - Known Claude Code agent types must match their configured `maxTurns`; custom
   Claude agent types are allowed when specified explicitly.
 
@@ -409,11 +412,12 @@ It is not a lifecycle status object.
 
 For Pi RPC, `external_id` is the invocation's Pi `--session-id` and metadata
 carries the metadata-only event log path, optional raw text log path, assistant
-text, and `pi_metrics` usage/timing summary returned by
+text, bounded `progress_handoff`, and `pi_metrics` usage/timing summary returned by
 `agentic-any-search-pi-worker`. Workers use `--no-session`; this id is
 correlation provenance, not a resumable Pi transcript handle. If the runner
 fails before a normal handle is returned, the driver binds a synthetic failure
-handle with `runner_failed`, failure stage/type, and a bounded error summary.
+handle with `runner_failed`, failure stage/type, a bounded error summary, and a
+best-effort workspace progress handoff.
 
 ---
 

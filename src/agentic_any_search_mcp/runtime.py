@@ -619,6 +619,8 @@ class FileSearchRuntime:
                 worker_budget_override=worker_budget_override,
             )
             host = frozen.spec.strategy.worker_host
+            if host == "pi-rpc":
+                launch["run_id"] = run_id
             host_handle = AgentHostHandle(host=host)
             if host == "codex":
                 host_handle = host_handle.model_copy(
@@ -782,6 +784,41 @@ class FileSearchRuntime:
         run = self._load_run(session.run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         candidate_record = self._load_candidate_record(session.run_id, session.candidate_id)
+        previous_sessions: list[dict[str, Any]] = []
+        latest_handoff: dict[str, Any] | None = None
+        for previous in self._load_agent_sessions(session.run_id):
+            if (
+                previous.candidate_id != session.candidate_id
+                or previous.agent_session_id == session.agent_session_id
+            ):
+                continue
+            metadata = previous.host_handle.metadata
+            progress_handoff = metadata.get("progress_handoff")
+            if isinstance(progress_handoff, dict):
+                latest_handoff = progress_handoff
+            assistant_text = metadata.get("assistant_text")
+            error = metadata.get("error")
+            previous_sessions.append(
+                {
+                    "agent_session_id": previous.agent_session_id,
+                    "timed_out": bool(metadata.get("timed_out")),
+                    "runner_failed": bool(metadata.get("runner_failed")),
+                    "assistant_summary": (
+                        assistant_text[:2000] + ("..." if len(assistant_text) > 2000 else "")
+                        if isinstance(assistant_text, str)
+                        else None
+                    ),
+                    "progress_handoff": progress_handoff
+                    if isinstance(progress_handoff, dict)
+                    else None,
+                    "error": (
+                        error[:500] + ("..." if len(error) > 500 else "")
+                        if isinstance(error, str)
+                        else None
+                    ),
+                }
+            )
+        workspace_status = self._git_status(candidate_record.task.workspace)
         return {
             "agent_session_id": session.agent_session_id,
             "run_id": session.run_id,
@@ -795,6 +832,19 @@ class FileSearchRuntime:
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
             "candidate_task": candidate_record.task.model_dump(mode="json"),
+            "resume": {
+                "is_redispatch": bool(session.directive.get("state_level_resume")),
+                "previous_sessions": previous_sessions,
+                "latest_handoff": latest_handoff,
+                "workspace": {
+                    "git_head": self._git_head(candidate_record.task.workspace),
+                    "git_status": workspace_status,
+                    "dirty": bool(workspace_status),
+                    "changed_files": self._detect_changed_files(
+                        Path(run.source_path), candidate_record.task.workspace
+                    ),
+                },
+            },
             "history": self.list_history(session.run_id, top_n=5, sort_by="score"),
             "iterations": self.list_iterations(session.run_id, session.candidate_id),
         }

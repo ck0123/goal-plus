@@ -98,12 +98,15 @@ returned handle with `search_bind_agent_handle`, but the runner owns the
 process watchdog, metadata-only event log, optional raw debug log, and
 `metadata.pi_metrics`. Workers run with `--no-session`; MCP Search state,
 verifier iterations, candidate Git commits, and workspace files are the durable
-recovery surface.
+recovery surface. At exit, the runner also stores a bounded
+`metadata.progress_handoff` containing an optional model-authored
+`.tmp/handoff.json` note plus deterministic Git and verifier snapshots.
 
 Pi RPC has no same-worker continuation. The Pi main agent uses
 `pi_search_run_candidate(..., redispatch=true)` for state-level redispatch; the
 driver invokes `search_redispatch_candidate` and creates a fresh
-`agent_session_id` in the same candidate workspace.
+`agent_session_id` in the same candidate workspace. The new worker receives
+prior handoffs and current workspace state through `context.resume`.
 
 For ecosystem compatibility, this implementation is project-local and does not
 patch Pi core. External Pi packages can still register overlapping commands or
@@ -310,6 +313,11 @@ When a worker needs more time or another approach, the Pi main agent calls
 state-level redispatch in the same candidate workspace. The new worker starts
 from `search_get_agent_context`, verifier history, and Git state rather than a
 prior Pi transcript.
+
+For a promising attempt that has no usable verifier evidence, the high-level
+driver accepts `runtime_multiplier` only together with `redispatch=true`. The
+value must be greater than 1 and at most 2, and scales only that launch's
+`max_runtime_seconds`; the frozen SearchSpec remains unchanged.
 
 A watchdog timeout and a runner failure are distinct. Timeout means the host
 successfully enforced the configured deadline and returned a bindable handle;

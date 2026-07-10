@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from agentic_any_search_mcp import pi_worker
@@ -250,6 +251,95 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert handle["metadata"]["text_log"] is None
     assert handle["metadata"]["session_file"] is None
     assert handle["metadata"]["continuation"] == "state_redispatch"
+    assert handle["metadata"]["progress_handoff"]["status"] == "completed"
+    assert handle["metadata"]["progress_handoff"]["summary"] == "done"
+
+
+def test_workspace_progress_handoff_preserves_model_and_git_progress(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "initial_program.py").write_text("VALUE = 0\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "add", "initial_program.py"], cwd=workspace, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "baseline",
+        ],
+        cwd=workspace,
+        check=True,
+    )
+    (workspace / "initial_program.py").write_text("VALUE = 7\n", encoding="utf-8")
+    (workspace / "__pycache__").mkdir()
+    (workspace / "__pycache__" / "initial_program.cpython-311.pyc").write_bytes(b"cache")
+    (workspace / ".tmp").mkdir()
+    (workspace / ".tmp" / "handoff.json").write_text(
+        json.dumps(
+            {
+                "summary": "implemented the first half",
+                "what_was_tried": ["changed VALUE"],
+                "next_steps": ["run verifier"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    handoff = pi_worker._workspace_progress_handoff(
+        workspace,
+        root=tmp_path / ".search",
+        run_id="run_missing",
+        candidate_id="c001",
+        timed_out=True,
+        runner_failed=False,
+        assistant_text=None,
+    )
+
+    assert handoff["status"] == "timed_out"
+    assert handoff["summary"] == "implemented the first half"
+    assert handoff["model_handoff"]["next_steps"] == ["run verifier"]
+    assert handoff["workspace"]["dirty"] is True
+    assert handoff["workspace"]["changed_files"] == ["initial_program.py"]
+    assert "initial_program.py" in handoff["workspace"]["diff_stat"]
+    assert handoff["verifier"]["count"] == 0
+
+
+def test_verifier_snapshot_respects_minimize_direction(tmp_path: Path) -> None:
+    root = tmp_path / ".search"
+    candidate_dir = root / "runs" / "run_1" / "candidates" / "c001"
+    candidate_dir.mkdir(parents=True)
+    (root / "runs" / "run_1" / "run.json").write_text(
+        json.dumps({"frozen_spec_id": "spec_1"}), encoding="utf-8"
+    )
+    spec_dir = root / "specs" / "spec_1"
+    spec_dir.mkdir(parents=True)
+    (spec_dir / "frozen_spec.json").write_text(
+        json.dumps({"spec": {"metric_direction": "minimize"}}), encoding="utf-8"
+    )
+    (candidate_dir / "candidate.json").write_text(
+        json.dumps(
+            {
+                "iterations": [
+                    {"iteration": 1, "score": 1.0, "process_passed": True},
+                    {"iteration": 2, "score": 5.0, "process_passed": True},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = pi_worker._verifier_snapshot(root, "run_1", "c001")
+
+    assert snapshot["best_iteration"] == 1
+    assert snapshot["best_score"] == 1.0
 
 
 def test_run_pi_rpc_worker_waits_for_pi_auto_retry(

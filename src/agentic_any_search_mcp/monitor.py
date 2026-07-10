@@ -455,6 +455,11 @@ def goal_plus_monitor_snapshot(
                     "session_file": _path_info(session_file),
                     "timed_out": timed_out,
                     "runner_failed": runner_failed,
+                    "progress_handoff": (
+                        metadata.get("progress_handoff")
+                        if isinstance(metadata.get("progress_handoff"), dict)
+                        else None
+                    ),
                     "failure_stage": metadata.get("failure_stage"),
                     "error_type": metadata.get("error_type"),
                     "error": metadata.get("error"),

@@ -131,7 +131,7 @@ There are two different continuation concepts:
 
 | Concept | Portable? | What it does |
 |---|---|---|
-| State-level resume with `search_redispatch_candidate` | yes, all hosts | Creates a fresh `agent_session_id` for the same candidate workspace. The new worker reads `search_get_agent_context`, including runtime history and previous iterations. It can override `worker_agent_type` or `worker_budget` for that dispatch. |
+| State-level resume with `search_redispatch_candidate` | yes, all hosts | Creates a fresh `agent_session_id` for the same candidate workspace. The new worker reads `search_get_agent_context`, including explicit prior-session handoffs, current Git state, runtime history, and previous iterations. It can override `worker_agent_type` or `worker_budget` for that dispatch. |
 | Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Codex and Pi RPC are explicitly unsupported in these adapters. |
 
 Default to state-level resume when a worker hits a step/turn/time cap, returns

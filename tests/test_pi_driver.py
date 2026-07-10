@@ -180,6 +180,7 @@ def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
         candidate_id=candidate.candidate_id,
         directive="resume from runtime and Git evidence",
         redispatch=True,
+        runtime_multiplier=1.5,
         final_verify=False,
         worker_runner=fake_worker,
     )
@@ -187,7 +188,36 @@ def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
     assert first["agent_session_id"] != resumed["agent_session_id"]
     assert resumed["steps"][0]["tool"] == "search_redispatch_candidate"
     assert resumed["launch"]["continuation"] == "state_redispatch"
+    assert resumed["launch"]["budget_control"]["max_runtime_seconds"] == 900
+    assert resumed["steps"][0]["runtime_multiplier"] == 1.5
     assert len(runtime._load_agent_sessions(run_id)) == 2
+
+
+def test_run_pi_search_candidate_rejects_unsafe_runtime_multiplier(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    with pytest.raises(ValueError, match="requires redispatch=true"):
+        run_pi_search_candidate(
+            root_dir=runtime.root_dir,
+            run_id=run_id,
+            candidate_id=candidate.candidate_id,
+            runtime_multiplier=1.5,
+            final_verify=False,
+        )
+    with pytest.raises(ValueError, match="greater than 1 and at most 2"):
+        run_pi_search_candidate(
+            root_dir=runtime.root_dir,
+            run_id=run_id,
+            candidate_id=candidate.candidate_id,
+            redispatch=True,
+            runtime_multiplier=3,
+            final_verify=False,
+        )
 
 
 def test_run_pi_search_candidate_rejects_non_pi_rpc_search_spec(tmp_path: Path) -> None:
@@ -240,6 +270,8 @@ def test_run_pi_search_candidate_binds_runner_failure_handle(tmp_path: Path) -> 
     assert stored.host_handle.metadata["runner_failed"] is True
     assert stored.host_handle.metadata["failure_stage"] == "worker_runner"
     assert stored.host_handle.metadata["error_type"] == "BrokenPipeError"
+    assert stored.host_handle.metadata["progress_handoff"]["status"] == "runner_failed"
+    assert stored.host_handle.metadata["progress_handoff"]["workspace"]["git_head"]
 
     snapshot = goal_plus_monitor_snapshot(root_dir=runtime.root_dir, run_id=run_id)
     [subagent] = snapshot["subagents"]
