@@ -355,9 +355,7 @@ class FileSearchRuntime:
         records = self._load_candidate_records(run_id)
 
         def score_value(record: CandidateRecord) -> float | None:
-            if record.score_report is None:
-                return None
-            return record.score_report.aggregate_score
+            return self._record_ranking_score(record, frozen.spec)
 
         def created_index(record: CandidateRecord) -> int:
             try:
@@ -381,7 +379,7 @@ class FileSearchRuntime:
 
         selected = ordered[:top_n]
         candidates = [
-            self._history_candidate_payload(record, frozen.spec.metric_name) for record in selected
+            self._history_candidate_payload(record, frozen.spec) for record in selected
         ]
 
         return {
@@ -1056,7 +1054,7 @@ class FileSearchRuntime:
             if record.score_report:
                 score = "" if record.score_report.aggregate_score is None else str(record.score_report.aggregate_score)
                 passed = str(record.score_report.process_passed)
-            payload = self._history_candidate_payload(record, frozen.spec.metric_name)
+            payload = self._history_candidate_payload(record, frozen.spec)
             key_metrics = ", ".join(
                 f"{key}={value}" for key, value in payload["key_metrics"].items()
             )
@@ -1592,7 +1590,7 @@ class FileSearchRuntime:
         remaining: int,
     ) -> SearchPlan:
         records = self._load_candidate_records(run.run_id)
-        scored = self._scored_records(records)
+        scored = self._scored_records(records, frozen.spec)
 
         if not scored:
             plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
@@ -1667,7 +1665,7 @@ class FileSearchRuntime:
         remaining: int,
     ) -> SearchPlan:
         records = self._load_candidate_records(run.run_id)
-        scored = self._records_by_created(self._scored_records(records))
+        scored = self._records_by_created(self._scored_records(records, frozen.spec))
         strategy = frozen.spec.strategy
         config = strategy.config
 
@@ -1861,7 +1859,7 @@ class FileSearchRuntime:
         remaining: int,
     ) -> SearchPlan:
         records = self._load_candidate_records(run.run_id)
-        scored = self._scored_records(records)
+        scored = self._scored_records(records, frozen.spec)
         if not scored:
             plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
             plan.strategy_trace = {
@@ -1922,7 +1920,7 @@ class FileSearchRuntime:
         remaining: int,
     ) -> SearchPlan:
         records = self._load_candidate_records(run.run_id)
-        scored = self._scored_records(records)
+        scored = self._scored_records(records, frozen.spec)
 
         if not scored:
             plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
@@ -2226,7 +2224,7 @@ class FileSearchRuntime:
             "include": policy.include,
             "visible_candidate_ids": [record.candidate_id for record in selected_records],
             "candidates": [
-                self._history_candidate_payload(record, frozen.spec.metric_name)
+                self._history_candidate_payload(record, frozen.spec)
                 for record in selected_records
             ],
             "description": (
@@ -2234,18 +2232,40 @@ class FileSearchRuntime:
             ),
         }
 
-    def _scored_records(self, records: list[CandidateRecord]) -> list[CandidateRecord]:
+    def _record_ranking_score(
+        self,
+        record: CandidateRecord,
+        spec: SearchSpec,
+    ) -> float | None:
+        best_iteration = self._best_iteration_record(record, spec.metric_direction)
+        if best_iteration is not None:
+            return best_iteration.score
+        if (
+            record.score_report
+            and record.score_report.process_passed
+            and record.score_report.aggregate_score is not None
+        ):
+            return record.score_report.aggregate_score
+        return None
+
+    def _scored_records(
+        self,
+        records: list[CandidateRecord],
+        spec: SearchSpec,
+    ) -> list[CandidateRecord]:
         return [
             record
             for record in records
-            if record.score_report
-            and record.score_report.process_passed
-            and record.score_report.aggregate_score is not None
+            if self._record_ranking_score(record, spec) is not None
         ]
 
     def _best_record(self, records: list[CandidateRecord], spec: SearchSpec) -> CandidateRecord:
         reverse = spec.metric_direction == "maximize"
-        return sorted(records, key=lambda record: record.score_report.aggregate_score, reverse=reverse)[0]  # type: ignore[union-attr]
+        return sorted(
+            records,
+            key=lambda record: self._record_ranking_score(record, spec),
+            reverse=reverse,
+        )[0]  # type: ignore[arg-type,return-value]
 
     def _top_records(
         self,
@@ -2253,11 +2273,15 @@ class FileSearchRuntime:
         spec: SearchSpec,
         top_n: int,
     ) -> list[CandidateRecord]:
-        scored = self._scored_records(records)
+        scored = self._scored_records(records, spec)
         if not scored:
             return self._records_by_created(records)[:top_n]
         reverse = spec.metric_direction == "maximize"
-        return sorted(scored, key=lambda record: record.score_report.aggregate_score, reverse=reverse)[:top_n]  # type: ignore[union-attr]
+        return sorted(
+            scored,
+            key=lambda record: self._record_ranking_score(record, spec),
+            reverse=reverse,
+        )[:top_n]  # type: ignore[arg-type,return-value]
 
     def _records_by_created(self, records: list[CandidateRecord]) -> list[CandidateRecord]:
         def created_index(record: CandidateRecord) -> int:
@@ -2549,7 +2573,7 @@ class FileSearchRuntime:
         scored = [
             iteration
             for iteration in record.iterations
-            if iteration.process_passed is not False
+            if iteration.process_passed is True
             and iteration.score is not None
             and not iteration.touched_denied_files
             and not iteration.changed_outside_allowed
@@ -2607,22 +2631,53 @@ class FileSearchRuntime:
                 )
         return options
 
-    def _history_candidate_payload(self, record: CandidateRecord, metric_name: str) -> dict[str, Any]:
+    def _history_candidate_payload(
+        self,
+        record: CandidateRecord,
+        spec: SearchSpec,
+    ) -> dict[str, Any]:
         score_report = record.score_report
+        best_iteration = self._best_iteration_record(record, spec.metric_direction)
+        evidence_score = (
+            best_iteration.score
+            if best_iteration is not None
+            else score_report.aggregate_score if score_report else None
+        )
+        evidence_passed = (
+            True
+            if best_iteration is not None
+            else score_report.process_passed if score_report else None
+        )
         metrics: dict[str, Any] = {}
         verifier_summaries: list[dict[str, Any]] = []
         failure_classes: list[str] = []
         log_paths: list[str] = []
+        latest_verifier_summaries: list[dict[str, Any]] = []
+        latest_failure_classes: list[str] = []
+        latest_log_paths: list[str] = []
 
+        score_report_is_evidence = bool(
+            score_report
+            and score_report.process_passed
+            and score_report.aggregate_score == evidence_score
+        )
+        if best_iteration is not None:
+            for verifier_metrics in best_iteration.metrics.values():
+                if isinstance(verifier_metrics, dict):
+                    metrics.update(
+                        {
+                            key: value
+                            for key, value in verifier_metrics.items()
+                            if key not in metrics
+                        }
+                    )
         if score_report:
             for result in score_report.verifier_results:
-                if not metrics and result.metrics:
-                    metrics = result.metrics
                 if result.failure_class:
-                    failure_classes.append(result.failure_class)
+                    latest_failure_classes.append(result.failure_class)
                 if result.log_path:
-                    log_paths.append(str(result.log_path))
-                verifier_summaries.append(
+                    latest_log_paths.append(str(result.log_path))
+                latest_verifier_summaries.append(
                     {
                         "name": result.name,
                         "role": result.role,
@@ -2632,6 +2687,15 @@ class FileSearchRuntime:
                         "log_path": str(result.log_path) if result.log_path else None,
                     }
                 )
+            if score_report_is_evidence:
+                if not metrics:
+                    for result in score_report.verifier_results:
+                        if result.metrics:
+                            metrics = result.metrics
+                            break
+                failure_classes = list(latest_failure_classes)
+                log_paths = list(latest_log_paths)
+                verifier_summaries = list(latest_verifier_summaries)
 
         key_metrics = {
             key: value
@@ -2670,9 +2734,17 @@ class FileSearchRuntime:
             "changed_files": record.detected_changed_files,
             "touched_denied_files": record.touched_denied_files,
             "changed_outside_allowed": record.changed_outside_allowed,
-            "process_passed": score_report.process_passed if score_report else None,
-            "score": score_report.aggregate_score if score_report else None,
-            "metric_name": metric_name,
+            "process_passed": evidence_passed,
+            "score": evidence_score,
+            "metric_name": spec.metric_name,
+            "evidence_source": "best_iteration" if best_iteration else "latest_score_report",
+            "best_iteration": best_iteration.iteration if best_iteration else None,
+            "best_git_head": best_iteration.git_head if best_iteration else None,
+            "latest_process_passed": score_report.process_passed if score_report else None,
+            "latest_score": score_report.aggregate_score if score_report else None,
+            "latest_failure_classes": latest_failure_classes,
+            "latest_verifiers": latest_verifier_summaries,
+            "latest_log_paths": latest_log_paths,
             "key_metrics": key_metrics,
             "failure_classes": failure_classes,
             "verifiers": verifier_summaries,

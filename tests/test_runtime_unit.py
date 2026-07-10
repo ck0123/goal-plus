@@ -1270,6 +1270,60 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
     assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 2\n"
 
 
+def test_evolve_planning_keeps_candidate_with_valid_iteration_after_latest_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_with_strategy(
+            project,
+            {"name": "evolve", "history_policy": {"scope": "top_n", "top_n": 2}},
+            max_candidates=3,
+        ),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    first_plan = runtime.plan_next(run_id, requested_k=2)
+    first_tasks = runtime.start_batch(run_id, first_plan.plan_id)
+
+    scores = {"c001": [0.9, 0.0], "c002": [0.8]}
+    real_run = subprocess.run
+
+    def fake_run(*args, **kwargs):
+        command = args[0]
+        if command and command[0] != "python":
+            return real_run(*args, **kwargs)
+        candidate_id = Path(kwargs["cwd"]).name
+        score = scores[candidate_id].pop(0)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0 if score > 0 else 1,
+            stdout=f'{{"combined_score": {score}}}\n' if score > 0 else "",
+            stderr="verifier failed" if score == 0 else "",
+        )
+
+    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+
+    runtime.run_verifier(run_id, first_tasks[0].candidate_id)
+    runtime.run_verifier(run_id, first_tasks[0].candidate_id)
+    runtime.run_verifier(run_id, first_tasks[1].candidate_id)
+
+    history = runtime.list_history(run_id, top_n=2)
+    second_plan = runtime.plan_next(run_id, requested_k=1)
+
+    assert history["candidates"][0]["candidate_id"] == "c001"
+    assert history["candidates"][0]["score"] == 0.9
+    assert history["candidates"][0]["latest_score"] == 0.0
+    assert history["candidates"][0]["latest_process_passed"] is False
+    assert history["candidates"][0]["latest_failure_classes"] == [
+        "VerifierCommandFailed"
+    ]
+    assert second_plan.strategy_trace["parent_candidate_id"] == "c001"
+    assert second_plan.official_history["candidates"][0]["score"] == 0.9
+
+
 def test_openevolve_strategy_bootstraps_from_source_with_openevolve_trace(
     tmp_path: Path,
 ) -> None:

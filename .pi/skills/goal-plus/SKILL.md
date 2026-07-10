@@ -93,6 +93,13 @@ evidence, use state-level resume by calling
 `agent_session_id` for the same candidate workspace, and recovers prior work
 from MCP history, verifier iterations, and Git state.
 
+Do not redispatch only because the worker handle has `timed_out=true`. When the
+candidate already has a `process_passed=true` Git-backed iteration, that best
+iteration remains valid search evidence and eligible for later planning and
+selection. Official history reports that best evidence in `score` and
+`best_iteration`, while `latest_score` and `latest_process_passed` preserve a
+later timeout or regression for diagnosis.
+
 History is runtime-owned, not a local plan file. Workers must call
 `search_get_agent_context` first and use `context.history` plus
 `context.iterations` as the resume source.

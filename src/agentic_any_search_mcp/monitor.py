@@ -168,7 +168,7 @@ def _best_iteration(
     scored = [
         iteration
         for iteration in candidate.iterations
-        if iteration.process_passed is not False
+        if iteration.process_passed is True
         and iteration.score is not None
         and not iteration.touched_denied_files
         and not iteration.changed_outside_allowed

@@ -11,6 +11,7 @@ benchmarks/reports/
 benchmarks/runs/
 .tmp/
 docs/superpowers/
+.superpowers/
 .opencode/node_modules/
 .opencode/package.json
 .opencode/package-lock.json

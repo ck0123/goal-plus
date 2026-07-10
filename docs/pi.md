@@ -311,6 +311,17 @@ state-level redispatch in the same candidate workspace. The new worker starts
 from `search_get_agent_context`, verifier history, and Git state rather than a
 prior Pi transcript.
 
+A watchdog timeout and a runner failure are distinct. Timeout means the host
+successfully enforced the configured deadline and returned a bindable handle;
+runner failure means the runner could not return normally. If a timed-out
+candidate already has a passing Git-backed iteration, the runtime keeps that
+best iteration in planning and selection history. `search_list_history` exposes
+the recoverable evidence as `score`, `best_iteration`, and `best_git_head`, and
+keeps the final attempt separately as `latest_score` and
+`latest_process_passed`. Redispatch is needed only when no useful passing
+iteration exists or the main agent deliberately wants another exploration
+attempt.
+
 If the runner fails before returning a normal handle, the Pi driver binds a
 synthetic failure handle to the agent session. Its metadata includes
 `runner_failed`, `failure_stage`, `error_type`, and a bounded `error` summary,
