@@ -369,33 +369,85 @@ class FileSearchRuntime:
         plan_id: str,
         proposals: list[CandidateProposal] | None = None,
     ) -> list[CandidateTask]:
+        with self._run_transaction(run_id):
+            return self._start_batch_locked(run_id, plan_id, proposals)
+
+    def _start_batch_locked(
+        self,
+        run_id: str,
+        plan_id: str,
+        proposals: list[CandidateProposal] | None,
+    ) -> list[CandidateTask]:
         run = self._load_run(run_id)
         if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
             raise RuntimeError(f"cannot create candidates from state {run.state}")
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         plan = self._load_plan(run_id, plan_id)
+        all_records = self._load_candidate_records(run_id)
+        plan_records = sorted(
+            (record for record in all_records if record.task.plan_id == plan_id),
+            key=lambda record: record.candidate_id,
+        )
+        for record in plan_records:
+            self._write_candidate_record(run_id, record)
+        if all_records:
+            highest_index = max(
+                int(record.candidate_id.removeprefix("c")) for record in all_records
+            )
+            run.candidates_total = max(run.candidates_total, len(all_records))
+            run.next_candidate_index = max(run.next_candidate_index, highest_index + 1)
+
+        if plan.status == "started":
+            records_by_id = {record.candidate_id: record for record in plan_records}
+            try:
+                tasks = [
+                    records_by_id[candidate_id].task
+                    for candidate_id in plan.started_candidate_ids
+                ]
+            except KeyError as exc:
+                raise RuntimeError(
+                    f"started plan {plan_id} is missing candidate state for {exc.args[0]}"
+                ) from exc
+            if tasks:
+                run.state = RunState.WAITING_FOR_WORKERS
+                self._write_run(run)
+            return tasks
         if plan.status != "planned":
             raise RuntimeError(f"plan {plan_id} has already been started")
 
         remaining = max(0, frozen.spec.budget.max_candidates - run.candidates_total)
-        if remaining <= 0 or plan.planned_k <= 0:
+        target_count = min(plan.planned_k, len(plan_records) + remaining)
+        if target_count <= 0:
             return []
 
         if plan.requires_agent_proposals:
             if not proposals:
                 raise ValueError("this strategy plan requires candidate proposals")
             self._validate_agent_proposals(plan, proposals)
-            candidate_proposals = proposals[: min(plan.planned_k, remaining)]
+            candidate_proposals = proposals[:target_count]
         else:
             if proposals:
                 raise ValueError("this strategy plan already contains fixed work orders")
             candidate_proposals = [
                 self._proposal_from_work_order(work_order) for work_order in plan.work_orders
-            ][: min(plan.planned_k, remaining)]
+            ][:target_count]
 
-        tasks: list[CandidateTask] = []
-        for index, proposal in enumerate(candidate_proposals, start=1):
+        if len(plan_records) > len(candidate_proposals):
+            raise RuntimeError(
+                f"plan {plan_id} has more persisted candidates than candidate proposals"
+            )
+        for record, proposal in zip(plan_records, candidate_proposals, strict=False):
+            if record.task.proposal != proposal:
+                raise RuntimeError(
+                    f"retry proposals do not match persisted candidate "
+                    f"{record.candidate_id}"
+                )
+
+        tasks = [record.task for record in plan_records]
+        for index, proposal in enumerate(
+            candidate_proposals[len(plan_records):], start=len(plan_records) + 1
+        ):
             candidate_id = f"c{run.next_candidate_index:03d}"
             task = self._create_candidate_task(
                 run=run,
@@ -410,6 +462,8 @@ class FileSearchRuntime:
             tasks.append(task)
             run.next_candidate_index += 1
             run.candidates_total += 1
+            run.state = RunState.WAITING_FOR_WORKERS
+            self._write_run(run)
 
         if tasks:
             run.state = RunState.WAITING_FOR_WORKERS
@@ -2105,13 +2159,15 @@ class FileSearchRuntime:
             base_record = self._load_candidate_record(run.run_id, base_candidate_id)
             base_workspace = base_record.task.workspace
             if frozen.spec.workspace.backend == "git_worktree":
-                best_iteration = self._best_iteration_record(
+                best_iteration = self._best_git_iteration_record(
                     base_record, frozen.spec.metric_direction
                 )
-                if best_iteration is not None and best_iteration.git_head is not None:
-                    base_revision = best_iteration.git_head
-                else:
-                    base_revision = self._git_head(base_record.task.workspace)
+                if best_iteration is None:
+                    raise RuntimeError(
+                        f"git_worktree parent {base_candidate_id} has no clean "
+                        "verifier-backed Git iteration"
+                    )
+                base_revision = best_iteration.git_head
 
         materialization = materialize_candidate_workspace(
             backend=frozen.spec.workspace.backend,
@@ -2562,6 +2618,28 @@ class FileSearchRuntime:
             for iteration in record.iterations
             if iteration.process_passed is True
             and iteration.score is not None
+            and not iteration.touched_denied_files
+            and not iteration.changed_outside_allowed
+        ]
+        if not scored:
+            return None
+        reverse = metric_direction == "maximize"
+        return sorted(
+            scored, key=lambda iteration: iteration.score, reverse=reverse
+        )[0]
+
+    def _best_git_iteration_record(
+        self,
+        record: CandidateRecord,
+        metric_direction: Literal["maximize", "minimize"],
+    ) -> IterationRecord | None:
+        scored = [
+            iteration
+            for iteration in record.iterations
+            if iteration.process_passed is True
+            and iteration.score is not None
+            and iteration.git_head is not None
+            and iteration.git_artifact_clean is True
             and not iteration.touched_denied_files
             and not iteration.changed_outside_allowed
         ]

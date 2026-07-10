@@ -117,6 +117,77 @@ def test_git_worktree_backend_shares_objects_but_keeps_branches_independent(
     assert (second_path / "program.py").read_text(encoding="utf-8") == "VALUE = 2\n"
 
 
+def test_git_worktree_baseline_tracks_files_ignored_by_source_gitignore(
+    tmp_path: Path,
+) -> None:
+    source = make_source(tmp_path)
+    (source / ".gitignore").write_text("generated.txt\n", encoding="utf-8")
+    (source / "generated.txt").write_text("snapshot me\n", encoding="utf-8")
+    workspace = tmp_path / "run" / "workspace" / "c001"
+
+    materialize_candidate_workspace(
+        backend="git_worktree",
+        run_dir=tmp_path / "run",
+        source=source,
+        workspace=workspace,
+        run_id="run_test",
+        candidate_id="c001",
+    )
+
+    assert (workspace / "generated.txt").read_text(encoding="utf-8") == "snapshot me\n"
+    tracked = git_output(workspace, "ls-files", "generated.txt")
+    assert tracked == "generated.txt"
+
+
+def test_git_worktree_materialization_is_idempotent_after_workspace_creation(
+    tmp_path: Path,
+) -> None:
+    source = make_source(tmp_path)
+    run_dir = tmp_path / "run"
+    workspace = run_dir / "workspace" / "c001"
+
+    first = materialize_candidate_workspace(
+        backend="git_worktree",
+        run_dir=run_dir,
+        source=source,
+        workspace=workspace,
+        run_id="run_test",
+        candidate_id="c001",
+    )
+    second = materialize_candidate_workspace(
+        backend="git_worktree",
+        run_dir=run_dir,
+        source=source,
+        workspace=workspace,
+        run_id="run_test",
+        candidate_id="c001",
+    )
+
+    assert second == first
+    assert git_output(workspace, "branch", "--show-current") == first.branch
+
+
+def test_git_worktree_recovers_incomplete_run_repository(tmp_path: Path) -> None:
+    source = make_source(tmp_path)
+    run_dir = tmp_path / "run"
+    repository = run_dir / "workspace-repository"
+    repository.mkdir(parents=True)
+    (repository / "partial.txt").write_text("incomplete\n", encoding="utf-8")
+    workspace = run_dir / "workspace" / "c001"
+
+    materialize_candidate_workspace(
+        backend="git_worktree",
+        run_dir=run_dir,
+        source=source,
+        workspace=workspace,
+        run_id="run_test",
+        candidate_id="c001",
+    )
+
+    assert (workspace / "program.py").read_text(encoding="utf-8") == "VALUE = 0\n"
+    assert not (workspace / "partial.txt").exists()
+
+
 def test_git_worktree_child_starts_from_explicit_parent_revision(
     tmp_path: Path,
 ) -> None:

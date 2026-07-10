@@ -83,7 +83,7 @@ def initialize_workspace_git_baseline(workspace: Path) -> str | None:
 
     try:
         subprocess.run(
-            ["git", "add", "--", *files],
+            ["git", "add", "-f", "--", *files],
             cwd=workspace,
             check=True,
             capture_output=True,
@@ -141,16 +141,35 @@ def materialize_candidate_workspace(
     )
     branch = _branch_name(run_id, candidate_id)
     workspace.parent.mkdir(parents=True, exist_ok=True)
-    _git_run(
-        repository,
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        branch,
-        str(workspace),
-        revision,
-    )
+    if not _is_expected_worktree(repository, workspace, branch, revision):
+        _git_run(repository, "worktree", "prune")
+        branch_ref = f"refs/heads/{branch}"
+        if _git_succeeds(repository, "show-ref", "--verify", "--quiet", branch_ref):
+            branch_revision = _git_output(repository, "rev-parse", branch_ref)
+            if branch_revision != revision:
+                raise RuntimeError(
+                    f"candidate branch {branch} exists at {branch_revision}, "
+                    f"expected {revision}"
+                )
+            _git_run(
+                repository,
+                "worktree",
+                "add",
+                "-q",
+                str(workspace),
+                branch,
+            )
+        else:
+            _git_run(
+                repository,
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch,
+                str(workspace),
+                revision,
+            )
     (workspace / ".tmp").mkdir(parents=True, exist_ok=True)
     return WorkspaceMaterialization(
         backend="git_worktree",
@@ -162,16 +181,73 @@ def materialize_candidate_workspace(
 
 def _ensure_worktree_repository(run_dir: Path, source: Path, run_id: str) -> Path:
     repository = run_dir / "workspace-repository"
+    baseline_branch = _branch_name(run_id, "baseline")
     if repository.exists():
-        _git_output(repository, "rev-parse", "--show-toplevel")
-        return repository
+        if not (repository / ".git").exists():
+            shutil.rmtree(repository)
+        else:
+            try:
+                _git_output(repository, "rev-parse", baseline_branch)
+                return repository
+            except RuntimeError:
+                try:
+                    _git_output(repository, "rev-parse", "HEAD")
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        f"run workspace repository is incomplete or corrupt: {repository}"
+                    ) from exc
+                _git_run(repository, "branch", "-M", baseline_branch)
+                return repository
 
-    copy_source_tree(source, repository)
-    baseline_revision = initialize_workspace_git_baseline(repository)
+    staging = run_dir / "workspace-repository.init"
+    copy_source_tree(source, staging)
+    baseline_revision = initialize_workspace_git_baseline(staging)
     if baseline_revision is None:
+        shutil.rmtree(staging, ignore_errors=True)
         raise RuntimeError("git_worktree backend requires a non-empty source and Git")
-    _git_run(repository, "branch", "-M", _branch_name(run_id, "baseline"))
+    _git_run(staging, "branch", "-M", baseline_branch)
+    staging.replace(repository)
     return repository
+
+
+def _is_expected_worktree(
+    repository: Path,
+    workspace: Path,
+    branch: str,
+    revision: str,
+) -> bool:
+    if not workspace.exists():
+        return False
+    if not any(workspace.iterdir()):
+        workspace.rmdir()
+        return False
+    try:
+        current_branch = _git_output(workspace, "branch", "--show-current")
+        current_revision = _git_output(workspace, "rev-parse", "HEAD")
+        common_dir = _resolve_git_path(
+            workspace, _git_output(workspace, "rev-parse", "--git-common-dir")
+        )
+        repository_git_dir = _resolve_git_path(
+            repository, _git_output(repository, "rev-parse", "--git-common-dir")
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"candidate workspace already exists but is not a valid worktree: {workspace}"
+        ) from exc
+    if (
+        current_branch != branch
+        or current_revision != revision
+        or common_dir != repository_git_dir
+    ):
+        raise RuntimeError(
+            f"candidate workspace {workspace} does not match expected branch/base"
+        )
+    return True
+
+
+def _resolve_git_path(workspace: Path, value: str) -> Path:
+    path = Path(value)
+    return path.resolve() if path.is_absolute() else (workspace / path).resolve()
 
 
 def _branch_name(run_id: str, candidate_id: str) -> str:
@@ -216,3 +292,16 @@ def _git_output(repository: Path, *args: str) -> str:
             f"git workspace command failed in {repository}: git {' '.join(args)}: "
             f"{detail.strip()}"
         ) from exc
+
+
+def _git_succeeds(repository: Path, *args: str) -> bool:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repository,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).returncode == 0
+    except FileNotFoundError:
+        return False
