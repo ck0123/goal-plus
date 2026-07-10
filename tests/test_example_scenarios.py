@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -213,3 +215,30 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     status = tools.search_status(run_id)
     assert status["candidates_total"] == expected["max_candidates"]
     assert status["candidates_evaluated"] == 2
+
+
+def test_git_worktree_workspace_demo_runs_end_to_end(tmp_path: Path) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "examples" / "workspace-backends" / "run_demo.py"),
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    summary = json.loads(completed.stdout.splitlines()[-1])
+    assert summary["workspace_backend"] == "git_worktree"
+    assert summary["candidate_ids"] == ["c001", "c002", "c003"]
+    assert summary["scores"] == {"c001": 1.0, "c002": 2.0, "c003": 3.0}
+    assert summary["shared_git_common_dir"] is True
+    assert len(set(summary["branches"].values())) == 3
+    assert summary["parent_candidate_id"] == "c002"
+    assert summary["child_base_revision"] == summary["parent_best_git_head"]
+    assert summary["selected_candidate_id"] == "c003"
+    assert Path(summary["report_path"]).exists()

@@ -79,7 +79,10 @@ FileSearchRuntime
 
 ## Core Data Model
 
-`SearchSpec` describes one search job: objective, metric, source path, edit surface, verifier commands, promotion verifiers, budget, root hypotheses, and strategy.
+`SearchSpec` describes one search job: objective, metric, source path, edit
+surface, verifier commands, promotion verifiers, budget, workspace backend,
+root hypotheses, and strategy. `workspace.backend` is `copy` by default and
+may be set to `git_worktree` for a shared-object Git layout.
 
 `StrategySpec` controls planning and execution:
 
@@ -99,7 +102,9 @@ Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-sea
 
 `SearchPlan` is produced by `search_plan_next`. It contains worker policy, requested/planned batch size, official history, derivation policy, optional proposal contract, fixed work orders, and strategy trace.
 
-`CandidateTask` is produced by `search_start_batch`. It contains the candidate workspace path, allowed/denied files, candidate lineage, plan metadata, and local instructions.
+`CandidateTask` is produced by `search_start_batch`. It contains the candidate
+workspace path, workspace backend, optional branch/base revision, allowed and
+denied files, candidate lineage, plan metadata, and local instructions.
 
 `AgentSessionRecord` is produced by `search_start_agent_session` or `search_redispatch_candidate`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, host, host_handle, optional legacy opencode_session_id, workspace, directive, host-native launch payload, and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to the host client.
 
@@ -223,12 +228,30 @@ The MCP runtime does not perform process supervision. Stopping a running subagen
 
 Verifier commands run from each candidate workspace. The runtime adds the workspace to `PYTHONPATH` and parses the last JSON object printed to stdout as metrics. Hard gates such as edit-surface violations and frozen verifier hash failures force the score to `0.0`.
 
-Candidate workspaces are copied from `source_path`:
+The default `copy` backend creates an independent source snapshot for each
+candidate:
 
 ```text
 .gp/runs/<run_id>/workspace/c001/
 .gp/runs/<run_id>/workspace/c002/
 ```
+
+The `git_worktree` backend snapshots `source_path` once into a normal run-local
+repository, then creates each candidate with `git worktree`:
+
+```text
+.gp/runs/<run_id>/workspace-repository/       # shared objects + baseline branch
+.gp/runs/<run_id>/workspace/c001/             # gp/<run_id>/c001
+.gp/runs/<run_id>/workspace/c002/             # gp/<run_id>/c002
+```
+
+The runtime accepts either Git or non-Git input because the run-local baseline
+is always its own snapshot. A first-generation candidate starts from
+`gp/<run_id>/baseline`. A follow-up candidate starts from the chosen parent's
+best verifier-recorded commit, preserving explicit branch lineage and avoiding
+uncommitted parent state. Worktrees share Git object storage, but each still
+materializes its checked-out files; this reduces repository-history duplication
+rather than eliminating all per-candidate disk use.
 
 Each candidate workspace contains `.tmp/` for notes and non-scoring static drafts. Runtime tree hashing ignores `.tmp/`.
 

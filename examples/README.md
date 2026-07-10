@@ -40,6 +40,7 @@ Pi RPC. See
 | `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-inspired public-feedback optimization, 4 candidates, pool=2 |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
+| `workspace-backends/` | tiny local Python source tree | none (runtime-only E2E) | 3 Git worktree candidates, including a follow-up from the best parent commit |
 
 For each example, start through `/goal-plus`. The goal-plus layer records the
 raw goal, triage, frozen verifier confirmation, and final raw-goal audit. Once
@@ -90,6 +91,31 @@ Each `SearchSpec` must include an explicit `budget`; there are no runtime defaul
 - `max_candidates`: total candidate workspaces allowed for the run. Enforced by `search_plan_next` / `search_start_batch`.
 - `max_parallel`: batch planning hint. The runtime records it in the spec, but Task calls are foreground and the runtime does not supervise workers.
 - `max_tokens`: optional worker-level cap.
+
+## Workspace Backends
+
+`SearchSpec.workspace.backend` controls how the runtime materializes candidate
+workspaces:
+
+| Backend | Storage model | Source requirements | Intended use |
+|---|---|---|---|
+| `copy` (default) | Full independent tree per candidate | Any directory | Small fixtures, tests, and non-Git inputs |
+| `git_worktree` | One run-local repository plus one Git worktree per candidate | Any non-empty directory; the runtime snapshots it into the run-local repository | Large codebases and candidates that need explicit branch lineage |
+
+For `git_worktree`, branches use
+`gp/<run_id>/baseline` and `gp/<run_id>/<candidate_id>`. Follow-up candidates
+start at the selected parent's best verifier commit, not at uncommitted parent
+state. Candidate directories still contain checked-out working files, so Git
+objects are shared but working-tree files consume disk once per candidate.
+
+Run the host-free runtime E2E example with:
+
+```bash
+python examples/workspace-backends/run_demo.py --runtime-root /tmp/gp-workspace-demo
+```
+
+The final JSON shows candidate branches, scores, the parent/child base
+revision, shared Git common-dir evidence, selection, and report path.
 
 Freeze the matching evaluator as the verifier artifact:
 
