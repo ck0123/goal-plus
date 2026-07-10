@@ -50,17 +50,14 @@ from agentic_any_search_mcp.models import (
     WorkerBudget,
 )
 from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from agentic_any_search_mcp.workspaces import (
+    copy_source_tree,
+    initialize_workspace_git_baseline,
+    list_files,
+    materialize_candidate_workspace,
+)
 
 
-IGNORED_NAMES = {
-    ".git",
-    DEFAULT_RUNTIME_ROOT,
-    LEGACY_RUNTIME_ROOT,
-    ".tmp",
-    ".pytest_cache",
-    "__pycache__",
-}
-IGNORED_SUFFIXES = {".pyc", ".pyo"}
 CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS = {
     "any-search-agent-flash": 4,
     "any-search-agent": 8,
@@ -137,88 +134,6 @@ def exclusive_file_lock(lock_path: Path):
         yield
     finally:
         lock_dir.rmdir()
-
-
-def should_ignore(path: Path) -> bool:
-    if any(part in IGNORED_NAMES for part in path.parts):
-        return True
-    return path.suffix in IGNORED_SUFFIXES
-
-
-def list_files(root: Path) -> list[Path]:
-    if root.is_file():
-        return [root]
-    files: list[Path] = []
-    for path in root.rglob("*"):
-        if path.is_file() and not should_ignore(path.relative_to(root)):
-            files.append(path)
-    return sorted(files)
-
-
-def copy_source_tree(source: Path, destination: Path) -> None:
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    if source.is_file():
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination / source.name)
-        return
-
-    def ignore(_dir: str, names: list[str]) -> set[str]:
-        ignored: set[str] = set()
-        for name in names:
-            if name in IGNORED_NAMES or Path(name).suffix in IGNORED_SUFFIXES:
-                ignored.add(name)
-        return ignored
-
-    shutil.copytree(source, destination, ignore=ignore)
-
-
-def initialize_workspace_git_baseline(workspace: Path) -> None:
-    try:
-        subprocess.run(
-            ["git", "init", "-q"],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return
-
-    files = [path.relative_to(workspace).as_posix() for path in list_files(workspace)]
-    if not files:
-        return
-
-    try:
-        subprocess.run(
-            ["git", "add", "--", *files],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=agentic-any-search",
-                "-c",
-                "user.email=agentic-any-search@example.invalid",
-                "commit",
-                "-q",
-                "--no-verify",
-                "-m",
-                "search candidate baseline",
-            ],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError:
-        return
 
 
 def path_matches(path: str, patterns: list[str]) -> bool:
@@ -454,33 +369,85 @@ class FileSearchRuntime:
         plan_id: str,
         proposals: list[CandidateProposal] | None = None,
     ) -> list[CandidateTask]:
+        with self._run_transaction(run_id):
+            return self._start_batch_locked(run_id, plan_id, proposals)
+
+    def _start_batch_locked(
+        self,
+        run_id: str,
+        plan_id: str,
+        proposals: list[CandidateProposal] | None,
+    ) -> list[CandidateTask]:
         run = self._load_run(run_id)
         if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
             raise RuntimeError(f"cannot create candidates from state {run.state}")
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         plan = self._load_plan(run_id, plan_id)
+        all_records = self._load_candidate_records(run_id)
+        plan_records = sorted(
+            (record for record in all_records if record.task.plan_id == plan_id),
+            key=lambda record: record.candidate_id,
+        )
+        for record in plan_records:
+            self._write_candidate_record(run_id, record)
+        if all_records:
+            highest_index = max(
+                int(record.candidate_id.removeprefix("c")) for record in all_records
+            )
+            run.candidates_total = max(run.candidates_total, len(all_records))
+            run.next_candidate_index = max(run.next_candidate_index, highest_index + 1)
+
+        if plan.status == "started":
+            records_by_id = {record.candidate_id: record for record in plan_records}
+            try:
+                tasks = [
+                    records_by_id[candidate_id].task
+                    for candidate_id in plan.started_candidate_ids
+                ]
+            except KeyError as exc:
+                raise RuntimeError(
+                    f"started plan {plan_id} is missing candidate state for {exc.args[0]}"
+                ) from exc
+            if tasks:
+                run.state = RunState.WAITING_FOR_WORKERS
+                self._write_run(run)
+            return tasks
         if plan.status != "planned":
             raise RuntimeError(f"plan {plan_id} has already been started")
 
         remaining = max(0, frozen.spec.budget.max_candidates - run.candidates_total)
-        if remaining <= 0 or plan.planned_k <= 0:
+        target_count = min(plan.planned_k, len(plan_records) + remaining)
+        if target_count <= 0:
             return []
 
         if plan.requires_agent_proposals:
             if not proposals:
                 raise ValueError("this strategy plan requires candidate proposals")
             self._validate_agent_proposals(plan, proposals)
-            candidate_proposals = proposals[: min(plan.planned_k, remaining)]
+            candidate_proposals = proposals[:target_count]
         else:
             if proposals:
                 raise ValueError("this strategy plan already contains fixed work orders")
             candidate_proposals = [
                 self._proposal_from_work_order(work_order) for work_order in plan.work_orders
-            ][: min(plan.planned_k, remaining)]
+            ][:target_count]
 
-        tasks: list[CandidateTask] = []
-        for index, proposal in enumerate(candidate_proposals, start=1):
+        if len(plan_records) > len(candidate_proposals):
+            raise RuntimeError(
+                f"plan {plan_id} has more persisted candidates than candidate proposals"
+            )
+        for record, proposal in zip(plan_records, candidate_proposals, strict=False):
+            if record.task.proposal != proposal:
+                raise RuntimeError(
+                    f"retry proposals do not match persisted candidate "
+                    f"{record.candidate_id}"
+                )
+
+        tasks = [record.task for record in plan_records]
+        for index, proposal in enumerate(
+            candidate_proposals[len(plan_records):], start=len(plan_records) + 1
+        ):
             candidate_id = f"c{run.next_candidate_index:03d}"
             task = self._create_candidate_task(
                 run=run,
@@ -495,6 +462,8 @@ class FileSearchRuntime:
             tasks.append(task)
             run.next_candidate_index += 1
             run.candidates_total += 1
+            run.state = RunState.WAITING_FOR_WORKERS
+            self._write_run(run)
 
         if tasks:
             run.state = RunState.WAITING_FOR_WORKERS
@@ -2184,14 +2153,32 @@ class FileSearchRuntime:
         if base_candidate_id and base_candidate_id not in parent_candidate_ids:
             parent_candidate_ids.insert(0, base_candidate_id)
 
+        base_workspace: Path | None = None
+        base_revision: str | None = None
         if base_candidate_id:
             base_record = self._load_candidate_record(run.run_id, base_candidate_id)
-            copy_source_tree(base_record.task.workspace, workspace)
-        else:
-            copy_source_tree(Path(run.source_path), workspace)
-        scratch_dir = workspace / ".tmp"
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-        initialize_workspace_git_baseline(workspace)
+            base_workspace = base_record.task.workspace
+            if frozen.spec.workspace.backend == "git_worktree":
+                best_iteration = self._best_git_iteration_record(
+                    base_record, frozen.spec.metric_direction
+                )
+                if best_iteration is None:
+                    raise RuntimeError(
+                        f"git_worktree parent {base_candidate_id} has no clean "
+                        "verifier-backed Git iteration"
+                    )
+                base_revision = best_iteration.git_head
+
+        materialization = materialize_candidate_workspace(
+            backend=frozen.spec.workspace.backend,
+            run_dir=self._run_dir(run.run_id),
+            source=Path(run.source_path),
+            workspace=workspace,
+            run_id=run.run_id,
+            candidate_id=candidate_id,
+            base_workspace=base_workspace,
+            base_revision=base_revision,
+        )
 
         instructions = [
             "Work only inside this candidate workspace.",
@@ -2223,6 +2210,9 @@ class FileSearchRuntime:
             plan_id=plan.plan_id,
             hypothesis=hypothesis,
             workspace=workspace,
+            workspace_backend=materialization.backend,
+            workspace_branch=materialization.branch,
+            workspace_base_revision=materialization.base_revision,
             allowed_files=frozen.spec.edit_surface.allow,
             denied_files=frozen.spec.edit_surface.deny,
             instructions=instructions,
@@ -2236,6 +2226,9 @@ class FileSearchRuntime:
                 "worker_policy": plan.worker_policy,
                 "plan_id": plan.plan_id,
                 "slot": slot,
+                "workspace_backend": materialization.backend,
+                "workspace_branch": materialization.branch,
+                "workspace_base_revision": materialization.base_revision,
             },
         )
 
@@ -2625,6 +2618,28 @@ class FileSearchRuntime:
             for iteration in record.iterations
             if iteration.process_passed is True
             and iteration.score is not None
+            and not iteration.touched_denied_files
+            and not iteration.changed_outside_allowed
+        ]
+        if not scored:
+            return None
+        reverse = metric_direction == "maximize"
+        return sorted(
+            scored, key=lambda iteration: iteration.score, reverse=reverse
+        )[0]
+
+    def _best_git_iteration_record(
+        self,
+        record: CandidateRecord,
+        metric_direction: Literal["maximize", "minimize"],
+    ) -> IterationRecord | None:
+        scored = [
+            iteration
+            for iteration in record.iterations
+            if iteration.process_passed is True
+            and iteration.score is not None
+            and iteration.git_head is not None
+            and iteration.git_artifact_clean is True
             and not iteration.touched_denied_files
             and not iteration.changed_outside_allowed
         ]

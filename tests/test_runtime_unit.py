@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.models import CandidateProposal, SearchSpec
+from agentic_any_search_mcp.models import (
+    CandidateProposal,
+    CandidateRecord,
+    SearchSpec,
+)
 from agentic_any_search_mcp.runtime import (
     FileSearchRuntime,
     canonical_json,
@@ -1334,6 +1338,184 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
     assert followups[0].base_candidate_id == "c002"
     assert followups[0].parent_candidate_ids == ["c002"]
     assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+
+
+def test_git_worktree_runtime_branches_followup_from_best_parent_commit(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "namespace = {}\n"
+        "exec(open('initial_program.py', encoding='utf-8').read(), namespace)\n"
+        "print(json.dumps({'combined_score': float(namespace['VALUE'])}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_with_strategy(
+        project,
+        {"name": "evolve"},
+        max_candidates=3,
+    ).model_dump(mode="json")
+    spec_data["workspace"] = {"backend": "git_worktree"}
+    spec = SearchSpec.model_validate(spec_data)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    first_plan = runtime.plan_next(run_id, 2)
+    first = runtime.start_batch(run_id, first_plan.plan_id)
+    (first[0].workspace / "initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    (first[1].workspace / "initial_program.py").write_text(
+        "VALUE = 2\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    parent = runtime._load_candidate_record(run_id, "c002")
+    best_parent_iteration = runtime._best_iteration_record(parent, "maximize")
+    assert best_parent_iteration is not None
+    assert best_parent_iteration.git_head is not None
+
+    second_plan = runtime.plan_next(run_id, 1)
+    child = runtime.start_batch(run_id, second_plan.plan_id)[0]
+
+    common_dirs = {
+        subprocess.check_output(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=task.workspace,
+            text=True,
+        ).strip()
+        for task in (*first, child)
+    }
+    assert len(common_dirs) == 1
+    assert [task.workspace_backend for task in first] == [
+        "git_worktree",
+        "git_worktree",
+    ]
+    assert first[0].workspace_branch != first[1].workspace_branch
+    assert second_plan.strategy_trace["parent_candidate_id"] == "c002"
+    assert child.base_candidate_id == "c002"
+    assert child.workspace_backend == "git_worktree"
+    assert child.workspace_branch == f"gp/{run_id}/c003"
+    assert child.workspace_base_revision == best_parent_iteration.git_head
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=child.workspace, text=True
+    ).strip() == best_parent_iteration.git_head
+    assert (child.workspace / "initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 2\n"
+
+
+def test_git_worktree_start_batch_recovers_after_materialization_before_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_with_strategy(
+        project,
+        {"name": "independent_branches"},
+        max_candidates=1,
+    ).model_dump(mode="json")
+    spec_data["workspace"] = {"backend": "git_worktree"}
+    spec = SearchSpec.model_validate(spec_data)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, 1)
+    original_write = runtime._write_candidate_record
+    failed = False
+
+    def fail_once(run_id_arg: str, record: CandidateRecord) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            write_json(
+                runtime._candidate_dir(run_id_arg, record.candidate_id)
+                / "candidate.json",
+                record.model_dump(mode="json"),
+            )
+            raise RuntimeError("simulated state write failure")
+        original_write(run_id_arg, record)
+
+    monkeypatch.setattr(runtime, "_write_candidate_record", fail_once)
+
+    with pytest.raises(RuntimeError, match="simulated state write failure"):
+        runtime.start_batch(run_id, plan.plan_id)
+
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+    assert [task.candidate_id for task in tasks] == ["c001"]
+    assert runtime.status(run_id).candidates_total == 1
+    assert (
+        runtime._candidate_dir(run_id, "c001") / "task.json"
+    ).is_file()
+
+
+def test_start_batch_is_serialized_and_idempotent_for_same_plan(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_with_strategy(
+        project,
+        {"name": "independent_branches"},
+        max_candidates=2,
+    ).model_dump(mode="json")
+    spec_data["workspace"] = {"backend": "git_worktree"}
+    spec = SearchSpec.model_validate(spec_data)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, 2)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(runtime.start_batch, run_id, plan.plan_id)
+            for _ in range(2)
+        ]
+        batches = [future.result() for future in futures]
+
+    assert [[task.candidate_id for task in batch] for batch in batches] == [
+        ["c001", "c002"],
+        ["c001", "c002"],
+    ]
+    assert runtime.status(run_id).candidates_total == 2
+
+
+def test_git_worktree_followup_rejects_parent_without_clean_verifier_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "namespace = {}\n"
+        "exec(open('initial_program.py', encoding='utf-8').read(), namespace)\n"
+        "print(json.dumps({'combined_score': float(namespace['VALUE'])}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_with_strategy(
+        project,
+        {"name": "evolve"},
+        max_candidates=2,
+    ).model_dump(mode="json")
+    spec_data["workspace"] = {"backend": "git_worktree"}
+    spec = SearchSpec.model_validate(spec_data)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    first_plan = runtime.plan_next(run_id, 1)
+    parent = runtime.start_batch(run_id, first_plan.plan_id)[0]
+    (parent.workspace / "initial_program.py").write_text(
+        "VALUE = 9\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(runtime, "_commit_workspace_iteration", lambda *args: None)
+    report = runtime.run_verifier(run_id, parent.candidate_id)
+    assert report.aggregate_score == 9.0
+
+    second_plan = runtime.plan_next(run_id, 1)
+    with pytest.raises(RuntimeError, match="no clean verifier-backed Git iteration"):
+        runtime.start_batch(run_id, second_plan.plan_id)
 
 
 def test_evolve_planning_keeps_candidate_with_valid_iteration_after_latest_failure(

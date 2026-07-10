@@ -1,0 +1,38 @@
+{
+  "objective": "maximize the numeric workspace value",
+  "metric_name": "combined_score",
+  "metric_direction": "maximize",
+  "source_path": "examples/workspace-backends/source",
+  "edit_surface": {
+    "allow": [
+      "initial_program.py"
+    ],
+    "deny": [
+      "evaluator.py"
+    ]
+  },
+  "budget": {
+    "max_candidates": 3,
+    "max_parallel": 2
+  },
+  "process_verifiers": [
+    {
+      "name": "workspace_value",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "evaluator.py"
+      ],
+      "timeout_seconds": 30
+    }
+  ],
+  "strategy": {
+    "name": "evolve",
+    "worker_mode": "agent-session-pool",
+    "worker_host": "opencode",
+    "worker_agent_type": "AnySearchAgentFlash"
+  },
+  "workspace": {
+    "backend": "git_worktree"
+  }
+}
