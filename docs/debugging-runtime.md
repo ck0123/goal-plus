@@ -332,19 +332,41 @@ c3d4e5f	0.651	discard	switch to rectangular grid (regressed)
 
 ## Live Monitoring
 
+Use the read-only monitor snapshot as the primary live view:
+
 ```bash
-# Watch iterations accumulate every 30s
-watch -n 30 "
-  for f in $RUN/candidates/*/candidate.json; do
-    python3 -c \"
-import json
-d = json.load(open('\$f'))
-iters = d.get('iterations', [])
-print(f\\\"{d['candidate_id']}: {len(iters)} iters, scores={[i['score'] for i in iters]}\\\")
-\"
-  done
-"
+agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+  --root .gp \
+  --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
+  --pretty
 ```
+
+The top-level `strategy` object identifies the search algorithm independently
+of candidate and plan counts:
+
+```json
+{
+  "strategy": {
+    "name": "agent_guided",
+    "driver": "builtin",
+    "worker_mode": "agent-session-pool",
+    "worker_host": "pi-rpc",
+    "history_policy": {"scope": "top_n", "top_n": 5},
+    "latest_plan": {
+      "plan_id": "plan_002",
+      "selection_rule": "agent-guided history policy: top_n",
+      "state": {}
+    }
+  }
+}
+```
+
+`plans_count` only reports how many planning rounds exist; it does not identify
+whether the run uses agent-guided, random, OpenEvolve, AdaptEvolve, MCTS, or a
+custom strategy. `strategy.latest_plan.state` contains a bounded whitelist of
+strategy-specific fields when present, including sampling mode, parent/archive
+ids, frontier node, generation/population, and tree-depth summaries. Inspect
+raw plan files only when the bounded summary is insufficient.
 
 ## Checking OpenCode Step Count
 

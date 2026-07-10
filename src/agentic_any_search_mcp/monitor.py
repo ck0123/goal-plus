@@ -12,6 +12,7 @@ from agentic_any_search_mcp.models import (
     GoalPlusRecord,
     IterationRecord,
     RunRecord,
+    SearchPlan,
 )
 from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
 from agentic_any_search_mcp.runtime import load_json, utc_timestamp, utc_timestamp_from_epoch
@@ -100,6 +101,64 @@ def _load_agent_sessions(run_dir: Path) -> list[AgentSessionRecord]:
         AgentSessionRecord.model_validate(load_json(path))
         for path in sorted(session_dir.glob("agent_*.json"))
     ]
+
+
+def _load_latest_plan(run_dir: Path) -> SearchPlan | None:
+    plan_paths = sorted((run_dir / "plans").glob("plan_*.json"))
+    if not plan_paths:
+        return None
+    return SearchPlan.model_validate(load_json(plan_paths[-1]))
+
+
+_STRATEGY_STATE_KEYS = (
+    "generation",
+    "generation_index",
+    "population",
+    "population_size",
+    "tree_depth",
+    "max_tree_depth",
+    "frontier_node",
+    "sampling_mode",
+    "parent_candidate_id",
+    "archive_candidate_ids",
+    "inspiration_candidate_ids",
+    "selected_worker_agent_type",
+    "seed",
+    "external_ref",
+)
+
+
+def _strategy_payload(
+    frozen: FrozenSpec,
+    latest_plan: SearchPlan | None,
+) -> dict[str, Any]:
+    strategy = frozen.spec.strategy
+    latest_plan_payload: dict[str, Any] | None = None
+    if latest_plan is not None:
+        trace = latest_plan.strategy_trace
+        latest_plan_payload = {
+            "plan_id": latest_plan.plan_id,
+            "status": latest_plan.status,
+            "requested_k": latest_plan.requested_k,
+            "planned_k": latest_plan.planned_k,
+            "started_candidate_ids": latest_plan.started_candidate_ids,
+            "selection_rule": trace.get("selection_rule"),
+            "state": {
+                key: trace[key]
+                for key in _STRATEGY_STATE_KEYS
+                if key in trace
+            },
+        }
+    return {
+        "name": strategy.name,
+        "driver": strategy.driver,
+        "ref": strategy.ref,
+        "worker_mode": strategy.worker_mode,
+        "worker_host": strategy.worker_host,
+        "worker_agent_type": strategy.worker_agent_type,
+        "history_policy": strategy.history_policy.model_dump(mode="json"),
+        "latest_plan": latest_plan_payload,
+    }
 
 
 def _best_iteration(
@@ -232,6 +291,7 @@ def goal_plus_monitor_snapshot(
         )
 
     run_payload: dict[str, Any] | None = None
+    strategy_payload: dict[str, Any] | None = None
     candidates_payload: dict[str, dict[str, Any]] = {}
     subagents: list[dict[str, Any]] = []
     main_agent = {
@@ -251,7 +311,10 @@ def goal_plus_monitor_snapshot(
         )
         candidates = _load_candidates(run_path)
         sessions = _load_agent_sessions(run_path)
-        plans_count = len(list((run_path / "plans").glob("*.json")))
+        plan_paths = list((run_path / "plans").glob("plan_*.json"))
+        plans_count = len(plan_paths)
+        latest_plan = _load_latest_plan(run_path)
+        strategy_payload = _strategy_payload(frozen, latest_plan)
         by_candidate = {candidate.candidate_id: candidate for candidate in candidates}
         sessions_by_candidate: dict[str, list[AgentSessionRecord]] = {}
         for session in sessions:
@@ -411,6 +474,7 @@ def goal_plus_monitor_snapshot(
         "root_dir": str(root),
         "goal_plus": _goal_payload(goal_record),
         "run": run_payload,
+        "strategy": strategy_payload,
         "main_agent": main_agent,
         "candidates": candidates_payload,
         "subagents": subagents,

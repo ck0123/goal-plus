@@ -279,8 +279,11 @@ Goal Plus/Search monitoring:
 
 - Prefer the MCP monitor tool `goal_plus_monitor_snapshot` for active or
   completed Goal Plus/Search runs. It summarizes goal status, linked run state,
-  selected candidate, candidate scores, verifier counts, subagent liveness,
-  Pi token/cost/context metrics, stale warnings, and report/promotion paths.
+  search strategy and latest-plan state, selected candidate, candidate scores,
+  verifier counts, subagent liveness, Pi token/cost/context metrics, stale
+  warnings, and report/promotion paths. Use `strategy.name` and
+  `strategy.driver` to identify the algorithm; `plans_count` is only a round
+  count.
 - If the MCP tool is not directly exposed in the current host, use the matching
   facade instead of manually tailing files, for example:
 
