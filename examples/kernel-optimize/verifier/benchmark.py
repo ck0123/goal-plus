@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Latency benchmark for the kernel-optimize scenario.
+"""Latency benchmark for the kernel-optimize example template.
 
 Measures framework (`Model`) vs implementation (`ModelNew`) latency on NPU
 (when `torch.npu` is available, via `torch.npu.synchronize` + perf_counter)

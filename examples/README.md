@@ -1,6 +1,6 @@
 # Goal Plus Search Examples
 
-The example specs are small local scenarios for exercising `/goal-plus` after it
+These examples are small local workloads and templates for exercising `/goal-plus` after it
 upgrades a measurable task into Search Mode.
 
 ## Automated ST Coverage
@@ -40,6 +40,7 @@ Pi RPC. See
 | `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-inspired public-feedback optimization, 4 candidates, pool=2 |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
+| `kernel-optimize/` | reusable PyTorch-reference kernel verifier template | `/goal-plus` host | Correctness + latency verifier and a worked C++ prompt; not a standalone fixture |
 | `workspace-backends/` | tiny local Python source tree | none (runtime-only E2E) | 3 Git worktree candidates, including a follow-up from the best parent commit |
 | `model-opt-gpu/` | future standalone TorchBench `BERT_pytorch` source | `/goal-plus` host on V100 | **WIP, incomplete, not validated, and not recommended yet**; preparation prompt only |
 

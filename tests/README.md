@@ -18,7 +18,8 @@ tests/
 ├── test_runtime_unit.py               # FileSearchRuntime internals (history, batches, verifier)
 ├── test_tools.py                      # GoalPlusTools/SearchTools facades
 ├── test_server.py                     # MCP server tool registration
-├── test_example_scenarios.py          # Examples + runtime integration (no real opencode)
+├── test_examples.py                   # Examples + runtime integration (no real opencode)
+├── test_kernel_optimize_example.py    # Kernel template verifier behavior
 ├── test_k_module_runtime.py           # k_module end-to-end on runtime (no real opencode)
 ├── test_opencode_assets.py            # Bundled agents / skills are well-formed
 ├── test_pi_assets.py                  # Pi prompts / skills / extension are well-formed
@@ -58,7 +59,7 @@ run before merging.
 | Tier | Command | What it proves | What it does not prove |
 |---|---|---|---|
 | Default gate | `python -m pytest -q` | Models, runtime state machine, facades, bundled assets, example specs, and mock/fixture integration still behave | A real host agent can finish the user-visible workflow |
-| Runtime E2E | Included in default tests, e.g. `test_k_module_runtime.py` and the `workspace-backends` scenario in `test_example_scenarios.py` | Candidate workspaces, workspace backend lineage, frozen verifier artifacts, selection, reports, and promotion logic work without a host agent | Host launch, prompt following, MCP wiring, native hooks, or real worker lifecycle |
+| Runtime E2E | Included in default tests, e.g. `test_k_module_runtime.py` and the `workspace-backends` example in `test_examples.py` | Candidate workspaces, workspace backend lineage, frozen verifier artifacts, selection, reports, and promotion logic work without a host agent | Host launch, prompt following, MCP wiring, native hooks, or real worker lifecycle |
 | System tests | `python -m pytest -m "st or st_pi" -v -s` | Real host/Pi entrypoints can drive the workflow and produce final runtime evidence | Full exhaustive strategy quality; ST is a slow final-effect gate |
 
 Rules:

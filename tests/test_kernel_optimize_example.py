@@ -9,7 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BENCHMARK_PATH = ROOT / "scenarios" / "kernel-optimize" / "verifier" / "benchmark.py"
+BENCHMARK_PATH = ROOT / "examples" / "kernel-optimize" / "verifier" / "benchmark.py"
 
 
 def _load_benchmark_module():

@@ -1,9 +1,9 @@
-# kernel-optimize scenario
+# Kernel Optimize Example Template
 
 Run an agentic search to optimize an operator kernel against a PyTorch
 reference, with `avg_latency_ms` as the primary metric. The runtime, the
 `AnySearchAgent` autoresearch loop, and the `search` skill are unchanged;
-this bundle only contributes a verifier reference and a usage guide.
+this example only contributes a verifier reference and a usage guide.
 
 ## Inputs
 
@@ -100,7 +100,7 @@ Notes:
 ## Step 4 — drive the search flow
 
 Hand off to the standard `search` skill. Full mechanics live in
-`.opencode/skills/search/SKILL.md` and `examples/README.md`; this scenario
+`.opencode/skills/search/SKILL.md` and `examples/README.md`; this example
 does not redefine them. The shape:
 
 1. `search_freeze_spec(spec=<above>, verifier_artifact_paths=[`
@@ -170,7 +170,7 @@ The runtime's existing mechanism does all of it:
   out imports.
 - A new subagent. `AnySearchAgent` already autoresearches.
 
-## Worked example
+## Worked prompt
 
 See [`example-prompt-cpp.md`](example-prompt-cpp.md) for a complete prompt the
 host agent can paste into the search skill for a C++ kernel optimization

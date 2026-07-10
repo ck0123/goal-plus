@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Correctness verifier for the kernel-optimize scenario.
+"""Correctness verifier for the kernel-optimize example template.
 
 Compares a PyTorch reference (`Model`) against a candidate implementation
 (`ModelNew`) across one or more input groups. Multi-shape aware: each shape

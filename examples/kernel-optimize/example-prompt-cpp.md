@@ -18,10 +18,10 @@ is in `edit_surface.allow`.
 ## Prompt
 
 ```text
-Use the kernel-optimize scenario to optimize the matmul operator at <source>/.
+Use the kernel-optimize example template to optimize the matmul operator at <source>/.
 
 Step 1 — bootstrap verifier:
-- Copy scenarios/kernel-optimize/verifier/{verify.py, benchmark.py, _common_utils.py}
+- Copy examples/kernel-optimize/verifier/{verify.py, benchmark.py, _common_utils.py}
   to <source>/_verifier/.
 
 Step 2 — build verify inputs under <source>/_verifier/:
@@ -116,7 +116,7 @@ Do not promote. The user will review the report first.
 
 - The C++ kernel file is the only entry in `edit_surface.allow`. The wrapper
   that loads it via `torch.utils.cpp_extension.load_inline` is denied —
-  changing the binding contract is out of scope for this scenario.
+  changing the binding contract is out of scope for this example.
 - If the user's wrapper does not already define `ModelNew`, assemble
   `_verifier/matmul_impl.py` so that it imports the binding and defines
   `ModelNew` to call it. Read the wrapper to confirm.
