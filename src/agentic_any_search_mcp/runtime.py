@@ -50,17 +50,13 @@ from agentic_any_search_mcp.models import (
     WorkerBudget,
 )
 from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from agentic_any_search_mcp.workspaces import (
+    copy_source_tree,
+    initialize_workspace_git_baseline,
+    list_files,
+)
 
 
-IGNORED_NAMES = {
-    ".git",
-    DEFAULT_RUNTIME_ROOT,
-    LEGACY_RUNTIME_ROOT,
-    ".tmp",
-    ".pytest_cache",
-    "__pycache__",
-}
-IGNORED_SUFFIXES = {".pyc", ".pyo"}
 CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS = {
     "any-search-agent-flash": 4,
     "any-search-agent": 8,
@@ -137,88 +133,6 @@ def exclusive_file_lock(lock_path: Path):
         yield
     finally:
         lock_dir.rmdir()
-
-
-def should_ignore(path: Path) -> bool:
-    if any(part in IGNORED_NAMES for part in path.parts):
-        return True
-    return path.suffix in IGNORED_SUFFIXES
-
-
-def list_files(root: Path) -> list[Path]:
-    if root.is_file():
-        return [root]
-    files: list[Path] = []
-    for path in root.rglob("*"):
-        if path.is_file() and not should_ignore(path.relative_to(root)):
-            files.append(path)
-    return sorted(files)
-
-
-def copy_source_tree(source: Path, destination: Path) -> None:
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-
-    if source.is_file():
-        destination.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination / source.name)
-        return
-
-    def ignore(_dir: str, names: list[str]) -> set[str]:
-        ignored: set[str] = set()
-        for name in names:
-            if name in IGNORED_NAMES or Path(name).suffix in IGNORED_SUFFIXES:
-                ignored.add(name)
-        return ignored
-
-    shutil.copytree(source, destination, ignore=ignore)
-
-
-def initialize_workspace_git_baseline(workspace: Path) -> None:
-    try:
-        subprocess.run(
-            ["git", "init", "-q"],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return
-
-    files = [path.relative_to(workspace).as_posix() for path in list_files(workspace)]
-    if not files:
-        return
-
-    try:
-        subprocess.run(
-            ["git", "add", "--", *files],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=agentic-any-search",
-                "-c",
-                "user.email=agentic-any-search@example.invalid",
-                "commit",
-                "-q",
-                "--no-verify",
-                "-m",
-                "search candidate baseline",
-            ],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError:
-        return
 
 
 def path_matches(path: str, patterns: list[str]) -> bool:
