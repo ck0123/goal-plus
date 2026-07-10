@@ -10,6 +10,7 @@ benchmarks/data/
 benchmarks/reports/
 benchmarks/runs/
 .tmp/
+.worktrees/
 docs/superpowers/
 .superpowers/
 .opencode/node_modules/
