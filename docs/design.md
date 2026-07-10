@@ -86,11 +86,13 @@ FileSearchRuntime
 - `name`: strategy mode, default `agent_guided`; alternatives `independent_branches`, `evolve`, `openevolve`, `mcts`, `random`, or Python plugins such as `adaptevolve`
 - `driver`: `builtin`, `python`, or `external_mcp`
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
-- `worker_host`: `opencode`, `codex`, or `claude-code`; default `opencode`
+- `worker_host`: `opencode`, `codex`, `claude-code`, or `pi-rpc`; default `opencode`
 - `worker_agent_type`: optional default host hint such as OpenCode `AnySearchAgent`; a strategy plan may override it through `worker_policy`
 - `worker_budget`: optional per-worker runtime budget. Codex requires
   `max_runtime_seconds` and enforces it through a parent watchdog. Claude Code
   requires `max_turns` and enforces it through the selected agent definition.
+  Pi RPC requires `max_runtime_seconds`, sends a closeout steer before the
+  deadline, and retains a hard process watchdog.
 - `history_policy`, `parent_policy`, and `config`: strategy-specific controls
 
 Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) and string-form `strategy` are rejected at parse time. Fix the spec instead of relying on normalization.

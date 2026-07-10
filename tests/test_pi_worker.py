@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,82 @@ def test_summarize_pi_entries_reports_totals_and_latest_cache_hit_rate() -> None
         "costTotal": 0.03,
         "latestCacheHitRate": 75.0,
     }
+
+
+def test_rpc_client_compacts_stream_updates_and_skips_text_log_by_default(
+    tmp_path: Path,
+) -> None:
+    event_log = tmp_path / "events.jsonl"
+    client = pi_worker._RpcClient(  # type: ignore[arg-type]
+        proc=object(),
+        event_log=event_log,
+        text_log=None,
+    )
+
+    client._append_event({"type": "message_update", "delta": "partial"})
+    client._append_event(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "SECRET_REASONING"}],
+                "usage": {"input": 10, "output": 2},
+            },
+        }
+    )
+    client._append_event(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call_1",
+            "toolName": "search_get_agent_context",
+            "isError": False,
+            "result": {"content": [{"type": "text", "text": "SECRET_TOOL_RESULT"}]},
+        }
+    )
+    client._append_event(
+        {
+            "type": "response",
+            "id": "cmd_1",
+            "command": "get_entries",
+            "success": True,
+            "data": {"entries": [{"message": "SECRET_TRANSCRIPT"}]},
+        }
+    )
+    client._append_text('{"type":"message_update"}\n')
+
+    log_text = event_log.read_text(encoding="utf-8")
+    events = [json.loads(line) for line in log_text.splitlines()]
+    assert [event["type"] for event in events] == [
+        "message_end",
+        "tool_execution_end",
+        "response",
+    ]
+    assert events[0]["role"] == "assistant"
+    assert events[0]["content_types"] == ["thinking"]
+    assert events[1]["tool_name"] == "search_get_agent_context"
+    assert events[2]["command"] == "get_entries"
+    assert events[2]["entry_count"] == 1
+    assert "SECRET" not in log_text
+    assert not (tmp_path / "events.txt").exists()
+
+
+def test_rpc_client_raw_logging_keeps_stream_updates_and_text(
+    tmp_path: Path,
+) -> None:
+    event_log = tmp_path / "events.jsonl"
+    text_log = tmp_path / "events.txt"
+    client = pi_worker._RpcClient(  # type: ignore[arg-type]
+        proc=object(),
+        event_log=event_log,
+        text_log=text_log,
+        raw_logging=True,
+    )
+
+    client._append_event({"type": "message_update", "delta": "partial"})
+    client._append_text('{"type":"message_update"}\n')
+
+    assert '"type": "message_update"' in event_log.read_text(encoding="utf-8")
+    assert text_log.read_text(encoding="utf-8") == '{"type":"message_update"}\n'
 
 
 def test_run_pi_rpc_worker_returns_run_delta_metrics(
@@ -141,7 +218,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     )
 
     metrics = handle["metadata"]["pi_metrics"]
-    assert metrics["session_file"] == str(session_dir / "2026_agent_1.jsonl")
+    assert metrics["session_file"] is None
     assert metrics["baseline_entry_count"] == 1
     assert metrics["final_entry_count"] == 2
     assert metrics["duration_seconds"] >= 0
@@ -166,7 +243,13 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert metrics["session_stats"] == {"tokens": {"input": 125}}
     assert commands.count("get_entries") == 2
     assert popen_cmd[0:3] == ["pi", "--model", "gpt-5.4-mini"]
+    assert "--no-session" in popen_cmd
+    assert "--session-dir" not in popen_cmd
     assert popen_env["AGENTIC_ANY_SEARCH_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
+    assert handle["metadata"]["raw_logging"] is False
+    assert handle["metadata"]["text_log"] is None
+    assert handle["metadata"]["session_file"] is None
+    assert handle["metadata"]["continuation"] == "state_redispatch"
 
 
 def test_run_pi_rpc_worker_waits_for_pi_auto_retry(
@@ -246,3 +329,96 @@ def test_run_pi_rpc_worker_waits_for_pi_auto_retry(
 
     assert handle["metadata"]["assistant_text"] == "done after retry"
     assert commands.count("get_state") >= 3
+
+
+def test_run_pi_rpc_worker_steers_once_before_hard_deadline(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    extension = tmp_path / "search-runtime.ts"
+    extension.write_text("// fake extension\n", encoding="utf-8")
+    session_dir = tmp_path / "sessions"
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+
+    commands: list[dict[str, Any]] = []
+    clock = {"value": 0.0}
+
+    class FakeProc:
+        returncode = None
+
+    class FakeRpcClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.state_calls = 0
+
+        def start(self) -> None:
+            return None
+
+        def command(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            commands.append(payload)
+            command_type = str(payload["type"])
+            if command_type == "get_entries":
+                return {"data": {"entries": [], "leafId": None}}
+            if command_type in {"prompt", "steer"}:
+                return {"data": {}}
+            if command_type == "get_state":
+                self.state_calls += 1
+                if self.state_calls == 1:
+                    clock["value"] = 25.0
+                    return {
+                        "data": {
+                            "isStreaming": True,
+                            "isCompacting": False,
+                            "pendingMessageCount": 0,
+                        }
+                    }
+                return {
+                    "data": {
+                        "isStreaming": False,
+                        "isCompacting": False,
+                        "pendingMessageCount": 0,
+                    }
+                }
+            if command_type == "get_last_assistant_text":
+                return {"data": {"text": "closed out"}}
+            if command_type == "get_session_stats":
+                return {"data": {}}
+            raise AssertionError(f"unexpected command {command_type}")
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
+
+    def fake_kill_process_group(proc: FakeProc) -> None:
+        proc.returncode = 0
+
+    def fake_sleep(seconds: float) -> None:
+        clock["value"] += seconds
+
+    monkeypatch.setattr(pi_worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(pi_worker, "_RpcClient", FakeRpcClient)
+    monkeypatch.setattr(pi_worker, "_kill_process_group", fake_kill_process_group)
+    monkeypatch.setattr(pi_worker.time, "monotonic", lambda: clock["value"])
+    monkeypatch.setattr(pi_worker.time, "sleep", fake_sleep)
+
+    handle = pi_worker.run_pi_rpc_worker(
+        {
+            "agent_session_id": "agent_closeout",
+            "session_id": "agent_closeout",
+            "session_dir": str(session_dir),
+            "root": str(tmp_path / ".search"),
+            "cwd": str(cwd),
+            "prompt": "do work",
+            "budget_control": {
+                "max_runtime_seconds": 30,
+                "soft_closeout_seconds": 6,
+            },
+        },
+        extension_path=extension,
+    )
+
+    steer_commands = [command for command in commands if command["type"] == "steer"]
+    assert len(steer_commands) == 1
+    assert "final search_run_verifier" in steer_commands[0]["message"]
+    assert handle["metadata"]["soft_closeout_seconds"] == 6
+    assert handle["metadata"]["soft_closeout_sent"] is True
+    assert handle["metadata"]["timed_out"] is False

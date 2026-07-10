@@ -55,6 +55,10 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
                 "event_log": str(event_log),
                 "session_file": str(session_file),
                 "timed_out": False,
+                "runner_failed": False,
+                "soft_closeout_seconds": 45,
+                "soft_closeout_sent": True,
+                "raw_logging": False,
                 "pi_metrics": {
                     "duration_seconds": 12.5,
                     "usage_delta": {
@@ -110,6 +114,10 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert subagent["context"]["tokens"] == 12345
     assert subagent["usage_total"]["costTotal"] == 0.18
     assert subagent["duration_seconds"] == 12.5
+    assert subagent["soft_closeout_seconds"] == 45
+    assert subagent["soft_closeout_sent"] is True
+    assert subagent["raw_logging"] is False
+    assert subagent["runner_failed"] is False
     assert subagent["liveness"] == "evaluated"
 
     assert snapshot["candidates"][second.candidate_id]["status"] == "created"

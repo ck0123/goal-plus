@@ -9,16 +9,25 @@ For the cross-host capability matrix and adapter contract, see
 
 ## Config
 
-Project-local MCP configuration lives in:
+The tracked project-local MCP configuration template is:
 
 ```text
-.codex/config.toml
+.codex/config.example.toml
 .codex/hooks.json
 .codex/skills/goal-plus/SKILL.md
 .codex/skills/search/SKILL.md
 .codex/agents/any_search_agent.toml
 scripts/hooks/goal_plus_stop.py
 ```
+
+Create the ignored local config before using Codex in this checkout:
+
+```bash
+cp .codex/config.example.toml .codex/config.toml
+```
+
+Keeping `.codex/config.toml` untracked lets each checkout set local approval or
+runtime options without changing the repository template.
 
 Use `goal-plus` as the user-facing skill. The `search` skill is the internal
 Search Mode engine after Goal Plus has frozen and, when needed, confirmed a

@@ -282,14 +282,11 @@ class PiRpcAdapter:
     name: AgentHostKind = "pi-rpc"
     capabilities = HostCapabilities(
         supports_bind_handle=True,
-        supports_same_worker_continue=True,
+        supports_same_worker_continue=False,
         supports_trace_export=False,
         uses_background_workers=False,
-        continuation="session_jsonl_restart",
+        continuation="state_redispatch",
     )
-
-    def _session_dir(self, root: str | None) -> str:
-        return str((Path(root or DEFAULT_RUNTIME_ROOT) / "host-logs" / "pi-rpc-sessions"))
 
     def _budget_control(
         self,
@@ -297,12 +294,18 @@ class PiRpcAdapter:
     ) -> dict[str, Any] | None:
         if not worker_budget:
             return None
+        max_runtime_seconds = worker_budget.get("max_runtime_seconds")
         budget_control: dict[str, Any] = {
             "mode": "pi_rpc_process_watchdog",
-            "continuation": "session_jsonl_restart",
-            "max_runtime_seconds": worker_budget.get("max_runtime_seconds"),
+            "continuation": "state_redispatch",
+            "max_runtime_seconds": max_runtime_seconds,
             "on_exceed": worker_budget.get("on_exceed", "interrupt"),
         }
+        if max_runtime_seconds is not None:
+            budget_control["soft_closeout_seconds"] = min(
+                45,
+                max(5, int(max_runtime_seconds) // 5),
+            )
         if worker_budget.get("max_turns") is not None:
             budget_control["max_turns_hint"] = worker_budget["max_turns"]
         return budget_control
@@ -344,11 +347,10 @@ class PiRpcAdapter:
             "agent_session_id": agent_session_id,
             "candidate_id": candidate_id,
             "session_id": agent_session_id,
-            "session_dir": self._session_dir(root),
             "root": root or DEFAULT_RUNTIME_ROOT,
             "cwd": cwd or ".",
             "description": f"{candidate_id} {short_intent}",
-            "continuation": "session_jsonl_restart",
+            "continuation": "state_redispatch",
             "prompt": self._base_prompt(
                 worker_prompt=worker_prompt,
                 agent_session_id=agent_session_id,
@@ -378,32 +380,10 @@ class PiRpcAdapter:
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        session_id = external_id or agent_session_id
-        payload: dict[str, Any] = {
-            "tool": "pi_rpc_worker",
-            "resume": True,
-            "agent_session_id": agent_session_id,
-            "candidate_id": candidate_id,
-            "session_id": session_id,
-            "session_dir": self._session_dir(root),
-            "root": root or DEFAULT_RUNTIME_ROOT,
-            "cwd": cwd or ".",
-            "description": f"{candidate_id} continue {short_intent}",
-            "continuation": "session_jsonl_restart",
-            "prompt": self._base_prompt(
-                worker_prompt=worker_prompt,
-                agent_session_id=agent_session_id,
-                candidate_id=candidate_id,
-                one_paragraph_idea=one_paragraph_idea,
-                resume=True,
-            ),
-        }
-        if worker_agent_type:
-            payload["worker_agent_type"] = worker_agent_type
-        budget_control = self._budget_control(worker_budget)
-        if budget_control:
-            payload["budget_control"] = budget_control
-        return payload
+        raise UnsupportedHostCapability(
+            "pi-rpc workers do not persist full session JSONL; use "
+            "search_redispatch_candidate for state-level resume"
+        )
 
 
 _ADAPTERS: dict[AgentHostKind, AgentHostAdapter] = {

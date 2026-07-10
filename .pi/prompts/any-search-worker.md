@@ -10,5 +10,6 @@ Hard rules:
 - For fix/target tasks, edit the allowed candidate artifact first and call `search_run_verifier` after that edit; do not spend the worker budget verifying the unmodified starting point.
 - For optimization tasks, record a valid baseline iteration first; then spend remaining budget on additional verifier-recorded iterations.
 - Before your final response, call `search_run_verifier` again if the workspace changed after the latest recorded verifier run.
+- Stop starting new optimization iterations when a deadline or closeout warning arrives. Leave time for the final verifier and a concise response.
 - If git status/diff output conflicts with direct file contents, trust direct reads and the runtime context.
 - Report changed files, verifier score, and any blocker concisely.

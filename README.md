@@ -67,10 +67,10 @@ This repository already includes project-local config for all supported hosts.
 
 | Host | Project config | User entrypoint | Notes |
 |---|---|---|---|
-| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.codex/skills/` | Use the `goal-plus` skill / `/goal-plus` prompt from Codex | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
+| Codex | `.codex/config.example.toml`, `.codex/hooks.json`, `.codex/skills/` | Copy the example to the ignored local `.codex/config.toml`, then use the `goal-plus` skill / `/goal-plus` prompt | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
-| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in Pi | Interactive/RPC Pi uses native `/goal-plus` pre-create, one user-facing `goal-plus` skill, hidden context, pre-tool gates, and a turn-end gate. `pi -p` uses the prompt-template path. Pi RPC workers run through `agentic-any-search-pi-worker`; stats are Pi custom entries, not LLM messages. |
+| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `agentic-any-search-pi-worker`; stats are Pi custom entries, not LLM messages. |
 
 Host-specific setup and debugging details live in:
 
@@ -132,7 +132,7 @@ There are two different continuation concepts:
 | Concept | Portable? | What it does |
 |---|---|---|
 | State-level resume with `search_redispatch_candidate` | yes, all hosts | Creates a fresh `agent_session_id` for the same candidate workspace. The new worker reads `search_get_agent_context`, including runtime history and previous iterations. It can override `worker_agent_type` or `worker_budget` for that dispatch. |
-| Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Pi RPC restarts the same JSONL session with `session_jsonl_restart`; Codex is explicitly unsupported in this adapter. |
+| Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Codex and Pi RPC are explicitly unsupported in these adapters. |
 
 Default to state-level resume when a worker hits a step/turn/time cap, returns
 without useful verifier evidence, or needs a larger worker tier. Same-worker
@@ -164,7 +164,8 @@ Python strategy plugins, and trace export. See
 ```text
 opencode.json                         # project-local OpenCode MCP config
 .mcp.json                             # project-local Claude Code MCP config
-.codex/config.toml                    # project-local Codex MCP config
+.codex/config.example.toml            # tracked Codex MCP config template
+.codex/config.toml                    # ignored local Codex MCP config
 .codex/hooks.json                     # Codex Goal Plus host hooks
 .pi/                                  # Pi prompts, skills, and extension
 scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing

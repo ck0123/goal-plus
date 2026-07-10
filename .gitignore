@@ -19,6 +19,7 @@ docs/superpowers/
 .codex/agents/any-search-agent.toml
 .codex/agents/any-search-agent-flash.toml
 .codex/agents/any-search-agent-deep.toml
+.codex/config.toml
 dist/
 build/
 *.egg-info/

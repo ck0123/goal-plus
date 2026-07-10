@@ -8,11 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_codex_mcp_config_registers_search_runtime() -> None:
-    text = (ROOT / ".codex" / "config.toml").read_text(encoding="utf-8")
+    text = (ROOT / ".codex" / "config.example.toml").read_text(encoding="utf-8")
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
     assert "[mcp_servers.search-runtime]" in text
     assert 'command = "agentic-any-search-mcp"' in text
     assert 'args = ["--root", ".gp"]' in text
+    assert ".codex/config.toml" in gitignore
 
 
 def test_codex_assets_wire_goal_plus_host_hooks() -> None:

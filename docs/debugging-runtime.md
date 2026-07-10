@@ -196,22 +196,27 @@ The runner starts:
 
 ```bash
 pi --mode rpc --approve \
-  --session-dir .gp/host-logs/pi-rpc-sessions \
+  --no-session \
   --session-id <agent_session_id> \
   -e <repo>/.pi/extensions/search-runtime.ts
 ```
 
 Important paths:
 
-- `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`
-- `.gp/host-logs/pi-rpc-<agent_session_id>.txt`
-- `.gp/host-logs/pi-rpc-sessions/`
+- `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`: metadata-only event log
+
+The default JSONL keeps event types, tool names/status, usage/counts, and
+bounded error summaries. It omits streaming `message_update` events plus prompt,
+reasoning, tool payload, and transcript content. Set
+`AGENTIC_ANY_SEARCH_PI_RAW_LOG=1` for a short debugging run when full RPC
+payloads are required; raw mode also creates the duplicate
+`.gp/host-logs/pi-rpc-<agent_session_id>.txt` stream.
 
 Useful search pattern:
 
 ```bash
 rg -n "agent_session_id|candidate_id|search_get_agent_context|search_run_verifier|tool_call|stderr|abort" \
-  .gp/host-logs/pi-rpc-*.jsonl .gp/host-logs/pi-rpc-*.txt
+  .gp/host-logs/pi-rpc-*.jsonl
 ```
 
 For periodic monitoring, prefer the read-only MCP/Pi facade snapshot instead
@@ -228,13 +233,15 @@ The snapshot summarizes run state, candidate counts, agent sessions, verifier
 counts, Pi RPC duration/cost/context metrics, file mtimes, and stale/timed-out
 warnings from durable `.gp` state.
 
-`session_jsonl_restart` means continuation restarts `pi --mode rpc` with the
-same `--session-id`. It is not a live process continuation. Search MCP
-`.gp/runs/...` remains the authoritative state; Pi JSONL is transcript and
-resume evidence only. Pi has a native turn-level Goal Plus stop gate through
-the extension `agent_end` event, but no host process Stop hook. Debug Goal Plus
-completion through extension pre-tool guard events, stop continuation messages,
-and `.gp/goal-plus/...`.
+Pi RPC workers use `--no-session` and do not support same-worker continuation.
+Use `search_redispatch_candidate` for state-level redispatch; Search MCP
+`.gp/runs/...`, verifier iterations, candidate Git commits, and workspace files
+remain authoritative. Runner failures are bound as synthetic failure handles,
+so monitor warnings include `subagent_runner_failed` and bounded failure
+metadata instead of leaving the session apparently running. Pi has a native
+turn-level Goal Plus stop gate through the extension `agent_end` event, but no
+host process Stop hook. Debug Goal Plus completion through extension pre-tool
+guard events, stop continuation messages, and `.gp/goal-plus/...`.
 
 ## `.gp/` Layout
 

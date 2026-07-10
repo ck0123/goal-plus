@@ -279,6 +279,23 @@ class FileGoalPlusRuntime:
         frozen_spec_id: str,
         run_id: str,
     ) -> GoalPlusRecord:
+        if (
+            not run_id.startswith("run_")
+            or any(not (character.isalnum() or character in {"_", "-"}) for character in run_id)
+        ):
+            raise ValueError(f"invalid search run id: {run_id}")
+        run_path = self.root_dir / "runs" / run_id / "run.json"
+        if not run_path.exists():
+            raise FileNotFoundError(
+                f"search run not found: {run_id}. Call search_create and use its returned run_id."
+            )
+        search_run = read_json(run_path)
+        actual_frozen_spec_id = search_run.get("frozen_spec_id")
+        if actual_frozen_spec_id != frozen_spec_id:
+            raise ValueError(
+                f"search run {run_id} belongs to frozen spec {actual_frozen_spec_id}; "
+                f"cannot link it as {frozen_spec_id}"
+            )
         record = self._load_record(goal_plus_id)
         if (
             record.linked_search
@@ -322,12 +339,40 @@ class FileGoalPlusRuntime:
         summary: str | None = None,
     ) -> GoalPlusRecord:
         record = self._load_record(goal_plus_id)
+        if record.linked_search is None or record.linked_search.run_id != run_id:
+            raise RuntimeError(
+                f"Goal Plus {goal_plus_id} is not linked to search run {run_id}."
+            )
+        run_path = self.root_dir / "runs" / run_id / "run.json"
+        if not run_path.exists():
+            raise RuntimeError(f"Search run state does not exist: {run_path}")
+        run_state = read_json(run_path)
+        if run_state.get("state") != "promoted":
+            raise RuntimeError(
+                "Call search_promote for the selected candidate before recording "
+                "the Goal Plus search result."
+            )
+        runtime_selected_candidate_id = run_state.get("selected_candidate_id")
+        if not runtime_selected_candidate_id:
+            raise RuntimeError("Promoted search run has no selected candidate.")
+        if (
+            selected_candidate_id is not None
+            and selected_candidate_id != runtime_selected_candidate_id
+        ):
+            raise RuntimeError(
+                "Goal Plus selected_candidate_id does not match the promoted search run."
+            )
+        selected_candidate_id = str(runtime_selected_candidate_id)
         report_path = self._canonical_report_path(run_id, report_path)
         promotion_artifact_path = self._canonical_promotion_artifact_path(
             run_id,
             selected_candidate_id,
             promotion_artifact_path,
         )
+        if report_path is None or not Path(report_path).is_file():
+            raise RuntimeError("Search report artifact does not exist.")
+        if promotion_artifact_path is None or not Path(promotion_artifact_path).is_file():
+            raise RuntimeError("Search promotion artifact does not exist.")
         linked = (record.linked_search or GoalPlusLinkedSearch()).model_copy(
             update={
                 "run_id": run_id,
@@ -441,16 +486,6 @@ class FileGoalPlusRuntime:
                     "block",
                     reason=self._mutation_block_reason(record),
                 )
-            if self._tool_matches(tool_name, "search_promote") and not (
-                record.linked_search and record.linked_search.selected_candidate_id
-            ):
-                return self._record_gate(
-                    record,
-                    event,
-                    "block",
-                    reason="Promotion is blocked until a selected candidate is recorded.",
-                )
-
         return self._record_gate(record, event, "allow")
 
     def _triage_phase_and_action(

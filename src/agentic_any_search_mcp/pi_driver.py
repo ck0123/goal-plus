@@ -42,12 +42,54 @@ def _worker_kwargs(
     }
 
 
+def _failure_details(stage: str, exc: Exception) -> dict[str, str]:
+    message = str(exc)
+    if len(message) > 500:
+        message = message[:500] + "..."
+    return {
+        "stage": stage,
+        "error_type": type(exc).__name__,
+        "message": message,
+    }
+
+
+def _failed_candidate_result(
+    *,
+    run_id: str,
+    candidate_id: str,
+    agent_session_id: str,
+    launch: dict[str, Any],
+    steps: list[dict[str, Any]],
+    failure: dict[str, str],
+    handle: dict[str, Any] | None = None,
+    bound_session: dict[str, Any] | None = None,
+    handle_bind_failure: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    result = {
+        "ok": False,
+        "run_id": run_id,
+        "candidate_id": candidate_id,
+        "agent_session_id": agent_session_id,
+        "launch": launch,
+        "handle": handle,
+        "bound_session": bound_session,
+        "final_score_report": None,
+        "steps": steps,
+        "failure": failure,
+        "error": failure["message"],
+    }
+    if handle_bind_failure is not None:
+        result["handle_bind_failure"] = handle_bind_failure
+    return result
+
+
 def run_pi_search_candidate(
     *,
     root_dir: Path | str,
     run_id: str,
     candidate_id: str,
     directive: dict[str, Any] | str | None = None,
+    redispatch: bool = False,
     final_verify: bool = True,
     worker_runner: Callable[..., dict[str, Any]] | None = None,
     pi_binary: str = "pi",
@@ -60,33 +102,111 @@ def run_pi_search_candidate(
     tools = _search_tools_for_pi_rpc_run(root_dir, run_id)
     steps: list[dict[str, Any]] = []
 
-    session = tools.search_start_agent_session(
-        run_id=run_id,
-        candidate_id=candidate_id,
-        directive=directive,
+    session = (
+        tools.search_redispatch_candidate(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            directive=directive,
+        )
+        if redispatch
+        else tools.search_start_agent_session(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            directive=directive,
+        )
     )
     agent_session_id = str(session["agent_session_id"])
     launch = dict(session["launch"])
     steps.append(
         {
-            "tool": "search_start_agent_session",
+            "tool": (
+                "search_redispatch_candidate"
+                if redispatch
+                else "search_start_agent_session"
+            ),
             "agent_session_id": agent_session_id,
             "candidate_id": candidate_id,
         }
     )
 
     runner = worker_runner or run_pi_rpc_worker
-    handle = runner(
-        launch,
-        **_worker_kwargs(
-            pi_binary=pi_binary,
-            extension_path=extension_path,
-            thinking_level=thinking_level,
-            model_pattern=model_pattern,
-            provider=provider,
-            model_id=model_id,
-        ),
-    )
+    try:
+        handle = runner(
+            launch,
+            **_worker_kwargs(
+                pi_binary=pi_binary,
+                extension_path=extension_path,
+                thinking_level=thinking_level,
+                model_pattern=model_pattern,
+                provider=provider,
+                model_id=model_id,
+            ),
+        )
+    except Exception as exc:
+        failure = _failure_details("worker_runner", exc)
+        handle = {
+            "host": "pi-rpc",
+            "external_id": agent_session_id,
+            "metadata": {
+                "runner_failed": True,
+                "failure_stage": failure["stage"],
+                "error_type": failure["error_type"],
+                "error": failure["message"],
+                "timed_out": False,
+                "continuation": "state_redispatch",
+            },
+        }
+        steps.append(
+            {
+                "tool": "pi_rpc_run_worker",
+                "agent_session_id": agent_session_id,
+                "status": "failed",
+                "error_type": failure["error_type"],
+            }
+        )
+        try:
+            bound_session = tools.search_bind_agent_handle(
+                agent_session_id=agent_session_id,
+                handle=handle,
+            )
+        except Exception as bind_exc:
+            bind_failure = _failure_details("bind_synthetic_failure_handle", bind_exc)
+            steps.append(
+                {
+                    "tool": "search_bind_agent_handle",
+                    "agent_session_id": agent_session_id,
+                    "status": "failed",
+                    "error_type": bind_failure["error_type"],
+                }
+            )
+            return _failed_candidate_result(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                agent_session_id=agent_session_id,
+                launch=launch,
+                steps=steps,
+                failure=failure,
+                handle=handle,
+                handle_bind_failure=bind_failure,
+            )
+        steps.append(
+            {
+                "tool": "search_bind_agent_handle",
+                "agent_session_id": agent_session_id,
+                "external_id": agent_session_id,
+                "status": "failed_handle_bound",
+            }
+        )
+        return _failed_candidate_result(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            agent_session_id=agent_session_id,
+            launch=launch,
+            steps=steps,
+            failure=failure,
+            handle=handle,
+            bound_session=bound_session,
+        )
     steps.append(
         {
             "tool": "pi_rpc_run_worker",
@@ -95,10 +215,21 @@ def run_pi_search_candidate(
         }
     )
 
-    bound_session = tools.search_bind_agent_handle(
-        agent_session_id=agent_session_id,
-        handle=handle,
-    )
+    try:
+        bound_session = tools.search_bind_agent_handle(
+            agent_session_id=agent_session_id,
+            handle=handle,
+        )
+    except Exception as exc:
+        return _failed_candidate_result(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            agent_session_id=agent_session_id,
+            launch=launch,
+            steps=steps,
+            failure=_failure_details("bind_agent_handle", exc),
+            handle=handle,
+        )
     steps.append(
         {
             "tool": "search_bind_agent_handle",
@@ -109,12 +240,24 @@ def run_pi_search_candidate(
 
     final_score_report: dict[str, Any] | None = None
     if final_verify:
-        final_score_report = tools.search_run_verifier(
-            run_id=run_id,
-            candidate_id=candidate_id,
-            scope="process",
-            agent_session_id=None,
-        )
+        try:
+            final_score_report = tools.search_run_verifier(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                scope="process",
+                agent_session_id=None,
+            )
+        except Exception as exc:
+            return _failed_candidate_result(
+                run_id=run_id,
+                candidate_id=candidate_id,
+                agent_session_id=agent_session_id,
+                launch=launch,
+                steps=steps,
+                failure=_failure_details("final_verifier", exc),
+                handle=handle,
+                bound_session=bound_session,
+            )
         steps.append(
             {
                 "tool": "search_run_verifier",

@@ -194,8 +194,7 @@ Goal: try the actual Pi GP path from this checkout.
 Expected command shape:
 
 ```bash
-pi --approve --session-dir .gp/host-logs/pi-rpc-sessions \
-  --session-id model-opt-pi-gp \
+pi --approve --no-session \
   -p "$(cat examples/model-optimize/pi-goal-prompt.md)"
 ```
 

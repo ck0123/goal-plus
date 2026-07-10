@@ -115,39 +115,36 @@ def test_pi_rpc_adapter_builds_worker_payload() -> None:
     assert payload["candidate_id"] == "c001"
     assert payload["root"] == "/tmp/project/.search"
     assert payload["cwd"].endswith("/c001/workspace")
+    assert "session_dir" not in payload
+    assert payload["continuation"] == "state_redispatch"
     assert "search_get_agent_context" in payload["prompt"]
     assert "agent_session_id=agent_0001" in payload["prompt"]
     assert payload["budget_control"] == {
         "mode": "pi_rpc_process_watchdog",
-        "continuation": "session_jsonl_restart",
+        "continuation": "state_redispatch",
         "max_runtime_seconds": 600,
         "max_turns_hint": 8,
+        "soft_closeout_seconds": 45,
         "on_exceed": "interrupt",
     }
 
 
-def test_pi_rpc_adapter_continues_same_jsonl_session() -> None:
+def test_pi_rpc_adapter_rejects_same_session_continuation() -> None:
     adapter = get_agent_host_adapter("pi-rpc")
 
-    payload = adapter.build_continue_payload(
-        worker_agent_type=None,
-        candidate_id="c001",
-        agent_session_id="agent_0001",
-        external_id="agent_0001",
-        task_name=None,
-        short_intent="continue",
-        one_paragraph_idea="continue from runtime context",
-        root="/tmp/project/.search",
-        cwd="/tmp/project/.search/runs/run_1/candidates/c001/workspace",
-        worker_prompt="first call search_get_agent_context",
-    )
-
-    assert payload["tool"] == "pi_rpc_worker"
-    assert payload["resume"] is True
-    assert payload["session_id"] == "agent_0001"
-    assert payload["continuation"] == "session_jsonl_restart"
-    assert "continue_existing_agent_session=true" in payload["prompt"]
-    assert "search_get_agent_context" in payload["prompt"]
+    with pytest.raises(UnsupportedHostCapability, match="search_redispatch_candidate"):
+        adapter.build_continue_payload(
+            worker_agent_type=None,
+            candidate_id="c001",
+            agent_session_id="agent_0001",
+            external_id="agent_0001",
+            task_name=None,
+            short_intent="continue",
+            one_paragraph_idea="continue from runtime context",
+            root="/tmp/project/.search",
+            cwd="/tmp/project/.search/runs/run_1/candidates/c001/workspace",
+            worker_prompt="first call search_get_agent_context",
+        )
 
 
 def test_claude_adapter_builds_foreground_agent_payload() -> None:

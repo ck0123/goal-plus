@@ -82,15 +82,16 @@ OpenCode still has no shipped hook. Codex and Claude Code use session-scoped
 Stop backstops plus ownership binding; their `PreToolUse` and `SubagentStop`
 gate calls remain manual / instruction-driven in the skills. Pi is different:
 the project extension owns the native `/goal-plus` command for interactive/RPC
-sessions, pre-creates the Goal Plus record, persists the active
-`goal_plus_id` in Pi custom session entries, injects hidden Goal Plus context
+sessions and an equivalent pre-model input transform for print/JSON, pre-creates
+the Goal Plus record, persists the
+active `goal_plus_id` in interactive Pi custom session entries, keeps it in
+memory for print/JSON invocations, injects hidden Goal Plus context
 on `before_agent_start`, runs the pre-tool gate from `tool_call` for
 `search_*`, explicitly exposed `pi_rpc_run_worker` debugging calls, and
 mutating built-ins, then runs the turn-level stop gate from `agent_end`.
 Completion statistics are emitted as a Pi custom entry/notification, not as an
-LLM message. In `pi -p` print mode, the
-checked-in prompt template is the compatibility path because the native command
-is intentionally not registered for print. No host currently ships a
+LLM message. The checked-in prompt template is a fallback when the extension is
+not loaded; correctness in normal Pi modes uses the native command. No host currently ships a
 `SubagentStop` hook; Pi also has no host process Stop hook that can block
 closing the process.
 
@@ -125,16 +126,16 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 
 | Capability | OpenCode | Codex | Claude Code | Pi RPC |
 |---|---|---|---|---|
-| Config files | `opencode.json`, `.opencode/` | `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
+| Config files | `opencode.json`, `.opencode/` | `.codex/config.example.toml` plus ignored local `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
 | Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or debug-only `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
-| Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics` |
-| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | `session_jsonl_restart`; restarts Pi RPC with the same session id, not a live stdin continuation |
-| Host-native debug evidence | OpenCode DB/log plus `.gp` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | `.gp/host-logs/pi-rpc-*.jsonl`, `.txt`, Pi session JSONL, Goal Plus stats custom entry |
+| Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics`, or synthetic runner-failure metadata |
+| Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | not supported; use `search_redispatch_candidate` for state-level redispatch |
+| Host-native debug evidence | OpenCode DB/log plus `.gp` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | metadata-only `.gp/host-logs/pi-rpc-*.jsonl`, optional raw `.txt`, Goal Plus stats custom entry |
 | Trace export | supported for OpenCode logs | not implemented | not implemented | not implemented |
-| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | native `/goal-plus` pre-create, persistent custom state, pre-tool gate for search/worker/mutating tools, turn-level stop gate, stats custom entry; no host process Stop or SubagentStop hook |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | pre-model `/goal-plus` creation through native command or print/JSON input transform, persistent interactive custom state, pre-tool gate, turn-level stop gate, stats custom entry; no host process Stop or SubagentStop hook |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only | portable builtin strategies only |
 
 Portable builtin strategies are:
@@ -166,7 +167,7 @@ Runtime length control is not currently equivalent across hosts:
 | OpenCode | supported with the full `AnySearchAgent` loop | yes, `steps` in `.opencode/agents/*.md` | host step budget per Task; current tiers are 15, 50, 100, and 150 steps |
 | Codex | supported with the project Codex worker prompt | yes, through `worker_budget.max_runtime_seconds` and a parent watchdog | parent waits with `wait_agent(timeout_ms=...)`, then interrupts the child if the deadline expires |
 | Claude Code | supported with the project Claude worker prompt | yes, through `worker_budget.max_turns` and bounded `.claude/agents/*.md` definitions | host turn budget per foreground Agent; current tiers are 4, 8, and 16 turns |
-| Pi RPC | supported with `.pi/prompts/any-search-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | `agentic-any-search-pi-worker` aborts then kills the Pi RPC process group after the deadline; `max_turns` is only a prompt hint |
+| Pi RPC | supported with `.pi/prompts/any-search-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | the runner sends one closeout steer before the deadline, then aborts and kills the Pi RPC process group if it does not exit; `max_turns` is only a prompt hint |
 
 `budget.max_candidates`, `budget.max_parallel`, and strategy round settings
 control how many workers the runtime plans and how many candidates it puts in a
@@ -369,8 +370,9 @@ Pi RPC launch payload:
   "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: ...",
   "session_id": "agent_001",
   "budget_control": {
-    "mode": "process_watchdog",
+    "mode": "pi_rpc_process_watchdog",
     "max_runtime_seconds": 600,
+    "soft_closeout_seconds": 45,
     "on_exceed": "interrupt"
   }
 }
@@ -405,9 +407,13 @@ Generic handle shape:
 `AgentSessionRecord.host_handle` is for provenance and optional continuation.
 It is not a lifecycle status object.
 
-For Pi RPC, `external_id` is the Pi `--session-id` and metadata carries the
-event log path, text log path, session JSONL path, assistant text, and
-`pi_metrics` usage/timing summary returned by `agentic-any-search-pi-worker`.
+For Pi RPC, `external_id` is the invocation's Pi `--session-id` and metadata
+carries the metadata-only event log path, optional raw text log path, assistant
+text, and `pi_metrics` usage/timing summary returned by
+`agentic-any-search-pi-worker`. Workers use `--no-session`; this id is
+correlation provenance, not a resumable Pi transcript handle. If the runner
+fails before a normal handle is returned, the driver binds a synthetic failure
+handle with `runner_failed`, failure stage/type, and a bounded error summary.
 
 ---
 

@@ -19,17 +19,131 @@ class PiRpcError(RuntimeError):
     pass
 
 
+def _bounded_error(value: Any, *, limit: int = 500) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(value)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _message_summary(message: Any) -> dict[str, Any]:
+    if not isinstance(message, dict):
+        return {}
+    content = message.get("content")
+    content_types = (
+        [str(item.get("type")) for item in content if isinstance(item, dict) and item.get("type")]
+        if isinstance(content, list)
+        else []
+    )
+    summary: dict[str, Any] = {
+        "role": message.get("role"),
+        "content_types": content_types,
+    }
+    if message.get("stopReason") is not None:
+        summary["stop_reason"] = message["stopReason"]
+    if isinstance(message.get("usage"), dict):
+        summary["usage"] = message["usage"]
+    if message.get("errorMessage"):
+        summary["error"] = _bounded_error(message["errorMessage"])
+    return summary
+
+
+def _compact_pi_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    event_type = str(event.get("type") or "unknown")
+    if event_type == "message_update":
+        return None
+    if event_type in {"message_start", "message_end"}:
+        return {"type": event_type, **_message_summary(event.get("message"))}
+    if event_type == "turn_end":
+        tool_results = event.get("toolResults")
+        return {
+            "type": event_type,
+            **_message_summary(event.get("message")),
+            "tool_result_count": len(tool_results) if isinstance(tool_results, list) else 0,
+        }
+    if event_type == "agent_end":
+        messages = event.get("messages")
+        last_message = messages[-1] if isinstance(messages, list) and messages else None
+        return {
+            "type": event_type,
+            "message_count": len(messages) if isinstance(messages, list) else 0,
+            "will_retry": bool(event.get("willRetry")),
+            "last_message": _message_summary(last_message),
+        }
+    if event_type.startswith("tool_execution_"):
+        summary = {
+            "type": event_type,
+            "tool_call_id": event.get("toolCallId"),
+            "tool_name": event.get("toolName"),
+        }
+        if event.get("isError") is not None:
+            summary["is_error"] = bool(event.get("isError"))
+        if event.get("isError"):
+            summary["error"] = _bounded_error(event.get("result"))
+        return summary
+    if event_type == "response":
+        summary = {
+            "type": event_type,
+            "id": event.get("id"),
+            "command": event.get("command"),
+            "success": bool(event.get("success")),
+        }
+        data = event.get("data")
+        if isinstance(data, dict):
+            summary["data_keys"] = sorted(str(key) for key in data)
+            entries = data.get("entries")
+            if isinstance(entries, list):
+                summary["entry_count"] = len(entries)
+            if event.get("command") == "get_state":
+                for key in ("isStreaming", "isCompacting", "pendingMessageCount", "messageCount"):
+                    if key in data:
+                        summary[key] = data[key]
+        if event.get("error"):
+            summary["error"] = _bounded_error(event.get("error"))
+        return summary
+    if event_type in {"stderr", "raw_stdout"}:
+        return {"type": event_type, "error": _bounded_error(event.get("text"))}
+    if event_type.startswith("auto_retry_"):
+        return {
+            "type": event_type,
+            **{
+                key: event[key]
+                for key in ("attempt", "maxAttempts", "delayMs", "success")
+                if key in event
+            },
+            **({"error": _bounded_error(event.get("error"))} if event.get("error") else {}),
+        }
+    if event_type == "queue_update":
+        return {
+            "type": event_type,
+            **{
+                key: event[key]
+                for key in ("steeringMessageCount", "followUpMessageCount", "pendingMessageCount")
+                if key in event
+            },
+        }
+    return {"type": event_type}
+
+
 class _RpcClient:
     def __init__(
         self,
         *,
         proc: subprocess.Popen[str],
         event_log: Path,
-        text_log: Path,
+        text_log: Path | None,
+        raw_logging: bool = False,
     ) -> None:
         self.proc = proc
         self.event_log = event_log
         self.text_log = text_log
+        self.raw_logging = raw_logging
         self._condition = threading.Condition()
         self._responses: dict[str, dict[str, Any]] = {}
         self._counter = 0
@@ -39,7 +153,8 @@ class _RpcClient:
 
     def start(self) -> None:
         self.event_log.parent.mkdir(parents=True, exist_ok=True)
-        self.text_log.parent.mkdir(parents=True, exist_ok=True)
+        if self.text_log is not None:
+            self.text_log.parent.mkdir(parents=True, exist_ok=True)
         self._stdout_thread.start()
         self._stderr_thread.start()
 
@@ -108,10 +223,17 @@ class _RpcClient:
             self._append_text(line)
 
     def _append_event(self, event: dict[str, Any]) -> None:
+        if not self.raw_logging:
+            compact_event = _compact_pi_event(event)
+            if compact_event is None:
+                return
+            event = compact_event
         with self.event_log.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def _append_text(self, line: str) -> None:
+        if self.text_log is None:
+            return
         with self.text_log.open("a", encoding="utf-8") as handle:
             handle.write(line)
 
@@ -215,19 +337,9 @@ def _last_entry_id(entries: list[dict[str, Any]]) -> str | None:
     return str(value) if value is not None else None
 
 
-def _find_session_file(session_dir: Path, session_id: str) -> str | None:
-    matches = sorted(
-        session_dir.glob(f"*_{session_id}.jsonl"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    return str(matches[0]) if matches else None
-
-
 def _collect_pi_metrics(
     rpc: Any,
     *,
-    session_dir: Path,
     session_id: str,
     baseline_entries: list[dict[str, Any]],
     baseline_error: str | None,
@@ -262,14 +374,13 @@ def _collect_pi_metrics(
         errors.append(f"get_session_stats: {exc}")
         session_stats = None
 
-    session_file = state_data.get("sessionFile") or _find_session_file(session_dir, session_id)
     baseline_count = len(baseline_entries)
     delta_entries = final_entries[baseline_count:] if len(final_entries) >= baseline_count else []
     scope = "run_delta" if not baseline_error and final_entries else "session_total_fallback"
     metrics: dict[str, Any] = {
         "scope": scope,
         "session_id": session_id,
-        "session_file": session_file,
+        "session_file": None,
         "started_at": started_at,
         "ended_at": ended_at,
         "duration_seconds": duration_seconds,
@@ -307,16 +418,19 @@ def run_pi_rpc_worker(
     if max_runtime_seconds is None:
         raise ValueError("pi_rpc_worker launch requires budget_control.max_runtime_seconds")
     timeout_seconds = int(max_runtime_seconds)
+    soft_closeout_seconds = int(
+        budget.get("soft_closeout_seconds")
+        or min(45, max(5, timeout_seconds // 5))
+    )
 
     host_logs = root / "host-logs"
-    session_dir = Path(str(launch.get("session_dir") or host_logs / "pi-rpc-sessions")).resolve()
     event_log = host_logs / f"pi-rpc-{session_id}.jsonl"
-    text_log = host_logs / f"pi-rpc-{session_id}.txt"
+    raw_logging = os.environ.get("AGENTIC_ANY_SEARCH_PI_RAW_LOG") == "1"
+    text_log = host_logs / f"pi-rpc-{session_id}.txt" if raw_logging else None
     extension = Path(extension_path) if extension_path else default_extension_path()
     if not extension.exists():
         raise FileNotFoundError(f"Pi extension not found: {extension}")
 
-    session_dir.mkdir(parents=True, exist_ok=True)
     host_logs.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
@@ -333,8 +447,7 @@ def run_pi_rpc_worker(
             "--mode",
             "rpc",
             "--approve",
-            "--session-dir",
-            str(session_dir),
+            "--no-session",
             "--session-id",
             session_id,
             "-e",
@@ -352,11 +465,17 @@ def run_pi_rpc_worker(
         bufsize=1,
         start_new_session=True,
     )
-    rpc = _RpcClient(proc=proc, event_log=event_log, text_log=text_log)
+    rpc = _RpcClient(
+        proc=proc,
+        event_log=event_log,
+        text_log=text_log,
+        raw_logging=raw_logging,
+    )
     rpc.start()
 
     assistant_text: str | None = None
     timed_out = False
+    soft_closeout_sent = False
     started_at = _utc_timestamp()
     started_monotonic = time.monotonic()
     deadline = started_monotonic + timeout_seconds
@@ -402,11 +521,35 @@ def run_pi_rpc_worker(
             state = rpc.command({"type": "get_state"}, timeout=min(10, remaining))
             data = dict(state.get("data") or {})
             last_state_data = data
+            worker_active = (
+                data.get("isStreaming", False)
+                or data.get("isCompacting", False)
+                or int(data.get("pendingMessageCount") or 0) > 0
+            )
+            remaining_after_state = deadline - time.monotonic()
             if (
-                not data.get("isStreaming", False)
-                and not data.get("isCompacting", False)
-                and int(data.get("pendingMessageCount") or 0) == 0
+                worker_active
+                and not soft_closeout_sent
+                and remaining_after_state <= soft_closeout_seconds
             ):
+                soft_closeout_sent = True
+                try:
+                    rpc.command(
+                        {
+                            "type": "steer",
+                            "message": (
+                                "Worker deadline is approaching. Stop starting new analysis, edits, "
+                                "or optimization iterations. If the workspace changed since the latest "
+                                "recorded verifier, run one final search_run_verifier now; otherwise "
+                                "return a concise summary immediately. Do not start another optimization "
+                                "iteration."
+                            ),
+                        },
+                        timeout=min(5, max(0.1, remaining_after_state)),
+                    )
+                except Exception:
+                    pass
+            if not worker_active:
                 auto_retry_pending = getattr(rpc, "auto_retry_pending", lambda: False)
                 if auto_retry_pending():
                     time.sleep(min(1.0, max(0.1, remaining)))
@@ -429,7 +572,6 @@ def run_pi_rpc_worker(
         try:
             pi_metrics = _collect_pi_metrics(
                 rpc,
-                session_dir=session_dir,
                 session_id=session_id,
                 baseline_entries=baseline_entries,
                 baseline_error=baseline_error,
@@ -453,15 +595,17 @@ def run_pi_rpc_worker(
         "host": "pi-rpc",
         "external_id": session_id,
         "metadata": {
-            "session_dir": str(session_dir),
             "event_log": str(event_log),
-            "text_log": str(text_log),
+            "text_log": str(text_log) if text_log is not None else None,
+            "raw_logging": raw_logging,
             "session_file": pi_metrics.get("session_file") if pi_metrics else None,
             "pi_metrics": pi_metrics,
             "assistant_text": assistant_text,
             "timed_out": timed_out,
+            "soft_closeout_seconds": soft_closeout_seconds,
+            "soft_closeout_sent": soft_closeout_sent,
             "exit_code": proc.returncode,
-            "continuation": "session_jsonl_restart",
+            "continuation": "state_redispatch",
         },
     }
 

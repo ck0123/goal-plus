@@ -1,0 +1,49 @@
+{
+  "objective": "maximize EdgeBench-lite ad placement satisfaction on public deterministic cases",
+  "metric_name": "combined_score",
+  "metric_direction": "maximize",
+  "source_path": "examples/edgebench-ad-placement/workspace",
+  "edit_surface": {
+    "allow": [
+      "initial_program.py"
+    ],
+    "deny": [
+      "README.md",
+      "cases.py",
+      "evaluator.py"
+    ]
+  },
+  "process_verifiers": [
+    {
+      "name": "ad_placement_public_score",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "-c",
+        "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+      ],
+      "timeout_seconds": 30
+    }
+  ],
+  "promotion_verifiers": [],
+  "budget": {
+    "max_candidates": 4,
+    "max_parallel": 2
+  },
+  "strategy": {
+    "name": "agent_guided",
+    "worker_mode": "agent-session-pool",
+    "worker_host": "pi-rpc",
+    "worker_budget": {
+      "max_runtime_seconds": 240,
+      "max_turns": 6,
+      "on_exceed": "interrupt"
+    }
+  },
+  "constraints": {
+    "suggested_batch_size": 4,
+    "task_summary": "Place non-overlapping integer rectangles on a 10000x10000 grid. Each rectangle must contain its ad point, and satisfaction is highest when rectangle area matches the target area.",
+    "edgebench_alignment": "This is an EdgeBench-inspired public-feedback example. The process verifier is work-visible search feedback. No hidden judge is wired into GP; real EdgeBench judge ownership belongs to the external SForge harness."
+  },
+  "root_hypotheses": []
+}

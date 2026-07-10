@@ -13,6 +13,10 @@ The native Pi `/goal-plus` command creates the Goal Plus record before the model
 
 Use Goal Mode when the request is not yet a verifiable optimization/search task. Record triage with `goal_plus_record_triage({ goal_plus_id, triage: { is_optimization, confidence, recommended_phase, identified_at, scenario, reasons, missing } })` and keep the user-facing goal separate from implementation guesses. Do not create a SearchSpec in Goal Mode.
 
+If the raw goal explicitly requests verifier-guided Search Mode and supplies a
+measurable verifier or metric, classify it as optimization/search; do not
+downgrade it to ordinary Goal Mode merely because the requested run is small.
+
 ## Spec Discovery Mode
 
 Use Spec Discovery Mode when the target needs a frozen verifier or edit surface. Save candidate details with `goal_plus_save_spec_draft`; if the verifier is already frozen and trustworthy, call `goal_plus_confirm_frozen_verifier` with evidence.
@@ -25,6 +29,15 @@ Before `search_freeze_spec`, ensure the SearchSpec strategy sets
 `worker_host: "pi-rpc"` and `worker_mode: "agent-session-pool"`. Pi Search Mode
 must run workers through the Pi RPC driver. Do not omit `worker_host`; the
 runtime default is OpenCode and is wrong for Pi.
+
+Pi-supported strategy names are limited to the portable builtin subset:
+
+- `agent_guided`, `agent`, or `default`
+- `random` or `random_mode`
+
+Only offer names from this subset when drafting a Pi SearchSpec. Do not silently
+rewrite an already frozen unsupported strategy; let runtime validation reject
+it and create a corrected draft before freezing instead.
 
 1. `search_freeze_spec`
 2. `search_create`
@@ -44,6 +57,11 @@ runtime default is OpenCode and is wrong for Pi.
 9. Call `goal_plus_record_search_result`.
 10. Run the final raw-goal audit and then `goal_plus_set_status`.
 
+Never invent `frozen_spec_id`, `run_id`, `plan_id`, `candidate_id`, or
+`agent_session_id` values. Use only exact ids returned by the immediately
+preceding runtime tool. In particular, call `search_create` before
+`goal_plus_link_search_run` and link the exact returned `run_id`.
+
 `pi_search_run_batch` runs candidate workers concurrently up to
 `max_parallel`, then returns ordered per-candidate results. It is still a
 foreground host driver: it does not add runtime-owned wait, abort, heartbeat,
@@ -54,18 +72,26 @@ a single candidate:
 `agent_session_id` when `final_verify=true`. Normal Goal Plus/Search flow must
 not call the low-level `pi_rpc_run_worker` tool directly. It is hidden from the
 main Pi agent unless `AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set
-for manual debugging, custom recovery, or a deliberate same-session
-continuation path.
+for manual debugging or custom recovery.
+
+Do not call `search_start_agent_session`, `search_bind_agent_handle`, or
+`search_continue_agent_session` from the Pi main agent; the high-level driver
+owns those mechanical steps. For another attempt on an existing candidate,
+call `pi_search_run_candidate(..., redispatch=true)`. The driver then uses
+`search_redispatch_candidate` internally and records that step before launching
+the fresh stateless worker.
 
 Worker launch is foreground and synchronous. `worker_budget.max_runtime_seconds`
 is required and maps to the Pi RPC process watchdog. `worker_budget.max_turns`
 is only a prompt hint.
 
-Continuation uses `session_jsonl_restart`: `search_continue_agent_session`
-returns another `pi_rpc_run_worker` launch using the same Pi `--session-id`; it
-is not a live stdin continuation. If a worker times out or exits before
-producing useful verifier evidence, prefer `search_redispatch_candidate` to
-create a new `agent_session_id` for the same candidate workspace.
+Pi workers run with `--no-session`, so same-worker continuation is unsupported.
+If a worker times out, fails, or exits before producing useful verifier
+evidence, use state-level resume by calling
+`pi_search_run_candidate(..., redispatch=true)`. The driver uses
+`search_redispatch_candidate` internally, creates a new
+`agent_session_id` for the same candidate workspace, and recovers prior work
+from MCP history, verifier iterations, and Git state.
 
 History is runtime-owned, not a local plan file. Workers must call
 `search_get_agent_context` first and use `context.history` plus

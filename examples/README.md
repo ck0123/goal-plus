@@ -37,6 +37,7 @@ Pi RPC. See
 | `search-mode/k_module_openevolve_search_spec.json` | `tests/fixtures/k_module_problem` | OpenEvolve-style sampling with `AnySearchAgentFlash` | 2 candidates, pool=1, two sequential batches |
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `AnySearchAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `AnySearchAgent` (50 steps) | 8 candidates, pool=4, two batches |
+| `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-inspired public-feedback optimization, 4 candidates, pool=2 |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
 
@@ -50,14 +51,15 @@ the active strategy defines how later candidates should derive from history.
 
 Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far.
 
-`strategy.worker_mode` is always `agent-session-pool`. Candidate execution goes through a host foreground worker launched from a runtime context handle: call `search_start_agent_session(run_id, candidate_id, directive)`, launch the configured worker with the returned `launch` payload, then bind the returned handle. OpenCode uses `search_bind_opencode_session`; Codex, Claude Code, and Pi RPC use `search_bind_agent_handle`.
+`strategy.worker_mode` is always `agent-session-pool`. Candidate execution goes through a host foreground worker launched from a runtime context handle: generic hosts call `search_start_agent_session(run_id, candidate_id, directive)`, launch the configured worker with the returned `launch` payload, then bind the returned handle. OpenCode uses `search_bind_opencode_session`; Codex and Claude Code use `search_bind_agent_handle`. Pi main agents use `pi_search_run_batch` or `pi_search_run_candidate`, which perform start, launch, and bind internally.
 
 Subagents run until the host cap hits or the user/runner interrupts them. Pi
 RPC requires `worker_host="pi-rpc"` and `worker_budget.max_runtime_seconds`;
-the runner writes `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl` and uses
-`session_jsonl_restart` for same-session resume.
+the runner starts workers with `--no-session` and writes a metadata-only
+`.gp/host-logs/pi-rpc-<agent_session_id>.jsonl` event log. Pi RPC recovery uses
+state-level redispatch, not same-worker continuation.
 
-If a candidate needs more work after a step-cap hit, call `search_redispatch_candidate` for the same candidate and optionally raise `worker_agent_type` / `worker_budget`. This creates a new session for the same workspace and relies on runtime history/iterations for resume.
+If a candidate needs more work after a step-cap hit, generic hosts call `search_redispatch_candidate` for the same candidate and may raise `worker_agent_type` / `worker_budget`. Pi main agents call `pi_search_run_candidate(..., redispatch=true)`, whose driver performs that redispatch internally. Both paths create a fresh session for the same workspace and rely on runtime history/iterations for resume.
 
 ## Step Tiers
 
@@ -100,7 +102,7 @@ tests/fixtures/swe_bench_20212/evaluator.py
 
 ## Strategy Modes
 
-The default strategy is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch (pick parents, write one proposal per slot). The bundled example specs pin `independent_branches` to keep their demo flows independent of history; switch a copied spec to other modes by setting `strategy.name`:
+The default strategy is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch (pick parents, write one proposal per slot). OpenCode-oriented fixture examples pin `independent_branches` to keep their demo flows independent of history. The Pi RPC EdgeBench-lite example uses `agent_guided` directly. Select strategies from the configured host's supported subset; non-OpenCode hosts currently accept `agent_guided`/`agent`/`default` and `random`/`random_mode` only.
 
 ```json
 {
@@ -217,6 +219,30 @@ Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores +
 
 ```
 Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_parallel=2, worker_agent_type=AnySearchAgentFlash. Freeze tests/fixtures/k_module_problem/evaluator.py and run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start 2 sessions → Task → bind_opencode_session → run_verifier on each → select → report.
+```
+
+### EdgeBench-lite ad placement — public-feedback optimization
+
+This is an EdgeBench-inspired local example, not an official EdgeBench run. It
+keeps the useful boundary for GP: workers see only public deterministic cases
+and a public process verifier. Hidden judge ownership remains external to GP
+and is not modeled by this SearchSpec. The example uses different data,
+execution limits, and score scaling, so its `combined_score` is not directly
+comparable to EdgeBench leaderboard results.
+
+A sustained 16-candidate Pi run is recorded in
+[`edgebench-ad-placement/report.md`](edgebench-ad-placement/report.md). It ran
+for 60.95 minutes in eight sequential two-candidate batches and completed
+selection, reporting, promotion, and Goal Plus final audit.
+
+```
+Load examples/edgebench_ad_placement_search_spec.json. It is already configured for Pi RPC with the portable agent_guided strategy and a 240-second worker watchdog. Freeze examples/edgebench-ad-placement/workspace/evaluator.py as the verifier artifact. Run two batches of Pi RPC candidates and provide one agent-guided proposal per candidate.
+
+Suggested first-batch directions:
+  - c001: target-area greedy rectangles, sorted by largest target first, never covering another ad anchor.
+  - c002: compact rectangles around dense clusters, shrinking on overlap until valid.
+
+After each candidate finishes, run the public process verifier. Select and report across all candidates. Do not add promotion verifiers for this example; external benchmark judges should stay outside GP.
 ```
 
 ### k_module — AdaptEvolve smoke test

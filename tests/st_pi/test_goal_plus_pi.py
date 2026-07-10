@@ -23,6 +23,16 @@ AUDIT_PROMPT = (
     "before_agent_start 上下文注入、tool_call pre-tool gate、agent_end stop gate、"
     "terminal stats 输出。不要修改文件。最后给出结论，并把 Goal Plus 状态设为 complete。"
 )
+SEARCH_PROMPT = (
+    "运行一个最小但完整的 Pi Goal Plus/Search smoke。读取 "
+    "examples/edgebench_ad_placement_search_spec.json，使用 "
+    "examples/edgebench-ad-placement/workspace/evaluator.py 作为冻结 verifier。"
+    "将本次 SearchSpec 限制为 worker_host=pi-rpc、worker_mode=agent-session-pool、"
+    "strategy.name=agent_guided、max_candidates=1、max_parallel=1，worker budget 为 "
+    "max_runtime_seconds=60、max_turns=4、on_exceed=interrupt。只允许候选修改 "
+    "initial_program.py。完成 candidate verifier、selection、report 和 promotion，然后把 "
+    "Goal Plus 状态设为 complete。"
+)
 
 
 def _pi_base_command(session_dir: Path, session_id: str) -> list[str]:
@@ -106,7 +116,7 @@ def _assert_goal_plus_jsonl_is_clean(session_path: Path) -> None:
 def test_goal_plus_print_prompt_jsonl_has_typed_triage(
     st_pi_run_root: Path,
 ) -> None:
-    search_root = st_pi_run_root / ".search"
+    search_root = st_pi_run_root / ".gp"
     session_dir = st_pi_run_root / "sessions"
     session_dir.mkdir(parents=True, exist_ok=True)
     session_id = "st-pi-goal-plus-print"
@@ -139,6 +149,60 @@ def test_goal_plus_print_prompt_jsonl_has_typed_triage(
 
 
 @pytest.mark.st_pi
+def test_goal_plus_print_search_reaches_linked_run(
+    st_pi_run_root: Path,
+) -> None:
+    search_root = st_pi_run_root / ".gp"
+    session_dir = st_pi_run_root / "sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        *_pi_base_command(session_dir, "st-pi-goal-plus-search"),
+        "-p",
+        f"/goal-plus {SEARCH_PROMPT}",
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=_run_env(search_root),
+        text=True,
+        capture_output=True,
+        timeout=int(os.environ.get("ST_PI_SEARCH_TIMEOUT", "600")),
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr[-2000:] or result.stdout[-2000:]
+    record = _goal_record(search_root)
+    assert record["status"] == "complete"
+    linked = record.get("linked_search") or {}
+    assert linked.get("run_id"), record
+    assert linked.get("selected_candidate_id"), record
+    assert linked.get("report_path"), record
+    assert linked.get("promotion_artifact_path"), record
+    assert Path(linked["report_path"]).exists()
+    assert Path(linked["promotion_artifact_path"]).exists()
+    run_record = json.loads(
+        (search_root / "runs" / linked["run_id"] / "run.json").read_text(encoding="utf-8")
+    )
+    assert run_record["state"] == "promoted"
+    worker_sessions = sorted(
+        (search_root / "runs" / linked["run_id"] / "agent_sessions").glob("agent_*.json")
+    )
+    assert worker_sessions
+    for session_path in worker_sessions:
+        session = json.loads(session_path.read_text(encoding="utf-8"))
+        metadata = session["host_handle"]["metadata"]
+        assert metadata["continuation"] == "state_redispatch"
+        assert metadata.get("runner_failed") is not True
+        assert metadata["raw_logging"] is False
+        assert metadata["session_file"] is None
+        assert metadata["text_log"] is None
+        assert Path(metadata["event_log"]).exists()
+    assert not (search_root / "host-logs" / "pi-rpc-sessions").exists()
+    _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
+
+
+@pytest.mark.st_pi
 @pytest.mark.skipif(
     os.environ.get("ST_PI_TUI") != "1" or shutil.which("tmux") is None,
     reason="set ST_PI_TUI=1 and install tmux to run the interactive native /goal-plus stats smoke",
@@ -146,7 +210,7 @@ def test_goal_plus_print_prompt_jsonl_has_typed_triage(
 def test_goal_plus_native_tui_stats_entry_does_not_trigger_followup(
     st_pi_run_root: Path,
 ) -> None:
-    search_root = st_pi_run_root / ".search"
+    search_root = st_pi_run_root / ".gp"
     session_dir = st_pi_run_root / "sessions"
     session_dir.mkdir(parents=True, exist_ok=True)
     session_id = "st-pi-goal-plus-native"

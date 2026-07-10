@@ -180,8 +180,11 @@ def _session_liveness(
     now: float,
     stale_after_seconds: int,
     timed_out: bool,
+    runner_failed: bool,
 ) -> str:
     if candidate and candidate.status == "failed":
+        return "failed"
+    if runner_failed:
         return "failed"
     if candidate and candidate.status == "evaluated":
         return "evaluated"
@@ -316,6 +319,7 @@ def goal_plus_monitor_snapshot(
             session_file = metadata.get("session_file") if isinstance(metadata.get("session_file"), str) else None
             latest_output_mtime = _latest_mtime([event_log, text_log, session_file])
             timed_out = bool(metadata.get("timed_out"))
+            runner_failed = bool(metadata.get("runner_failed"))
             session_iterations = [
                 iteration
                 for iteration in (candidate.iterations if candidate else [])
@@ -327,6 +331,7 @@ def goal_plus_monitor_snapshot(
                 now=now,
                 stale_after_seconds=stale_after_seconds,
                 timed_out=timed_out,
+                runner_failed=runner_failed,
             )
             main_agent["estimated_cost_total"] = float(main_agent["estimated_cost_total"]) + _usage_cost(
                 metrics if isinstance(metrics, dict) else {}
@@ -343,6 +348,17 @@ def goal_plus_monitor_snapshot(
                         "kind": "subagent_timed_out",
                         "agent_session_id": session.agent_session_id,
                         "candidate_id": session.candidate_id,
+                    }
+                )
+            if runner_failed:
+                warnings.append(
+                    {
+                        "kind": "subagent_runner_failed",
+                        "agent_session_id": session.agent_session_id,
+                        "candidate_id": session.candidate_id,
+                        "failure_stage": metadata.get("failure_stage"),
+                        "error_type": metadata.get("error_type"),
+                        "error": metadata.get("error"),
                     }
                 )
             if liveness == "stale":
@@ -375,6 +391,13 @@ def goal_plus_monitor_snapshot(
                     "text_log": _path_info(text_log),
                     "session_file": _path_info(session_file),
                     "timed_out": timed_out,
+                    "runner_failed": runner_failed,
+                    "failure_stage": metadata.get("failure_stage"),
+                    "error_type": metadata.get("error_type"),
+                    "error": metadata.get("error"),
+                    "soft_closeout_seconds": metadata.get("soft_closeout_seconds"),
+                    "soft_closeout_sent": bool(metadata.get("soft_closeout_sent")),
+                    "raw_logging": bool(metadata.get("raw_logging")),
                     "liveness": liveness,
                 }
             )

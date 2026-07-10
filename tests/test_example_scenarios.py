@@ -26,6 +26,20 @@ EXAMPLE_SPECS = [
         "overall_score",
         {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "AnySearchAgent"},
     ),
+    (
+        "edgebench_ad_placement_search_spec.json",
+        "examples/edgebench-ad-placement/workspace/evaluator.py",
+        "combined_score",
+        {
+            "max_candidates": 4,
+            "max_parallel": 2,
+            "strategy_name": "agent_guided",
+            "worker_host": "pi-rpc",
+            "worker_agent_type": None,
+            "max_runtime_seconds": 240,
+            "max_turns": 6,
+        },
+    ),
 ]
 
 SEARCH_MODE_SPECS = [
@@ -93,6 +107,15 @@ def test_two_round_example_specs_are_valid(
     assert parsed.constraints["suggested_batch_size"] == 4
     assert parsed.strategy.worker_mode == "agent-session-pool"
     assert parsed.strategy.worker_agent_type == expected["worker_agent_type"]
+    if "strategy_name" in expected:
+        assert parsed.strategy.name == expected["strategy_name"]
+        assert parsed.strategy.worker_host == expected["worker_host"]
+        assert parsed.strategy.worker_budget is not None
+        assert (
+            parsed.strategy.worker_budget.max_runtime_seconds
+            == expected["max_runtime_seconds"]
+        )
+        assert parsed.strategy.worker_budget.max_turns == expected["max_turns"]
     assert not Path(parsed.source_path).is_absolute()
     assert (ROOT / verifier_path).exists()
 
@@ -114,9 +137,33 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
 
     first_plan = tools.search_plan_next(run_id, 4)
-    first_round = tools.search_start_batch(run_id, first_plan["plan_id"])
+    first_proposals = None
+    if first_plan["requires_agent_proposals"]:
+        first_proposals = [
+            {"intent": f"independent Pi proposal {index}"}
+            for index in range(1, first_plan["planned_k"] + 1)
+        ]
+    first_round = tools.search_start_batch(
+        run_id,
+        first_plan["plan_id"],
+        proposals=first_proposals,
+    )
     second_plan = tools.search_plan_next(run_id, 4)
-    second_round = tools.search_start_batch(run_id, second_plan["plan_id"])
+    second_proposals = None
+    if second_plan["requires_agent_proposals"]:
+        second_proposals = [
+            {
+                "intent": f"derive Pi proposal {index} from c001",
+                "parent_candidate_ids": ["c001"],
+                "base_candidate_id": "c001",
+            }
+            for index in range(1, second_plan["planned_k"] + 1)
+        ]
+    second_round = tools.search_start_batch(
+        run_id,
+        second_plan["plan_id"],
+        proposals=second_proposals,
+    )
 
     first_expected = [
         f"c{index:03d}" for index in range(1, expected["max_parallel"] + 1)
@@ -130,7 +177,10 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert second_plan["planned_k"] == expected["max_parallel"]
     assert [task["candidate_id"] for task in first_round] == first_expected
     assert [task["candidate_id"] for task in second_round] == second_expected
-    assert first_round[0]["hypothesis"] == "Independent candidate c001"
+    if first_plan["requires_agent_proposals"]:
+        assert first_round[0]["hypothesis"] == "independent Pi proposal 1"
+    else:
+        assert first_round[0]["hypothesis"] == "Independent candidate c001"
 
     for candidate_id in ("c001", "c002"):
         session = tools.search_start_agent_session(

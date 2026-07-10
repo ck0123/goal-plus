@@ -180,10 +180,11 @@ Current host expectations:
 - Pi RPC supports the portable builtin strategy subset. `worker_budget`
   requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
   `agentic-any-search-pi-worker` to launch foreground `pi --mode rpc` workers
-  from candidate workspaces and explicitly loads `.pi/extensions/search-runtime.ts`.
-  Same-worker continuation is `session_jsonl_restart`, not a live process
-  continuation. Pi has extension pre-tool guarding and skill stop gates, but no
-  Codex Stop hook parity.
+  with `--no-session` from candidate workspaces and explicitly loads
+  `.pi/extensions/search-runtime.ts`. Pi RPC does not support same-worker
+  continuation; recover with `search_redispatch_candidate` and runtime/Git
+  state. Pi has extension pre-tool guarding and skill stop gates, but no Codex
+  Stop hook parity.
 
 Portable strategy names for non-OpenCode hosts are currently:
 
@@ -220,7 +221,7 @@ the runtime contract, update the matching assets and tests:
   `tests/test_opencode_assets.py`.
 - Codex: `.codex/skills/goal-plus/SKILL.md`,
   `.codex/skills/search/SKILL.md`,
-  `.codex/agents/any_search_agent.toml`, `.codex/config.toml`, and
+  `.codex/agents/any_search_agent.toml`, `.codex/config.example.toml`, and
   `tests/test_codex_assets.py`.
 - Claude Code: `.claude/skills/goal-plus/SKILL.md`,
   `.claude/skills/search/SKILL.md`,
@@ -302,9 +303,9 @@ Host log sources:
   optional `RUST_LOG=debug codex -c log_dir=./.codex-log`.
 - Claude Code: `claude -p --output-format stream-json`, `--debug-file`, and
   `~/.claude/projects/<encoded-project>/...`.
-- Pi RPC: `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`,
-  `.gp/host-logs/pi-rpc-<agent_session_id>.txt`, and
-  `.gp/host-logs/pi-rpc-sessions/`.
+- Pi RPC: metadata-only `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl` and,
+  only when raw logging is explicitly enabled,
+  `.gp/host-logs/pi-rpc-<agent_session_id>.txt`.
 
 Never commit raw logs, transcripts, `.gp/`, or credentials.
 

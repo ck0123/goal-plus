@@ -630,10 +630,7 @@ class FileSearchRuntime:
                 host_handle = host_handle.model_copy(
                     update={
                         "external_id": launch.get("session_id", agent_session_id),
-                        "metadata": {
-                            "session_dir": launch.get("session_dir"),
-                            "continuation": "session_jsonl_restart",
-                        },
+                        "metadata": {"continuation": "state_redispatch"},
                     }
                 )
             session = AgentSessionRecord(
@@ -1146,8 +1143,12 @@ class FileSearchRuntime:
 
     def promote(self, run_id: str, candidate_id: str) -> Path:
         run = self._load_run(run_id)
+        if run.selected_candidate_id != candidate_id:
+            raise RuntimeError(
+                "cannot promote candidate before search_select selects it"
+            )
         record = self._load_candidate_record(run_id, candidate_id)
-        if run.selected_candidate_id == candidate_id and run.selected_git_head:
+        if run.selected_git_head:
             self._checkout_git_revision(record.task.workspace, run.selected_git_head)
             detected_changed = self._detect_changed_files(
                 Path(run.source_path), record.task.workspace
@@ -2153,7 +2154,7 @@ class FileSearchRuntime:
             "A local git repository has already been initialized with the copied baseline; use git status, git diff, git add, git commit, git reset, git restore, and git checkout only inside this workspace.",
             "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
             "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
-            "Iterate freely within your host step budget; each run_verifier call records an iteration. When steps run out the host will ask you to summarize and stop.",
+            "Each run_verifier call records an iteration. Work within the configured host budget. Complete and verify a candidate early, stop starting new optimization iterations before the limit, and leave enough time to return a concise summary.",
             "search_run_verifier automatically commits changed candidate artifact files before running the verifier; use git status, git diff, and git log to inspect iteration provenance.",
             "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). After each verifier call, use the returned/runtime-recorded git_head as the commit column.",
         ]

@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 from agentic_any_search_mcp.models import GoalPlusSpecDraft, GoalPlusTriage
+
+
+def _write_search_run(root, run_id: str, frozen_spec_id: str) -> None:
+    run_dir = root / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run.json").write_text(
+        json.dumps({"run_id": run_id, "frozen_spec_id": frozen_spec_id}),
+        encoding="utf-8",
+    )
 
 
 def test_goal_plus_runtime_defaults_to_gp_root(tmp_path, monkeypatch) -> None:
@@ -219,16 +230,26 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
     )
     assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
 
+    _write_search_run(tmp_path / ".search", "run_001", "spec_abc")
     linked = runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
     assert linked.phase == "search"
     assert linked.linked_search.run_id == "run_001"  # type: ignore[union-attr]
+
+    run_dir = tmp_path / ".search" / "runs" / "run_001"
+    report_path = run_dir / "report.md"
+    promotion_path = run_dir / "promotion" / "c001.patch"
+    promotion_path.parent.mkdir(parents=True)
+    report_path.write_text("# report\n", encoding="utf-8")
+    promotion_path.write_text("patch\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps({"state": "promoted", "selected_candidate_id": "c001"}),
+        encoding="utf-8",
+    )
 
     final = runtime.record_search_result(
         record.goal_plus_id,
         run_id="run_001",
         selected_candidate_id="c001",
-        report_path="/tmp/report.md",
-        promotion_artifact_path="/tmp/c001.patch",
         summary="c001 won",
     )
     assert final.phase == "final_audit"
@@ -247,9 +268,55 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
     assert runtime.gate(record.goal_plus_id, event="stop", context={}).decision == "allow"
 
 
-def test_link_search_run_is_idempotent_but_does_not_overwrite(tmp_path) -> None:
+def test_pre_tool_use_defers_promotion_selection_check_to_search_runtime(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize kernel latency")
+    runtime.record_triage(
+        record.goal_plus_id,
+        GoalPlusTriage(
+            is_optimization=True,
+            confidence="high",
+            recommended_phase="search",
+            identified_at="in_progress",
+            reasons=["latency benchmark exists"],
+        ),
+    )
+    runtime.save_spec_draft(
+        record.goal_plus_id,
+        GoalPlusSpecDraft(
+            baseline={"command": "python bench.py"},
+            metric={"name": "avg_latency_ms", "direction": "minimize"},
+            correctness_gate={"command": "python verify.py"},
+            edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
+            verifier_artifacts=["verify.py", "bench.py"],
+            search_spec={
+                "objective": "minimize latency",
+                "metric_name": "avg_latency_ms",
+                "metric_direction": "minimize",
+            },
+            promotion_rule="correctness pass and lower latency",
+            confidence="high",
+            origin="in_progress",
+        ),
+    )
+    _write_search_run(tmp_path / ".search", "run_001", "spec_abc")
+    runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "search_promote"},
+    )
+
+    assert gate.decision == "allow"
+
+
+def test_link_search_run_is_idempotent_but_does_not_overwrite(tmp_path) -> None:
+    root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(root)
     record = runtime.create_goal("Optimize model")
+    _write_search_run(root, "run_001", "spec_abc")
+    _write_search_run(root, "run_002", "spec_def")
 
     linked = runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
     assert linked.linked_search is not None
@@ -268,17 +335,39 @@ def test_link_search_run_is_idempotent_but_does_not_overwrite(tmp_path) -> None:
     assert final.linked_search.run_id == "run_001"
 
 
+def test_link_search_run_rejects_missing_or_mismatched_runtime_run(tmp_path) -> None:
+    root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(root)
+    record = runtime.create_goal("Optimize model")
+
+    with pytest.raises(FileNotFoundError, match="Call search_create"):
+        runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_0001")
+
+    _write_search_run(root, "run_real", "spec_other")
+    with pytest.raises(ValueError, match="belongs to frozen spec spec_other"):
+        runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_real")
+
+    final = runtime.status(record.goal_plus_id)
+    assert final.phase == "intake"
+    assert final.linked_search is None
+
+
 def test_record_search_result_prefers_existing_runtime_artifact_paths(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize model")
+    _write_search_run(tmp_path / ".search", "run_001", "spec_abc")
     runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
     run_dir = tmp_path / ".search" / "runs" / "run_001"
     report_path = run_dir / "report.md"
     promotion_path = run_dir / "promotion" / "c001.patch"
-    report_path.parent.mkdir(parents=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# report\n", encoding="utf-8")
     promotion_path.parent.mkdir(parents=True)
     promotion_path.write_text("patch\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps({"state": "promoted", "selected_candidate_id": "c001"}),
+        encoding="utf-8",
+    )
 
     final = runtime.record_search_result(
         record.goal_plus_id,
@@ -292,6 +381,29 @@ def test_record_search_result_prefers_existing_runtime_artifact_paths(tmp_path) 
     assert final.linked_search is not None
     assert final.linked_search.report_path == str(report_path.resolve())
     assert final.linked_search.promotion_artifact_path == str(promotion_path.resolve())
+
+
+def test_record_search_result_rejects_unpromoted_run(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize model")
+    _write_search_run(tmp_path / ".search", "run_001", "spec_abc")
+    runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    run_dir = tmp_path / ".search" / "runs" / "run_001"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "report.md").write_text("# report\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps({"state": "ready_to_promote", "selected_candidate_id": "c001"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="search_promote"):
+        runtime.record_search_result(
+            record.goal_plus_id,
+            run_id="run_001",
+            selected_candidate_id="c001",
+        )
+
+    assert runtime.status(record.goal_plus_id).phase == "search"
 
 
 def test_pre_tool_use_blocks_search_before_high_confidence_spec(tmp_path) -> None:

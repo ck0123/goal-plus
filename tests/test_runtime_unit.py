@@ -330,6 +330,26 @@ def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
     assert any(
         "iteration log" in instruction for instruction in tasks[0].instructions
     )
+    combined_instructions = "\n".join(tasks[0].instructions)
+    assert "Complete and verify a candidate early" in combined_instructions
+    assert "leave enough time to return a concise summary" in combined_instructions
+    assert "When steps run out the host will ask you" not in combined_instructions
+
+
+def test_promote_requires_search_runtime_selection(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    report = runtime.run_verifier(run_id, candidate_id)
+    assert report.process_passed is True
+
+    with pytest.raises(RuntimeError, match="search_select"):
+        runtime.promote(run_id, candidate_id)
+
+    selected = runtime.select(run_id)
+    assert selected["selected_candidate_id"] == candidate_id
+    assert runtime.promote(run_id, candidate_id).exists()
 
 
 def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> None:
@@ -346,7 +366,7 @@ def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> N
     assert plan.worker_policy["uses_background_workers"] is False
 
 
-def test_worker_policy_includes_pi_rpc_session_jsonl_continue(tmp_path: Path) -> None:
+def test_worker_policy_uses_pi_rpc_state_redispatch(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
@@ -369,8 +389,8 @@ def test_worker_policy_includes_pi_rpc_session_jsonl_continue(tmp_path: Path) ->
     plan = runtime.plan_next(run_id, requested_k=1)
 
     assert plan.worker_policy["host"] == "pi-rpc"
-    assert plan.worker_policy["supports_same_worker_continue"] is True
-    assert plan.worker_policy["continuation"] == "session_jsonl_restart"
+    assert plan.worker_policy["supports_same_worker_continue"] is False
+    assert plan.worker_policy["continuation"] == "state_redispatch"
     assert plan.worker_policy["uses_background_workers"] is False
 
 
@@ -847,7 +867,7 @@ def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path)
     assert "continue_existing_agent_session=true" in continued.launch["message"]
 
 
-def test_pi_rpc_continue_agent_session_restarts_same_jsonl_session(tmp_path: Path) -> None:
+def test_pi_rpc_continue_agent_session_requires_redispatch(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
@@ -877,20 +897,11 @@ def test_pi_rpc_continue_agent_session_restarts_same_jsonl_session(tmp_path: Pat
         },
     )
 
-    continued = runtime.continue_agent_session(
-        session.agent_session_id,
-        {"goal": "continue"},
-    )
-
-    assert continued.agent_session_id == session.agent_session_id
-    assert continued.launch["tool"] == "pi_rpc_worker"
-    assert continued.launch["resume"] is True
-    assert continued.launch["session_id"] == session.agent_session_id
-    assert continued.launch["continuation"] == "session_jsonl_restart"
-    assert continued.launch["budget_control"]["max_runtime_seconds"] == 600
-    assert continued.launch["budget_control"]["mode"] == "pi_rpc_process_watchdog"
-    assert continued.launch["cwd"] == str(task.workspace)
-    assert "continue_existing_agent_session=true" in continued.launch["prompt"]
+    with pytest.raises(RuntimeError, match="search_redispatch_candidate"):
+        runtime.continue_agent_session(
+            session.agent_session_id,
+            {"goal": "continue"},
+        )
 
     report = runtime.report(run_id).read_text(encoding="utf-8")
     assert "| Session | Host | Candidate | Verifier Runs |" in report

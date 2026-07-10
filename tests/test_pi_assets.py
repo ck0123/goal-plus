@@ -61,6 +61,9 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert 'worker_host: "pi-rpc"' in text
     assert 'worker_mode: "agent-session-pool"' in text
     assert "runtime default is OpenCode and is wrong for Pi" in text
+    assert "Pi-supported strategy names" in text
+    assert "`agent_guided`, `agent`, or `default`" in text
+    assert "`random` or `random_mode`" in text
     assert "pi_search_run_batch" in text
     assert "max_parallel=<budget.max_parallel>" in text
     assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1" in text
@@ -72,7 +75,9 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "search_select" in text
     assert "search_report" in text
     assert "search_promote" in text
-    assert "session_jsonl_restart" in text
+    assert "state-level resume" in text
+    assert "search_redispatch_candidate" in text
+    assert "session_jsonl_restart" not in text
     assert "early `search_run_verifier`" in text
     assert "verification of the unmodified starting point" in text
     assert "verifier-recorded runtime iterations" in text
@@ -98,6 +103,8 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "verifying the unmodified starting point" in text
     assert "valid baseline iteration first" in text
     assert "verifier-recorded iterations" in text
+    assert "Stop starting new optimization iterations" in text
+    assert "final verifier" in text
     assert "trust direct reads and the runtime context" in text
     assert "workspace only" in text
     assert "runtime history" in text
@@ -123,6 +130,9 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert 'pi.on("session_start"' in text
     assert 'pi.on("before_agent_start"' in text
     assert 'pi.on("agent_end"' in text
+    assert 'lastMessage?.role === "assistant"' in text
+    assert 'lastMessage.stopReason === "error"' in text
+    assert 'lastMessage.stopReason === "aborted"' in text
     assert 'pi.on("tool_call"' in text
     assert 'goal_plus_gate' in text
     assert "tool_name" in text
@@ -138,10 +148,22 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "sys.path.insert" in text
     assert "agentic_any_search_mcp.pi_tool" in text
     assert "agentic_any_search_mcp.pi_worker" in text
-    assert "isPrintInvocation" in text
+    assert "isPrintLikeInvocation" in text
     assert 'process.argv.includes("-p")' in text
-    assert 'ctx.mode === "print"' in text
-    assert "buildGoalPlusCommandPrompt" in text
+    assert "if (!isPrintLikeInvocation)" in text
+    assert 'mode !== "print"' in text
+    assert "function canPersistGoalState" in text
+    assert 'pi.on("input"' in text
+    assert 'action: "transform"' in text
+    assert "rawGoalFromSlashInput" in text
+    assert "createGoalPlusStart" in text
+    assert "do not downgrade it to ordinary Goal Mode" in text
+    assert "Never invent frozen_spec_id" in text
+    assert 'if (name === "goal_plus_create")' in text
+    assert "activateGoal(pi, result.details, startEntryCount, canPersistPiState)" in text
+    assert 'if (name === "goal_plus_create" && canPersistPiState)' not in text
+    assert "activateGoal(pi, status, startEntryCount, canPersistGoalState(ctx.mode))" in text
+    assert "await ctx.waitForIdle()" not in text
     assert "do not read or audit target files before goal_plus_record_triage" in text
     assert "workspaceGuard" in text
     assert "MAIN_GATED_TOOLS" in text
@@ -166,8 +188,19 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "goal_plus_monitor_snapshot: Type.Object" in text
     assert "pi_search_run_candidate: Type.Object" in text
     assert "pi_search_run_batch: Type.Object" in text
+    assert "redispatch: Type.Optional(Type.Boolean())" in text
     assert "candidate_ids: Type.Array(Type.String())" in text
     assert "max_parallel: Type.Optional(Type.Number())" in text
+    candidate_schema = text.split("pi_search_run_candidate: Type.Object", 1)[1].split(
+        "pi_search_run_batch: Type.Object", 1
+    )[0]
+    assert "model_pattern" not in candidate_schema
+    assert "provider" not in candidate_schema
+
+    main_tools = text.split("const mainTools = [", 1)[1].split("];", 1)[0]
+    assert '"search_start_agent_session"' not in main_tools
+    assert '"search_bind_agent_handle"' not in main_tools
+    assert '"search_continue_agent_session"' not in main_tools
     assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
     assert "is_optimization: Type.Boolean()" in text
@@ -199,11 +232,16 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "run the Pi" in combined
     assert "RPC worker, bind the handle, and can run the final verifier" in combined
     assert "How Pi Differs From Other Hosts" in combined
-    assert "native `/goal-plus` pre-create" in combined
+    assert "Pi currently supports the portable builtin strategies only" in combined
+    assert "pre-model `/goal-plus` creation" in combined
     assert "pi -p" in combined
-    assert "session_jsonl_restart" in combined
-    assert "not a live stdin continuation" in combined
+    assert "--no-session" in combined
+    assert "metadata-only" in combined
+    assert "state-level redispatch" in combined
+    assert "session_jsonl_restart" not in combined
     assert ".gp/host-logs/pi-rpc-" in combined
+    assert "metadata-only event log" in combined
+    assert "AGENTIC_ANY_SEARCH_PI_RAW_LOG=1" in combined
     assert "native turn-level stop gate" in combined
     assert "Goal Plus stats" in combined
     assert "custom entry" in combined

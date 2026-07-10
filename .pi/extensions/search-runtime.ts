@@ -8,7 +8,12 @@ const role = process.env.AGENTIC_ANY_SEARCH_PI_ROLE || "main";
 const runtimeRoot = process.env.AGENTIC_ANY_SEARCH_ROOT || ".gp";
 const sourcePath = process.env.AGENTIC_ANY_SEARCH_SOURCE_PATH;
 const exposeLowLevelWorker = process.env.AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER === "1";
-const isPrintInvocation = process.argv.includes("-p") || process.argv.includes("--print");
+const modeArgIndex = process.argv.indexOf("--mode");
+const isPrintLikeInvocation =
+	process.argv.includes("-p") ||
+	process.argv.includes("--print") ||
+	process.argv.includes("--mode=json") ||
+	(modeArgIndex >= 0 && process.argv[modeArgIndex + 1] === "json");
 const STATE_ENTRY_TYPE = "goal-plus-native-state";
 const GOAL_PLUS_STATS_ENTRY_TYPE = "goal-plus-stats";
 let workspaceRoot: string | undefined;
@@ -255,13 +260,8 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			run_id: Type.String(),
 			candidate_id: Type.String(),
 			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			redispatch: Type.Optional(Type.Boolean()),
 			final_verify: Type.Optional(Type.Boolean()),
-			pi_binary: Type.Optional(Type.String()),
-			extension_path: Type.Optional(Type.String()),
-			thinking_level: Type.Optional(Type.String()),
-			model_pattern: Type.Optional(Type.String()),
-			provider: Type.Optional(Type.String()),
-			model_id: Type.Optional(Type.String()),
 		},
 		{ additionalProperties: false },
 	),
@@ -272,12 +272,6 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
 			final_verify: Type.Optional(Type.Boolean()),
 			max_parallel: Type.Optional(Type.Number()),
-			pi_binary: Type.Optional(Type.String()),
-			extension_path: Type.Optional(Type.String()),
-			thinking_level: Type.Optional(Type.String()),
-			model_pattern: Type.Optional(Type.String()),
-			provider: Type.Optional(Type.String()),
-			model_id: Type.Optional(Type.String()),
 		},
 		{ additionalProperties: false },
 	),
@@ -487,6 +481,10 @@ function persistGoalState(pi: ExtensionAPI) {
 	} satisfies GoalPlusNativeState);
 }
 
+function canPersistGoalState(mode: string | undefined): boolean {
+	return mode !== "print" && mode !== "json";
+}
+
 function restoreGoalState(ctx: ExtensionContext) {
 	const entries = ctx.sessionManager.getEntries();
 	const stateEntry = entries
@@ -499,7 +497,7 @@ function restoreGoalState(ctx: ExtensionContext) {
 	activeGoalStartEntryCount = stateEntry.data.startEntryCount ?? activeGoalStartEntryCount;
 }
 
-function activateGoal(pi: ExtensionAPI, details: unknown, startEntryCount?: number) {
+function activateGoal(pi: ExtensionAPI, details: unknown, startEntryCount?: number, persist = true) {
 	const id = goalPlusIdFrom(details);
 	if (!id) return;
 	if (id !== activeGoalPlusId || !activeGoalStartedAt) {
@@ -509,16 +507,20 @@ function activateGoal(pi: ExtensionAPI, details: unknown, startEntryCount?: numb
 	}
 	activeGoalPlusId = id;
 	cachedGoalStatus = statusFrom(details);
-	persistGoalState(pi);
+	if (persist) persistGoalState(pi);
 }
 
-async function refreshActiveGoal(pi: ExtensionAPI, ctx: CommandRuntimeContext): Promise<GoalPlusStatusPayload | undefined> {
+async function refreshActiveGoal(
+	pi: ExtensionAPI,
+	ctx: CommandRuntimeContext,
+	persist = true,
+): Promise<GoalPlusStatusPayload | undefined> {
 	if (!activeGoalPlusId) return undefined;
 	const result = await runJsonCli(pi, ctx, "goal_plus_status", { goal_plus_id: activeGoalPlusId });
 	const status = statusFrom(result.details);
 	if (!status?.goal_plus_id) return undefined;
 	cachedGoalStatus = status;
-	persistGoalState(pi);
+	if (persist) persistGoalState(pi);
 	return status;
 }
 
@@ -644,22 +646,51 @@ function buildGoalStartPrompt(status: GoalPlusStatusPayload): string {
 		"- Load and follow the goal-plus skill.",
 		"- Except for loading the goal-plus skill, do not read or audit target files before goal_plus_record_triage.",
 		"- Start by recording triage with goal_plus_record_triage.",
+		"- If the raw goal explicitly requests verifier-guided Search Mode and supplies a measurable verifier or metric, do not downgrade it to ordinary Goal Mode.",
 		"- If the task is search-ready, follow the frozen-verifier and Search Mode gates.",
+		"- Never invent frozen_spec_id, run_id, plan_id, candidate_id, or agent_session_id values. Use only exact ids returned by the immediately preceding runtime tools; call search_create before goal_plus_link_search_run.",
 		"- If it is not search-ready, continue in Goal Mode and update goal-plus state before stopping.",
 	].join("\n");
 }
 
-function buildGoalPlusCommandPrompt(rawGoal: string): string {
-	return [
-		`Call \`goal_plus_create(raw_goal=${JSON.stringify(rawGoal)})\` first, before triage, planning, editing, or search.`,
-		"Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.",
-		"",
-		"# Goal Plus",
-		"",
-		"Use `/skill:goal-plus` with this raw user goal:",
-		"",
-		rawGoal,
-	].join("\n");
+function rawGoalFromSlashInput(text: string): string | undefined {
+	const match = text.match(/^\/goal-plus(?:\s+([\s\S]*))?$/);
+	return match ? (match[1] ?? "").trim() : undefined;
+}
+
+async function createGoalPlusStart(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	rawGoal: string,
+): Promise<string | undefined> {
+	const commandCtx = commandContextFrom(ctx);
+	const startEntryCount = ctx.sessionManager.getEntries().length;
+	const result = await runJsonCli(pi, commandCtx, "goal_plus_create", {
+		raw_goal: rawGoal,
+		source_path: ctx.cwd,
+	});
+	const status = statusFrom(result.details);
+	if (!status?.goal_plus_id) {
+		const details =
+			isRecord(result.details) && typeof result.details.error === "string"
+				? result.details.error
+				: "goal_plus_create did not return a goal_plus_id";
+		pi.sendMessage({
+			customType: "goal-plus-error",
+			content: details,
+			display: true,
+			details: { tool: "goal_plus_create" },
+		});
+		return undefined;
+	}
+	activateGoal(pi, status, startEntryCount, canPersistGoalState(ctx.mode));
+	pi.sendMessage({
+		customType: "goal-plus-created",
+		content: `Goal Plus ${status.goal_plus_id} created`,
+		display: true,
+		details: { goal_plus_id: status.goal_plus_id },
+	});
+	return buildGoalStartPrompt(status);
 }
 
 function sendUserMessage(pi: ExtensionAPI, message: string, deliverAsFollowUp: boolean) {
@@ -680,10 +711,10 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const commandCtx = commandContextFrom(ctx);
 			const startEntryCount = ctx.sessionManager.getEntries().length;
-			const canPersistPiState = ctx.mode !== "print" && ctx.mode !== "json";
+			const canPersistPiState = canPersistGoalState(ctx.mode);
 			const result = await runJsonCli(pi, commandCtx, name, params as Record<string, unknown>);
-			if (name === "goal_plus_create" && canPersistPiState) {
-				activateGoal(pi, result.details, startEntryCount);
+			if (name === "goal_plus_create") {
+				activateGoal(pi, result.details, startEntryCount, canPersistPiState);
 			}
 			if (name === "search_get_agent_context") {
 				const details = result.details as { workspace?: string } | undefined;
@@ -793,7 +824,7 @@ export default function (pi: ExtensionAPI) {
 			return box;
 		});
 	}
-	if (!isPrintInvocation) {
+	if (!isPrintLikeInvocation) {
 		pi.registerCommand("goal-plus", {
 			description: "Run native Pi Goal Plus",
 			handler: async (args, ctx) => {
@@ -802,37 +833,9 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Usage: /goal-plus <goal>", "error");
 					return;
 				}
-				if (ctx.mode === "print" || ctx.mode === "json") {
-					pi.sendUserMessage(buildGoalPlusCommandPrompt(rawGoal));
-					await ctx.waitForIdle();
-					return;
-				}
-				const commandCtx = commandContextFrom(ctx);
-				const startEntryCount = ctx.sessionManager.getEntries().length;
 				const deliverAsFollowUp = !ctx.isIdle();
-				const result = await runJsonCli(pi, commandCtx, "goal_plus_create", {
-					raw_goal: rawGoal,
-					source_path: ctx.cwd,
-				});
-				const status = statusFrom(result.details);
-				if (!status?.goal_plus_id) {
-					const details = isRecord(result.details) && typeof result.details.error === "string" ? result.details.error : "goal_plus_create did not return a goal_plus_id";
-					pi.sendMessage({
-						customType: "goal-plus-error",
-						content: details,
-						display: true,
-						details: { tool: "goal_plus_create" },
-					});
-					return;
-				}
-				activateGoal(pi, status, startEntryCount);
-				pi.sendMessage({
-					customType: "goal-plus-created",
-					content: `Goal Plus ${status.goal_plus_id} created`,
-					display: true,
-					details: { goal_plus_id: status.goal_plus_id },
-				});
-				sendUserMessage(pi, buildGoalStartPrompt(status), deliverAsFollowUp);
+				const prompt = await createGoalPlusStart(pi, ctx, rawGoal);
+				if (prompt) sendUserMessage(pi, prompt, deliverAsFollowUp);
 			},
 		});
 	}
@@ -854,10 +857,6 @@ export default function (pi: ExtensionAPI) {
 		"search_list_history",
 		"search_plan_next",
 		"search_start_batch",
-		"search_start_agent_session",
-		"search_redispatch_candidate",
-		"search_bind_agent_handle",
-		"search_continue_agent_session",
 		"search_run_verifier",
 		"search_select",
 		"search_report",
@@ -870,6 +869,21 @@ export default function (pi: ExtensionAPI) {
 		registerRuntimeTool(pi, tool);
 	}
 	if (role === "main" && exposeLowLevelWorker) registerPiWorkerTool(pi);
+	pi.on("input", async (event, ctx) => {
+		if (role !== "main" || (ctx.mode !== "print" && ctx.mode !== "json")) {
+			return { action: "continue" };
+		}
+		const rawGoal = rawGoalFromSlashInput(event.text);
+		if (rawGoal === undefined) return { action: "continue" };
+		if (!rawGoal) {
+			ctx.ui.notify("Usage: /goal-plus <goal>", "error");
+			return { action: "handled" };
+		}
+		const prompt = await createGoalPlusStart(pi, ctx, rawGoal);
+		return prompt
+			? { action: "transform", text: prompt, images: event.images }
+			: { action: "handled" };
+	});
 	pi.on("tool_call", async (event, ctx) => {
 		return workspaceGuard(event) || (await mainGate(event, ctx));
 	});
@@ -877,14 +891,15 @@ export default function (pi: ExtensionAPI) {
 		restoreGoalState(ctx);
 		if (role !== "main" || !activeGoalPlusId) return;
 		const commandCtx = commandContextFrom(ctx);
+		const persist = canPersistGoalState(ctx.mode);
 		try {
-			const status = await refreshActiveGoal(pi, commandCtx);
+			const status = await refreshActiveGoal(pi, commandCtx, persist);
 			if (isTerminalStatus(status?.status)) {
 				activeGoalPlusId = undefined;
 				activeGoalStartedAt = undefined;
 				activeGoalStartEntryCount = 0;
 				continuationCount = 0;
-				persistGoalState(pi);
+				if (persist) persistGoalState(pi);
 			}
 		} catch {
 			// Keep startup non-fatal; the next explicit tool call will surface runtime errors.
@@ -893,7 +908,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (_event, ctx) => {
 		if (role !== "main" || !activeGoalPlusId) return;
 		const commandCtx = commandContextFrom(ctx);
-		const status = await refreshActiveGoal(pi, commandCtx);
+		const status = await refreshActiveGoal(pi, commandCtx, canPersistGoalState(ctx.mode));
 		if (!status || isTerminalStatus(status.status)) return;
 		return {
 			message: {
@@ -904,11 +919,19 @@ export default function (pi: ExtensionAPI) {
 			},
 		};
 	});
-	pi.on("agent_end", async (_event, ctx) => {
+	pi.on("agent_end", async (event, ctx) => {
 		if (role !== "main" || !activeGoalPlusId) return;
+		const lastMessage = event.messages.at(-1);
+		if (
+			lastMessage?.role === "assistant" &&
+			(lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted")
+		) {
+			return;
+		}
 		if (ctx.hasPendingMessages()) return;
 		const commandCtx = commandContextFrom(ctx);
 		const mode = ctx.mode;
+		const persist = canPersistGoalState(mode);
 		const usage = collectGoalUsageFromEntries(ctx.sessionManager.getEntries() as unknown[]);
 		const gate = await runJsonCli(pi, commandCtx, "goal_plus_gate", {
 			goal_plus_id: activeGoalPlusId,
@@ -919,7 +942,7 @@ export default function (pi: ExtensionAPI) {
 		if (!details) return;
 		if (details.decision === "block") {
 			continuationCount += 1;
-			persistGoalState(pi);
+			if (persist) persistGoalState(pi);
 			pi.sendMessage(
 				{
 					customType: "goal-plus-stop-continuation",
@@ -931,7 +954,7 @@ export default function (pi: ExtensionAPI) {
 			);
 			return;
 		}
-		const status = await refreshActiveGoal(pi, commandCtx);
+		const status = await refreshActiveGoal(pi, commandCtx, persist);
 		if (isTerminalStatus(status?.status)) {
 			const statsMessage = appendGoalStats(pi, status, usage);
 			ctx.ui.notify(statsMessage, "info");
@@ -940,7 +963,7 @@ export default function (pi: ExtensionAPI) {
 			activeGoalStartEntryCount = 0;
 			continuationCount = 0;
 			cachedGoalStatus = undefined;
-			persistGoalState(pi);
+			if (persist) persistGoalState(pi);
 		}
 	});
 }

@@ -46,5 +46,7 @@ def st_pi_run_root(request: pytest.FixtureRequest) -> Path:
     base.mkdir(parents=True, exist_ok=True)
     node = request.node.name.replace("::", "_").replace("[", "_").replace("]", "")
     run_root = base / node
+    if run_root.exists():
+        shutil.rmtree(run_root)
     run_root.mkdir(parents=True, exist_ok=True)
     return run_root

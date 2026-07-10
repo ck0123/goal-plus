@@ -7,8 +7,10 @@ from typing import Any
 import pytest
 
 from agentic_any_search_mcp.models import SearchSpec
+from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
 from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from agentic_any_search_mcp.runtime import FileSearchRuntime
+from agentic_any_search_mcp.tools import SearchTools
 from tests.test_runtime_unit import spec_for
 
 
@@ -148,6 +150,46 @@ def test_run_pi_search_candidate_binds_worker_handle_and_final_verifies(
     assert record.iterations[-1].score == 7.0
 
 
+def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    def fake_worker(launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "host": "pi-rpc",
+            "external_id": launch["session_id"],
+            "metadata": {"continuation": "state_redispatch"},
+        }
+
+    first = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=candidate.candidate_id,
+        final_verify=False,
+        worker_runner=fake_worker,
+    )
+    resumed = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=candidate.candidate_id,
+        directive="resume from runtime and Git evidence",
+        redispatch=True,
+        final_verify=False,
+        worker_runner=fake_worker,
+    )
+
+    assert first["agent_session_id"] != resumed["agent_session_id"]
+    assert resumed["steps"][0]["tool"] == "search_redispatch_candidate"
+    assert resumed["launch"]["continuation"] == "state_redispatch"
+    assert len(runtime._load_agent_sessions(run_id)) == 2
+
+
 def test_run_pi_search_candidate_rejects_non_pi_rpc_search_spec(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -166,6 +208,86 @@ def test_run_pi_search_candidate_rejects_non_pi_rpc_search_spec(tmp_path: Path) 
                 "external_id": "should-not-run",
             },
         )
+
+
+def test_run_pi_search_candidate_binds_runner_failure_handle(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    def failed_worker(_launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        raise BrokenPipeError("Pi RPC stdout closed " + ("x" * 1_000))
+
+    result = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=candidate.candidate_id,
+        worker_runner=failed_worker,
+    )
+
+    assert result["ok"] is False
+    assert result["failure"]["stage"] == "worker_runner"
+    assert result["failure"]["error_type"] == "BrokenPipeError"
+    assert len(result["failure"]["message"]) <= 503
+    assert result["agent_session_id"]
+    assert result["final_score_report"] is None
+
+    stored = runtime._load_agent_session_by_id(result["agent_session_id"], run_id=run_id)
+    assert stored.host_handle.external_id == result["agent_session_id"]
+    assert stored.host_handle.metadata["runner_failed"] is True
+    assert stored.host_handle.metadata["failure_stage"] == "worker_runner"
+    assert stored.host_handle.metadata["error_type"] == "BrokenPipeError"
+
+    snapshot = goal_plus_monitor_snapshot(root_dir=runtime.root_dir, run_id=run_id)
+    [subagent] = snapshot["subagents"]
+    assert subagent["runner_failed"] is True
+    assert subagent["failure_stage"] == "worker_runner"
+    assert subagent["liveness"] == "failed"
+    assert any(
+        warning["kind"] == "subagent_runner_failed"
+        for warning in snapshot["warnings"]
+    )
+
+
+def test_run_pi_search_candidate_returns_both_failures_when_synthetic_bind_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    def failed_worker(_launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        raise BrokenPipeError("Pi RPC stdout closed")
+
+    def failed_bind(
+        _self: SearchTools,
+        *,
+        agent_session_id: str,
+        handle: dict[str, Any],
+    ) -> dict[str, Any]:
+        raise OSError(f"cannot persist {agent_session_id} {handle['host']}")
+
+    monkeypatch.setattr(SearchTools, "search_bind_agent_handle", failed_bind)
+
+    result = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=candidate.candidate_id,
+        worker_runner=failed_worker,
+    )
+
+    assert result["ok"] is False
+    assert result["failure"]["stage"] == "worker_runner"
+    assert result["handle_bind_failure"]["stage"] == "bind_synthetic_failure_handle"
+    assert result["handle_bind_failure"]["error_type"] == "OSError"
+    assert result["bound_session"] is None
 
 
 def test_run_pi_search_batch_runs_worker_processes_in_parallel(tmp_path: Path) -> None:
