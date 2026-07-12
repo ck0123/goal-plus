@@ -28,21 +28,26 @@ Host setup references:
 
 ## Common Runtime Contract
 
-After `/goal-plus` has frozen or linked a verifier-backed SearchSpec, all four
-hosts use the same Search Mode MCP control plane:
+After `/goal-plus` has frozen a verifier-backed SearchSpec, all four hosts use
+the same Search Mode MCP control plane for each search task:
 
 1. `search_freeze_spec`
 2. `search_create`
-3. `search_plan_next`
-4. `search_start_batch`
-5. `search_start_agent_session`
-6. host foreground worker launch
-7. `search_bind_opencode_session` or `search_bind_agent_handle`
-8. worker `search_get_agent_context`
-9. worker `search_run_verifier(..., agent_session_id=...)`
-10. main-agent final `search_run_verifier(...)`
-11. `search_select` checks out the best committed iteration and final-verifies it
-12. `search_report`
+3. `goal_plus_link_search_run`
+4. `search_plan_next`
+5. `search_start_batch`
+6. `search_start_agent_session`
+7. host foreground worker launch
+8. `search_bind_opencode_session` or `search_bind_agent_handle`
+9. worker `search_get_agent_context`
+10. worker `search_run_verifier(..., agent_session_id=...)`
+11. main-agent final `search_run_verifier(...)`
+12. `search_select` checks out the best committed iteration and final-verifies it
+13. `search_report`, optional `search_promote`, and `goal_plus_record_search_result`
+
+The final raw-goal audit may finish the Goal Plus task or repeat this control
+plane with another frozen spec and `run_id`. This multi-task relationship is
+host-neutral; hosts still own only their foreground worker lifecycle.
 
 The runtime does not wait for, abort, supervise, or synchronize host workers.
 It records provenance and verifier counters only after the host or worker calls

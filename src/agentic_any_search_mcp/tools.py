@@ -186,7 +186,12 @@ class GoalPlusTools:
         ).model_dump(mode="json")
 
     def goal_plus_status(self, goal_plus_id: str) -> dict[str, Any]:
-        payload = self.runtime.status(goal_plus_id).model_dump(mode="json")
+        record = self.runtime.status(goal_plus_id)
+        payload = record.model_dump(mode="json")
+        payload["search_tasks_total"] = len(record.search_tasks)
+        payload["current_search_run_id"] = (
+            record.linked_search.run_id if record.linked_search is not None else None
+        )
         payload["evidence_log"] = self.runtime.list_events(goal_plus_id)
         return payload
 

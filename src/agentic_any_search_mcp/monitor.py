@@ -5,10 +5,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 from agentic_any_search_mcp.models import (
     AgentSessionRecord,
     CandidateRecord,
     FrozenSpec,
+    GoalPlusLinkedSearch,
     GoalPlusRecord,
     IterationRecord,
     RunRecord,
@@ -80,7 +82,7 @@ def _load_goal_record(root_dir: Path, goal_plus_id: str) -> GoalPlusRecord:
     path = root_dir / "goal-plus" / goal_plus_id / "goal.json"
     if not path.exists():
         raise FileNotFoundError(f"goal-plus record not found: {goal_plus_id}")
-    return GoalPlusRecord.model_validate(load_json(path))
+    return FileGoalPlusRuntime(root_dir).status(goal_plus_id)
 
 
 def _load_candidates(run_dir: Path) -> list[CandidateRecord]:
@@ -103,11 +105,11 @@ def _load_agent_sessions(run_dir: Path) -> list[AgentSessionRecord]:
     ]
 
 
-def _load_latest_plan(run_dir: Path) -> SearchPlan | None:
-    plan_paths = sorted((run_dir / "plans").glob("plan_*.json"))
-    if not plan_paths:
-        return None
-    return SearchPlan.model_validate(load_json(plan_paths[-1]))
+def _load_plans(run_dir: Path) -> list[SearchPlan]:
+    return [
+        SearchPlan.model_validate(load_json(path))
+        for path in sorted((run_dir / "plans").glob("plan_*.json"))
+    ]
 
 
 _STRATEGY_STATE_KEYS = (
@@ -191,6 +193,8 @@ def _goal_payload(record: GoalPlusRecord | None) -> dict[str, Any] | None:
         "raw_goal": record.raw_goal,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "search_tasks_total": len(record.search_tasks),
+        "current_search_run_id": linked.get("run_id") if linked else None,
         "linked_search": linked,
         "next_action": next_action,
         "hook_counters": record.hook_counters,
@@ -254,6 +258,92 @@ def _session_liveness(
     return "running_or_waiting"
 
 
+def _search_task_payload(
+    root_dir: Path,
+    task: GoalPlusLinkedSearch,
+    *,
+    current_run_id: str | None,
+) -> dict[str, Any]:
+    payload = task.model_dump(mode="json")
+    run_id = task.run_id
+    payload.update(
+        {
+            "is_current": run_id is not None and run_id == current_run_id,
+            "run_exists": False,
+            "state": None,
+            "run_frozen_spec_id": None,
+            "frozen_spec_exists": False,
+            "strategy": None,
+            "planning_rounds_total": 0,
+            "started_rounds_total": 0,
+            "candidates_total": 0,
+            "candidates_evaluated": 0,
+            "worker_sessions_total": 0,
+            "verifier_runs_total": 0,
+            "estimated_cost_total": 0.0,
+        }
+    )
+    if run_id is None:
+        return payload
+    run_dir = root_dir / "runs" / run_id
+    run_path = run_dir / "run.json"
+    if not run_path.exists():
+        return payload
+
+    run = RunRecord.model_validate(load_json(run_path))
+    frozen_path = root_dir / "specs" / run.frozen_spec_id / "frozen_spec.json"
+    frozen = FrozenSpec.model_validate(load_json(frozen_path)) if frozen_path.exists() else None
+    plans = _load_plans(run_dir)
+    candidates = _load_candidates(run_dir)
+    sessions = _load_agent_sessions(run_dir)
+    estimated_cost_total = 0.0
+    for session in sessions:
+        metadata = session.host_handle.metadata
+        metrics = metadata.get("pi_metrics") if isinstance(metadata.get("pi_metrics"), dict) else {}
+        estimated_cost_total += _usage_cost(metrics if isinstance(metrics, dict) else {})
+    payload.update(
+        {
+            "run_exists": True,
+            "state": run.state,
+            "run_frozen_spec_id": run.frozen_spec_id,
+            "frozen_spec_exists": frozen is not None,
+            "strategy": (
+                {
+                    "name": frozen.spec.strategy.name,
+                    "driver": frozen.spec.strategy.driver,
+                    "worker_mode": frozen.spec.strategy.worker_mode,
+                    "worker_host": frozen.spec.strategy.worker_host,
+                }
+                if frozen is not None
+                else None
+            ),
+            "planning_rounds_total": len(plans),
+            "started_rounds_total": sum(1 for plan in plans if plan.status == "started"),
+            "candidates_total": len(candidates),
+            "candidates_evaluated": sum(
+                1 for candidate in candidates if candidate.status == "evaluated"
+            ),
+            "worker_sessions_total": len(sessions),
+            "verifier_runs_total": sum(len(candidate.iterations) for candidate in candidates),
+            "estimated_cost_total": estimated_cost_total,
+        }
+    )
+    return payload
+
+
+def _search_task_aggregate(search_tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "search_tasks_total": len(search_tasks),
+        "planning_rounds_total": sum(task["planning_rounds_total"] for task in search_tasks),
+        "started_rounds_total": sum(task["started_rounds_total"] for task in search_tasks),
+        "candidates_total": sum(task["candidates_total"] for task in search_tasks),
+        "candidates_evaluated": sum(task["candidates_evaluated"] for task in search_tasks),
+        "worker_sessions_total": sum(task["worker_sessions_total"] for task in search_tasks),
+        "verifier_runs_total": sum(task["verifier_runs_total"] for task in search_tasks),
+        "estimated_cost_total": sum(task["estimated_cost_total"] for task in search_tasks),
+    }
+
+
 def goal_plus_monitor_snapshot(
     root_dir: Path | str = DEFAULT_RUNTIME_ROOT,
     *,
@@ -290,6 +380,91 @@ def goal_plus_monitor_snapshot(
             }
         )
 
+    current_search_run_id = (
+        goal_record.linked_search.run_id
+        if goal_record is not None and goal_record.linked_search is not None
+        else None
+    )
+    task_links = list(goal_record.search_tasks) if goal_record is not None else []
+    if goal_record is None and run_id is not None:
+        run_record = RunRecord.model_validate(load_json(_run_dir(root, run_id) / "run.json"))
+        task_links = [
+            GoalPlusLinkedSearch(
+                frozen_spec_id=run_record.frozen_spec_id,
+                run_id=run_record.run_id,
+                linked_at=run_record.created_at,
+            )
+        ]
+        current_search_run_id = run_id
+
+    linked_run_ids = {task.run_id for task in task_links if task.run_id is not None}
+    if goal_record is not None and run_id is not None and run_id not in linked_run_ids:
+        warnings.append(
+            {
+                "kind": "run_not_linked_to_goal",
+                "goal_plus_id": goal_record.goal_plus_id,
+                "run_id": run_id,
+            }
+        )
+
+    search_tasks = [
+        _search_task_payload(root, task, current_run_id=current_search_run_id)
+        for task in task_links
+    ]
+    search_task_aggregate = _search_task_aggregate(search_tasks)
+    terminal_run_states = {"promoted", "aborted", "failed"}
+    for task in search_tasks:
+        task_run_id = task.get("run_id")
+        if not task["run_exists"]:
+            warnings.append(
+                {
+                    "kind": "linked_search_run_missing",
+                    "goal_plus_id": goal_record.goal_plus_id if goal_record else None,
+                    "run_id": task_run_id,
+                }
+            )
+            continue
+        if task.get("frozen_spec_id") != task.get("run_frozen_spec_id"):
+            warnings.append(
+                {
+                    "kind": "linked_search_spec_mismatch",
+                    "run_id": task_run_id,
+                    "linked_frozen_spec_id": task.get("frozen_spec_id"),
+                    "run_frozen_spec_id": task.get("run_frozen_spec_id"),
+                }
+            )
+        if not task["frozen_spec_exists"]:
+            warnings.append(
+                {
+                    "kind": "linked_search_frozen_spec_missing",
+                    "run_id": task_run_id,
+                    "frozen_spec_id": task.get("run_frozen_spec_id"),
+                }
+            )
+        if not task["is_current"] and task["state"] not in terminal_run_states:
+            warnings.append(
+                {
+                    "kind": "superseded_search_task_not_terminal",
+                    "run_id": task_run_id,
+                    "state": task["state"],
+                }
+            )
+    current_task = next((task for task in search_tasks if task["is_current"]), None)
+    if (
+        goal_record is not None
+        and goal_record.status == "complete"
+        and current_task is not None
+        and current_task["state"] != "promoted"
+    ):
+        warnings.append(
+            {
+                "kind": "completed_goal_current_search_not_promoted",
+                "goal_plus_id": goal_record.goal_plus_id,
+                "run_id": current_task.get("run_id"),
+                "state": current_task.get("state"),
+            }
+        )
+
     run_payload: dict[str, Any] | None = None
     strategy_payload: dict[str, Any] | None = None
     candidates_payload: dict[str, dict[str, Any]] = {}
@@ -303,7 +478,8 @@ def goal_plus_monitor_snapshot(
         "context_percent_max": None,
     }
 
-    if run_id is not None:
+    selected_run_exists = run_id is not None and (root / "runs" / run_id / "run.json").exists()
+    if run_id is not None and selected_run_exists:
         run_path = _run_dir(root, run_id)
         run = RunRecord.model_validate(load_json(run_path / "run.json"))
         frozen = FrozenSpec.model_validate(
@@ -311,9 +487,10 @@ def goal_plus_monitor_snapshot(
         )
         candidates = _load_candidates(run_path)
         sessions = _load_agent_sessions(run_path)
-        plan_paths = list((run_path / "plans").glob("plan_*.json"))
-        plans_count = len(plan_paths)
-        latest_plan = _load_latest_plan(run_path)
+        plans = _load_plans(run_path)
+        plans_count = len(plans)
+        started_rounds_total = sum(1 for plan in plans if plan.status == "started")
+        latest_plan = plans[-1] if plans else None
         strategy_payload = _strategy_payload(frozen, latest_plan)
         by_candidate = {candidate.candidate_id: candidate for candidate in candidates}
         sessions_by_candidate: dict[str, list[AgentSessionRecord]] = {}
@@ -331,6 +508,8 @@ def goal_plus_monitor_snapshot(
             "created_at": run.created_at,
             "source_path": run.source_path,
             "plans_count": plans_count,
+            "planning_rounds_total": plans_count,
+            "started_rounds_total": started_rounds_total,
             "candidates_total": len(candidates),
             "candidates_evaluated": sum(1 for candidate in candidates if candidate.status == "evaluated"),
             "best_candidate_id": run.best_candidate_id,
@@ -478,6 +657,9 @@ def goal_plus_monitor_snapshot(
         "snapshot_at": utc_timestamp(),
         "root_dir": str(root),
         "goal_plus": _goal_payload(goal_record),
+        "selected_run_id": run_id,
+        "search_tasks": search_tasks,
+        "search_task_aggregate": search_task_aggregate,
         "run": run_payload,
         "strategy": strategy_payload,
         "main_agent": main_agent,

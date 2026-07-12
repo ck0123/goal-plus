@@ -174,6 +174,73 @@ def test_goal_plus_monitor_snapshot_does_not_attach_unlinked_latest_run(
     assert unrelated_run_id is not None
 
 
+def test_goal_plus_monitor_snapshot_aggregates_multiple_search_tasks(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime_root = tmp_path / ".search"
+    goal_runtime = FileGoalPlusRuntime(runtime_root)
+    goal = goal_runtime.create_goal("Run two verifier-backed searches")
+    search_runtime = FileSearchRuntime(runtime_root)
+    frozen = search_runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+
+    first_run_id = search_runtime.create_run(frozen.frozen_spec_id)
+    search_runtime.plan_next(first_run_id, requested_k=1)
+    goal_runtime.link_search_run(goal.goal_plus_id, frozen.frozen_spec_id, first_run_id)
+
+    second_run_id = search_runtime.create_run(frozen.frozen_spec_id)
+    second_plan = search_runtime.plan_next(second_run_id, requested_k=2)
+    search_runtime.start_batch(second_run_id, second_plan.plan_id)
+    goal_runtime.link_search_run(goal.goal_plus_id, frozen.frozen_spec_id, second_run_id)
+    goal_runtime.set_status(goal.goal_plus_id, status="complete", reason="simulate stale state")
+
+    snapshot = goal_plus_monitor_snapshot(
+        root_dir=runtime_root,
+        goal_plus_id=goal.goal_plus_id,
+    )
+
+    assert snapshot["goal_plus"]["search_tasks_total"] == 2
+    assert snapshot["goal_plus"]["current_search_run_id"] == second_run_id
+    assert snapshot["selected_run_id"] == second_run_id
+    assert [task["run_id"] for task in snapshot["search_tasks"]] == [
+        first_run_id,
+        second_run_id,
+    ]
+    assert snapshot["search_tasks"][0]["planning_rounds_total"] == 1
+    assert snapshot["search_tasks"][0]["started_rounds_total"] == 0
+    assert snapshot["search_tasks"][1]["planning_rounds_total"] == 1
+    assert snapshot["search_tasks"][1]["started_rounds_total"] == 1
+    assert snapshot["search_tasks"][1]["strategy"] == {
+        "name": "random",
+        "driver": "builtin",
+        "worker_mode": "agent-session-pool",
+        "worker_host": "pi-rpc",
+    }
+    assert snapshot["search_task_aggregate"] == {
+        "search_tasks_total": 2,
+        "planning_rounds_total": 2,
+        "started_rounds_total": 1,
+        "candidates_total": 2,
+        "candidates_evaluated": 0,
+        "worker_sessions_total": 0,
+        "verifier_runs_total": 0,
+        "estimated_cost_total": 0.0,
+    }
+    assert snapshot["run"]["run_id"] == second_run_id
+    assert snapshot["run"]["planning_rounds_total"] == 1
+    assert snapshot["run"]["started_rounds_total"] == 1
+    assert any(
+        warning["kind"] == "superseded_search_task_not_terminal"
+        and warning["run_id"] == first_run_id
+        for warning in snapshot["warnings"]
+    )
+    assert any(
+        warning["kind"] == "completed_goal_current_search_not_promoted"
+        and warning["run_id"] == second_run_id
+        for warning in snapshot["warnings"]
+    )
+
+
 def test_goal_plus_monitor_snapshot_is_exposed_to_mcp_and_pi_facade(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime_root = tmp_path / ".search"

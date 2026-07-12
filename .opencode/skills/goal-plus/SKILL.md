@@ -148,6 +148,12 @@ After `search_create`, call `search-runtime_goal_plus_link_search_run`.
 After selection/report/promotion, call
 `search-runtime_goal_plus_record_search_result`.
 
+One Goal Plus record is the complete user task. If the raw-goal audit needs
+another verifier-backed search, create and link another `run_id` under the same
+`goal_plus_id`. `search_tasks` is the append-only task history, one run over
+one frozen spec per item; `linked_search` is only the current-task
+compatibility view. Each search task may contain multiple search rounds.
+
 ### Step 6: Final Raw-Goal Audit
 
 Search completion proves only the frozen spec. The final raw-goal audit checks

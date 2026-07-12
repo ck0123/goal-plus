@@ -3,7 +3,7 @@
 ## Objective
 
 This project provides `/goal-plus`: a generic goal entrypoint that can upgrade
-measurable coding tasks into Search MCP runs. The runtime owns durable state,
+measurable coding tasks into one or more Search MCP tasks. The runtime owns durable state,
 candidate workspaces, budgets, verifier execution, scoring history,
 best-candidate selection, reports, and promotion artifacts. The host code-agent
 client owns the subagent process lifecycle. The main agent owns policy decisions
@@ -52,7 +52,7 @@ GoalPlusTools facade
   v
 FileGoalPlusRuntime
   |
-  | links to Search Mode when verifier-backed spec is ready
+  | appends a search task whenever a verifier-backed spec is ready
   v
 SearchTools facade
   |
@@ -84,6 +84,19 @@ FileSearchRuntime
 surface, verifier commands, promotion verifiers, budget, workspace backend,
 root hypotheses, and strategy. `workspace.backend` is `copy` by default and
 may be set to `git_worktree` for a shared-object Git layout.
+
+`GoalPlusRecord` describes the complete user task. Its canonical
+`search_tasks` list is append-only and may contain multiple Search Mode runs.
+Each item is identified by `run_id`, references one `frozen_spec_id`, and
+stores the recorded selection/report/promotion result. `linked_search` is kept
+as a backward-compatible view of the current or most recently linked task.
+Legacy records that only contain `linked_search` remain readable, and older
+multi-run histories are reconstructed from `search_linked` and
+`search_result_recorded` events.
+
+A `search task` is one complete run over one frozen spec. A `search round` is
+one persisted `SearchPlan` within that run. Monitoring distinguishes all
+planning rounds from rounds whose plan reached `status="started"`.
 
 `StrategySpec` controls planning and execution:
 
@@ -129,6 +142,9 @@ search_freeze_spec
   |
   v
 search_create
+  |
+  v
+goal_plus_link_search_run  (append this run as one search task)
   |
   v
 search_plan_next
@@ -181,6 +197,10 @@ search_report
   v
 search_promote
 ```
+
+After `goal_plus_record_search_result` and the raw-goal audit, the main agent
+may finish the Goal Plus task or create and link another search task. Starting
+another task does not overwrite earlier task evidence.
 
 There is no batch-shortcut compatibility helper. For fixed-work-order strategies, call `search_plan_next` followed by `search_start_batch`. For proposal-based strategies, do the same and pass proposals to `start_batch`.
 

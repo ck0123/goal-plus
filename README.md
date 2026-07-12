@@ -87,6 +87,12 @@ Use `/goal-plus` for both ordinary goals and optimization-shaped goals. The
 workflow starts with `goal_plus_create`, records triage, and only enters Search
 Mode after the goal has a verifier-backed spec.
 
+One Goal Plus record is the complete user task. It may contain multiple
+`search task` records when the final audit identifies another verifier-backed
+search that is needed. Each search task is one `run_id` over one frozen spec;
+each task may contain multiple search rounds. The runtime reports planning and
+started round counts separately.
+
 Examples:
 
 ```text
@@ -119,6 +125,11 @@ common MCP flow:
 9. worker self-scores with `search_run_verifier(..., agent_session_id=...)`
 10. main agent confirms the final score, selects, reports, and optionally
     promotes
+
+If the raw-goal audit requires another frozen search, repeat from
+`search_freeze_spec`/`search_create` and link the new `run_id` to the same Goal
+Plus record. `linked_search` remains the current-task compatibility view;
+`search_tasks` is the complete append-only task history.
 
 The runtime owns `.gp/` state, candidate workspaces, verifier scoring,
 history, reports, and promotion artifacts. The host owns worker launch,

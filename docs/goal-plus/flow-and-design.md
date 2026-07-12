@@ -245,8 +245,9 @@ Host adapter
 ```
 
 This avoids changing the runtime into a general goal supervisor. The goal-plus
-state machine records phase, next action, spec draft, linked search run, and
-gate decisions; the search runtime stays strict where it is already strong:
+state machine records phase, next action, spec draft, an append-only list of
+linked search tasks, the current-task compatibility view, and gate decisions;
+the search runtime stays strict where it is already strong:
 frozen inputs, isolated candidates, verifier results, and promotion artifacts.
 
 The gate decisions are enforceable only when the host calls them. Current Codex

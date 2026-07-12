@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
+
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL_HINT = (
@@ -32,6 +34,19 @@ SEARCH_PROMPT = (
     "max_runtime_seconds=60、max_turns=4、on_exceed=interrupt。只允许候选修改 "
     "initial_program.py。完成 candidate verifier、selection、report 和 promotion，然后把 "
     "Goal Plus 状态设为 complete。"
+)
+MULTI_SEARCH_PROMPT = (
+    "在同一个 Goal Plus 任务里顺序运行两个最小但完整的 Pi search task。两次都读取 "
+    "examples/edgebench_ad_placement_search_spec.json，并使用 "
+    "examples/edgebench-ad-placement/workspace/evaluator.py 作为冻结 verifier。"
+    "第一个 SearchSpec 使用 strategy.name=random，第二个使用 strategy.name=agent_guided；"
+    "两次都设置 worker_host=pi-rpc、worker_mode=agent-session-pool、max_candidates=1、"
+    "max_parallel=1，worker budget 为 max_runtime_seconds=60、max_turns=4、"
+    "on_exceed=interrupt，只允许候选修改 initial_program.py。每次都必须分别完成 "
+    "search_freeze_spec、search_create、goal_plus_link_search_run、candidate verifier、"
+    "selection、report、promotion 和 goal_plus_record_search_result。第一次结果记录后不要"
+    "结束 Goal Plus，继续创建并链接第二个不同 run_id。只有两个 search task 都完成后，"
+    "才把 Goal Plus 状态设为 complete。"
 )
 
 
@@ -199,6 +214,73 @@ def test_goal_plus_print_search_reaches_linked_run(
         assert metadata["text_log"] is None
         assert Path(metadata["event_log"]).exists()
     assert not (search_root / "host-logs" / "pi-rpc-sessions").exists()
+    _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
+
+
+@pytest.mark.st_pi
+def test_goal_plus_print_supports_two_search_tasks_in_one_goal(
+    st_pi_run_root: Path,
+) -> None:
+    search_root = st_pi_run_root / ".gp"
+    session_dir = st_pi_run_root / "sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        *_pi_base_command(session_dir, "st-pi-goal-plus-multi-search"),
+        "-p",
+        f"/goal-plus {MULTI_SEARCH_PROMPT}",
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=_run_env(search_root),
+        text=True,
+        capture_output=True,
+        timeout=int(os.environ.get("ST_PI_MULTI_SEARCH_TIMEOUT", "900")),
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr[-2000:] or result.stdout[-2000:]
+    record = _goal_record(search_root)
+    assert record["status"] == "complete"
+    search_tasks = record.get("search_tasks") or []
+    assert len(search_tasks) == 2, record
+    run_ids = [task.get("run_id") for task in search_tasks]
+    assert all(run_ids)
+    assert len(set(run_ids)) == 2
+    for task in search_tasks:
+        assert task.get("selected_candidate_id"), task
+        assert task.get("report_path"), task
+        assert task.get("promotion_artifact_path"), task
+        assert Path(task["report_path"]).exists()
+        assert Path(task["promotion_artifact_path"]).exists()
+        run_record = json.loads(
+            (search_root / "runs" / task["run_id"] / "run.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert run_record["state"] == "promoted"
+
+    snapshot = goal_plus_monitor_snapshot(
+        root_dir=search_root,
+        goal_plus_id=record["goal_plus_id"],
+    )
+    assert snapshot["goal_plus"]["search_tasks_total"] == 2
+    assert snapshot["search_task_aggregate"]["search_tasks_total"] == 2
+    assert snapshot["search_task_aggregate"]["started_rounds_total"] == 2
+    assert [task["strategy"]["name"] for task in snapshot["search_tasks"]] == [
+        "random",
+        "agent_guided",
+    ]
+    assert not any(
+        warning["kind"] in {
+            "linked_search_run_missing",
+            "linked_search_spec_mismatch",
+            "linked_search_frozen_spec_missing",
+            "completed_goal_current_search_not_promoted",
+        }
+        for warning in snapshot["warnings"]
+    )
     _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
 
 

@@ -375,6 +375,7 @@ def _emit_terminal_stats(record: Any) -> None:
         f"goal_plus_id={record.goal_plus_id}; "
         f"status={record.status}; "
         f"phase={record.phase}; "
+        f"search_tasks={len(record.search_tasks)}; "
         f"linked_run={linked_run}; "
         f"gates={counters}"
     )

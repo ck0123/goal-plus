@@ -40,9 +40,12 @@ Core loop:
 9. In Search Mode, call the internal `search` skill and follow its frozen-spec workflow.
 10. After selection/report/promotion, record the result with
    `goal_plus_record_search_result`.
-11. Finish with a final raw-goal audit. Mark `goal_plus_set_status(...,
+11. If the raw-goal audit needs another verifier-backed search, append a new
+   search task by freezing, creating, and linking a new `run_id`; do not
+   overwrite or discard earlier task evidence.
+12. Finish with a final raw-goal audit. Mark `goal_plus_set_status(...,
    status="complete")` only when the original objective is satisfied.
-12. Before stopping, call `goal_plus_gate(event="stop", context={})`; if it
+13. Before stopping, call `goal_plus_gate(event="stop", context={})`; if it
     blocks, continue with the returned continuation prompt.
 
 Modes:

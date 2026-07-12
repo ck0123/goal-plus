@@ -65,6 +65,70 @@ def write_json(path: Path, data: Any) -> None:
     tmp_path.replace(path)
 
 
+_SEARCH_TASK_FIELDS = (
+    "frozen_spec_id",
+    "run_id",
+    "linked_at",
+    "selected_candidate_id",
+    "report_path",
+    "promotion_artifact_path",
+    "summary",
+    "result_recorded_at",
+)
+
+
+def _merge_search_tasks_from_events(
+    record: GoalPlusRecord,
+    events: list[dict[str, Any]],
+) -> GoalPlusRecord:
+    tasks_by_run: dict[str, GoalPlusLinkedSearch] = {}
+    run_order: list[str] = []
+
+    def upsert(payload: dict[str, Any], *, event_type: str, created_at: str | None) -> None:
+        run_id = payload.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            return
+        existing = tasks_by_run.get(run_id, GoalPlusLinkedSearch(run_id=run_id))
+        updates = {
+            field: payload[field]
+            for field in _SEARCH_TASK_FIELDS
+            if field in payload and payload[field] is not None
+        }
+        if event_type == "search_linked" and existing.linked_at is None and created_at:
+            updates["linked_at"] = created_at
+        if event_type == "search_result_recorded" and created_at:
+            updates["result_recorded_at"] = created_at
+        tasks_by_run[run_id] = existing.model_copy(update=updates)
+        if run_id not in run_order:
+            run_order.append(run_id)
+
+    for event in events:
+        event_type = event.get("event_type")
+        payload = event.get("payload")
+        if event_type in {"search_linked", "search_result_recorded"} and isinstance(payload, dict):
+            upsert(
+                payload,
+                event_type=event_type,
+                created_at=event.get("created_at") if isinstance(event.get("created_at"), str) else None,
+            )
+
+    for task in record.search_tasks:
+        payload = task.model_dump(mode="json", exclude_none=True)
+        upsert(payload, event_type="record", created_at=None)
+
+    current = record.linked_search
+    if current is not None:
+        payload = current.model_dump(mode="json", exclude_none=True)
+        upsert(payload, event_type="record", created_at=None)
+        if current.run_id in run_order:
+            run_order.remove(current.run_id)
+            run_order.append(current.run_id)
+
+    tasks = [tasks_by_run[run_id] for run_id in run_order]
+    linked = tasks[-1].model_copy(deep=True) if tasks else None
+    return record.model_copy(update={"search_tasks": tasks, "linked_search": linked})
+
+
 class FileGoalPlusRuntime:
     """Small file-backed state machine for goal-plus orchestration."""
 
@@ -297,28 +361,36 @@ class FileGoalPlusRuntime:
                 f"cannot link it as {frozen_spec_id}"
             )
         record = self._load_record(goal_plus_id)
-        if (
-            record.linked_search
-            and record.linked_search.run_id
-            and record.linked_search.run_id != run_id
-        ):
-            raise RuntimeError(
-                "goal-plus record is already linked to search run "
-                f"{record.linked_search.run_id}; refusing to overwrite with {run_id}"
-            )
-        linked = (record.linked_search or GoalPlusLinkedSearch()).model_copy(
-            update={"frozen_spec_id": frozen_spec_id, "run_id": run_id}
+        existing = next(
+            (task for task in record.search_tasks if task.run_id == run_id),
+            None,
         )
+        if existing is not None:
+            if existing.frozen_spec_id not in {None, frozen_spec_id}:
+                raise ValueError(
+                    f"search run {run_id} is already linked as frozen spec "
+                    f"{existing.frozen_spec_id}; cannot relink it as {frozen_spec_id}"
+                )
+            return record
+
+        now = utc_timestamp()
+        linked = GoalPlusLinkedSearch(
+            frozen_spec_id=frozen_spec_id,
+            run_id=run_id,
+            linked_at=now,
+        )
+        search_tasks = [*record.search_tasks, linked]
         updated = record.model_copy(
             update={
                 "phase": "search",
+                "search_tasks": search_tasks,
                 "linked_search": linked,
                 "next_action": GoalPlusNextAction(
                     kind="drive_search_run",
                     description="Drive the linked Search MCP run through candidate verification, selection, report, and promotion.",
                     required=True,
                 ),
-                "updated_at": utc_timestamp(),
+                "updated_at": now,
             }
         )
         self._write_record(updated)
@@ -339,7 +411,11 @@ class FileGoalPlusRuntime:
         summary: str | None = None,
     ) -> GoalPlusRecord:
         record = self._load_record(goal_plus_id)
-        if record.linked_search is None or record.linked_search.run_id != run_id:
+        task_index = next(
+            (index for index, task in enumerate(record.search_tasks) if task.run_id == run_id),
+            None,
+        )
+        if task_index is None:
             raise RuntimeError(
                 f"Goal Plus {goal_plus_id} is not linked to search run {run_id}."
             )
@@ -373,26 +449,38 @@ class FileGoalPlusRuntime:
             raise RuntimeError("Search report artifact does not exist.")
         if promotion_artifact_path is None or not Path(promotion_artifact_path).is_file():
             raise RuntimeError("Search promotion artifact does not exist.")
-        linked = (record.linked_search or GoalPlusLinkedSearch()).model_copy(
+        now = utc_timestamp()
+        linked = record.search_tasks[task_index].model_copy(
             update={
                 "run_id": run_id,
                 "selected_candidate_id": selected_candidate_id,
                 "report_path": report_path,
                 "promotion_artifact_path": promotion_artifact_path,
                 "summary": summary,
+                "result_recorded_at": now,
             }
         )
+        search_tasks = list(record.search_tasks)
+        search_tasks[task_index] = linked
+        is_current_task = record.linked_search is not None and record.linked_search.run_id == run_id
+        update: dict[str, Any] = {
+            "search_tasks": search_tasks,
+            "updated_at": now,
+        }
+        if is_current_task:
+            update.update(
+                {
+                    "phase": "final_audit",
+                    "linked_search": linked,
+                    "next_action": GoalPlusNextAction(
+                        kind="audit_raw_goal",
+                        description="audit the original raw goal against current evidence before marking goal-plus complete.",
+                        required=True,
+                    ),
+                }
+            )
         updated = record.model_copy(
-            update={
-                "phase": "final_audit",
-                "linked_search": linked,
-                "next_action": GoalPlusNextAction(
-                    kind="audit_raw_goal",
-                    description="audit the original raw goal against current evidence before marking goal-plus complete.",
-                    required=True,
-                ),
-                "updated_at": utc_timestamp(),
-            }
+            update=update
         )
         self._write_record(updated)
         self._append_event(
@@ -644,7 +732,8 @@ class FileGoalPlusRuntime:
         return self._goal_dir(goal_plus_id) / "events.jsonl"
 
     def _load_record(self, goal_plus_id: str) -> GoalPlusRecord:
-        return GoalPlusRecord.model_validate(read_json(self._goal_path(goal_plus_id)))
+        record = GoalPlusRecord.model_validate(read_json(self._goal_path(goal_plus_id)))
+        return _merge_search_tasks_from_events(record, self.list_events(goal_plus_id))
 
     def _write_record(self, record: GoalPlusRecord) -> None:
         write_json(self._goal_path(record.goal_plus_id), record.model_dump(mode="json"))

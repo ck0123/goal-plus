@@ -220,10 +220,12 @@ class GoalPlusSpecDraft(SearchModel):
 class GoalPlusLinkedSearch(SearchModel):
     frozen_spec_id: str | None = None
     run_id: str | None = None
+    linked_at: str | None = None
     selected_candidate_id: str | None = None
     report_path: str | None = None
     promotion_artifact_path: str | None = None
     summary: str | None = None
+    result_recorded_at: str | None = None
 
 
 class GoalPlusActiveSession(SearchModel):
@@ -246,12 +248,21 @@ class GoalPlusRecord(SearchModel):
     policy: dict[str, Any] = Field(default_factory=dict)
     triage: GoalPlusTriage | None = None
     spec_draft: GoalPlusSpecDraft | None = None
+    search_tasks: list[GoalPlusLinkedSearch] = Field(default_factory=list)
     linked_search: GoalPlusLinkedSearch | None = None
     next_action: GoalPlusNextAction | None = None
     active_session: GoalPlusActiveSession | None = None
     hook_counters: dict[str, int] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def synchronize_search_task_compatibility_view(self) -> "GoalPlusRecord":
+        if not self.search_tasks and self.linked_search is not None:
+            self.search_tasks = [self.linked_search.model_copy(deep=True)]
+        elif self.search_tasks:
+            self.linked_search = self.search_tasks[-1].model_copy(deep=True)
+        return self
 
 
 class GoalPlusGateResult(SearchModel):

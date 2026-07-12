@@ -55,7 +55,15 @@ it and create a corrected draft before freezing instead.
    best committed candidate `git_head`, and runs a main-agent final verifier on
    that exact commit before recording the selected candidate.
 9. Call `goal_plus_record_search_result`.
-10. Run the final raw-goal audit and then `goal_plus_set_status`.
+10. Run the raw-goal audit. If another verifier-backed search is needed,
+    freeze/create and link a new `run_id`, then repeat the Search Mode flow
+    under the same `goal_plus_id`.
+11. Run the final raw-goal audit and then `goal_plus_set_status`.
+
+One Goal Plus record is the complete user task. `search_tasks` is its
+append-only search-task history; each item is one `run_id` over one frozen
+spec. `linked_search` is only the current-task compatibility view. A search
+task may contain multiple planning/search rounds.
 
 Never invent `frozen_spec_id`, `run_id`, `plan_id`, `candidate_id`, or
 `agent_session_id` values. Use only exact ids returned by the immediately
@@ -148,8 +156,10 @@ For active or completed Goal Plus/Search runs, use
 `goal_plus_monitor_snapshot(goal_plus_id?, run_id?, stale_after_seconds?)`
 first. It is the primary read-only monitoring path.
 
-The monitor summarizes durable `.gp` evidence including goal status, linked
-run state, selected candidate, selected commit, report and promotion paths,
+The monitor summarizes durable `.gp` evidence including goal status, all
+linked search tasks, per-task planning/started round counts, aggregate task,
+candidate, worker-session, verifier, and Pi cost counts, selected candidate,
+selected commit, report and promotion paths,
 candidate scores, per-iteration git heads, agent sessions, verifier iterations,
 Pi RPC token/cost/context metrics, and stale/timed-out warnings. It does not
 start, wait for, or stop workers.

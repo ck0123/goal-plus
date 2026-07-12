@@ -289,3 +289,18 @@ def test_subagent_only_two_mcp_calls_documented() -> None:
     agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(encoding="utf-8")
     assert "search_get_agent_context" in agent
     assert "search_run_verifier" in agent
+
+
+def test_opencode_goal_plus_assets_document_multiple_search_tasks() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    orchestrator = (
+        ROOT / ".opencode" / "agents" / "goal-plus-orchestrator.md"
+    ).read_text(encoding="utf-8")
+
+    assert "same" in skill
+    assert "`goal_plus_id`" in skill
+    assert "`search_tasks` is the append-only task history" in skill
+    assert "another verifier-backed search" in orchestrator
+    assert "new `run_id`" in orchestrator

@@ -311,7 +311,7 @@ def test_pre_tool_use_defers_promotion_selection_check_to_search_runtime(tmp_pat
     assert gate.decision == "allow"
 
 
-def test_link_search_run_is_idempotent_but_does_not_overwrite(tmp_path) -> None:
+def test_link_search_run_is_idempotent_and_appends_distinct_search_tasks(tmp_path) -> None:
     root = tmp_path / ".search"
     runtime = FileGoalPlusRuntime(root)
     record = runtime.create_goal("Optimize model")
@@ -326,13 +326,77 @@ def test_link_search_run_is_idempotent_but_does_not_overwrite(tmp_path) -> None:
     assert linked_again.linked_search is not None
     assert linked_again.linked_search.run_id == "run_001"
 
-    with pytest.raises(RuntimeError, match="already linked to search run run_001"):
-        runtime.link_search_run(record.goal_plus_id, "spec_def", "run_002")
+    second = runtime.link_search_run(record.goal_plus_id, "spec_def", "run_002")
+    assert second.linked_search is not None
+    assert second.linked_search.run_id == "run_002"
+    assert [task.run_id for task in second.search_tasks] == ["run_001", "run_002"]
 
     final = runtime.status(record.goal_plus_id)
     assert final.linked_search is not None
-    assert final.linked_search.frozen_spec_id == "spec_abc"
-    assert final.linked_search.run_id == "run_001"
+    assert final.linked_search.frozen_spec_id == "spec_def"
+    assert final.linked_search.run_id == "run_002"
+    assert [task.run_id for task in final.search_tasks] == ["run_001", "run_002"]
+    assert len(
+        [event for event in runtime.list_events(record.goal_plus_id) if event["event_type"] == "search_linked"]
+    ) == 2
+
+
+def test_goal_status_recovers_legacy_search_task_history_from_events(tmp_path) -> None:
+    root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(root)
+    record = runtime.create_goal("Optimize model")
+    _write_search_run(root, "run_001", "spec_abc")
+    _write_search_run(root, "run_002", "spec_def")
+    runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    latest = runtime.link_search_run(record.goal_plus_id, "spec_def", "run_002")
+
+    legacy_payload = latest.model_dump(mode="json")
+    legacy_payload.pop("search_tasks")
+    runtime._goal_path(record.goal_plus_id).write_text(  # noqa: SLF001
+        json.dumps(legacy_payload),
+        encoding="utf-8",
+    )
+
+    recovered = runtime.status(record.goal_plus_id)
+
+    assert [task.run_id for task in recovered.search_tasks] == ["run_001", "run_002"]
+    assert recovered.search_tasks[0].linked_at is not None
+    assert recovered.linked_search is not None
+    assert recovered.linked_search.run_id == "run_002"
+
+
+def test_recording_superseded_search_result_preserves_current_task(tmp_path) -> None:
+    root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(root)
+    record = runtime.create_goal("Optimize model")
+    _write_search_run(root, "run_001", "spec_abc")
+    _write_search_run(root, "run_002", "spec_def")
+    runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    runtime.link_search_run(record.goal_plus_id, "spec_def", "run_002")
+
+    run_dir = root / "runs" / "run_001"
+    report_path = run_dir / "report.md"
+    promotion_path = run_dir / "promotion" / "c001.patch"
+    promotion_path.parent.mkdir(parents=True)
+    report_path.write_text("# report\n", encoding="utf-8")
+    promotion_path.write_text("patch\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps({"state": "promoted", "selected_candidate_id": "c001"}),
+        encoding="utf-8",
+    )
+
+    updated = runtime.record_search_result(
+        record.goal_plus_id,
+        run_id="run_001",
+        selected_candidate_id="c001",
+        summary="older task completed",
+    )
+
+    assert updated.phase == "search"
+    assert updated.linked_search is not None
+    assert updated.linked_search.run_id == "run_002"
+    assert updated.search_tasks[0].selected_candidate_id == "c001"
+    assert updated.search_tasks[0].result_recorded_at is not None
 
 
 def test_link_search_run_rejects_missing_or_mismatched_runtime_run(tmp_path) -> None:

@@ -133,3 +133,13 @@ def test_claude_docs_record_log_inspection_paths() -> None:
     assert "claude project purge" in combined
     assert "~/.claude/projects" in combined
     assert "subagents/" in combined
+
+
+def test_claude_goal_plus_skill_documents_multiple_search_tasks() -> None:
+    text = (ROOT / ".claude" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "same `goal_plus_id`" in text
+    assert "`search_tasks` is append-only" in text
+    assert "`linked_search` is the current" in text

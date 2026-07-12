@@ -36,7 +36,8 @@ Not allowed for now:
 
 The missing pieces are smaller than a full orchestration framework:
 
-1. **Root harness evidence.** Goal Plus can record a linked Search result, but
+1. **Root harness evidence.** Goal Plus can record one or more linked Search
+   task results, but
    it does not have a narrow convention for attaching the final root verifier
    evidence that proves the original goal after integration.
 2. **Opaque resource evidence.** Resource-heavy scenarios need to preserve

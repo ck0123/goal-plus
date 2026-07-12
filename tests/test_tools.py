@@ -326,7 +326,10 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
         policy={"max_discovery_turns": 1},
     )
     assert created["goal_plus_id"] == "gp_0001"
-    assert tools.goal_plus_status("gp_0001")["evidence_log"][0]["event_type"] == "created"
+    status = tools.goal_plus_status("gp_0001")
+    assert status["evidence_log"][0]["event_type"] == "created"
+    assert status["search_tasks_total"] == 0
+    assert status["current_search_run_id"] is None
     assert tools.goal_plus_record_triage(
         "gp_0001",
         {

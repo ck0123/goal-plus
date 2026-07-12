@@ -191,3 +191,16 @@ def test_codex_docs_record_native_parity_contract() -> None:
 
 def test_shared_agents_skill_directory_is_not_used() -> None:
     assert not (ROOT / ".agents").exists()
+
+
+def test_codex_goal_plus_skill_documents_multiple_search_tasks() -> None:
+    text = (ROOT / ".codex" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "`goal_plus_id`" in text
+    assert "another search task" in text
+    assert "`search_tasks` is its" in text
+    assert "append-only" in text
+    assert "`linked_search` is only the current-task compatibility view" in text
+    assert "planning and started search rounds" in text

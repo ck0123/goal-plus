@@ -254,3 +254,21 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "custom entry" in combined
     assert "does not trigger another assistant turn" in combined
     assert "no host process Stop hook" in combined
+
+
+def test_pi_goal_plus_skill_documents_multiple_search_tasks_and_monitoring() -> None:
+    text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    extension = (ROOT / ".pi" / "extensions" / "search-runtime.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert "same `goal_plus_id`" in text
+    assert "`search_tasks` is its" in text
+    assert "append-only search-task history" in text
+    assert "per-task planning/started round counts" in text
+    assert "aggregate task" in text
+    assert "search_tasks?: unknown[]" in extension
+    assert "search_tasks_total?: number" in extension
+    assert "status.search_tasks_total" in extension

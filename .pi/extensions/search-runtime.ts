@@ -313,6 +313,9 @@ interface GoalPlusStatusPayload {
 	next_action?: GoalPlusNextActionPayload | null;
 	triage?: unknown;
 	spec_draft?: unknown;
+	search_tasks?: unknown[];
+	search_tasks_total?: number;
+	current_search_run_id?: string | null;
 	linked_search?: unknown;
 }
 
@@ -584,6 +587,7 @@ function buildGoalStatsMessage(status: GoalPlusStatusPayload, usage: GoalPlusUsa
 		"Goal Plus stats",
 		`goal_plus_id: ${status.goal_plus_id ?? activeGoalPlusId ?? "unknown"}`,
 		`status: ${status.status ?? "unknown"}`,
+		`search_tasks: ${status.search_tasks_total ?? status.search_tasks?.length ?? 0}`,
 		`elapsed: ${formatDuration(elapsedMs)}`,
 		`assistant_messages: ${usage.assistantMessages}`,
 		`tool_calls: ${usage.toolCalls}`,

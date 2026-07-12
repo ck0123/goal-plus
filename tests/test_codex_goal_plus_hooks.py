@@ -218,4 +218,5 @@ def test_stop_for_terminal_goal_emits_non_llm_stats(tmp_path: Path) -> None:
     assert f"goal_plus_id={record.goal_plus_id}" in message
     assert "status=complete" in message
     assert "phase=intake" in message
+    assert "search_tasks=0" in message
     assert "stop=1" in message

@@ -40,10 +40,14 @@ prefix; match by the final logical tool name.
    `search_promote`.
 11. After `search_create`, call `goal_plus_link_search_run`.
 12. After selection/report/promotion, call `goal_plus_record_search_result`.
-13. Finish with a final raw-goal audit, then call
+13. If the raw-goal audit requires another verifier-backed search, create and
+    link a new `run_id` under the same `goal_plus_id`, then repeat the Search
+    Mode flow. `search_tasks` is append-only; `linked_search` is the current
+    task compatibility view.
+14. Finish with a final raw-goal audit, then call
     `goal_plus_set_status(status="complete", evidence=[...])` only when the
     original objective is satisfied.
-14. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
+15. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
 
 ## Triage Schema

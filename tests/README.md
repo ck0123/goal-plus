@@ -151,6 +151,9 @@ pytest -m "st and st_pi_rpc" -k circle_packing_two_batch -v -s
 # Pi native /goal-plus print/TUI entrypoints
 pytest -m st_pi -v -s
 
+# Pi native one-Goal-Plus/two-search-task smoke
+pytest -m st_pi -k two_search_tasks -v -s
+
 # Pi RPC worker smoke with explicit model and thinking level
 ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
 

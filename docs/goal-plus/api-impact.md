@@ -108,6 +108,9 @@ status
 phase
 triage
 spec_draft
+search_tasks
+search_tasks_total
+current_search_run_id
 linked_search
 next_action
 evidence_log
@@ -303,12 +306,22 @@ status: active | needs_user | blocked | complete | abandoned
 phase: intake | goal | spec_discovery | search | final_audit
 triage?: GoalPlusTriage
 spec_draft?: GoalPlusSpecDraft
+search_tasks:
+  - frozen_spec_id?: str
+    run_id?: str
+    linked_at?: str
+    selected_candidate_id?: str
+    report_path?: str
+    promotion_artifact_path?: str
+    summary?: str
+    result_recorded_at?: str
 linked_search?:
   frozen_spec_id?: str
   run_id?: str
   selected_candidate_id?: str
   report_path?: str
   promotion_artifact_path?: str
+  # compatibility/current-task view of search_tasks[-1]
 next_action?: GoalPlusNextAction
 hook_counters: dict
 created_at: str

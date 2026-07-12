@@ -26,8 +26,10 @@ The MCP runtime does not maintain lifecycle status, host-sync state, or process
 cancellation. Debugging lifecycle state belongs in OpenCode; debugging
 goal/search state belongs in `.gp/`.
 
-Goal-plus records live under `.gp/goal-plus/<goal_plus_id>/`. Search runs
-live under `.gp/runs/<run_id>/`.
+Goal-plus records live under `.gp/goal-plus/<goal_plus_id>/`. One Goal Plus
+record may append multiple search tasks; each task points to one Search run
+under `.gp/runs/<run_id>/`, and each run may contain multiple planning/search
+rounds under `plans/`.
 
 For Codex, Claude Code, and Pi RPC, substitute the host-native JSONL/debug files below
 for the OpenCode process layer. The same rule still applies: host logs explain
@@ -235,9 +237,13 @@ agentic-any-search-pi-tool goal_plus_monitor_snapshot \
   --pretty
 ```
 
-The snapshot summarizes run state, candidate counts, agent sessions, verifier
-counts, Pi RPC duration/cost/context metrics, file mtimes, and stale/timed-out
-warnings from durable `.gp` state.
+The snapshot summarizes the complete Goal Plus search-task history and the
+selected run's detailed state. `search_tasks` contains per-run state, frozen
+spec, strategy, and round summaries;
+`search_task_aggregate` totals task, planning-round, started-round, candidate,
+worker-session, verifier-run, and Pi cost counts. The selected task retains the
+detailed run, strategy, candidate, session, duration/cost/context, file-mtime,
+and stale/timed-out views.
 
 Pi RPC workers use `--no-session` and do not support same-worker continuation.
 Use `search_redispatch_candidate` for state-level redispatch; Search MCP
@@ -343,9 +349,24 @@ Use the read-only monitor snapshot as the primary live view:
 ```bash
 agentic-any-search-pi-tool goal_plus_monitor_snapshot \
   --root .gp \
-  --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
+  --args-json '{"goal_plus_id":"gp_...","stale_after_seconds":600}' \
   --pretty
 ```
+
+Use `goal_plus_id` when you need the complete hierarchy:
+
+```text
+goal-plus (complete user task)
+  search_tasks[] (one run_id + frozen_spec_id per search task)
+    planning_rounds_total (all persisted plan files)
+    started_rounds_total  (plans whose status is started)
+```
+
+`linked_search` and the top-level detailed `run` remain compatibility/current
+views. Do not use `linked_search != null` as the task count. The monitor also
+warns about missing linked runs, frozen-spec mismatches, non-terminal
+superseded tasks, explicit runs not linked to the requested goal, and a
+completed goal whose current run is not promoted.
 
 The top-level `strategy` object identifies the search algorithm independently
 of candidate and plan counts:
@@ -367,7 +388,8 @@ of candidate and plan counts:
 }
 ```
 
-`plans_count` only reports how many planning rounds exist; it does not identify
+`plans_count` is a compatibility alias for the selected run's
+`planning_rounds_total`. It only reports how many planning rounds exist; it does not identify
 whether the run uses agent-guided, random, OpenEvolve, AdaptEvolve, MCTS, or a
 custom strategy. `strategy.latest_plan.state` contains a bounded whitelist of
 strategy-specific fields when present, including sampling mode, parent/archive
