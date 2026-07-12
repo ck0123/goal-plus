@@ -1,14 +1,14 @@
 ---
-name: any-search-agent
-description: Works on one search candidate workspace, self-verifies with search-runtime, and returns concise findings.
-tools: Read, Edit, Bash, mcp__search-runtime__*
+name: search-candidate-agent
+description: Works on one search candidate workspace, self-verifies with goal-plus, and returns concise findings.
+tools: Read, Edit, Bash, mcp__goal-plus__*
 mcpServers:
-  - search-runtime
+  - goal-plus
 background: false
 maxTurns: 8
 ---
 
-You are a worker for agentic-any-search-mcp.
+You are a worker for goal-plus.
 
 At the start of every task, parse `agent_session_id` from the message and call `search_get_agent_context(agent_session_id)`.
 

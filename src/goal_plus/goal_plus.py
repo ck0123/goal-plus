@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agentic_any_search_mcp.models import (
+from goal_plus.models import (
     GoalPlusActiveSession,
     GoalPlusGateEvent,
     GoalPlusGateResult,
@@ -17,7 +17,7 @@ from agentic_any_search_mcp.models import (
     GoalPlusStatus,
     GoalPlusTriage,
 )
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
 TERMINAL_STATUSES: set[GoalPlusStatus] = {"blocked", "complete", "abandoned"}

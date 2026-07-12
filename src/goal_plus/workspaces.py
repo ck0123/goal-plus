@@ -6,8 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from agentic_any_search_mcp.models import WorkspaceBackend
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from goal_plus.models import WorkspaceBackend
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
 
 
 IGNORED_NAMES = {
@@ -93,9 +93,9 @@ def initialize_workspace_git_baseline(workspace: Path) -> str | None:
             [
                 "git",
                 "-c",
-                "user.name=agentic-any-search",
+                "user.name=goal-plus",
                 "-c",
-                "user.email=agentic-any-search@example.invalid",
+                "user.email=goal-plus@example.invalid",
                 "commit",
                 "-q",
                 "--no-verify",

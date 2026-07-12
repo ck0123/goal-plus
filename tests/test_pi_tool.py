@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from agentic_any_search_mcp.pi_tool import call_pi_tool
-from agentic_any_search_mcp.runtime import FileSearchRuntime
+from goal_plus.pi_tool import call_pi_tool
+from goal_plus.runtime import FileSearchRuntime
 
 from tests.test_runtime_unit import make_project, spec_for
 
@@ -65,7 +65,7 @@ def test_pi_tool_dispatches_candidate_driver(monkeypatch, tmp_path: Path) -> Non
         }
 
     monkeypatch.setattr(
-        "agentic_any_search_mcp.pi_tool.run_pi_search_candidate",
+        "goal_plus.pi_tool.run_pi_search_candidate",
         fake_run_pi_search_candidate,
     )
 
@@ -117,7 +117,7 @@ def test_pi_tool_dispatches_batch_driver(monkeypatch, tmp_path: Path) -> None:
         }
 
     monkeypatch.setattr(
-        "agentic_any_search_mcp.pi_tool.run_pi_search_batch",
+        "goal_plus.pi_tool.run_pi_search_batch",
         fake_run_pi_search_batch,
     )
 

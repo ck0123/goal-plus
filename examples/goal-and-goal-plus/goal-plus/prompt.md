@@ -1,5 +1,5 @@
 Use `/goal-plus` for this ordinary coding task. Load the project-local
-`goal-plus` skill and use the `search-runtime` MCP `goal_plus_*` tools.
+`goal-plus` skill and use the `goal-plus` MCP `goal_plus_*` tools.
 
 You are in `examples/goal-and-goal-plus/goal-plus`.
 

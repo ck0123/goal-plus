@@ -33,26 +33,26 @@ OpenCode `Task` has no `timeout` parameter. Subagents run until their OpenCode s
 
 ## Tool Names In OpenCode
 
-The MCP server is configured as `search-runtime`, so tools appear with this prefix:
+The MCP server is configured as `goal-plus`, so tools appear with this prefix:
 
 | Runtime tool | OpenCode tool name |
 |---|---|
-| `search_freeze_spec` | `search-runtime_search_freeze_spec` |
-| `search_create` | `search-runtime_search_create` |
-| `search_status` | `search-runtime_search_status` |
-| `search_list_history` | `search-runtime_search_list_history` |
-| `search_plan_next` | `search-runtime_search_plan_next` |
-| `search_start_batch` | `search-runtime_search_start_batch` |
-| `search_start_agent_session` | `search-runtime_search_start_agent_session` |
-| `search_redispatch_candidate` | `search-runtime_search_redispatch_candidate` |
-| `search_bind_opencode_session` | `search-runtime_search_bind_opencode_session` |
-| `search_continue_agent_session` | `search-runtime_search_continue_agent_session` |
-| `search_get_agent_context` | `search-runtime_search_get_agent_context` |
-| `search_run_verifier` | `search-runtime_search_run_verifier` |
-| `search_list_iterations` | `search-runtime_search_list_iterations` |
-| `search_select` | `search-runtime_search_select` |
-| `search_report` | `search-runtime_search_report` |
-| `search_promote` | `search-runtime_search_promote` |
+| `search_freeze_spec` | `goal-plus_search_freeze_spec` |
+| `search_create` | `goal-plus_search_create` |
+| `search_status` | `goal-plus_search_status` |
+| `search_list_history` | `goal-plus_search_list_history` |
+| `search_plan_next` | `goal-plus_search_plan_next` |
+| `search_start_batch` | `goal-plus_search_start_batch` |
+| `search_start_agent_session` | `goal-plus_search_start_agent_session` |
+| `search_redispatch_candidate` | `goal-plus_search_redispatch_candidate` |
+| `search_bind_opencode_session` | `goal-plus_search_bind_opencode_session` |
+| `search_continue_agent_session` | `goal-plus_search_continue_agent_session` |
+| `search_get_agent_context` | `goal-plus_search_get_agent_context` |
+| `search_run_verifier` | `goal-plus_search_run_verifier` |
+| `search_list_iterations` | `goal-plus_search_list_iterations` |
+| `search_select` | `goal-plus_search_select` |
+| `search_report` | `goal-plus_search_report` |
+| `search_promote` | `goal-plus_search_promote` |
 
 If any of these tools are unavailable, stop and report that the MCP server is not connected. Do not simulate runtime state in chat.
 
@@ -93,7 +93,7 @@ Minimum shape:
     {
       "name": "anti_cheat_gate",
       "role": "anti_cheat_gate",
-      "command": ["search-runtime-internal", "check-frozen-hashes"]
+      "command": ["goal-plus-internal", "check-frozen-hashes"]
     }
   ],
   "budget": {
@@ -104,7 +104,7 @@ Minimum shape:
     "name": "agent_guided",
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgent",
+    "worker_agent_type": "SearchCandidateAgent",
     "history_policy": {
       "scope": "top_n",
       "top_n": 5
@@ -121,10 +121,10 @@ Minimum shape:
 
 | Variant | Steps | Use when |
 |---|---|---|
-| `AnySearchAgentFlash` | 15 | Smoke tests, cheap iterations |
-| `AnySearchAgent` (default) | 50 | Standard autoresearch loop |
-| `AnySearchAgentDeep` | 100 | Sustained iteration on harder problems |
-| `AnySearchAgentExtraDeep` | 150 | Extensive search, complex fixtures |
+| `SearchCandidateAgentFlash` | 15 | Smoke tests, cheap iterations |
+| `SearchCandidateAgent` (default) | 50 | Standard autoresearch loop |
+| `SearchCandidateAgentDeep` | 100 | Sustained iteration on harder problems |
+| `SearchCandidateAgentExtraDeep` | 150 | Extensive search, complex fixtures |
 
 Custom Python strategies may return a plan-level `worker_policy` that overrides the default worker tier for the next candidate batch. Always use `session.launch.subagent_type` from `search_start_agent_session`; it is the authoritative Task tier after any strategy routing.
 
@@ -133,10 +133,10 @@ Custom Python strategies may return a plan-level `worker_policy` that overrides 
 Choose the initial tier before freezing the spec, and raise the tier for later
 work when the prior worker did not produce useful verifier evidence:
 
-- Use `AnySearchAgentFlash` only for smoke tests, very cheap probes, or tasks
+- Use `SearchCandidateAgentFlash` only for smoke tests, very cheap probes, or tasks
   where a partial answer is acceptable.
-- Use `AnySearchAgent` for normal candidate work.
-- Use `AnySearchAgentDeep` or `AnySearchAgentExtraDeep` when the source tree is
+- Use `SearchCandidateAgent` for normal candidate work.
+- Use `SearchCandidateAgentDeep` or `SearchCandidateAgentExtraDeep` when the source tree is
   large, the verifier is slow, the edit requires cross-file reasoning, or a
   previous flash/default worker returned without any `search_run_verifier`
   iteration or usable final score.
@@ -177,8 +177,8 @@ Before calling runtime tools, summarize objective, metric, source path, edit sur
 Call:
 
 ```text
-search-runtime_search_freeze_spec(spec=<spec>, verifier_artifact_paths=[...])
-search-runtime_search_create(frozen_spec_id="<id>")
+goal-plus_search_freeze_spec(spec=<spec>, verifier_artifact_paths=[...])
+goal-plus_search_create(frozen_spec_id="<id>")
 ```
 
 Record `run_id`.
@@ -188,8 +188,8 @@ Record `run_id`.
 Call:
 
 ```text
-search-runtime_search_plan_next(run_id="<run_id>", requested_k=<k>)
-search-runtime_search_start_batch(run_id="<run_id>", plan_id="<plan_id>", proposals=<optional>)
+goal-plus_search_plan_next(run_id="<run_id>", requested_k=<k>)
+goal-plus_search_start_batch(run_id="<run_id>", plan_id="<plan_id>", proposals=<optional>)
 ```
 
 Each returned `CandidateTask` owns an isolated workspace. Candidate work must stay inside that workspace and only modify allowed files.
@@ -207,13 +207,13 @@ If you switch the spec to a builtin that produces fixed work orders (`independen
 
 For `worker_policy.mode == "agent-session-pool"` (the only supported mode):
 
-1. For each candidate you want to dispatch, call `search-runtime_search_start_agent_session(run_id, candidate_id, directive)`. The response includes a `launch` payload: `subagent_type`, `description`, and `prompt`. Use those fields verbatim in the OpenCode Task call below.
+1. For each candidate you want to dispatch, call `goal-plus_search_start_agent_session(run_id, candidate_id, directive)`. The response includes a `launch` payload: `subagent_type`, `description`, and `prompt`. Use those fields verbatim in the OpenCode Task call below.
 2. Launch the subagent with `Task(subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. The `launch.prompt` is the only prompt string the worker needs. Do not append or hard-code `run_id` / workspace paths into the prompt — the worker derives those from `search_get_agent_context`.
 3. Wait for the OpenCode Task to return. There is no MCP wait call.
-4. When a first-time Task returns, bind the runtime session to the OpenCode session id: `search-runtime_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
-5. When Task returns, call `search-runtime_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
-6. If the same candidate should keep working in the same OpenCode context and the tier was sufficient, call `search-runtime_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
-7. If the prior Task hit its step cap, returned no useful verifier evidence, or needs a larger tier/budget, call `search-runtime_search_redispatch_candidate(run_id, candidate_id, directive?, worker_agent_type="AnySearchAgentDeep")`. Launch the returned payload like a fresh Task. This creates a new `agent_session_id` for the same candidate workspace and includes resume instructions; it does not mutate candidate policy or create a new candidate.
+4. When a first-time Task returns, bind the runtime session to the OpenCode session id: `goal-plus_search_bind_opencode_session(agent_session_id=session.agent_session_id, opencode_session_id=<Task metadata.sessionId>)`. This mapping is required for same-session continuation.
+5. When Task returns, call `goal-plus_search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score.
+6. If the same candidate should keep working in the same OpenCode context and the tier was sufficient, call `goal-plus_search_continue_agent_session(agent_session_id, directive?)`. Launch the returned payload with `Task(task_id=launch.task_id, subagent_type=launch.subagent_type, description=launch.description, prompt=launch.prompt)`. This continues the same candidate/session/workspace; it is not a fork and it does not create a new candidate.
+7. If the prior Task hit its step cap, returned no useful verifier evidence, or needs a larger tier/budget, call `goal-plus_search_redispatch_candidate(run_id, candidate_id, directive?, worker_agent_type="SearchCandidateAgentDeep")`. Launch the returned payload like a fresh Task. This creates a new `agent_session_id` for the same candidate workspace and includes resume instructions; it does not mutate candidate policy or create a new candidate.
 8. If candidate budget remains and you want new candidates, plan and start the next batch.
 
 Hard host rules:
@@ -263,7 +263,7 @@ while budget_remaining:
     run_id,
     session.candidate_id,
     directive,
-    worker_agent_type="AnySearchAgentDeep",
+    worker_agent_type="SearchCandidateAgentDeep",
   )
   Task(
     subagent_type=resumed.launch.subagent_type,
@@ -276,8 +276,8 @@ while budget_remaining:
 
 The subagent receives only `agent_session_id` and a candidate idea (from `launch.prompt`). It then:
 
-1. Calls `search-runtime_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `iterations` (its own previous attempts). The only required MCP calls are `search_get_agent_context` and `search_run_verifier`. Treat these fields as the resume context if this is a restarted worker; do not rely on the launch prompt or prior chat transcript for history.
-2. Runs an autoresearch loop inside `workspace`: edit allowed files → `search-runtime_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate submit step exists.
+1. Calls `goal-plus_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `iterations` (its own previous attempts). The only required MCP calls are `search_get_agent_context` and `search_run_verifier`. Treat these fields as the resume context if this is a restarted worker; do not rely on the launch prompt or prior chat transcript for history.
+2. Runs an autoresearch loop inside `workspace`: edit allowed files → `goal-plus_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate submit step exists.
 3. Maintains `workspace/.tmp/results.tsv` as its private iteration log. Header is `commit \t <metric_name> \t status \t hypothesis`, where `<metric_name>` is the literal value of `context.metric_name` (set by the main agent at freeze time). Commit-first: each iteration is `git commit`-ed before `search_run_verifier` so every row carries a real 7-char short hash; `discard` rows are rolled back with `git reset --hard HEAD~1`, but the hash stays recoverable via git reflog (`git checkout <hash>` still works).
 4. Ends with the best workspace state checked out and a concise text summary that includes `agent_session_id`, `candidate_id`, best score/metric, best commit hash, changed files, and a short description. This final answer is for OpenCode/main-agent mapping only; no MCP finalize call exists.
 
@@ -288,15 +288,15 @@ You do not pass numeric score targets, baseline scores, or local-verification re
 For every candidate Task that returned:
 
 ```text
-search-runtime_search_run_verifier(run_id, candidate_id, "process")
+goal-plus_search_run_verifier(run_id, candidate_id, "process")
 ```
 
 Then:
 
 ```text
-search-runtime_search_list_history(run_id, top_n=5, sort_by="score")
-search-runtime_search_select(run_id)
-search-runtime_search_report(run_id)
+goal-plus_search_list_history(run_id, top_n=5, sort_by="score")
+goal-plus_search_select(run_id)
+goal-plus_search_report(run_id)
 ```
 
 Show the user the selected candidate, score table summary, and report path.
@@ -306,7 +306,7 @@ Show the user the selected candidate, score table summary, and report path.
 Only after selection and user review:
 
 ```text
-search-runtime_search_promote(run_id, selected_candidate_id)
+goal-plus_search_promote(run_id, selected_candidate_id)
 ```
 
 Promotion exports a patch and should not directly mutate the main source workspace.
@@ -315,7 +315,7 @@ Promotion exports a patch and should not directly mutate the main source workspa
 
 | Failure | Action |
 |---|---|
-| MCP tools unavailable | Tell the user the `search-runtime` MCP server is not connected; do not proceed |
+| MCP tools unavailable | Tell the user the `goal-plus` MCP server is not connected; do not proceed |
 | Freeze fails | Fix spec paths/artifacts, then retry freeze |
 | Candidate workspace missing | Call status/report; do not recreate by hand |
 | Verifier fails | Keep the failure in report; do not edit verifier |

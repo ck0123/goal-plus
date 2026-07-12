@@ -15,27 +15,27 @@ needed, and then delegates Search Mode to the internal `search` skill.
 
 ## Tool Names In OpenCode
 
-The MCP server is configured as `search-runtime`, so tools appear with this
+The MCP server is configured as `goal-plus`, so tools appear with this
 prefix:
 
 | Runtime tool | OpenCode tool name |
 |---|---|
-| `goal_plus_create` | `search-runtime_goal_plus_create` |
-| `goal_plus_status` | `search-runtime_goal_plus_status` |
-| `goal_plus_record_triage` | `search-runtime_goal_plus_record_triage` |
-| `goal_plus_save_spec_draft` | `search-runtime_goal_plus_save_spec_draft` |
-| `goal_plus_confirm_frozen_verifier` | `search-runtime_goal_plus_confirm_frozen_verifier` |
-| `goal_plus_link_search_run` | `search-runtime_goal_plus_link_search_run` |
-| `goal_plus_record_search_result` | `search-runtime_goal_plus_record_search_result` |
-| `goal_plus_set_status` | `search-runtime_goal_plus_set_status` |
-| `goal_plus_gate` | `search-runtime_goal_plus_gate` |
+| `goal_plus_create` | `goal-plus_goal_plus_create` |
+| `goal_plus_status` | `goal-plus_goal_plus_status` |
+| `goal_plus_record_triage` | `goal-plus_goal_plus_record_triage` |
+| `goal_plus_save_spec_draft` | `goal-plus_goal_plus_save_spec_draft` |
+| `goal_plus_confirm_frozen_verifier` | `goal-plus_goal_plus_confirm_frozen_verifier` |
+| `goal_plus_link_search_run` | `goal-plus_goal_plus_link_search_run` |
+| `goal_plus_record_search_result` | `goal-plus_goal_plus_record_search_result` |
+| `goal_plus_set_status` | `goal-plus_goal_plus_set_status` |
+| `goal_plus_gate` | `goal-plus_goal_plus_gate` |
 
 Use the internal `search` skill for Search Mode tools such as
 `search_freeze_spec`, `search_create`, `search_plan_next`,
 `search_start_batch`, `search_start_agent_session`, `search_select`,
 `search_report`, and `search_promote`.
 
-If any required MCP tool is unavailable, stop and report that the search-runtime
+If any required MCP tool is unavailable, stop and report that the goal-plus
 MCP server is not connected. Do not simulate `.gp` state in chat.
 
 ## Workflow
@@ -45,7 +45,7 @@ MCP server is not connected. Do not simulate `.gp` state in chat.
 Call:
 
 ```text
-search-runtime_goal_plus_create(raw_goal="<user objective>", source_path="<optional>")
+goal-plus_goal_plus_create(raw_goal="<user objective>", source_path="<optional>")
 ```
 
 There is no user-provided mode hint. The model decides from context whether the
@@ -54,7 +54,7 @@ goal should stay goal-like or upgrade into Search Mode.
 ### Step 2: Triage
 
 Read enough context to decide whether search adds value. Then call
-`search-runtime_goal_plus_record_triage`.
+`goal-plus_goal_plus_record_triage`.
 
 Use Search Mode only when most of these are true:
 
@@ -82,12 +82,12 @@ qualitative tasks.
 
 Do not create a SearchSpec in Goal Mode. Work in the current workspace, verify
 with appropriate commands or review evidence, then call
-`search-runtime_goal_plus_set_status(status="complete", evidence=[...])`.
+`goal-plus_goal_plus_set_status(status="complete", evidence=[...])`.
 
 Before final response, call:
 
 ```text
-search-runtime_goal_plus_gate(goal_plus_id="<id>", event="stop", context={})
+goal-plus_goal_plus_gate(goal_plus_id="<id>", event="stop", context={})
 ```
 
 If the gate blocks, continue with its `continuation_prompt`.
@@ -105,7 +105,7 @@ Discovery turns a fuzzy optimization request into a SearchSpec draft. Produce:
 - promotion rule
 - unresolved questions, if any
 
-Call `search-runtime_goal_plus_save_spec_draft`. Continue to Search Mode only
+Call `goal-plus_goal_plus_save_spec_draft`. Continue to Search Mode only
 when `confidence="high"` and `open_questions=[]`. Otherwise ask for the missing
 piece or continue in Goal Mode.
 
@@ -115,7 +115,7 @@ When the first triage already proves that search is ready, set
 `identified_at="initial"` in `goal_plus_record_triage` and `origin="initial"`
 in `goal_plus_save_spec_draft`. Show the user the frozen verifier artifacts,
 metric, edit surface, and promotion rule. After explicit approval, call
-`search-runtime_goal_plus_confirm_frozen_verifier`.
+`goal-plus_goal_plus_confirm_frozen_verifier`.
 
 #### In-Progress Search Discovery
 
@@ -129,7 +129,7 @@ the active `/goal-plus` execution.
 Before calling any `search_*` tool that creates or runs search state, call:
 
 ```text
-search-runtime_goal_plus_gate(
+goal-plus_goal_plus_gate(
   goal_plus_id="<id>",
   event="pre_tool_use",
   context={"tool_name": "search_freeze_spec"}
@@ -144,9 +144,9 @@ search_freeze_spec -> search_create -> search_plan_next -> search_start_batch
 -> search_select -> search_report -> search_promote
 ```
 
-After `search_create`, call `search-runtime_goal_plus_link_search_run`.
+After `search_create`, call `goal-plus_goal_plus_link_search_run`.
 After selection/report/promotion, call
-`search-runtime_goal_plus_record_search_result`.
+`goal-plus_goal_plus_record_search_result`.
 
 One Goal Plus record is the complete user task. If the raw-goal audit needs
 another verifier-backed search, create and link another `run_id` under the same
@@ -160,7 +160,7 @@ Search completion proves only the frozen spec. The final raw-goal audit checks
 whether the original user objective is actually satisfied after promotion and
 any integration work.
 
-If yes, call `search-runtime_goal_plus_set_status(status="complete",
+If yes, call `goal-plus_goal_plus_set_status(status="complete",
 evidence=[...])`. If not, continue in Goal Mode with the remaining integration
 work or mark the goal blocked with clear evidence.
 

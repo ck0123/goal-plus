@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from agentic_any_search_mcp.models import AgentHostKind
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.models import AgentHostKind
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
 PORTABLE_STRATEGY_MODES = {
@@ -139,7 +139,7 @@ class OpenCodeAdapter:
         worker_prompt: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "subagent_type": worker_agent_type or "AnySearchAgent",
+            "subagent_type": worker_agent_type or "SearchCandidateAgent",
             "description": f"{candidate_id} {short_intent}",
             "prompt": (
                 f"agent_session_id={agent_session_id}; "
@@ -170,7 +170,7 @@ class OpenCodeAdapter:
             )
         return {
             "task_id": external_id,
-            "subagent_type": worker_agent_type or "AnySearchAgent",
+            "subagent_type": worker_agent_type or "SearchCandidateAgent",
             "description": f"{candidate_id} continue {short_intent}",
             "prompt": (
                 "continue_existing_agent_session=true; "
@@ -213,7 +213,7 @@ class CodexAdapter:
         payload = {
             "tool": "spawn_agent",
             "task_name": task_name,
-            "agent_type": worker_agent_type or "any_search_agent",
+            "agent_type": worker_agent_type or "search_candidate_agent",
             "fork_turns": "none",
             "message": (
                 f"{CODEX_WORKER_BOUNDARY}\n\n"
@@ -290,7 +290,7 @@ class ClaudeCodeAdapter:
     ) -> dict[str, Any]:
         payload = {
             "tool": "Agent",
-            "agent_type": worker_agent_type or "any-search-agent",
+            "agent_type": worker_agent_type or "search-candidate-agent",
             "description": f"{candidate_id} {short_intent}",
             "background": False,
             "message": (

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Preparing Goal Plus context"
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Restoring Goal Plus context"
           }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Checking Goal Plus tool gate"
           }
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Binding Goal Plus session"
           }
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Checking Goal Plus stop gate"
           }
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Checking Goal Plus subagent gate"
           }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compatibility wrapper for the Goal Plus host hook.
 
-Host configs should prefer `agentic-any-search-mcp --goal-plus-host-hook` so
+Host configs should prefer `goal-plus --goal-plus-host-hook` so
 the hook uses the same installed Python environment as the MCP server. This
 script remains useful for local development and direct unit tests.
 """
@@ -20,7 +20,7 @@ def _add_local_src_to_path() -> None:
 
 def main() -> int:
     _add_local_src_to_path()
-    from agentic_any_search_mcp.goal_plus_stop_hook import main as hook_main
+    from goal_plus.goal_plus_stop_hook import main as hook_main
 
     return hook_main()
 

@@ -102,13 +102,13 @@ python -m pip install -e ".[bench,dev]"
 Sample one case:
 
 ```bash
-agentic-any-search-bench sample --benchmark formal_logic --limit 1 --out benchmarks/reports/formal_logic-case.json
+goal-plus-bench sample --benchmark formal_logic --limit 1 --out benchmarks/reports/formal_logic-case.json
 ```
 
 Run a paper-compatible direct row from a local case:
 
 ```bash
-agentic-any-search-bench run-one \
+goal-plus-bench run-one \
   --case-json benchmarks/reports/formal_logic-case.json \
   --mode direct \
   --prediction B
@@ -117,7 +117,7 @@ agentic-any-search-bench run-one \
 Run the same case through MCP Search with Pi RPC:
 
 ```bash
-agentic-any-search-bench run-one \
+goal-plus-bench run-one \
   --case-json benchmarks/reports/formal_logic-case.json \
   --mode search \
   --worker-backend pi-rpc \
@@ -130,7 +130,7 @@ agentic-any-search-bench run-one \
 Compare paper-compatible JSONL rows:
 
 ```bash
-agentic-any-search-bench compare \
+goal-plus-bench compare \
   --ours benchmarks/reports/ours.jsonl \
   --paper benchmarks/reports/paper.jsonl
 ```

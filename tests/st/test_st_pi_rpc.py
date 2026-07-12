@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.models import SearchSpec
-from agentic_any_search_mcp.pi_driver import run_pi_search_candidate
-from agentic_any_search_mcp.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
-from agentic_any_search_mcp.runtime import FileSearchRuntime
+from goal_plus.models import SearchSpec
+from goal_plus.pi_driver import run_pi_search_candidate
+from goal_plus.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
+from goal_plus.runtime import FileSearchRuntime
 
 
 ROOT = Path(__file__).resolve().parents[2]

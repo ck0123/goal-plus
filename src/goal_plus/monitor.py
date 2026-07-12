@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.models import (
+from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.models import (
     AgentSessionRecord,
     CandidateRecord,
     FrozenSpec,
@@ -16,8 +16,8 @@ from agentic_any_search_mcp.models import (
     RunRecord,
     SearchPlan,
 )
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
-from agentic_any_search_mcp.runtime import load_json, utc_timestamp, utc_timestamp_from_epoch
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.runtime import load_json, utc_timestamp, utc_timestamp_from_epoch
 
 
 def _path_mtime(path: str | None) -> float | None:

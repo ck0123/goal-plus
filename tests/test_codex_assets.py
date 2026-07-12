@@ -14,8 +14,8 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
     text = (ROOT / ".codex" / "config.example.toml").read_text(encoding="utf-8")
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
 
-    assert "[mcp_servers.search-runtime]" in text
-    assert 'command = "agentic-any-search-mcp"' in text
+    assert "[mcp_servers.goal-plus]" in text
+    assert 'command = "goal-plus"' in text
     assert 'args = ["--root", ".gp"]' in text
     assert ".codex/config.toml" in gitignore
 
@@ -35,7 +35,7 @@ def test_codex_assets_wire_goal_plus_host_hooks() -> None:
     for event in expected_events:
         handler = hooks["hooks"][event][0]["hooks"][0]
         assert handler["type"] == "command"
-        assert handler["command"] == "agentic-any-search-mcp --goal-plus-host-hook"
+        assert handler["command"] == "goal-plus --goal-plus-host-hook"
         assert "python3" not in handler["command"]
         assert handler["timeout"] == 30
 
@@ -45,7 +45,7 @@ def test_codex_assets_wire_goal_plus_host_hooks() -> None:
     assert "UserPromptSubmit" in text
     assert "PreToolUse" in text
     assert "SubagentStop" in text
-    assert "agentic-any-search-mcp --goal-plus-host-hook" in text
+    assert "goal-plus --goal-plus-host-hook" in text
 
 
 def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
@@ -114,7 +114,7 @@ def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
 
 
 def test_codex_worker_records_progress_handoff_before_returning() -> None:
-    text = (ROOT / ".codex" / "agents" / "any_search_agent.toml").read_text(
+    text = (ROOT / ".codex" / "agents" / "search_candidate_agent.toml").read_text(
         encoding="utf-8"
     )
 
@@ -127,7 +127,7 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
     text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    agent = (ROOT / ".codex" / "agents" / "any_search_agent.toml").read_text(
+    agent = (ROOT / ".codex" / "agents" / "search_candidate_agent.toml").read_text(
         encoding="utf-8"
     )
 
@@ -141,11 +141,11 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
 
 
 def test_codex_worker_agent_calls_context_and_verifier() -> None:
-    text = (ROOT / ".codex" / "agents" / "any_search_agent.toml").read_text(
+    text = (ROOT / ".codex" / "agents" / "search_candidate_agent.toml").read_text(
         encoding="utf-8"
     )
 
-    assert 'name = "any_search_agent"' in text
+    assert 'name = "search_candidate_agent"' in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
     assert "not the search orchestrator" in text

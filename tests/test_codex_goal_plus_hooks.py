@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+from goal_plus.goal_plus import FileGoalPlusRuntime
 
 
 HOOK_CLI = [
     sys.executable,
     "-m",
-    "agentic_any_search_mcp.server",
+    "goal_plus.server",
     "--goal-plus-host-hook",
 ]
 pytestmark = pytest.mark.codex
@@ -124,7 +124,7 @@ def test_pre_tool_use_blocks_search_before_spec_is_ready(tmp_path: Path) -> None
         {
             "hook_event_name": "PreToolUse",
             "session_id": "session-codex",
-            "tool_name": "mcp__search-runtime__search_create",
+            "tool_name": "mcp__goal-plus__search_create",
             "tool_input": {},
         },
     )
@@ -178,7 +178,7 @@ def test_subagent_stop_uses_session_bound_goal_gate(tmp_path: Path) -> None:
             "hook_event_name": "SubagentStop",
             "session_id": "session-codex",
             "agent_id": "agent-worker",
-            "agent_type": "any_search_agent",
+            "agent_type": "search_candidate_agent",
         },
     )
 

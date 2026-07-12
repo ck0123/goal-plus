@@ -56,7 +56,7 @@ class ClaudeRunner:
             "the task is Initial Search-Ready, this prompt explicitly confirms "
             "the frozen verifier, metric, edit surface, and promotion rule. "
             "You are already inside the ST harness: do not run pytest, codex, "
-            "opencode, claude, or any tests/st command. Drive the search-runtime "
+            "opencode, claude, or any tests/st command. Drive the goal-plus "
             "MCP tools directly, and only launch foreground workers from runtime "
             "launch payloads.\n\n"
             + prompt

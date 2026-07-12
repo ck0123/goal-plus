@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
+from goal_plus.monitor import goal_plus_monitor_snapshot
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +20,7 @@ INSTALL_HINT = (
 )
 AUDIT_PROMPT = (
     "请只读审计当前分支的 Pi native Goal Plus 改造是否完整。范围限定为 "
-    ".pi/extensions/search-runtime.ts、.pi/skills/goal-plus/SKILL.md、docs/pi.md、"
+    ".pi/extensions/goal-plus.ts、.pi/skills/goal-plus/SKILL.md、docs/pi.md、"
     "tests/test_pi_assets.py。重点检查：/goal-plus 命令、session_start 状态恢复、"
     "before_agent_start 上下文注入、tool_call pre-tool gate、agent_end stop gate、"
     "terminal stats 输出。不要修改文件。最后给出结论，并把 Goal Plus 状态设为 complete。"
@@ -71,8 +71,8 @@ def _pi_base_command(session_dir: Path, session_id: str) -> list[str]:
 def _run_env(search_root: Path) -> dict[str, str]:
     return {
         **os.environ,
-        "AGENTIC_ANY_SEARCH_ROOT": str(search_root),
-        "AGENTIC_ANY_SEARCH_SOURCE_PATH": str(ROOT),
+        "GOAL_PLUS_ROOT": str(search_root),
+        "GOAL_PLUS_SOURCE_PATH": str(ROOT),
     }
 
 
@@ -304,8 +304,8 @@ def test_goal_plus_native_tui_stats_entry_does_not_trigger_followup(
     shell_command = shlex.join(
         [
             "env",
-            f"AGENTIC_ANY_SEARCH_ROOT={search_root}",
-            f"AGENTIC_ANY_SEARCH_SOURCE_PATH={ROOT}",
+            f"GOAL_PLUS_ROOT={search_root}",
+            f"GOAL_PLUS_SOURCE_PATH={ROOT}",
             *_pi_base_command(session_dir, session_id),
         ]
     )

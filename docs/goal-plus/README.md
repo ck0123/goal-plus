@@ -41,7 +41,7 @@ intake, decides whether a frozen spec is available, and only then calls the
 existing search tools.
 
 Codex and Claude Code ship Goal Plus host hooks through
-`agentic-any-search-mcp --goal-plus-host-hook`.
+`goal-plus --goal-plus-host-hook`.
 `PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
 current top-level session, and `Stop` catches unfinished records only when the
 bound session matches or `GOAL_PLUS_ID` explicitly selects the record.

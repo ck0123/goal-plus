@@ -252,7 +252,7 @@ frozen inputs, isolated candidates, verifier results, and promotion artifacts.
 
 The gate decisions are enforceable only when the host calls them. Current Codex
 and Claude Code assets ship Goal Plus host hooks through
-`agentic-any-search-mcp --goal-plus-host-hook`.
+`goal-plus --goal-plus-host-hook`.
 `PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
 current top-level session, and `Stop` applies the same `goal_plus_gate`
 semantics before that session ends. OpenCode has no shipped hook, and no host
@@ -268,11 +268,11 @@ The baseline implementation has these pieces:
   - goal.json
   - events.jsonl
 
-src/agentic_any_search_mcp/goal_plus.py
+src/goal_plus/goal_plus.py
   - file-backed Goal Plus state machine
   - deterministic gate decisions for stop and pre-tool-use checkpoints
 
-src/agentic_any_search_mcp/tools.py / server.py
+src/goal_plus/tools.py / server.py
   - goal_plus_* MCP facade and registration
   - frozen-verifier confirmation for initially search-ready goals
 
@@ -294,7 +294,7 @@ src/agentic_any_search_mcp/tools.py / server.py
   - Pi RPC worker flow is folded into this skill instead of a separate
     user-facing search skill
 
-agentic-any-search-mcp --goal-plus-host-hook
+goal-plus --goal-plus-host-hook
 .codex/hooks.json
 .claude/settings.json
   - legacy wrapper plus host hook config for Codex and Claude Code

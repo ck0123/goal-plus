@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_DIR = ROOT / "examples" / "workspace-backends"
 sys.path.insert(0, str(ROOT / "src"))
 
-from agentic_any_search_mcp.runtime import FileSearchRuntime  # noqa: E402
-from agentic_any_search_mcp.tools import SearchTools  # noqa: E402
+from goal_plus.runtime import FileSearchRuntime  # noqa: E402
+from goal_plus.tools import SearchTools  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

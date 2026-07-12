@@ -12,7 +12,7 @@ Before taking action:
 2. Treat @.opencode/skills/goal-plus/SKILL.md as the required workflow reference.
 3. Do not bypass `/goal-plus` triage, spec discovery, verifier confirmation, or final raw-goal audit.
 4. Call the internal `search` skill only after Goal Plus enters Search Mode.
-5. If the `goal-plus` skill or search-runtime MCP tools are unavailable, stop and report the missing dependency.
+5. If the `goal-plus` skill or goal-plus MCP tools are unavailable, stop and report the missing dependency.
 
 Goal:
 

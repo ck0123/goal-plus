@@ -379,7 +379,7 @@ search_list_observations
 
 这是最关键的能力。没有它，多 agent 并发只是“黑盒等待”。
 
-### Step 3: 修改 AnySearchAgent prompt
+### Step 3: 修改 SearchCandidateAgent prompt
 
 不要再强调“你只执行这个固定方案”。改成：
 

@@ -3,7 +3,7 @@
 This repo implements AdaptEvolve as a Python strategy plugin:
 
 ```text
-agentic_any_search_mcp.strategies.adaptevolve:AdaptEvolveStrategy
+goal_plus.strategies.adaptevolve:AdaptEvolveStrategy
 ```
 
 ## Method Logic
@@ -15,11 +15,11 @@ AdaptEvolve is not `AdaptiveSearch + Evolve`. The useful part for this runtime i
    - later batches pick the best verified candidate as parent;
    - top alternatives are exposed as inspirations.
 2. Use MCP-observable confidence proxies to choose worker tier:
-   - no scored candidates -> `AnySearchAgentFlash`;
-   - low score or process failure -> `AnySearchAgentDeep`;
-   - repeated failures -> `AnySearchAgentExtraDeep`;
-   - high score -> `AnySearchAgentFlash`;
-   - medium confidence -> `AnySearchAgent`.
+   - no scored candidates -> `SearchCandidateAgentFlash`;
+   - low score or process failure -> `SearchCandidateAgentDeep`;
+   - repeated failures -> `SearchCandidateAgentExtraDeep`;
+   - high score -> `SearchCandidateAgentFlash`;
+   - medium confidence -> `SearchCandidateAgent`.
 3. Emit fixed `work_orders` plus a plan-level `worker_policy`.
 
 The original paper-style signal would be model-token confidence. This runtime does not own model logits, so the implemented proxy is deliberately conservative: score, process pass/fail, failure classes, and history availability.
@@ -29,7 +29,7 @@ The original paper-style signal would be model-token confidence. This runtime do
 ```text
 examples/search-mode/k_module_adaptevolve_search_spec.json
   strategy.driver = "python"
-  strategy.ref = "agentic_any_search_mcp.strategies.adaptevolve:AdaptEvolveStrategy"
+  strategy.ref = "goal_plus.strategies.adaptevolve:AdaptEvolveStrategy"
 
 FileSearchRuntime.plan_next
   -> _plan_custom_strategy
@@ -49,7 +49,7 @@ FileSearchRuntime.start_agent_session
   -> session.launch.subagent_type
 
 OpenCode Task
-  -> launches AnySearchAgentFlash / AnySearchAgent / AnySearchAgentDeep / AnySearchAgentExtraDeep
+  -> launches SearchCandidateAgentFlash / SearchCandidateAgent / SearchCandidateAgentDeep / SearchCandidateAgentExtraDeep
   -> worker calls search_get_agent_context and search_run_verifier
 
 FileSearchRuntime.run_verifier

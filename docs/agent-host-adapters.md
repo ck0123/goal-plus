@@ -1,6 +1,6 @@
 # Agent Host Adapters
 
-`agentic-any-search-mcp` is host-neutral at the runtime layer. `/goal-plus`
+`goal-plus` is host-neutral at the runtime layer. `/goal-plus`
 owns goal intake, triage, spec drafts, verifier confirmation, and final audit
 state. The internal Search Mode engine owns durable search state, workspaces,
 verifier execution, scoring history, reports, and promotion patches. The
@@ -74,7 +74,7 @@ checkpoints such as:
 - before a subagent stop, if the host exposes that hook
 
 Current repository assets include Goal Plus host hooks for Codex and Claude
-Code. Host settings run `agentic-any-search-mcp --goal-plus-host-hook`.
+Code. Host settings run `goal-plus --goal-plus-host-hook`.
 Codex 0.144.1+ wires `UserPromptSubmit`, `SessionStart`, `PreToolUse`,
 `PostToolUse`, `Stop`, and `SubagentStop`: it pre-creates and binds an exact
 `/goal-plus` or `$goal-plus` prompt, restores hidden session context, gates
@@ -111,7 +111,7 @@ Set `strategy.worker_host` in the `SearchSpec`:
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
     "worker_host": "codex",
-    "worker_agent_type": "any_search_agent"
+    "worker_agent_type": "search_candidate_agent"
   }
 }
 ```
@@ -148,12 +148,12 @@ model. This is Codex-native behavior, not an alternate provider integration.
 
 | Capability | OpenCode | Codex | Claude Code | Pi RPC |
 |---|---|---|---|---|
-| Config files | `opencode.json`, `.opencode/` | `.codex/config.example.toml` plus ignored local `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts`, Pi console script facades |
-| Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
-| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or debug-only `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
+| Config files | `opencode.json`, `.opencode/` | `.codex/config.example.toml` plus ignored local `.codex/config.toml`, `.codex/skills/goal-plus/`, `.codex/skills/search/`, `.codex/agents/` | `.mcp.json`, `.claude/skills/goal-plus/`, `.claude/skills/search/`, `.claude/agents/` | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/goal-plus.ts`, Pi console script facades |
+| Default worker agent type | `SearchCandidateAgent` | `search_candidate_agent` | `search-candidate-agent` | `search-candidate-worker` prompt asset |
+| Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or debug-only `pi_rpc_run_worker` / `goal-plus-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
 | Launch-schema behavior | fixed `Task` fields from the OpenCode asset | project adapter metadata onto the current `spawn_agent` schema; hidden optional metadata is omitted and the parent model is inherited | project onto the foreground `Agent` tool exposed by the current Claude surface | runner maps payload fields to `pi --mode rpc` CLI/RPC options |
-| Worker/orchestrator boundary | `AnySearchAgent*` prompt owns one candidate | boundary is present both in `any_search_agent.toml` and every launch message, so it survives a hidden `agent_type` field | local agent definition owns one candidate | worker prompt plus runner-owned RPC process owns one candidate |
+| Worker/orchestrator boundary | `SearchCandidateAgent*` prompt owns one candidate | boundary is present both in `search_candidate_agent.toml` and every launch message, so it survives a hidden `agent_type` field | local agent definition owns one candidate | worker prompt plus runner-owned RPC process owns one candidate |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics`, or synthetic runner-failure metadata |
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | not supported; use `search_redispatch_candidate` for state-level redispatch |
@@ -211,10 +211,10 @@ Runtime length control is not currently equivalent across hosts:
 
 | Host | Single-worker autoresearch | Runtime cap exposed by current assets | What the cap controls |
 |---|---|---|---|
-| OpenCode | supported with the full `AnySearchAgent` loop | yes, `steps` in `.opencode/agents/*.md` | host step budget per Task; current tiers are 15, 50, 100, and 150 steps |
+| OpenCode | supported with the full `SearchCandidateAgent` loop | yes, `steps` in `.opencode/agents/*.md` | host step budget per Task; current tiers are 15, 50, 100, and 150 steps |
 | Codex | supported with the project Codex worker prompt | yes, through `worker_budget.max_runtime_seconds` and a parent watchdog | parent waits for the initial interval, sends one closeout message, waits for the final interval, then interrupts on a second timeout |
 | Claude Code | supported with the project Claude worker prompt | yes, through `worker_budget.max_turns` and bounded `.claude/agents/*.md` definitions | host turn budget per foreground Agent; current tiers are 4, 8, and 16 turns |
-| Pi RPC | supported with `.pi/prompts/any-search-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | the runner sends one closeout steer before the deadline, then aborts and kills the Pi RPC process group if it does not exit; `max_turns` is only a prompt hint |
+| Pi RPC | supported with `.pi/prompts/search-candidate-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | the runner sends one closeout steer before the deadline, then aborts and kills the Pi RPC process group if it does not exit; `max_turns` is only a prompt hint |
 
 `budget.max_candidates`, `budget.max_parallel`, and strategy round settings
 control how many workers the runtime plans and how many candidates it puts in a
@@ -236,13 +236,13 @@ Use `strategy.worker_budget` for host-neutral worker limits:
 }
 ```
 
-OpenCode continues to use worker agent tiers such as `AnySearchAgentFlash` and
-`AnySearchAgentDeep`. Codex maps wall-clock budgets to a two-stage watchdog:
+OpenCode continues to use worker agent tiers such as `SearchCandidateAgentFlash` and
+`SearchCandidateAgentDeep`. Codex maps wall-clock budgets to a two-stage watchdog:
 wait, send one bounded closeout message, wait again, then interrupt the child.
 `spawn_agent` itself does not accept a timeout argument. Claude Code maps turn budgets to `maxTurns`
 in the selected local agent definition. When `worker_agent_type` is omitted,
-Claude Code budgets of 4, 8, and 16 turns map to `any-search-agent-flash`,
-`any-search-agent`, and `any-search-agent-deep` respectively.
+Claude Code budgets of 4, 8, and 16 turns map to `search-candidate-agent-flash`,
+`search-candidate-agent`, and `search-candidate-agent-deep` respectively.
 
 For Codex, keep these controls distinct:
 
@@ -334,7 +334,7 @@ into Codex or Claude Code.
 | `openevolve` | likely yes | likely yes | sampled parent/archive/inspiration context is larger and easier for workers to ignore | Add tests for sampled context shape and host launch payloads; smoke test with small `requested_k` |
 | current `mcts` | likely yes | likely yes | current implementation is a best-score frontier placeholder, not a full UCB tree policy | Treat it like fixed-work-order lineage first; revisit if true tree-state continuation is added |
 | Python driver | not as-is | not as-is | custom strategies can emit OpenCode-specific `worker_policy` and worker tier names | Add host capability validation or host-specific policy mapping before enabling |
-| `adaptevolve` | needs design work | needs design work | uses OpenCode worker tiers such as `AnySearchAgentFlash`, `AnySearchAgentDeep`, and `AnySearchAgentExtraDeep` | Introduce host-neutral tiers like `fast`, `default`, `deep`, `extra_deep`, then map them per adapter |
+| `adaptevolve` | needs design work | needs design work | uses OpenCode worker tiers such as `SearchCandidateAgentFlash`, `SearchCandidateAgentDeep`, and `SearchCandidateAgentExtraDeep` | Introduce host-neutral tiers like `fast`, `default`, `deep`, `extra_deep`, then map them per adapter |
 | `external_mcp` driver | possible, but undefined | possible, but undefined | external planner ownership and MCP availability are not defined across hosts | Define who calls the external planner and how proposals are returned before enabling |
 | same-worker continuation algorithms | limited | limited | Codex adapter has no same-worker continuation; Claude Code may expose an agent id but `SendMessage` is not reliable on every tool surface | Prefer state-level resume with new-worker redispatch; treat same-worker continuation as a host-specific optimization only after a real smoke test |
 | trace-driven algorithms | not currently | not currently | trace export is only implemented for OpenCode logs | Add host trace exporters or keep these OpenCode-only |
@@ -354,7 +354,7 @@ In practice, the safe expansion order is now:
 
 ## Adapter Responsibilities
 
-Adapters live in `src/agentic_any_search_mcp/agent_hosts.py`.
+Adapters live in `src/goal_plus/agent_hosts.py`.
 
 Each adapter exposes:
 
@@ -386,7 +386,7 @@ OpenCode launch payload:
 
 ```json
 {
-  "subagent_type": "AnySearchAgent",
+  "subagent_type": "SearchCandidateAgent",
   "description": "c001 try alternate parser",
   "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
 }
@@ -398,7 +398,7 @@ Codex launch payload:
 {
   "tool": "spawn_agent",
   "task_name": "search_agent_001",
-  "agent_type": "any_search_agent",
+  "agent_type": "search_candidate_agent",
   "fork_turns": "none",
   "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
 }
@@ -409,7 +409,7 @@ Claude Code launch payload:
 ```json
 {
   "tool": "Agent",
-  "agent_type": "any-search-agent",
+  "agent_type": "search-candidate-agent",
   "description": "c001 try alternate parser",
   "background": false,
   "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
@@ -468,7 +468,7 @@ It is not a lifecycle status object.
 For Pi RPC, `external_id` is the invocation's Pi `--session-id` and metadata
 carries the metadata-only event log path, optional raw text log path, assistant
 text, bounded `progress_handoff`, and `pi_metrics` usage/timing summary returned by
-`agentic-any-search-pi-worker`. Workers use `--no-session`; this id is
+`goal-plus-pi-worker`. Workers use `--no-session`; this id is
 correlation provenance, not a resumable Pi transcript handle. If the runner
 fails before a normal handle is returned, the driver binds a synthetic failure
 handle with `runner_failed`, failure stage/type, a bounded error summary, and a

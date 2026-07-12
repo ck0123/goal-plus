@@ -10,7 +10,7 @@ Before taking action:
 2. Treat @.opencode/skills/goal-plus/SKILL.md as the required workflow reference.
 3. Start by calling `goal_plus_create` for the raw objective.
 4. If the task upgrades to Search Mode, call the internal `search` skill and follow its workflow.
-5. If the `goal-plus` skill or search-runtime MCP tools are unavailable, stop and report the missing dependency.
+5. If the `goal-plus` skill or goal-plus MCP tools are unavailable, stop and report the missing dependency.
 
 Goal:
 $ARGUMENTS

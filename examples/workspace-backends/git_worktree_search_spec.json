@@ -30,7 +30,7 @@
     "name": "evolve",
     "worker_mode": "agent-session-pool",
     "worker_host": "opencode",
-    "worker_agent_type": "AnySearchAgentFlash"
+    "worker_agent_type": "SearchCandidateAgentFlash"
   },
   "workspace": {
     "backend": "git_worktree"

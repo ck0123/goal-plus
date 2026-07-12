@@ -16,7 +16,7 @@ The tracked project-local MCP configuration template is:
 .codex/hooks.json
 .codex/skills/goal-plus/SKILL.md
 .codex/skills/search/SKILL.md
-.codex/agents/any_search_agent.toml
+.codex/agents/search_candidate_agent.toml
 scripts/hooks/goal_plus_stop.py
 ```
 
@@ -35,7 +35,7 @@ verifier-backed spec.
 
 This repository ships project-local Goal Plus host hooks for Codex 0.144.1 and
 newer. `.codex/hooks.json` runs
-`agentic-any-search-mcp --goal-plus-host-hook` for `UserPromptSubmit`,
+`goal-plus --goal-plus-host-hook` for `UserPromptSubmit`,
 `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop`. Codex
 project hooks must be reviewed and trusted through `/hooks` before they run.
 
@@ -57,7 +57,7 @@ The MCP server is configured as:
 
 ```toml
 [mcp_servers.gp-runtime]
-command = "agentic-any-search-mcp"
+command = "goal-plus"
 args = ["--root", ".gp"]
 cwd = "."
 startup_timeout_sec = 10
@@ -86,7 +86,7 @@ foreground launch payload from
 {
   "tool": "spawn_agent",
   "task_name": "search_agent_001",
-  "agent_type": "any_search_agent",
+  "agent_type": "search_candidate_agent",
   "fork_turns": "none",
   "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
 }
@@ -132,7 +132,7 @@ and call `search_run_verifier`. It must not call `search_plan_next`,
 `search_start_batch`, `search_select`, `search_report`, `search_promote`, or any
 `goal_plus_*` tool.
 
-This rule exists in both `.codex/agents/any_search_agent.toml` and the adapter
+This rule exists in both `.codex/agents/search_candidate_agent.toml` and the adapter
 message. The duplication is intentional: when the current `spawn_agent` schema
 hides `agent_type`, Codex launches a default child rather than the named local
 agent, so the launch message must preserve the same ownership boundary.

@@ -1,6 +1,6 @@
-"""MCP-first runtime for verifiable agentic search."""
+"""Goal Plus runtime with optional verifier-guided Search Mode."""
 
-from agentic_any_search_mcp.models import (
+from goal_plus.models import (
     AgentSessionRecord,
     Budget,
     CandidateProposal,
@@ -24,7 +24,7 @@ from agentic_any_search_mcp.models import (
     VerifierResult,
     VerifierRole,
 )
-from agentic_any_search_mcp.runtime import FileSearchRuntime
+from goal_plus.runtime import FileSearchRuntime
 
 __all__ = [
     "AgentSessionRecord",

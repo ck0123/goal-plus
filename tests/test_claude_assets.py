@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_claude_mcp_json_registers_search_runtime() -> None:
     data = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
 
-    server = data["mcpServers"]["search-runtime"]
-    assert server["command"] == "agentic-any-search-mcp"
+    server = data["mcpServers"]["goal-plus"]
+    assert server["command"] == "goal-plus"
     assert server["args"] == ["--root", ".gp"]
 
 
@@ -25,17 +25,17 @@ def test_claude_assets_wire_goal_plus_host_hooks() -> None:
     assert stop_hooks[0]["matcher"] == ""
     assert stop_hooks[0]["hooks"][0]["type"] == "command"
     command = stop_hooks[0]["hooks"][0]["command"]
-    assert command == "agentic-any-search-mcp --goal-plus-host-hook"
+    assert command == "goal-plus --goal-plus-host-hook"
     assert "python3" not in command
     assert post_tool_use_hooks[0]["matcher"] == ""
     post_command = post_tool_use_hooks[0]["hooks"][0]["command"]
-    assert post_command == "agentic-any-search-mcp --goal-plus-host-hook"
+    assert post_command == "goal-plus --goal-plus-host-hook"
 
     text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
     assert "ships Claude Code Goal Plus host hooks" in text
     assert "PostToolUse(goal_plus_create)" in text
     assert "does not wire PreToolUse or SubagentStop hooks" in text
-    assert "agentic-any-search-mcp --goal-plus-host-hook" in text
+    assert "goal-plus --goal-plus-host-hook" in text
 
 
 def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
@@ -78,28 +78,28 @@ def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
 
 
 def test_claude_worker_agent_calls_context_and_verifier() -> None:
-    text = (ROOT / ".claude" / "agents" / "any-search-agent.md").read_text(
+    text = (ROOT / ".claude" / "agents" / "search-candidate-agent.md").read_text(
         encoding="utf-8"
     )
 
-    assert "name: any-search-agent" in text
+    assert "name: search-candidate-agent" in text
     assert "maxTurns: 8" in text
-    assert "mcp__search-runtime__*" in text
+    assert "mcp__goal-plus__*" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
 
 
 def test_claude_worker_agent_turn_budget_variants_exist() -> None:
-    flash = (ROOT / ".claude" / "agents" / "any-search-agent-flash.md").read_text(
+    flash = (ROOT / ".claude" / "agents" / "search-candidate-agent-flash.md").read_text(
         encoding="utf-8"
     )
-    deep = (ROOT / ".claude" / "agents" / "any-search-agent-deep.md").read_text(
+    deep = (ROOT / ".claude" / "agents" / "search-candidate-agent-deep.md").read_text(
         encoding="utf-8"
     )
 
-    assert "name: any-search-agent-flash" in flash
+    assert "name: search-candidate-agent-flash" in flash
     assert "maxTurns: 4" in flash
-    assert "name: any-search-agent-deep" in deep
+    assert "name: search-candidate-agent-deep" in deep
     assert "maxTurns: 16" in deep
 
 
@@ -107,12 +107,12 @@ def test_claude_search_skill_documents_tier_escalation_and_resume() -> None:
     text = (ROOT / ".claude" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    agent = (ROOT / ".claude" / "agents" / "any-search-agent.md").read_text(
+    agent = (ROOT / ".claude" / "agents" / "search-candidate-agent.md").read_text(
         encoding="utf-8"
     )
 
-    assert "any-search-agent-flash" in text
-    assert "any-search-agent-deep" in text
+    assert "search-candidate-agent-flash" in text
+    assert "search-candidate-agent-deep" in text
     assert "reached `maxTurns` before recording any verifier iteration" in text
     assert "History is runtime-owned, not a `plan.md` file" in text
     assert "state-level resume" in text
@@ -133,6 +133,19 @@ def test_claude_docs_record_log_inspection_paths() -> None:
     assert "claude project purge" in combined
     assert "~/.claude/projects" in combined
     assert "subagents/" in combined
+
+
+def test_claude_docs_separate_current_support_from_host_capability() -> None:
+    text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
+
+    assert "## Claude Code Parity Assessment" in text
+    assert "**Implemented**" in text
+    assert "**Host-capable**" in text
+    assert "**Conditional**" in text
+    assert "No checked-in `PreToolUse` hook or tests" in text
+    assert "No checked-in `SubagentStop` hook or tests" in text
+    assert "No Claude-native equivalent of `pi_search_run_batch`" in text
+    assert "## Claude Code-Native Completion Plan" in text
 
 
 def test_claude_goal_plus_skill_documents_multiple_search_tasks() -> None:

@@ -4,10 +4,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type TSchema, Type } from "typebox";
 
-const role = process.env.AGENTIC_ANY_SEARCH_PI_ROLE || "main";
-const runtimeRoot = process.env.AGENTIC_ANY_SEARCH_ROOT || ".gp";
-const sourcePath = process.env.AGENTIC_ANY_SEARCH_SOURCE_PATH;
-const exposeLowLevelWorker = process.env.AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER === "1";
+const role = process.env.GOAL_PLUS_PI_ROLE || "main";
+const runtimeRoot = process.env.GOAL_PLUS_ROOT || ".gp";
+const sourcePath = process.env.GOAL_PLUS_SOURCE_PATH;
+const exposeLowLevelWorker = process.env.GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER === "1";
 const modeArgIndex = process.argv.indexOf("--mode");
 const isPrintLikeInvocation =
 	process.argv.includes("-p") ||
@@ -18,7 +18,7 @@ const STATE_ENTRY_TYPE = "goal-plus-native-state";
 const GOAL_PLUS_STATS_ENTRY_TYPE = "goal-plus-stats";
 let workspaceRoot: string | undefined;
 let sawContext = false;
-let activeGoalPlusId = process.env.AGENTIC_ANY_SEARCH_GOAL_PLUS_ID;
+let activeGoalPlusId = process.env.GOAL_PLUS_ID;
 let cachedGoalStatus: GoalPlusStatusPayload | undefined;
 let continuationCount = 0;
 let activeGoalStartedAt: string | undefined;
@@ -375,7 +375,7 @@ function sourceRoot(ctx: CommandRuntimeContext): string {
 function projectModuleInvocation(ctx: CommandRuntimeContext, command: string, moduleName: string): CommandInvocation {
 	const root = sourceRoot(ctx);
 	const src = join(root, "src");
-	const packageDir = join(src, "agentic_any_search_mcp");
+	const packageDir = join(src, "goal_plus");
 	if (existsSync(packageDir)) {
 		const code = [
 			"import sys",
@@ -452,7 +452,7 @@ function gateFrom(value: unknown): GoalPlusGatePayload | undefined {
 }
 
 async function runJsonCli(pi: ExtensionAPI, ctx: CommandRuntimeContext, tool: string, args: Record<string, unknown>) {
-	const invocation = projectModuleInvocation(ctx, "agentic-any-search-pi-tool", "agentic_any_search_mcp.pi_tool");
+	const invocation = projectModuleInvocation(ctx, "goal-plus-pi-tool", "goal_plus.pi_tool");
 	const result = await pi.exec(invocation.command, [
 		...invocation.argsPrefix,
 		"--root",
@@ -712,7 +712,7 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 	pi.registerTool({
 		name,
 		label: name,
-		description: `Call search-runtime facade tool ${name}.`,
+		description: `Call goal-plus facade tool ${name}.`,
 		parameters: toolParameters(name),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -744,7 +744,7 @@ function registerPiWorkerTool(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const commandCtx = commandContextFrom(ctx);
-			const invocation = projectModuleInvocation(commandCtx, "agentic-any-search-pi-worker", "agentic_any_search_mcp.pi_worker");
+			const invocation = projectModuleInvocation(commandCtx, "goal-plus-pi-worker", "goal_plus.pi_worker");
 			const result = await pi.exec(invocation.command, [
 				...invocation.argsPrefix,
 				"run",

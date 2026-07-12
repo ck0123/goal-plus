@@ -79,7 +79,7 @@ a single candidate:
 `search_bind_agent_handle`, and the final `search_run_verifier` without
 `agent_session_id` when `final_verify=true`. Normal Goal Plus/Search flow must
 not call the low-level `pi_rpc_run_worker` tool directly. It is hidden from the
-main Pi agent unless `AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set
+main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set
 for manual debugging or custom recovery.
 
 Do not call `search_start_agent_session`, `search_bind_agent_handle`, or
@@ -168,7 +168,7 @@ If the MCP tool is not directly exposed in the current host, use the matching
 Pi facade instead of manually tailing state files:
 
 ```bash
-agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+goal-plus-pi-tool goal_plus_monitor_snapshot \
   --root .gp \
   --args-json '{"goal_plus_id":"gp_...","run_id":"run_...","stale_after_seconds":120}' \
   --pretty

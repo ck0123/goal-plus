@@ -21,12 +21,12 @@ try:
 except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
     fcntl = None  # type: ignore[assignment]
 
-from agentic_any_search_mcp.agent_hosts import (
+from goal_plus.agent_hosts import (
     UnsupportedHostCapability,
     get_agent_host_adapter,
     portable_strategy_mode,
 )
-from agentic_any_search_mcp.models import (
+from goal_plus.models import (
     AgentHostHandle,
     AgentSessionRecord,
     CandidateRecord,
@@ -49,8 +49,8 @@ from agentic_any_search_mcp.models import (
     VerifierRole,
     WorkerBudget,
 )
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
-from agentic_any_search_mcp.workspaces import (
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from goal_plus.workspaces import (
     copy_source_tree,
     initialize_workspace_git_baseline,
     list_files,
@@ -59,9 +59,9 @@ from agentic_any_search_mcp.workspaces import (
 
 
 CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS = {
-    "any-search-agent-flash": 4,
-    "any-search-agent": 8,
-    "any-search-agent-deep": 16,
+    "search-candidate-agent-flash": 4,
+    "search-candidate-agent": 8,
+    "search-candidate-agent-deep": 16,
 }
 CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET = {
     turns: agent_type
@@ -1364,12 +1364,12 @@ class FileSearchRuntime:
 
     def _default_worker_agent_type(self, host: str) -> str:
         if host == "codex":
-            return "any_search_agent"
+            return "search_candidate_agent"
         if host == "claude-code":
-            return "any-search-agent"
+            return "search-candidate-agent"
         if host == "pi-rpc":
-            return "any-search-worker"
-        return "AnySearchAgent"
+            return "search-candidate-worker"
+        return "SearchCandidateAgent"
 
     def _candidate_worker_agent_type(
         self,
@@ -1533,7 +1533,7 @@ class FileSearchRuntime:
     def _worker_prompt_for_host(self, host: str) -> str | None:
         if host != "pi-rpc":
             return None
-        prompt_path = Path(__file__).resolve().parents[2] / ".pi" / "prompts" / "any-search-worker.md"
+        prompt_path = Path(__file__).resolve().parents[2] / ".pi" / "prompts" / "search-candidate-worker.md"
         if prompt_path.exists():
             return prompt_path.read_text(encoding="utf-8")
         return (
@@ -1793,7 +1793,7 @@ class FileSearchRuntime:
                         ),
                         (
                             "Prefer a compact diff-style mutation, then verify through "
-                            "search-runtime_search_run_verifier."
+                            "goal-plus_search_run_verifier."
                         ),
                     ],
                     must_derive_from=[parent.candidate_id],
@@ -2232,7 +2232,7 @@ class FileSearchRuntime:
             "Modify only files listed in allowed_files; never touch denied_files or frozen verifier artifacts.",
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
             "A local git repository has already been initialized with the copied baseline; use git status, git diff, git add, git commit, git reset, git restore, and git checkout only inside this workspace.",
-            "All scoring must go through search-runtime_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
+            "All scoring must go through goal-plus_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
             "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
             "Each run_verifier call records an iteration. Work within the configured host budget. Complete and verify a candidate early, stop starting new optimization iterations before the limit, and leave enough time to return a concise summary.",
             "search_run_verifier automatically commits changed candidate artifact files before running the verifier; use git status, git diff, and git log to inspect iteration provenance.",
@@ -2493,7 +2493,7 @@ class FileSearchRuntime:
         record: CandidateRecord,
         command: VerifierCommand,
     ) -> VerifierResult:
-        if command.command[0] == "search-runtime-internal":
+        if command.command[0] == "goal-plus-internal":
             return self._run_internal_command(frozen, record, command)
 
         logs_dir = self._run_dir(run.run_id) / "candidates" / record.candidate_id / "logs"
@@ -3005,9 +3005,9 @@ class FileSearchRuntime:
                 [
                     "git",
                     "-c",
-                    "user.name=agentic-any-search",
+                    "user.name=goal-plus",
                     "-c",
-                    "user.email=agentic-any-search@example.invalid",
+                    "user.email=goal-plus@example.invalid",
                     "commit",
                     "-q",
                     "--no-verify",
@@ -3127,7 +3127,15 @@ class FileSearchRuntime:
         ]
 
     def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
-        return FrozenSpec.model_validate(load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json"))
+        data = load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json")
+        spec_data = data.get("spec")
+        if isinstance(spec_data, dict) and "workspace" not in spec_data:
+            # Frozen specs created before workspace backends were persisted used
+            # an independent copy for every candidate. Preserve that behavior
+            # when resuming legacy runs even though new specs default to a
+            # shared-object Git worktree layout.
+            spec_data["workspace"] = {"backend": "copy"}
+        return FrozenSpec.model_validate(data)
 
     def _load_run(self, run_id: str) -> RunRecord:
         return RunRecord.model_validate(load_json(self._run_dir(run_id) / "run.json"))

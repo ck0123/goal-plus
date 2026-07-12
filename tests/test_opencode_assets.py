@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_opencode_config_registers_search_runtime_mcp() -> None:
     config = json.loads((ROOT / "opencode.json").read_text(encoding="utf-8"))
 
-    server = config["mcp"]["search-runtime"]
+    server = config["mcp"]["goal-plus"]
     assert server["type"] == "local"
     assert server["command"] == [
-        "agentic-any-search-mcp",
+        "goal-plus",
         "--root",
         ".gp",
     ]
@@ -29,10 +29,10 @@ def test_search_skill_is_internal_search_mode_engine() -> None:
 
     assert "name: search" in skill
     assert "internal Search Mode engine" in skill
-    assert "search-runtime_search_freeze_spec" in skill
-    assert "search-runtime_search_bind_opencode_session" in skill
-    assert "search-runtime_search_continue_agent_session" in skill
-    assert "search-runtime_search_redispatch_candidate" in skill
+    assert "goal-plus_search_freeze_spec" in skill
+    assert "goal-plus_search_bind_opencode_session" in skill
+    assert "goal-plus_search_continue_agent_session" in skill
+    assert "goal-plus_search_redispatch_candidate" in skill
     assert "Do not start candidate execution before" in skill
     assert "k_module" in skill
 
@@ -42,7 +42,7 @@ def test_opencode_search_skill_keeps_opencode_bind_contract() -> None:
         encoding="utf-8"
     )
 
-    assert "search-runtime_search_bind_opencode_session" in skill
+    assert "goal-plus_search_bind_opencode_session" in skill
     assert "Task(" in skill
     assert "search_bind_agent_handle" not in skill
 
@@ -84,11 +84,11 @@ def test_opencode_goal_plus_skill_documents_progressive_modes() -> None:
 
     combined = skill + "\n" + agent
     assert "name: goal-plus" in skill
-    assert "search-runtime_goal_plus_create" in skill
-    assert "search-runtime_goal_plus_record_triage" in skill
-    assert "search-runtime_goal_plus_save_spec_draft" in skill
-    assert "search-runtime_goal_plus_confirm_frozen_verifier" in skill
-    assert "search-runtime_goal_plus_gate" in skill
+    assert "goal-plus_goal_plus_create" in skill
+    assert "goal-plus_goal_plus_record_triage" in skill
+    assert "goal-plus_goal_plus_save_spec_draft" in skill
+    assert "goal-plus_goal_plus_confirm_frozen_verifier" in skill
+    assert "goal-plus_goal_plus_gate" in skill
     assert "mode_hint" not in skill
     assert "Goal Mode" in combined
     assert "Spec Discovery Mode" in combined
@@ -119,7 +119,7 @@ def test_search_skill_uses_foreground_tasks() -> None:
 
 def test_subagent_contract_derives_identifiers_from_context() -> None:
     skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(encoding="utf-8")
-    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+    agent = (ROOT / ".opencode" / "agents" / "SearchCandidateAgent.md").read_text(
         encoding="utf-8"
     )
     orchestrator = (ROOT / ".opencode" / "agents" / "search-orchestrator.md").read_text(
@@ -154,7 +154,7 @@ def test_search_result_dump_skill_exports_chrome_trace() -> None:
     ).read_text(encoding="utf-8")
 
     assert "name: search-result-dump" in skill
-    assert "agentic-any-search-trace" in skill
+    assert "goal-plus-trace" in skill
     assert "--opencode-log" in skill
     assert ".gp/runs/<run_id>/trace.json" in skill
     assert "ui.perfetto.dev" in skill
@@ -162,8 +162,8 @@ def test_search_result_dump_skill_exports_chrome_trace() -> None:
     assert 'message="exiting loop"' in skill
 
 
-def test_any_search_agent_denies_destructive_shell_commands() -> None:
-    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+def test_search_candidate_agent_denies_destructive_shell_commands() -> None:
+    agent = (ROOT / ".opencode" / "agents" / "SearchCandidateAgent.md").read_text(
         encoding="utf-8"
     )
 
@@ -186,8 +186,8 @@ def test_any_search_agent_denies_destructive_shell_commands() -> None:
         assert pattern not in agent
 
 
-def test_any_search_agent_documents_autoresearch_loop() -> None:
-    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+def test_search_candidate_agent_documents_autoresearch_loop() -> None:
+    agent = (ROOT / ".opencode" / "agents" / "SearchCandidateAgent.md").read_text(
         encoding="utf-8"
     )
 
@@ -202,13 +202,13 @@ def test_opencode_search_skill_documents_tier_escalation_and_resume_history() ->
     skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(
+    agent = (ROOT / ".opencode" / "agents" / "SearchCandidateAgent.md").read_text(
         encoding="utf-8"
     )
 
     assert "Main-Agent Dispatch Policy" in skill
-    assert "AnySearchAgentFlash" in skill
-    assert "AnySearchAgentDeep" in skill
+    assert "SearchCandidateAgentFlash" in skill
+    assert "SearchCandidateAgentDeep" in skill
     assert "previous flash/default worker returned without any `search_run_verifier`" in skill
     assert "History is runtime-owned, not `plan.md`" in skill
     assert "context.history" in skill
@@ -220,13 +220,13 @@ def test_opencode_search_skill_documents_tier_escalation_and_resume_history() ->
 @pytest.mark.parametrize(
     "agent_file,expected_steps",
     [
-        ("AnySearchAgentFlash.md", 15),
-        ("AnySearchAgent.md", 50),
-        ("AnySearchAgentDeep.md", 100),
-        ("AnySearchAgentExtraDeep.md", 150),
+        ("SearchCandidateAgentFlash.md", 15),
+        ("SearchCandidateAgent.md", 50),
+        ("SearchCandidateAgentDeep.md", 100),
+        ("SearchCandidateAgentExtraDeep.md", 150),
     ],
 )
-def test_any_search_agent_tier_has_expected_step_cap(
+def test_search_candidate_agent_tier_has_expected_step_cap(
     agent_file: str, expected_steps: int
 ) -> None:
     text = (ROOT / ".opencode" / "agents" / agent_file).read_text(encoding="utf-8")
@@ -242,10 +242,10 @@ def test_any_search_agent_tier_has_expected_step_cap(
         ".opencode/command/goal-any-optimize.md",
         ".opencode/command/goal-plus.md",
         ".opencode/agents/goal-plus-orchestrator.md",
-        ".opencode/agents/AnySearchAgent.md",
-        ".opencode/agents/AnySearchAgentDeep.md",
-        ".opencode/agents/AnySearchAgentExtraDeep.md",
-        ".opencode/agents/AnySearchAgentFlash.md",
+        ".opencode/agents/SearchCandidateAgent.md",
+        ".opencode/agents/SearchCandidateAgentDeep.md",
+        ".opencode/agents/SearchCandidateAgentExtraDeep.md",
+        ".opencode/agents/SearchCandidateAgentFlash.md",
         ".opencode/agents/search-orchestrator.md",
         "docs/flow-view.md",
         "docs/design.md",
@@ -286,7 +286,7 @@ def test_deleted_lifecycle_apis_are_absent_from_opencode_assets(
 def test_subagent_only_two_mcp_calls_documented() -> None:
     """The subagent prompt contract must restrict the subagent to the two
     MCP calls it is allowed to make."""
-    agent = (ROOT / ".opencode" / "agents" / "AnySearchAgent.md").read_text(encoding="utf-8")
+    agent = (ROOT / ".opencode" / "agents" / "SearchCandidateAgent.md").read_text(encoding="utf-8")
     assert "search_get_agent_context" in agent
     assert "search_run_verifier" in agent
 

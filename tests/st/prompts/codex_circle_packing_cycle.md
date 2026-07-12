@@ -13,7 +13,7 @@ exact changes before freezing it:
 - Set `strategy.name="random"` and `strategy.driver="builtin"`.
 - Set `strategy.worker_mode="agent-session-pool"`.
 - Set `strategy.worker_host="codex"`.
-- Set `strategy.worker_agent_type="any_search_agent"`.
+- Set `strategy.worker_agent_type="search_candidate_agent"`.
 - Set `strategy.worker_budget={"max_runtime_seconds": 180, "max_turns": 8, "on_exceed": "interrupt"}`.
 - Set `strategy.config.seed=42`.
 

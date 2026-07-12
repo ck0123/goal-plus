@@ -30,13 +30,13 @@ Optional:
 2. Export the trace:
 
 ```bash
-agentic-any-search-trace --root .gp --run-id <run_id>
+goal-plus-trace --root .gp --run-id <run_id>
 ```
 
 Use `--opencode-log <path>` when the run came from a non-default OpenCode log:
 
 ```bash
-agentic-any-search-trace --root .gp --run-id <run_id> --opencode-log <path>
+goal-plus-trace --root .gp --run-id <run_id> --opencode-log <path>
 ```
 
 The default output is:

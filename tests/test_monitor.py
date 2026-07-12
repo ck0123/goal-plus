@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
-from agentic_any_search_mcp.pi_tool import call_pi_tool
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.server import create_mcp
+from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.monitor import goal_plus_monitor_snapshot
+from goal_plus.pi_tool import call_pi_tool
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.server import create_mcp
 
 from tests.test_runtime_unit import make_project, spec_with_strategy
 

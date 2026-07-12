@@ -17,7 +17,7 @@ the runner loads the extension explicitly with `-e`, so candidate workspaces do
 not need to contain `.pi/extensions`.
 
 When Pi is launched from this checkout, the extension runs
-`python -c ... agentic_any_search_mcp.pi_tool` with `src/` inserted into
+`python -c ... goal_plus.pi_tool` with `src/` inserted into
 `sys.path`. That keeps local development on the same `python` Pi inherited from
 the shell, even before the console scripts are on `PATH`. Installed checkouts
 can still use the console scripts directly.
@@ -47,11 +47,11 @@ model runs. The checked-in `.pi/prompts/goal-plus.md` remains a compatibility
 fallback for environments that do not load the extension; only that fallback
 depends on the model calling `goal_plus_create` first.
 
-The Pi extension runs as `AGENTIC_ANY_SEARCH_PI_ROLE=main` by default and
+The Pi extension runs as `GOAL_PLUS_PI_ROLE=main` by default and
 exposes `goal_plus_*`, `search_*`, `pi_search_run_batch`, and
 `pi_search_run_candidate`. The low-level `pi_rpc_run_worker` tool is hidden in
 normal main-agent flow and is registered only when
-`AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set for manual debugging.
+`GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set for manual debugging.
 The extension restores the active Goal Plus state on session start, injects
 hidden Goal Plus context before agent starts, and calls
 `goal_plus_gate(event="pre_tool_use")` before main-role `search_*` tool calls,
@@ -92,7 +92,7 @@ Print/JSON invocations use in-memory active state because those process modes
 do not need a persistent user session.
 
 For workers, Pi RPC is a foreground `pi --mode rpc` process started by
-`agentic-any-search-pi-worker`, not a host-managed background subagent. The
+`goal-plus-pi-worker`, not a host-managed background subagent. The
 main agent still receives a normal Search Mode launch payload and binds the
 returned handle with `search_bind_agent_handle`, but the runner owns the
 process watchdog, metadata-only event log, optional raw debug log, and
@@ -176,7 +176,7 @@ RPC worker, bind the handle, and can run the final verifier. The returned
 `search_bind_agent_handle`, and `search_run_verifier` when final verification
 is enabled. The main agent should not call the low-level worker tool in normal
 Search Mode. To expose it for manual debugging, start Pi with
-`AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1`.
+`GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1`.
 
 The Pi main agent also does not directly call `search_start_agent_session`,
 `search_bind_agent_handle`, or `search_continue_agent_session`; those mechanical
@@ -203,22 +203,22 @@ The launch payload uses `tool="pi_rpc_worker"` and contains `root`, `cwd`,
 
 ## RPC Runner
 
-`agentic-any-search-pi-worker run` starts Pi in the candidate workspace:
+`goal-plus-pi-worker run` starts Pi in the candidate workspace:
 
 ```bash
 pi --mode rpc --approve \
   --no-session \
   --session-id <agent_session_id> \
-  -e <repo>/.pi/extensions/search-runtime.ts
+  -e <repo>/.pi/extensions/goal-plus.ts
 ```
 
 The runner sets:
 
-- `AGENTIC_ANY_SEARCH_ROOT=<abs .gp>`
-- `AGENTIC_ANY_SEARCH_PI_ROLE=worker`
+- `GOAL_PLUS_ROOT=<abs .gp>`
+- `GOAL_PLUS_PI_ROLE=worker`
 
-If `--model` is passed to `agentic-any-search-pi-worker run`, or
-`AGENTIC_ANY_SEARCH_PI_MODEL` is set, the runner starts Pi with that model
+If `--model` is passed to `goal-plus-pi-worker run`, or
+`GOAL_PLUS_PI_MODEL` is set, the runner starts Pi with that model
 pattern.
 
 Worker-role extension tools are restricted to `search_get_agent_context`,
@@ -237,10 +237,10 @@ operate on the candidate workspace instead of an enclosing repository.
 
 ## Tool Facade
 
-`agentic-any-search-pi-tool` is a JSON CLI facade for the Pi extension:
+`goal-plus-pi-tool` is a JSON CLI facade for the Pi extension:
 
 ```bash
-agentic-any-search-pi-tool search_get_agent_context \
+goal-plus-pi-tool search_get_agent_context \
   --root .gp \
   --args-json '{"agent_session_id":"agent_..."}'
 ```
@@ -254,7 +254,7 @@ promotion as explicit runtime steps.
 The same facade exposes the generic read-only monitor tool:
 
 ```bash
-agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+goal-plus-pi-tool goal_plus_monitor_snapshot \
   --root .gp \
   --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
   --pretty
@@ -278,7 +278,7 @@ Pi worker logs are written under:
   default. It records event types, tool names/status, usage/counts, and bounded
   error summaries without prompts, reasoning, tool payloads, or transcripts.
 
-Set `AGENTIC_ANY_SEARCH_PI_RAW_LOG=1` only for short, targeted debugging. It
+Set `GOAL_PLUS_PI_RAW_LOG=1` only for short, targeted debugging. It
 retains streaming updates in the JSONL and also writes the duplicate raw
 `.gp/host-logs/pi-rpc-<agent_session_id>.txt` stream. Raw mode can grow by
 hundreds of MiB per worker because Pi updates may contain cumulative message
@@ -296,7 +296,7 @@ reports, benchmark tables, or strategy analysis.
 |---|---|
 | `usage_delta` | Tokens and estimated cost for this runner invocation. Computed from in-memory Pi entries added after the pre-prompt baseline. |
 | `usage_total` | Tokens and estimated cost visible in the worker process at completion. With stateless workers this is normally the current invocation total. |
-| `duration_seconds` | Wall-clock runtime measured by `agentic-any-search-pi-worker`, including waiting for the Pi RPC worker to finish. |
+| `duration_seconds` | Wall-clock runtime measured by `goal-plus-pi-worker`, including waiting for the Pi RPC worker to finish. |
 | `session_file` | `null` for stateless workers; retained in the schema so older run records remain readable. |
 | `baseline_entry_count`, `final_entry_count` | Entry boundaries used to compute `usage_delta`. |
 | `session_stats` | Pi RPC `get_session_stats` output, kept as host-native context. |

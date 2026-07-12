@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from agentic_any_search_mcp import pi_worker
+from goal_plus import pi_worker
 
 
 pytestmark = pytest.mark.pi
@@ -146,7 +146,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    extension = tmp_path / "search-runtime.ts"
+    extension = tmp_path / "goal-plus.ts"
     extension.write_text("// fake extension\n", encoding="utf-8")
     session_dir = tmp_path / "sessions"
     cwd = tmp_path / "workspace"
@@ -255,7 +255,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert popen_cmd[0:3] == ["pi", "--model", "gpt-5.4-mini"]
     assert "--no-session" in popen_cmd
     assert "--session-dir" not in popen_cmd
-    assert popen_env["AGENTIC_ANY_SEARCH_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
+    assert popen_env["GOAL_PLUS_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
     assert handle["metadata"]["raw_logging"] is False
     assert handle["metadata"]["text_log"] is None
     assert handle["metadata"]["session_file"] is None
@@ -355,7 +355,7 @@ def test_run_pi_rpc_worker_waits_for_pi_auto_retry(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    extension = tmp_path / "search-runtime.ts"
+    extension = tmp_path / "goal-plus.ts"
     extension.write_text("// fake extension\n", encoding="utf-8")
     session_dir = tmp_path / "sessions"
     cwd = tmp_path / "workspace"
@@ -434,7 +434,7 @@ def test_run_pi_rpc_worker_steers_once_before_hard_deadline(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    extension = tmp_path / "search-runtime.ts"
+    extension = tmp_path / "goal-plus.ts"
     extension.write_text("// fake extension\n", encoding="utf-8")
     session_dir = tmp_path / "sessions"
     cwd = tmp_path / "workspace"

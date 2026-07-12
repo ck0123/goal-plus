@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+from goal_plus.goal_plus import FileGoalPlusRuntime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +14,7 @@ HOOK = ROOT / "scripts" / "hooks" / "goal_plus_stop.py"
 HOOK_CLI = [
     sys.executable,
     "-m",
-    "agentic_any_search_mcp.server",
+    "goal_plus.server",
     "--goal-plus-host-hook",
 ]
 
@@ -156,7 +156,7 @@ def test_post_tool_use_goal_plus_create_binds_main_session(tmp_path: Path) -> No
             "hook_event_name": "PostToolUse",
             "session_id": "session-main",
             "transcript_path": "/tmp/main.jsonl",
-            "tool_name": "mcp__search-runtime__goal_plus_create",
+            "tool_name": "mcp__goal-plus__goal_plus_create",
             "tool_response": {"goal_plus_id": record.goal_plus_id},
         },
     )
@@ -183,9 +183,9 @@ def test_post_tool_use_goal_plus_create_ignores_subagent_context(tmp_path: Path)
             "hook_event_name": "PostToolUse",
             "session_id": "session-main",
             "agent_id": "agent-sub",
-            "agent_type": "any-search-agent",
+            "agent_type": "search-candidate-agent",
             "agent_transcript_path": "/tmp/subagent.jsonl",
-            "tool_name": "mcp__search-runtime__goal_plus_create",
+            "tool_name": "mcp__goal-plus__goal_plus_create",
             "tool_response": {"goal_plus_id": record.goal_plus_id},
         },
     )

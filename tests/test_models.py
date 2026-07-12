@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from agentic_any_search_mcp.models import (
+from goal_plus.models import (
     AgentHostHandle,
     AgentSessionRecord,
     Budget,
@@ -58,13 +58,15 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
 
 def test_search_spec_supports_copy_and_git_worktree_workspace_backends() -> None:
     default_spec = SearchSpec.model_validate(valid_spec_dict())
-    assert default_spec.workspace.backend == "copy"
-    assert default_spec.model_dump(mode="json")["workspace"] == {"backend": "copy"}
+    assert default_spec.workspace.backend == "git_worktree"
+    assert default_spec.model_dump(mode="json")["workspace"] == {
+        "backend": "git_worktree"
+    }
 
-    worktree_data = valid_spec_dict()
-    worktree_data["workspace"] = {"backend": "git_worktree"}
-    worktree_spec = SearchSpec.model_validate(worktree_data)
-    assert worktree_spec.workspace.backend == "git_worktree"
+    copy_data = valid_spec_dict()
+    copy_data["workspace"] = {"backend": "copy"}
+    copy_spec = SearchSpec.model_validate(copy_data)
+    assert copy_spec.workspace.backend == "copy"
 
     invalid_data = valid_spec_dict()
     invalid_data["workspace"] = {"backend": "overlay"}
@@ -84,10 +86,10 @@ def test_search_spec_requires_structured_strategy() -> None:
     data["strategy"] = {
         "name": "independent_branches",
         "worker_mode": "agent-session-pool",
-        "worker_agent_type": "AnySearchAgent"}
+        "worker_agent_type": "SearchCandidateAgent"}
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.worker_mode == "agent-session-pool"
-    assert spec.strategy.worker_agent_type == "AnySearchAgent"
+    assert spec.strategy.worker_agent_type == "SearchCandidateAgent"
 
     legacy_string = valid_spec_dict()
     legacy_string["strategy"] = "evolve"
@@ -193,7 +195,7 @@ def test_agent_session_record_is_context_handle_with_required_candidate() -> Non
         workspace=Path("/tmp/c001"),
         directive={"goal": "try one direction"},
         launch={
-            "subagent_type": "AnySearchAgent",
+            "subagent_type": "SearchCandidateAgent",
             "description": "c001 try one direction",
             "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: try one direction",
         },
@@ -202,7 +204,7 @@ def test_agent_session_record_is_context_handle_with_required_candidate() -> Non
     assert session.candidate_id == "c001"
     assert session.host == "opencode"
     assert session.host_handle == AgentHostHandle(host="opencode")
-    assert session.launch["subagent_type"] == "AnySearchAgent"
+    assert session.launch["subagent_type"] == "SearchCandidateAgent"
 
     # candidate_id is now required - a subagent session without a candidate
     # has no useful role in this runtime.

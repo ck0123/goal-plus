@@ -1,6 +1,7 @@
-# Agentic Any Search MCP
+# Goal Plus
 
-`agentic-any-search-mcp` is the MCP runtime behind `/goal-plus`.
+`goal-plus` is the host-neutral runtime behind `/goal-plus`. MCP is its shared
+control plane; Goal Plus is the product and user-facing workflow.
 
 `/goal-plus` is the default user-facing workflow. It behaves like an ordinary
 goal for normal coding, docs, review, and investigation tasks. When the task is
@@ -21,22 +22,22 @@ host configs, skills, hooks, and worker-agent prompts.
 
 ## Install
 
-Install the Python package so the `agentic-any-search-mcp` command is on
+Install the Python package so the `goal-plus` command is on
 `PATH`.
 
 From Git:
 
 ```bash
-python -m pip install --user "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
-agentic-any-search-mcp --help
+python -m pip install --user "git+https://github.com/ck0123/goal-plus.git"
+goal-plus --help
 ```
 
 From an existing checkout:
 
 ```bash
-cd agentic-any-search-mcp
+cd goal-plus
 python -m pip install -e ".[dev]"
-agentic-any-search-mcp --help
+goal-plus --help
 ```
 
 If the command is not found after a user-level install, add the Python user
@@ -60,7 +61,7 @@ path.
 The runtime is a stdio MCP server. All hosts should launch the same command:
 
 ```text
-agentic-any-search-mcp --root .gp
+goal-plus --root .gp
 ```
 
 This repository already includes project-local config for all supported hosts.
@@ -70,7 +71,7 @@ This repository already includes project-local config for all supported hosts.
 | Codex | `.codex/config.example.toml`, `.codex/hooks.json`, `.codex/skills/` | Copy the example to the ignored local `.codex/config.toml`, then use the `goal-plus` skill / `/goal-plus` prompt | Codex 0.144.1+ ships `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop` Goal Plus hooks. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
-| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/search-runtime.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `agentic-any-search-pi-worker`; stats are Pi custom entries, not LLM messages. |
+| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/goal-plus.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `goal-plus-pi-worker`; stats are Pi custom entries, not LLM messages. |
 
 Host-specific setup and debugging details live in:
 
@@ -186,7 +187,7 @@ scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 .claude/                              # Claude Code settings, skills, worker agents
 docs/                                 # design, host, debug, and strategy docs
 examples/                             # bundled SearchSpec examples
-src/agentic_any_search_mcp/           # runtime, models, tools, server
+src/goal_plus/           # runtime, models, tools, server
 tests/                                # unit, integration, asset, and opt-in ST tests
 ```
 

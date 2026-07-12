@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agentic_any_search_mcp.models import SearchSpec
+from goal_plus.models import SearchSpec
 
 
 ROOT = Path(__file__).resolve().parents[1]

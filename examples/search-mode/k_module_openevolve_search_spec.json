@@ -29,7 +29,7 @@
       "name": "evaluator_hash_check",
       "role": "anti_cheat_gate",
       "command": [
-        "search-runtime-internal",
+        "goal-plus-internal",
         "check-frozen-hashes"
       ]
     }
@@ -42,7 +42,7 @@
     "name": "openevolve",
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgentFlash",
+    "worker_agent_type": "SearchCandidateAgentFlash",
     "history_policy": {
       "scope": "top_n",
       "top_n": 5

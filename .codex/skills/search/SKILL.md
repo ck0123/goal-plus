@@ -1,6 +1,6 @@
 ---
 name: search
-description: Internal Search Mode engine for /goal-plus with the search-runtime MCP server from Codex.
+description: Internal Search Mode engine for /goal-plus with the goal-plus MCP server from Codex.
 ---
 
 # Search Mode Runtime for Codex
@@ -9,7 +9,7 @@ Use this skill after `/goal-plus` has upgraded a goal to Search Mode, or for
 explicit low-level debugging of an already measurable SearchSpec. The normal
 user-facing entrypoint is `/goal-plus`.
 
-Use the logical `search_*` tools exposed by the `search-runtime` MCP server.
+Use the logical `search_*` tools exposed by the `goal-plus` MCP server.
 Codex may display MCP tools with a client-specific prefix; match by the final
 logical tool name.
 

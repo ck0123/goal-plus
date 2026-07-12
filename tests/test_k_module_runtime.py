@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.models import RunState
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import SearchTools
+from goal_plus.models import RunState
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.tools import SearchTools
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "k_module_problem"
@@ -73,7 +73,7 @@ def spec_for(project: Path) -> dict:
             {
                 "name": "evaluator_hash_check",
                 "role": "anti_cheat_gate",
-                "command": ["search-runtime-internal", "check-frozen-hashes"],
+                "command": ["goal-plus-internal", "check-frozen-hashes"],
             }
         ],
         "budget": {

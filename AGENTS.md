@@ -121,22 +121,22 @@ When building or running such benchmarks:
 
 ## Directory Map
 
-- `src/agentic_any_search_mcp/models.py`: strict Pydantic data models and
+- `src/goal_plus/models.py`: strict Pydantic data models and
   validation.
-- `src/agentic_any_search_mcp/goal_plus.py`: file-backed goal-plus state
+- `src/goal_plus/goal_plus.py`: file-backed goal-plus state
   machine for raw goal intake, triage, spec drafts, gates, and search links.
-- `src/agentic_any_search_mcp/runtime.py`: file-backed Search Mode state
+- `src/goal_plus/runtime.py`: file-backed Search Mode state
   machine for workspace copy, verifier execution, selection, reports, and
   promotion.
-- `src/agentic_any_search_mcp/agent_hosts.py`: host adapters for OpenCode,
+- `src/goal_plus/agent_hosts.py`: host adapters for OpenCode,
   Codex, and Claude Code. Keep host launch/continue/budget mapping here.
-- `src/agentic_any_search_mcp/tools.py`: JSON-friendly facade used by tests and
+- `src/goal_plus/tools.py`: JSON-friendly facade used by tests and
   MCP.
-- `src/agentic_any_search_mcp/server.py`: FastMCP stdio server.
-- `src/agentic_any_search_mcp/strategies/`: strategy plugins and helpers.
-- `src/agentic_any_search_mcp/trace_export.py`: OpenCode trace export tooling.
-- `src/agentic_any_search_mcp/pi_tool.py` and
-  `src/agentic_any_search_mcp/pi_worker.py`: Pi extension facade and Pi RPC
+- `src/goal_plus/server.py`: FastMCP stdio server.
+- `src/goal_plus/strategies/`: strategy plugins and helpers.
+- `src/goal_plus/trace_export.py`: OpenCode trace export tooling.
+- `src/goal_plus/pi_tool.py` and
+  `src/goal_plus/pi_worker.py`: Pi extension facade and Pi RPC
   worker runner.
 - `.opencode/`: OpenCode goal-plus/search skills, commands, and worker agents.
 - `.codex/`: Codex goal-plus/search skills and worker agent assets.
@@ -179,9 +179,9 @@ Current host expectations:
   it does not yet wire PreToolUse or SubagentStop host hooks.
 - Pi RPC supports the portable builtin strategy subset. `worker_budget`
   requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
-  `agentic-any-search-pi-worker` to launch foreground `pi --mode rpc` workers
+  `goal-plus-pi-worker` to launch foreground `pi --mode rpc` workers
   with `--no-session` from candidate workspaces and explicitly loads
-  `.pi/extensions/search-runtime.ts`. Pi RPC does not support same-worker
+  `.pi/extensions/goal-plus.ts`. Pi RPC does not support same-worker
   continuation; recover with `search_redispatch_candidate`, MCP history,
   verifier evidence, Git state, and bounded progress handoff metadata. Pi has
   extension pre-tool guarding and skill stop gates, but no Codex Stop hook
@@ -218,19 +218,19 @@ the runtime contract, update the matching assets and tests:
   `.opencode/skills/goal-plus/SKILL.md`, `.opencode/command/goal-plus.md`,
   `.opencode/command/goal-any-optimize.md`,
   `.opencode/agents/goal-plus-orchestrator.md`,
-  `.opencode/agents/AnySearchAgent*.md`,
+  `.opencode/agents/SearchCandidateAgent*.md`,
   `.opencode/agents/search-orchestrator.md`, and
   `tests/test_opencode_assets.py`.
 - Codex: `.codex/skills/goal-plus/SKILL.md`,
   `.codex/skills/search/SKILL.md`,
-  `.codex/agents/any_search_agent.toml`, `.codex/config.example.toml`, and
+  `.codex/agents/search_candidate_agent.toml`, `.codex/config.example.toml`, and
   `tests/test_codex_assets.py`.
 - Claude Code: `.claude/skills/goal-plus/SKILL.md`,
   `.claude/skills/search/SKILL.md`,
-  `.claude/agents/any-search-agent*.md`, `.mcp.json`, and
+  `.claude/agents/search-candidate-agent*.md`, `.mcp.json`, and
   `tests/test_claude_assets.py`.
-- Pi: `.pi/prompts/goal-plus.md`, `.pi/prompts/any-search-worker.md`,
-  `.pi/skills/goal-plus/SKILL.md`, `.pi/extensions/search-runtime.ts`, and
+- Pi: `.pi/prompts/goal-plus.md`, `.pi/prompts/search-candidate-worker.md`,
+  `.pi/skills/goal-plus/SKILL.md`, `.pi/extensions/goal-plus.ts`, and
   `tests/test_pi_assets.py`.
 
 Do not let agents rediscover retired runtime APIs. The deleted lifecycle,
@@ -260,7 +260,7 @@ python -m pytest -m st -k k_module_smoke -v -s
 python -m pytest -m st -v -s
 ```
 
-Run ST only when host credentials, `opencode`, and the `search-runtime` MCP
+Run ST only when host credentials, `opencode`, and the `goal-plus` MCP
 connection are available. See [tests/README.md](tests/README.md) for preflight
 checks and environment variables.
 
@@ -290,7 +290,7 @@ Goal Plus/Search monitoring:
   facade instead of manually tailing files, for example:
 
   ```bash
-  agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+  goal-plus-pi-tool goal_plus_monitor_snapshot \
     --root .gp \
     --args-json '{"goal_plus_id":"gp_...","run_id":"run_...","stale_after_seconds":120}' \
     --pretty

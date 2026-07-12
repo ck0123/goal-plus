@@ -3,20 +3,20 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agentic_any_search_mcp.benchmarking.adapters.search_spec import (
+from goal_plus.benchmarking.adapters.search_spec import (
     build_search_spec,
     prepare_case_workspace,
 )
-from agentic_any_search_mcp.benchmarking.cases import BenchmarkCase, Choice
-from agentic_any_search_mcp.benchmarking.datasets import (
+from goal_plus.benchmarking.cases import BenchmarkCase, Choice
+from goal_plus.benchmarking.datasets import (
     SUPPORTED_BENCHMARKS,
     row_to_case,
 )
-from agentic_any_search_mcp.benchmarking.reporting import compare_paper_results
-from agentic_any_search_mcp.benchmarking.runners.direct import run_direct_case
-from agentic_any_search_mcp.benchmarking.runners.search_runtime import run_search_case
-from agentic_any_search_mcp.benchmarking.scoring import normalize_choice_label, score_prediction
-from agentic_any_search_mcp.runtime import FileSearchRuntime
+from goal_plus.benchmarking.reporting import compare_paper_results
+from goal_plus.benchmarking.runners.direct import run_direct_case
+from goal_plus.benchmarking.runners.search_runtime import run_search_case
+from goal_plus.benchmarking.scoring import normalize_choice_label, score_prediction
+from goal_plus.runtime import FileSearchRuntime
 
 
 def test_scores_mcq_and_numeric_answers() -> None:
@@ -145,7 +145,7 @@ def test_search_spec_adapter_verifies_case_workspace(tmp_path: Path) -> None:
     runtime = FileSearchRuntime(tmp_path / ".search")
     frozen = runtime.freeze_spec(
         runtime_spec := __import__(
-            "agentic_any_search_mcp.models",
+            "goal_plus.models",
             fromlist=["SearchSpec"],
         ).SearchSpec.model_validate(spec),
         [],

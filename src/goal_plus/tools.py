@@ -3,16 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.models import (
+from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.models import (
     CandidateProposal,
     GoalPlusNextAction,
     GoalPlusSpecDraft,
     GoalPlusTriage,
     SearchSpec,
 )
-from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
-from agentic_any_search_mcp.runtime import FileSearchRuntime
+from goal_plus.monitor import goal_plus_monitor_snapshot
+from goal_plus.runtime import FileSearchRuntime
 
 
 class SearchTools:

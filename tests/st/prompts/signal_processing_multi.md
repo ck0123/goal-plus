@@ -1,4 +1,4 @@
-Load {{PROJECT_ROOT}}/tests/st/fixtures/signal_processing/spec.json (max_candidates=8, max_parallel=4, AnySearchAgent 50 steps). Freeze {{PROJECT_ROOT}}/tests/st/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for each OpenCode Task to return, then plan + start the next 4. Report the best score after both batches.
+Load {{PROJECT_ROOT}}/tests/st/fixtures/signal_processing/spec.json (max_candidates=8, max_parallel=4, SearchCandidateAgent 50 steps). Freeze {{PROJECT_ROOT}}/tests/st/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for each OpenCode Task to return, then plan + start the next 4. Report the best score after both batches.
 
 ## ST Output Contract
 

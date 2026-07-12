@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agentic_any_search_mcp.models import SearchSpec
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.trace_export import export_chrome_trace
+from goal_plus.models import SearchSpec
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.trace_export import export_chrome_trace
 
 try:
     import tomllib
@@ -58,13 +58,13 @@ def spec_for(project: Path) -> SearchSpec:
                 {
                     "name": "hash_check",
                     "role": "anti_cheat_gate",
-                    "command": ["search-runtime-internal", "check-frozen-hashes"],
+                    "command": ["goal-plus-internal", "check-frozen-hashes"],
                 }
             ],
             "strategy": {
                 "name": "independent_branches",
                 "worker_mode": "agent-session-pool",
-                "worker_agent_type": "AnySearchAgentFlash",
+                "worker_agent_type": "SearchCandidateAgentFlash",
             },
         }
     )
@@ -117,7 +117,7 @@ def test_export_chrome_trace_includes_run_agent_verifier_and_report_events(
     assert plan_event["args"]["planned_k"] == 1
     assert plan_event["args"]["started_candidate_ids"] == ["c001"]
 
-    agent_event = event_named(trace, "c001 AnySearchAgentFlash")
+    agent_event = event_named(trace, "c001 SearchCandidateAgentFlash")
     assert agent_event["cat"] == "subagent"
     assert agent_event["args"]["candidate_id"] == "c001"
     assert agent_event["args"]["opencode_session_id"] == "ses_trace_001"
@@ -173,7 +173,7 @@ def test_export_chrome_trace_uses_opencode_log_for_subagent_timing(
                 (
                     "timestamp=2026-07-03T09:23:22.665Z level=INFO run=runlog "
                     "message=created id=ses_trace_001 title=\"c001 baseline\" "
-                    "agent=AnySearchAgentFlash time.created=1783070602665 "
+                    "agent=SearchCandidateAgentFlash time.created=1783070602665 "
                     "time.updated=1783070602665"
                 ),
                 (
@@ -187,7 +187,7 @@ def test_export_chrome_trace_uses_opencode_log_for_subagent_timing(
                 (
                     "timestamp=2026-07-03T09:23:25.000Z level=INFO run=runlog "
                     "message=stream providerID=zai-coding-plan modelID=glm-5.2 "
-                    "session.id=ses_trace_001 small=false agent=AnySearchAgentFlash "
+                    "session.id=ses_trace_001 small=false agent=SearchCandidateAgentFlash "
                     "mode=subagent"
                 ),
                 (
@@ -203,7 +203,7 @@ def test_export_chrome_trace_uses_opencode_log_for_subagent_timing(
     trace_path = export_chrome_trace(root, run_id, opencode_log_path=opencode_log)
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
 
-    agent_event = event_named(trace, "c001 AnySearchAgentFlash")
+    agent_event = event_named(trace, "c001 SearchCandidateAgentFlash")
     assert agent_event["cat"] == "subagent"
     assert agent_event["dur"] == 166_448_000
     assert agent_event["args"]["timing_source"] == "opencode_log"
@@ -227,6 +227,6 @@ def test_pyproject_exposes_trace_export_console_script() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert (
-        pyproject["project"]["scripts"]["agentic-any-search-trace"]
-        == "agentic_any_search_mcp.trace_export:main"
+        pyproject["project"]["scripts"]["goal-plus-trace"]
+        == "goal_plus.trace_export:main"
     )

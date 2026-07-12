@@ -5,9 +5,9 @@ import math
 from pathlib import Path
 from typing import Any, Callable
 
-from agentic_any_search_mcp.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import SearchTools
+from goal_plus.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.tools import SearchTools
 
 
 def _search_tools_for_pi_rpc_run(root_dir: Path | str, run_id: str) -> SearchTools:

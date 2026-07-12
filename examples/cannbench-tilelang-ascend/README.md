@@ -1,6 +1,6 @@
 # CANNBench TileLang-Ascend Search Example
 
-This example uses `agentic-any-search-mcp` as a generic search runtime and uses
+This example uses `goal-plus` as a generic search runtime and uses
 CANNBench only as the verifier. It is intended for Pi RPC workers:
 `/goal-plus` freezes the SearchSpec, Pi workers edit a TileLang-Ascend
 submission workspace, and `search_run_verifier` calls local CANNBench to produce
@@ -86,7 +86,7 @@ Backend:   tilelang_ascend
 
 ## Prepare A Search Workspace
 
-Run this from the `agentic-any-search-mcp` checkout on the target NPU machine.
+Run this from the `goal-plus` checkout on the target NPU machine.
 If `CANN_BENCH_ROOT` and `AKG_AGENTS_ROOT` are set, the roots can be omitted:
 
 ```bash
@@ -148,7 +148,7 @@ Then it reads the newest CANNBench JSON report and prints a final JSON object:
 {"overall_score": 73.2, "valid": true, "pass_rate": 1.0}
 ```
 
-`agentic-any-search-mcp` parses the last JSON line and ranks candidates by:
+`goal-plus` parses the last JSON line and ranks candidates by:
 
 ```json
 {
@@ -269,7 +269,7 @@ The target machine must have:
 CANN / torch_npu usable on the target NPU
 tilelang-ascend importable by Python
 cann-bench dependencies installed
-agentic-any-search-mcp configured for Pi RPC
+goal-plus configured for Pi RPC
 ```
 
 This repository does not emulate NPU scoring. On a non-NPU machine, use the

@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from agentic_any_search_mcp.agent_hosts import get_agent_host_adapter
+from goal_plus.agent_hosts import get_agent_host_adapter
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -172,7 +172,7 @@ def _search_spec(
             {
                 "name": "frozen_hash_gate",
                 "role": "anti_cheat_gate",
-                "command": ["search-runtime-internal", "check-frozen-hashes"],
+                "command": ["goal-plus-internal", "check-frozen-hashes"],
             }
         ],
         "budget": {

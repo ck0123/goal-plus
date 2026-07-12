@@ -48,7 +48,7 @@ WorkspaceBackend = Literal["copy", "git_worktree"]
 
 
 class WorkspaceSpec(SearchModel):
-    backend: WorkspaceBackend = "copy"
+    backend: WorkspaceBackend = "git_worktree"
 
 
 class EditSurface(SearchModel):

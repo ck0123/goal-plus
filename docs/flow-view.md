@@ -25,7 +25,7 @@ does not actually expose, the feature is dead on arrival.
                │               prompt=<launch.prompt>)
                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Subagent (AnySearchAgent[Flash|<none>|Deep|ExtraDeep])         │
+│  Subagent (SearchCandidateAgent[Flash|<none>|Deep|ExtraDeep])         │
 │  mode: subagent, steps: 15 / 50 / 100 / 150                    │
 │  Owns: one-candidate autoresearch loop (edit→verify→commit)    │
 │  Sees: the dict returned by search_get_agent_context           │
@@ -97,7 +97,7 @@ Each step lists **who acts** and **what they see**.
     prompt-supplied labels.
 
 [7] Subagent first action:
-    search-runtime_search_get_agent_context(agent_session_id)
+    goal-plus_search_get_agent_context(agent_session_id)
     Subagent sees (the full context dict, runtime.py get_agent_context):
       • agent_session_id, run_id, candidate_id, workspace
       • objective, metric_name, metric_direction
@@ -111,7 +111,7 @@ Each step lists **who acts** and **what they see**.
       • iterations — this candidate's own run_verifier history
     The subagent treats this dict as the single source of truth.
 
-[8] Subagent autoresearch loop (AnySearchAgent.md "Iteration Loop"):
+[8] Subagent autoresearch loop (SearchCandidateAgent.md "Iteration Loop"):
     repeat until OpenCode step cap or self-decision:
       read context.iterations + context.history
       → pick next hypothesis

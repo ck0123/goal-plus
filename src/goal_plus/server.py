@@ -4,10 +4,10 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
+from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.tools import GoalPlusTools, SearchTools
 
 
 def create_mcp(
@@ -19,7 +19,7 @@ def create_mcp(
     goal_runtime = FileGoalPlusRuntime(root_dir)
     tools = SearchTools(runtime)
     goal_tools = GoalPlusTools(goal_runtime)
-    mcp = FastMCP("agentic-any-search")
+    mcp = FastMCP("goal-plus")
 
     @mcp.tool()
     def search_freeze_spec(spec: dict[str, Any], verifier_artifact_paths: list[str]) -> dict[str, Any]:
@@ -336,7 +336,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.goal_plus_stop_hook or args.goal_plus_host_hook:
-        from agentic_any_search_mcp.goal_plus_stop_hook import main as hook_main
+        from goal_plus.goal_plus_stop_hook import main as hook_main
 
         raise SystemExit(hook_main())
     create_mcp(args.root).run(transport="stdio")

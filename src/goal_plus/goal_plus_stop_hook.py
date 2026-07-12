@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
 
 
 GOAL_ID_RE = re.compile(r"\bgp_\d+\b")
@@ -196,8 +196,8 @@ def _host_kind(hook_input: dict[str, Any]) -> str:
 
 
 def _load_record(path: Path):
-    from agentic_any_search_mcp.goal_plus import read_json
-    from agentic_any_search_mcp.models import GoalPlusRecord
+    from goal_plus.goal_plus import read_json
+    from goal_plus.models import GoalPlusRecord
 
     try:
         return GoalPlusRecord.model_validate(read_json(path))
@@ -474,7 +474,7 @@ def main() -> int:
     try:
         event_name = _hook_event_name(hook_input)
         if event_name in {"UserPromptSubmit", "SessionStart", "PreToolUse"}:
-            from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+            from goal_plus.goal_plus import FileGoalPlusRuntime
 
             if event_name != "UserPromptSubmit" and not search_root.exists():
                 return 0
@@ -499,7 +499,7 @@ def main() -> int:
             goal_path = search_root / "goal-plus" / goal_id / "goal.json"
             if not goal_path.is_file():
                 return 0
-            from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+            from goal_plus.goal_plus import FileGoalPlusRuntime
 
             runtime = FileGoalPlusRuntime(search_root)
             _handle_post_tool_use(runtime, hook_input, goal_id, session_id)
@@ -510,7 +510,7 @@ def main() -> int:
         if not search_root.exists():
             return 0
 
-        from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+        from goal_plus.goal_plus import FileGoalPlusRuntime
 
         runtime = FileGoalPlusRuntime(search_root)
         _handle_stop_event(

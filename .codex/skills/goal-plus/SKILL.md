@@ -1,6 +1,6 @@
 ---
 name: goal-plus
-description: Run a Codex goal with optional upgrade to Agentic Search through the search-runtime MCP server.
+description: Run a Codex goal with optional upgrade to Agentic Search through the goal-plus MCP server.
 ---
 
 # Goal Plus for Codex
@@ -10,7 +10,7 @@ multi-candidate Agentic Search when the success standard is measurable and
 frozen.
 
 Use the logical `goal_plus_*` and `search_*` tools exposed by the
-`search-runtime` MCP server. Codex may display MCP tools with a client-specific
+`goal-plus` MCP server. Codex may display MCP tools with a client-specific
 prefix; match by the final logical tool name.
 
 ## Workflow
@@ -106,7 +106,7 @@ existing Search MCP flow.
 
 This repository ships Codex 0.144.1 Goal Plus host hooks at
 `.codex/hooks.json`. They run
-`agentic-any-search-mcp --goal-plus-host-hook` for `UserPromptSubmit`,
+`goal-plus --goal-plus-host-hook` for `UserPromptSubmit`,
 `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop`.
 `UserPromptSubmit` pre-creates and binds `/goal-plus` or `$goal-plus` before the
 model turn. `SessionStart` restores a session-bound active id. `PreToolUse`

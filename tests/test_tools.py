@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 
-from agentic_any_search_mcp.models import (
+from goal_plus.models import (
     AgentHostHandle,
     AgentSessionRecord,
     CandidateProposal,
@@ -21,7 +21,7 @@ from agentic_any_search_mcp.models import (
     VerifierResult,
     VerifierRole,
 )
-from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
+from goal_plus.tools import GoalPlusTools, SearchTools
 
 
 def spec_dict() -> dict:
@@ -99,7 +99,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         updated_at="2026-06-24T00:00:00Z",
         workspace=Path("/tmp/c001"),
         launch={
-            "subagent_type": "AnySearchAgent",
+            "subagent_type": "SearchCandidateAgent",
             "description": "c001 try one",
             "prompt": "agent_session_id=agent_001; candidate_id=c001; idea: try one",
         },
@@ -140,7 +140,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         update={
             "agent_session_id": "agent_002",
             "launch": {
-                "subagent_type": "AnySearchAgentDeep",
+                "subagent_type": "SearchCandidateAgentDeep",
                 "description": "c001 resume",
                 "prompt": "state_level_resume=true; agent_session_id=agent_002",
             },
@@ -159,7 +159,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         update={
             "launch": {
                 "task_id": "opencode_session_001",
-                "subagent_type": "AnySearchAgent",
+                "subagent_type": "SearchCandidateAgent",
                 "description": "c001 continue try one",
                 "prompt": "continue_existing_agent_session=true; agent_session_id=agent_001",
             }
@@ -214,11 +214,11 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "run_1",
         "c001",
         {"goal": "resume same candidate"},
-        worker_agent_type="AnySearchAgentDeep",
+        worker_agent_type="SearchCandidateAgentDeep",
         worker_budget={"max_turns": 16},
     )
     assert redispatched["agent_session_id"] == "agent_002"
-    assert redispatched["launch"]["subagent_type"] == "AnySearchAgentDeep"
+    assert redispatched["launch"]["subagent_type"] == "SearchCandidateAgentDeep"
     assert tools.search_bind_agent_handle(
         "agent_001",
         {"host": "codex", "task_name": "search_agent_001"},
@@ -265,7 +265,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         run_id="run_1",
         candidate_id="c001",
         directive={"goal": "resume same candidate"},
-        worker_agent_type="AnySearchAgentDeep",
+        worker_agent_type="SearchCandidateAgentDeep",
         worker_budget={"max_turns": 16},
     )
     runtime.bind_opencode_session.assert_called_once_with(

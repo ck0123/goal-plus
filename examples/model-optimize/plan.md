@@ -201,8 +201,8 @@ pi --approve --no-session \
 Use the local ignored Goal Plus/Search root:
 
 ```bash
-AGENTIC_ANY_SEARCH_ROOT=.gp
-AGENTIC_ANY_SEARCH_SOURCE_PATH="$PWD"
+GOAL_PLUS_ROOT=.gp
+GOAL_PLUS_SOURCE_PATH="$PWD"
 ```
 
 Acceptance:

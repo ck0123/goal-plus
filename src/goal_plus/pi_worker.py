@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
 class PiRpcError(RuntimeError):
@@ -414,7 +414,7 @@ class _RpcClient:
 
 def default_extension_path() -> Path:
     source_root = Path(__file__).resolve().parents[2]
-    return source_root / ".pi" / "extensions" / "search-runtime.ts"
+    return source_root / ".pi" / "extensions" / "goal-plus.ts"
 
 
 def _kill_process_group(proc: subprocess.Popen[str]) -> None:
@@ -580,7 +580,7 @@ def run_pi_rpc_worker(
     agent_session_id = str(launch["agent_session_id"])
     session_id = _safe_session_name(str(launch.get("session_id") or agent_session_id))
     root = Path(
-        str(launch.get("root") or os.environ.get("AGENTIC_ANY_SEARCH_ROOT", DEFAULT_RUNTIME_ROOT))
+        str(launch.get("root") or os.environ.get("GOAL_PLUS_ROOT", DEFAULT_RUNTIME_ROOT))
     ).resolve()
     cwd = Path(str(launch["cwd"])).resolve()
     budget = dict(launch.get("budget_control") or {})
@@ -595,7 +595,7 @@ def run_pi_rpc_worker(
 
     host_logs = root / "host-logs"
     event_log = host_logs / f"pi-rpc-{session_id}.jsonl"
-    raw_logging = os.environ.get("AGENTIC_ANY_SEARCH_PI_RAW_LOG") == "1"
+    raw_logging = os.environ.get("GOAL_PLUS_PI_RAW_LOG") == "1"
     text_log = host_logs / f"pi-rpc-{session_id}.txt" if raw_logging else None
     extension = Path(extension_path) if extension_path else default_extension_path()
     if not extension.exists():
@@ -604,14 +604,14 @@ def run_pi_rpc_worker(
     host_logs.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
-        "AGENTIC_ANY_SEARCH_ROOT": str(root),
-        "AGENTIC_ANY_SEARCH_PI_ROLE": "worker",
-        "AGENTIC_ANY_SEARCH_SOURCE_PATH": str(default_extension_path().parents[2]),
+        "GOAL_PLUS_ROOT": str(root),
+        "GOAL_PLUS_PI_ROLE": "worker",
+        "GOAL_PLUS_SOURCE_PATH": str(default_extension_path().parents[2]),
     }
     selected_model_pattern = (
         model_pattern
         or launch.get("model_pattern")
-        or os.environ.get("AGENTIC_ANY_SEARCH_PI_MODEL")
+        or os.environ.get("GOAL_PLUS_PI_MODEL")
     )
     cmd = [pi_binary]
     if selected_model_pattern:
@@ -813,7 +813,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--launch-json", help="Launch payload JSON. Defaults to stdin.")
     run_parser.add_argument("--pi-binary", default="pi")
-    run_parser.add_argument("--extension", help="Path to search-runtime.ts")
+    run_parser.add_argument("--extension", help="Path to goal-plus.ts")
     run_parser.add_argument("--model")
     run_parser.add_argument("--provider")
     run_parser.add_argument("--model-id")

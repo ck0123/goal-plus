@@ -7,11 +7,11 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT
-from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import GoalPlusTools, SearchTools
+from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.pi_driver import run_pi_search_batch, run_pi_search_candidate
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.tools import GoalPlusTools, SearchTools
 
 
 SEARCH_TOOL_NAMES = {
@@ -156,12 +156,12 @@ def _read_args(args_json: str | None) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="JSON CLI facade for Pi search-runtime extension tools."
+        description="JSON CLI facade for Pi goal-plus extension tools."
     )
     parser.add_argument("tool", help="Tool name, e.g. search_get_agent_context")
     parser.add_argument(
         "--root",
-        default=os.environ.get("AGENTIC_ANY_SEARCH_ROOT", DEFAULT_RUNTIME_ROOT),
+        default=os.environ.get("GOAL_PLUS_ROOT", DEFAULT_RUNTIME_ROOT),
         help="Search runtime storage directory",
     )
     parser.add_argument(

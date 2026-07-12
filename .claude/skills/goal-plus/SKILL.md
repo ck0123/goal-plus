@@ -1,6 +1,6 @@
 ---
 name: goal-plus
-description: Run a Claude Code goal with optional upgrade to Agentic Search through the search-runtime MCP server.
+description: Run a Claude Code goal with optional upgrade to Agentic Search through the goal-plus MCP server.
 ---
 
 # Goal Plus for Claude Code
@@ -10,7 +10,7 @@ multi-candidate Agentic Search when the success standard is measurable and
 frozen.
 
 Use the logical `goal_plus_*` and `search_*` tools exposed by the
-`search-runtime` MCP server. Claude Code may display MCP tools with a server
+`goal-plus` MCP server. Claude Code may display MCP tools with a server
 prefix; match by the final logical tool name.
 
 ## Workflow
@@ -95,7 +95,7 @@ existing Search MCP flow.
 ## Hook Compatibility
 
 This repository ships Claude Code Goal Plus host hooks in `.claude/settings.json`
-that run `agentic-any-search-mcp --goal-plus-host-hook`.
+that run `goal-plus --goal-plus-host-hook`.
 `PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
 current top-level Claude Code `session_id`. The `Stop` hook is a final backstop
 for `goal_plus_gate(event="stop")`: if the session-bound Goal Plus record still

@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from agentic_any_search_mcp.workspaces import materialize_candidate_workspace
+from goal_plus.workspaces import materialize_candidate_workspace
 
 
 def make_source(tmp_path: Path) -> Path:

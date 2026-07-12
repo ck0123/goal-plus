@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-from agentic_any_search_mcp.models import SearchSpec
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import SearchTools
+from goal_plus.models import SearchSpec
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.tools import SearchTools
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,13 +20,13 @@ EXAMPLE_SPECS = [
         "circle_packing_search_spec.json",
         "tests/fixtures/circle_packing/evaluator.py",
         "combined_score",
-        {"max_candidates": 4, "max_parallel": 2, "worker_agent_type": "AnySearchAgentFlash"},
+        {"max_candidates": 4, "max_parallel": 2, "worker_agent_type": "SearchCandidateAgentFlash"},
     ),
     (
         "signal_processing_search_spec.json",
         "tests/fixtures/signal_processing/evaluator.py",
         "overall_score",
-        {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "AnySearchAgent"},
+        {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "SearchCandidateAgent"},
     ),
     (
         "edgebench_ad_placement_search_spec.json",
@@ -49,13 +49,13 @@ SEARCH_MODE_SPECS = [
         "search-mode/k_module_adaptevolve_search_spec.json",
         "adaptevolve",
         "python",
-        {"max_candidates": 1, "max_parallel": 1, "worker_agent_type": "AnySearchAgentFlash"},
+        {"max_candidates": 1, "max_parallel": 1, "worker_agent_type": "SearchCandidateAgentFlash"},
     ),
     (
         "search-mode/k_module_openevolve_search_spec.json",
         "openevolve",
         "builtin",
-        {"max_candidates": 2, "max_parallel": 1, "worker_agent_type": "AnySearchAgentFlash"},
+        {"max_candidates": 2, "max_parallel": 1, "worker_agent_type": "SearchCandidateAgentFlash"},
     ),
 ]
 
@@ -138,6 +138,26 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     frozen = tools.search_freeze_spec(spec, [verifier_path])
     run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
 
+    def verify_baseline(candidate_id: str) -> None:
+        session = tools.search_start_agent_session(
+            run_id,
+            candidate_id,
+            {"goal": f"verify baseline fixture path for {candidate_id}"},
+        )
+        tools.search_get_agent_context(session["agent_session_id"])
+        report = tools.search_run_verifier(
+            run_id,
+            candidate_id,
+            agent_session_id=session["agent_session_id"],
+        )
+
+        assert report["process_passed"] is True
+        assert report["aggregate_score"] is not None
+        assert report["aggregate_score"] > 0.0
+        assert report["verifier_results"][0]["metrics"][metric_name] == report[
+            "aggregate_score"
+        ]
+
     first_plan = tools.search_plan_next(run_id, 4)
     first_proposals = None
     if first_plan["requires_agent_proposals"]:
@@ -150,6 +170,11 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         first_plan["plan_id"],
         proposals=first_proposals,
     )
+    verified_candidate_ids: set[str] = set()
+    if first_plan["requires_agent_proposals"]:
+        verify_baseline("c001")
+        verified_candidate_ids.add("c001")
+
     second_plan = tools.search_plan_next(run_id, 4)
     second_proposals = None
     if second_plan["requires_agent_proposals"]:
@@ -185,22 +210,8 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         assert first_round[0]["hypothesis"] == "Independent candidate c001"
 
     for candidate_id in ("c001", "c002"):
-        session = tools.search_start_agent_session(
-            run_id,
-            candidate_id,
-            {"goal": f"verify baseline fixture path for {candidate_id}"},
-        )
-        tools.search_get_agent_context(session["agent_session_id"])
-        report = tools.search_run_verifier(
-            run_id,
-            candidate_id,
-            agent_session_id=session["agent_session_id"],
-        )
-
-        assert report["process_passed"] is True
-        assert report["aggregate_score"] is not None
-        assert report["aggregate_score"] > 0.0
-        assert report["verifier_results"][0]["metrics"][metric_name] == report["aggregate_score"]
+        if candidate_id not in verified_candidate_ids:
+            verify_baseline(candidate_id)
 
     history = tools.search_list_history(run_id)
     assert history["total_candidates"] == expected["max_candidates"]

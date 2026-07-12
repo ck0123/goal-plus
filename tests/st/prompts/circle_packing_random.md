@@ -1,4 +1,4 @@
-Load a copy of {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+Load a copy of {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
 Batch 1 (c001, c002 — random bootstrap, both derive from source):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)

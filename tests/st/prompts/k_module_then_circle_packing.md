@@ -6,7 +6,7 @@ runtime slate.
 ## Run 1: k_module smoke
 
 Load {{PROJECT_ROOT}}/tests/st/fixtures/k_module_problem/spec.json. The spec
-sets max_candidates=2, max_parallel=2, worker_agent_type=AnySearchAgentFlash.
+sets max_candidates=2, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash.
 Freeze {{PROJECT_ROOT}}/tests/st/fixtures/k_module_problem/evaluator.py and
 run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start
 2 sessions → Task → bind_opencode_session → run_verifier on each → select →
@@ -17,7 +17,7 @@ Record the first run_id as RUN_1.
 ## Run 2: circle_packing two-batch
 
 Load {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/spec.json. The spec
-sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash.
+sets max_candidates=4, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash.
 Freeze {{PROJECT_ROOT}}/tests/st/fixtures/circle_packing/evaluator.py as the
 verifier artifact. Then run the full search end-to-end with TWO batches:
 

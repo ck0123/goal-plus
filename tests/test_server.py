@@ -5,8 +5,8 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-import agentic_any_search_mcp.server as server_module
-from agentic_any_search_mcp.server import create_mcp
+import goal_plus.server as server_module
+from goal_plus.server import create_mcp
 
 
 def test_create_mcp(tmp_path: Path) -> None:

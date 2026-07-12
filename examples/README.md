@@ -26,20 +26,20 @@ pytest -m "st and st_pi_rpc" -k pi_rpc_k_module  # Pi RPC worker smoke
 ```
 
 Tests are skipped by default. They require the selected host binary on PATH and
-the `search-runtime` MCP server configured for that host, or Pi installed for
+the `goal-plus` MCP server configured for that host, or Pi installed for
 Pi RPC. See
 `tests/README.md` for the full host marker matrix and pre-flight checks.
 
 
 | Spec | Fixture | Worker | Layout |
 |---|---|---|---|
-| `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | `AnySearchAgentFlash` (15 steps) | 2 candidates, pool=2, single batch |
-| `search-mode/k_module_adaptevolve_search_spec.json` | `tests/fixtures/k_module_problem` | AdaptEvolve dynamic tier (starts with `AnySearchAgentFlash`) | 1 candidate, pool=1, smoke test |
-| `search-mode/k_module_openevolve_search_spec.json` | `tests/fixtures/k_module_problem` | OpenEvolve-style sampling with `AnySearchAgentFlash` | 2 candidates, pool=1, two sequential batches |
-| `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `AnySearchAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
-| `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `AnySearchAgent` (50 steps) | 8 candidates, pool=4, two batches |
+| `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | `SearchCandidateAgentFlash` (15 steps) | 2 candidates, pool=2, single batch |
+| `search-mode/k_module_adaptevolve_search_spec.json` | `tests/fixtures/k_module_problem` | AdaptEvolve dynamic tier (starts with `SearchCandidateAgentFlash`) | 1 candidate, pool=1, smoke test |
+| `search-mode/k_module_openevolve_search_spec.json` | `tests/fixtures/k_module_problem` | OpenEvolve-style sampling with `SearchCandidateAgentFlash` | 2 candidates, pool=1, two sequential batches |
+| `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `SearchCandidateAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
+| `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `SearchCandidateAgent` (50 steps) | 8 candidates, pool=4, two batches |
 | `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-inspired public-feedback optimization, 4 candidates, pool=2 |
-| `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `AnySearchAgent` (50 steps) | 4 candidates, pool=2, single batch |
+| `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `SearchCandidateAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
 | `kernel-optimize/` | reusable PyTorch-reference kernel verifier template | `/goal-plus` host | Correctness + latency verifier and a worked C++ prompt; not a standalone fixture |
 | `workspace-backends/` | tiny local Python source tree | none (runtime-only E2E) | 3 Git worktree candidates, including a follow-up from the best parent commit |
@@ -71,10 +71,10 @@ If a candidate needs more work after a step-cap hit, generic hosts call `search_
 
 | Variant | Steps | Use when |
 |---|---|---|
-| `AnySearchAgentFlash` | 15 | Smoke tests, toy tasks, cheap iterations (k_module, small fixtures) |
-| `AnySearchAgent` (default) | 50 | Standard autoresearch loop |
-| `AnySearchAgentDeep` | 100 | Sustained iteration on harder problems |
-| `AnySearchAgentExtraDeep` | 150 | Extensive search, complex fixtures |
+| `SearchCandidateAgentFlash` | 15 | Smoke tests, toy tasks, cheap iterations (k_module, small fixtures) |
+| `SearchCandidateAgent` (default) | 50 | Standard autoresearch loop |
+| `SearchCandidateAgentDeep` | 100 | Sustained iteration on harder problems |
+| `SearchCandidateAgentExtraDeep` | 150 | Extensive search, complex fixtures |
 
 When the step cap is reached OpenCode injects a system prompt instructing the agent to summarize and stop — the session ends cleanly without a hard kill.
 
@@ -102,8 +102,8 @@ workspaces:
 
 | Backend | Storage model | Source requirements | Intended use |
 |---|---|---|---|
-| `copy` (default) | Full independent tree per candidate | Any directory | Small fixtures, tests, and non-Git inputs |
-| `git_worktree` | One run-local repository plus one Git worktree per candidate | Any non-empty directory; the runtime snapshots it into the run-local repository | Large codebases and candidates that need explicit branch lineage |
+| `git_worktree` (default) | One run-local repository plus one Git worktree per candidate | Any non-empty directory; the runtime snapshots it into the run-local repository | Shared Git objects and explicit candidate branch lineage |
+| `copy` | Full independent tree per candidate | Any directory | Small fixtures or callers that explicitly require fully independent repositories |
 
 For `git_worktree`, branches use
 `gp/<run_id>/baseline` and `gp/<run_id>/<candidate_id>`. Follow-up candidates
@@ -139,7 +139,7 @@ The default strategy is `agent_guided`: the runtime exposes the official candida
     "name": "agent_guided",
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgent",
+    "worker_agent_type": "SearchCandidateAgent",
     "history_policy": {"scope": "top_n", "top_n": 5}
   }
 }
@@ -155,7 +155,7 @@ Comparison:
 | `openevolve` | Runtime: sampled parent from scored population/archive + inspirations | `false` | Bootstrap from source | Minimal OpenEvolve-style parent/archive/inspiration sampling |
 | `mcts` | Runtime: best-score frontier | `false` | Bootstrap from source | MCTS-style expansion (placeholder planner) |
 | `random` | Runtime: random scored parent (seedable via `strategy.config.seed`) | `false` | Bootstrap from source | Cheap random-walk baseline |
-| `adaptevolve` | Python plugin: best-score parent + confidence-routed worker tier | `false` | Bootstrap from source with `AnySearchAgentFlash` | Adaptive compute allocation around evolve-style mutations |
+| `adaptevolve` | Python plugin: best-score parent + confidence-routed worker tier | `false` | Bootstrap from source with `SearchCandidateAgentFlash` | Adaptive compute allocation around evolve-style mutations |
 
 Notes:
 
@@ -198,10 +198,10 @@ Run one circle_packing candidate and then continue the same OpenCode session:
 This is the fork-style smoke test for the current implementation: it continues the same OpenCode session with Task task_id instead of using OpenCode Session.fork. Do not create a second agent session for c001. Report run_id, agent_session_id, opencode_session_id, both verifier scores, score delta, and report path.
 ```
 
-### circle_packing — two batches, AnySearchAgentFlash
+### circle_packing — two batches, SearchCandidateAgentFlash
 
 ```
-Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash (15 step cap). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash (15 step cap). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
 Batch 1 (c001, c002):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
@@ -225,7 +225,7 @@ Report at the end: run_id, all 4 candidate scores + iteration counts, selected c
 Same fixture as above but the spec uses the `random` strategy so batch 2 derives from a runtime-picked parent instead of fresh source branches. Copy `circle_packing_search_spec.json` and set `"strategy": {"name": "random", "config": {"seed": 42}}` (seed optional; omit for non-deterministic parent pick).
 
 ```
-Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=AnySearchAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
+Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
 
 Batch 1 (c001, c002 — random bootstrap, both derive from source):
   - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
@@ -244,10 +244,10 @@ For each Task: use the runtime launch payload, then bind the returned Task metad
 Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
 ```
 
-### k_module — smoke test, AnySearchAgentFlash
+### k_module — smoke test, SearchCandidateAgentFlash
 
 ```
-Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_parallel=2, worker_agent_type=AnySearchAgentFlash. Freeze tests/fixtures/k_module_problem/evaluator.py and run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start 2 sessions → Task → bind_opencode_session → run_verifier on each → select → report.
+Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash. Freeze tests/fixtures/k_module_problem/evaluator.py and run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start 2 sessions → Task → bind_opencode_session → run_verifier on each → select → report.
 ```
 
 ### EdgeBench-lite ad placement — public-feedback optimization
@@ -277,7 +277,7 @@ After each candidate finishes, run the public process verifier. Select and repor
 ### k_module — AdaptEvolve smoke test
 
 ```
-Load examples/search-mode/k_module_adaptevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run the smallest end-to-end AdaptEvolve case: freeze_spec → create → plan_next(k=1) → start_batch → start_agent_session → Task with session.launch → bind_opencode_session → run_verifier → select → report. Confirm that the plan strategy_trace shows selected_worker_agent_type and that the Task launch uses AnySearchAgentFlash for the first bootstrap candidate.
+Load examples/search-mode/k_module_adaptevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run the smallest end-to-end AdaptEvolve case: freeze_spec → create → plan_next(k=1) → start_batch → start_agent_session → Task with session.launch → bind_opencode_session → run_verifier → select → report. Confirm that the plan strategy_trace shows selected_worker_agent_type and that the Task launch uses SearchCandidateAgentFlash for the first bootstrap candidate.
 ```
 
 ### k_module — OpenEvolve sampling smoke test
@@ -286,10 +286,10 @@ Load examples/search-mode/k_module_adaptevolve_search_spec.json. Freeze tests/fi
 Load examples/search-mode/k_module_openevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run two sequential one-candidate batches: batch 1 does bootstrap from source, then run_verifier; batch 2 calls plan_next(k=1) again so openevolve samples a parent from scored history and emits inspiration context. Start the second batch without proposals, launch Task with session.launch, bind, verify, select, and report. Confirm that the second plan strategy_trace shows selection_rule=openevolve sampled parent plus inspirations and includes parent_candidate_id.
 ```
 
-### signal_processing — multi-batch, AnySearchAgent
+### signal_processing — multi-batch, SearchCandidateAgent
 
 ```
-Load examples/signal_processing_search_spec.json (max_candidates=8, max_parallel=4, AnySearchAgent 50 steps). Freeze tests/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for each OpenCode Task to return, then plan + start the next 4. Report the best score after both batches.
+Load examples/signal_processing_search_spec.json (max_candidates=8, max_parallel=4, SearchCandidateAgent 50 steps). Freeze tests/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for each OpenCode Task to return, then plan + start the next 4. Report the best score after both batches.
 ```
 
 ## SWE-bench Style Fixture

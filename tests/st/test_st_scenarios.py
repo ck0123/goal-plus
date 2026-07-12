@@ -3,7 +3,7 @@ JSON report matches the expected scenario contract.
 
 These tests are skipped unless `-m st` is passed. They require:
   - host binary on PATH (`opencode`, `codex`, or `claude`)
-  - search-runtime MCP server configured for that host
+  - goal-plus MCP server configured for that host
 
 Each test loads a prompt from tests/st/prompts/<scenario>.md, runs the selected
 host in a temporary project root, then parses the st_report JSON block from

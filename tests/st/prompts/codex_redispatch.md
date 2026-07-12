@@ -14,7 +14,7 @@ with these required edits before freezing:
 - Set `budget.max_candidates=1` and `budget.max_parallel=1`.
 - Set `strategy.name="random"`.
 - Set `strategy.worker_host="codex"`.
-- Set `strategy.worker_agent_type="any_search_agent"`.
+- Set `strategy.worker_agent_type="search_candidate_agent"`.
 - Set `strategy.worker_budget={"max_runtime_seconds": 90, "max_turns": 4, "on_exceed": "interrupt"}`.
 
 Freeze {{PROJECT_ROOT}}/tests/st/fixtures/k_module_problem/evaluator.py, then
@@ -32,7 +32,7 @@ run this exact control-flow:
 4. Bind any returned Codex task name or nickname with `search_bind_agent_handle`.
 5. Run `search_run_verifier(run_id, candidate_id, "process")` from the main agent.
 6. Call `search_redispatch_candidate` for the same `candidate_id` with:
-   `worker_agent_type="any_search_agent"` and
+   `worker_agent_type="search_candidate_agent"` and
    `worker_budget={"max_runtime_seconds": 180, "max_turns": 8, "on_exceed": "interrupt"}`.
 7. Confirm the redispatch response has a second, different `agent_session_id`,
    the same `candidate_id`, and `launch.budget_control.mode == "parent_watchdog"`.

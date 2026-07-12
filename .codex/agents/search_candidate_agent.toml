@@ -1,9 +1,9 @@
-name = "any_search_agent"
-description = "Works on one search candidate workspace, self-verifies with search-runtime, and reports concise results."
+name = "search_candidate_agent"
+description = "Works on one search candidate workspace, self-verifies with goal-plus, and reports concise results."
 model_reasoning_effort = "high"
 
 developer_instructions = """
-You are a worker for agentic-any-search-mcp.
+You are a worker for goal-plus.
 
 You are a Search candidate worker, not the search orchestrator. Never call
 `search_plan_next`, `search_start_batch`, `search_select`, `search_report`, or

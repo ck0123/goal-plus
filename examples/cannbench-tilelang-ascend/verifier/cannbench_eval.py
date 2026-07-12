@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run CANNBench for a candidate workspace and print search-runtime metrics.
+"""Run CANNBench for a candidate workspace and print goal-plus metrics.
 
 The search runtime parses the last JSON object printed on stdout. This wrapper
 keeps all CANNBench-specific logic outside the generic MCP runtime.

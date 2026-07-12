@@ -2,7 +2,7 @@
 
 Run an agentic search to optimize an operator kernel against a PyTorch
 reference, with `avg_latency_ms` as the primary metric. The runtime, the
-`AnySearchAgent` autoresearch loop, and the `search` skill are unchanged;
+`SearchCandidateAgent` autoresearch loop, and the `search` skill are unchanged;
 this example only contributes a verifier reference and a usage guide.
 
 ## Inputs
@@ -71,7 +71,7 @@ a single `{op_name}_impl.py` that imports the binding and defines `ModelNew`.
     {
       "name": "frozen_hash_gate",
       "role": "anti_cheat_gate",
-      "command": ["search-runtime-internal", "check-frozen-hashes"]
+      "command": ["goal-plus-internal", "check-frozen-hashes"]
     }
   ],
   "budget": {"max_candidates": 4, "max_parallel": 2},
@@ -79,7 +79,7 @@ a single `{op_name}_impl.py` that imports the binding and defines `ModelNew`.
     "name": "agent_guided",
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgentDeep",
+    "worker_agent_type": "SearchCandidateAgentDeep",
     "history_policy": {"scope": "top_n", "top_n": 5}
   }
 }
@@ -94,8 +94,8 @@ Notes:
   lands at a stable path.
 - `edit_surface.deny` must include `_verifier/` and the reference file so the
   candidate cannot tamper with the verifier or the ground truth.
-- `worker_agent_type` is typically `AnySearchAgentDeep` (100 steps) for kernel
-  optimization. Drop to `AnySearchAgent` (50) for quick smoke runs.
+- `worker_agent_type` is typically `SearchCandidateAgentDeep` (100 steps) for kernel
+  optimization. Drop to `SearchCandidateAgent` (50) for quick smoke runs.
 
 ## Step 4 — drive the search flow
 
@@ -119,7 +119,7 @@ does not redefine them. The shape:
 
 ## Step 5 — subagent contract (unchanged)
 
-The subagent runs the existing `AnySearchAgent` autoresearch loop:
+The subagent runs the existing `SearchCandidateAgent` autoresearch loop:
 
 1. `search_get_agent_context(agent_session_id)` → reads `workspace`,
    `allowed_files`, `denied_files`, `metric_name`, `metric_direction`,
@@ -168,7 +168,7 @@ The runtime's existing mechanism does all of it:
   `import torch_npu` works in the source workspace before freeze.
 - DSL-specific scaffolding. The host agent reads the kernel file to figure
   out imports.
-- A new subagent. `AnySearchAgent` already autoresearches.
+- A new subagent. `SearchCandidateAgent` already autoresearches.
 
 ## Worked prompt
 

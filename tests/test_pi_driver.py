@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from agentic_any_search_mcp.models import SearchSpec
-from agentic_any_search_mcp.monitor import goal_plus_monitor_snapshot
-from agentic_any_search_mcp.pi_driver import run_pi_search_batch, run_pi_search_candidate
-from agentic_any_search_mcp.runtime import FileSearchRuntime
-from agentic_any_search_mcp.tools import SearchTools
+from goal_plus.models import SearchSpec
+from goal_plus.monitor import goal_plus_monitor_snapshot
+from goal_plus.pi_driver import run_pi_search_batch, run_pi_search_candidate
+from goal_plus.runtime import FileSearchRuntime
+from goal_plus.tools import SearchTools
 from tests.test_runtime_unit import spec_for
 
 

@@ -12,7 +12,7 @@ through MCP tool calls.
 `goal_plus_gate` records deterministic phase decisions, but those decisions are
 enforced only when a host actually calls the gate. Codex 0.144.1+ wires
 `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
-`SubagentStop` through `agentic-any-search-mcp --goal-plus-host-hook`. Claude
+`SubagentStop` through `goal-plus --goal-plus-host-hook`. Claude
 Code ships PostToolUse ownership binding plus a session-scoped Stop backstop.
 OpenCode has no shipped hook; Claude PreToolUse/SubagentStop checkpoints remain
 instruction-driven.
@@ -82,8 +82,9 @@ FileSearchRuntime
 
 `SearchSpec` describes one search job: objective, metric, source path, edit
 surface, verifier commands, promotion verifiers, budget, workspace backend,
-root hypotheses, and strategy. `workspace.backend` is `copy` by default and
-may be set to `git_worktree` for a shared-object Git layout.
+root hypotheses, and strategy. `workspace.backend` is `git_worktree` by default
+for a shared-object Git layout and may be set to `copy` for a fully independent
+source snapshot per candidate.
 
 `GoalPlusRecord` describes the complete user task. Its canonical
 `search_tasks` list is append-only and may contain multiple Search Mode runs.
@@ -104,7 +105,7 @@ planning rounds from rounds whose plan reached `status="started"`.
 - `driver`: `builtin`, `python`, or `external_mcp`
 - `worker_mode`: must be `agent-session-pool` (the only supported value)
 - `worker_host`: `opencode`, `codex`, `claude-code`, or `pi-rpc`; default `opencode`
-- `worker_agent_type`: optional default host hint such as OpenCode `AnySearchAgent`; a strategy plan may override it through `worker_policy`
+- `worker_agent_type`: optional default host hint such as OpenCode `SearchCandidateAgent`; a strategy plan may override it through `worker_policy`
 - `worker_budget`: optional per-worker runtime budget. Codex requires
   `max_runtime_seconds` and enforces it through a parent watchdog. Claude Code
   requires `max_turns` and enforces it through the selected agent definition.
@@ -226,8 +227,8 @@ host launches those workers.
 
 There are no runtime-owned time-based deadlines. Host workers run until their
 host-local budget, step cap, or user interruption stops them. OpenCode worker
-tiers use `AnySearchAgent` (default, 50 steps), `AnySearchAgentFlash` (15),
-`AnySearchAgentDeep` (100), or `AnySearchAgentExtraDeep` (150). Codex and
+tiers use `SearchCandidateAgent` (default, 50 steps), `SearchCandidateAgentFlash` (15),
+`SearchCandidateAgentDeep` (100), or `SearchCandidateAgentExtraDeep` (150). Codex and
 Claude Code use their own foreground agent limits. Users can interrupt anytime
 and query current best via `search_list_history` / `search_status`. There is no
 MCP abort tool; stopping a running subagent is a host/user concern.
@@ -251,16 +252,15 @@ The MCP runtime does not perform process supervision. Stopping a running subagen
 
 Verifier commands run from each candidate workspace. The runtime adds the workspace to `PYTHONPATH` and parses the last JSON object printed to stdout as metrics. Hard gates such as edit-surface violations and frozen verifier hash failures force the score to `0.0`.
 
-The default `copy` backend creates an independent source snapshot for each
-candidate:
+The `copy` backend creates an independent source snapshot for each candidate:
 
 ```text
 .gp/runs/<run_id>/workspace/c001/
 .gp/runs/<run_id>/workspace/c002/
 ```
 
-The `git_worktree` backend snapshots `source_path` once into a normal run-local
-repository, then creates each candidate with `git worktree`:
+The default `git_worktree` backend snapshots `source_path` once into a normal
+run-local repository, then creates each candidate with `git worktree`:
 
 ```text
 .gp/runs/<run_id>/workspace-repository/       # shared objects + baseline branch
@@ -288,10 +288,10 @@ Workers must not modify denied files, frozen verifier artifacts, or the main sou
 - `tools.py`: JSON-friendly facade used by tests and MCP
 - `server.py`: FastMCP stdio server for host clients
 - `.opencode/skills/search/SKILL.md`: host-agent workflow guide
-- `.opencode/agents/AnySearchAgent*.md`: managed subagent prompts
-- `.codex/skills/search/SKILL.md`, `.codex/agents/any_search_agent.toml`: Codex host assets
-- `.claude/skills/search/SKILL.md`, `.claude/agents/any-search-agent.md`: Claude Code host assets
-- `.pi/skills/goal-plus/SKILL.md`, `.pi/prompts/any-search-worker.md`, `.pi/extensions/search-runtime.ts`: Pi host assets; Pi folds Search Mode guidance into the single user-facing `goal-plus` skill
+- `.opencode/agents/SearchCandidateAgent*.md`: managed subagent prompts
+- `.codex/skills/search/SKILL.md`, `.codex/agents/search_candidate_agent.toml`: Codex host assets
+- `.claude/skills/search/SKILL.md`, `.claude/agents/search-candidate-agent.md`: Claude Code host assets
+- `.pi/skills/goal-plus/SKILL.md`, `.pi/prompts/search-candidate-worker.md`, `.pi/extensions/goal-plus.ts`: Pi host assets; Pi folds Search Mode guidance into the single user-facing `goal-plus` skill
 
 ## Current Boundary
 

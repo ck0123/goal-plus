@@ -17,9 +17,8 @@ docs/superpowers/
 .opencode/package-lock.json
 .opencode/bun.lock
 .opencode/.gitignore
-.codex/agents/any-search-agent.toml
-.codex/agents/any-search-agent-flash.toml
-.codex/agents/any-search-agent-deep.toml
+.codex/agents/search_candidate_agent_flash.toml
+.codex/agents/search_candidate_agent_deep.toml
 .codex/config.toml
 dist/
 build/

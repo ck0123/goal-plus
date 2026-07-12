@@ -54,7 +54,7 @@ HOSTS: dict[HostKind, StHost] = {
 
 HOST_BY_MARKER = {host.marker: host for host in HOSTS.values()}
 DEFAULT_ST_HOST: HostKind = "opencode"
-ST_ACTIVE_ENV = "AGENTIC_ANY_SEARCH_ST_ACTIVE"
+ST_ACTIVE_ENV = "GOAL_PLUS_ST_ACTIVE"
 
 
 def st_host_from_marker_names(marker_names: list[str] | set[str]) -> HostKind:

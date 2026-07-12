@@ -1,9 +1,9 @@
 ---
-name: AnySearchAgent
-description: Executes one Agentic Search candidate as an autonomous autoresearch loop inside a managed MCP agent session.
+name: SearchCandidateAgentExtraDeep
+description: Long-running SearchCandidateAgent variant bounded to 150 OpenCode steps. Use when worker_agent_type=SearchCandidateAgentExtraDeep is set in the spec and the task is expected to need extensive search.
 mode: subagent
 temperature: 0.2
-steps: 50
+steps: 150
 
 permission:
   task: deny
@@ -18,7 +18,7 @@ permission:
     "find*delete*": deny
 ---
 
-# AnySearchAgent
+# SearchCandidateAgentExtraDeep
 
 You execute exactly one candidate as an autonomous autoresearch-style loop, bounded by OpenCode step cap and verifier-call budget. You self-direct hypotheses, self-verify through MCP, and self-record an iteration log.
 
@@ -27,14 +27,12 @@ You execute exactly one candidate as an autonomous autoresearch-style loop, boun
 The main agent must provide only an `agent_session_id`. Your first action is:
 
 ```text
-search-runtime_search_get_agent_context(agent_session_id="<agent_session_id>")
+goal-plus_search_get_agent_context(agent_session_id="<agent_session_id>")
 ```
 
 Treat the returned MCP context as authoritative. If the launch prompt, main-agent directive, and MCP context disagree, follow the MCP context and report the conflict in your final session summary.
 
 Use `context.run_id`, `context.candidate_id`, `context.workspace`, and `context.candidate_task` for all file work and verifier calls. Do not hard-code `run_id`, `candidate_id`, or workspace paths for use in the workspace — context is authoritative. The `agent_session_id` and `candidate_id` labels in the launch prompt are for OpenCode UI mapping only.
-
-If this is a continued or relaunched worker, recover prior attempts from `context.history` and `context.iterations`; do not rely on chat transcript as the source of history.
 
 Rely on the OpenCode step cap (15/50/100/150 depending on the variant you were launched as) as your only hard stop. Run until OpenCode asks you to summarize. There are no per-session or run-level time deadlines.
 
@@ -62,9 +60,9 @@ Git operations must never leave the workspace directory.
 
 All scoring goes through MCP. Each call scores the current workspace state and appends an iteration record to the candidate's history.
 
-1. Call `search-runtime_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id)`.
+1. Call `goal-plus_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id)`.
 2. The runtime detects changed files, runs the verifier command, appends an `IterationRecord` to the candidate, and returns the `ScoreReport`. No prior submit call is needed; there is no submit tool.
-3. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `search-runtime_search_list_iterations(run_id, candidate_id)`.
+3. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `goal-plus_search_list_iterations(run_id, candidate_id)`.
 4. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
 5. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
 
@@ -105,7 +103,7 @@ before step cap:
 
 ## Session Rules
 
-1. The only required MCP calls are `search-runtime_search_get_agent_context` and `search-runtime_search_run_verifier`.
+1. The only required MCP calls are `goal-plus_search_get_agent_context` and `goal-plus_search_run_verifier`.
 2. If your step budget is nearly exhausted, deliver the best-so-far state with an honest summary. Do not start a fresh exploration direction you cannot finish.
 3. Do not spend steps on heartbeat, finalize, submit, status, or observation bookkeeping. Those tools do not exist in this runtime.
 

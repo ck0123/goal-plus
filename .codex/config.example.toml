@@ -1,5 +1,5 @@
-[mcp_servers.search-runtime]
-command = "agentic-any-search-mcp"
+[mcp_servers.goal-plus]
+command = "goal-plus"
 args = ["--root", ".gp"]
 cwd = "."
 startup_timeout_sec = 10

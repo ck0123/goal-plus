@@ -33,10 +33,10 @@ From the project root:
 
 ```bash
 python -m pip install -e ".[dev]"
-agentic-any-search-mcp --help
+goal-plus --help
 ```
 
-The OpenCode MCP config calls the installed `agentic-any-search-mcp` console
+The OpenCode MCP config calls the installed `goal-plus` console
 script. Editable install is the development setup; normal users should install
 from Git and keep the same MCP command.
 
@@ -64,16 +64,16 @@ opencode mcp list
 Expected:
 
 ```text
-search-runtime connected
-agentic-any-search-mcp --root .gp
+goal-plus connected
+goal-plus --root .gp
 ```
 
-If `search-runtime` is missing, run the command from the project root and check `opencode.json`.
+If `goal-plus` is missing, run the command from the project root and check `opencode.json`.
 
 If it is present but not connected, make sure the Python environment can import `fastmcp`:
 
 ```bash
-agentic-any-search-mcp --help
+goal-plus --help
 ```
 
 ## 4. Optional Negative Probe
@@ -81,12 +81,12 @@ agentic-any-search-mcp --help
 This verifies that `opencode run` can call an MCP tool without creating a search run:
 
 ```bash
-opencode run "Use the MCP tool search-runtime_search_status with run_id='missing-opencode-smoke'. Do not edit files. Report whether the tool was available and summarize the error if the run does not exist."
+opencode run "Use the MCP tool goal-plus_search_status with run_id='missing-opencode-smoke'. Do not edit files. Report whether the tool was available and summarize the error if the run does not exist."
 ```
 
 Expected behavior:
 
-- OpenCode calls `search-runtime_search_status`
+- OpenCode calls `goal-plus_search_status`
 - the tool is available
 - the runtime reports that `.gp/runs/missing-opencode-smoke/run.json` does not exist
 
@@ -108,25 +108,25 @@ Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixture
 
 The skill should guide the host agent through this sequence:
 
-1. Call `search-runtime_goal_plus_create`.
+1. Call `goal-plus_goal_plus_create`.
 2. Read `examples/k_module_search_spec.json`.
 3. Record search-ready triage with `identified_at="initial"`.
 4. Save a high-confidence spec draft with `origin="initial"`.
 5. Show the user the frozen verifier, metric, edit surface, and promotion rule.
-6. After confirmation, call `search-runtime_goal_plus_confirm_frozen_verifier`.
-7. Call `search-runtime_goal_plus_gate` before `search-runtime_search_freeze_spec`.
-8. Call `search-runtime_search_freeze_spec`.
-9. Call `search-runtime_search_create`, then `search-runtime_goal_plus_link_search_run`.
-10. Call `search-runtime_search_plan_next` with `requested_k=4`.
-11. Call `search-runtime_search_start_batch` with the returned `plan_id`.
-12. For each candidate, call `search-runtime_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim as a foreground Task call.
-13. When Task metadata is available, call `search-runtime_search_bind_opencode_session` with the runtime `agent_session_id` and Task `metadata.sessionId`.
-14. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `search-runtime_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
-15. After OpenCode Task return, call `search-runtime_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
-16. Call `search-runtime_search_select`.
-17. Call `search-runtime_search_report`.
-18. Ask before promotion, or call `search-runtime_search_promote` if you requested full promotion.
-19. Call `search-runtime_goal_plus_record_search_result`, then perform the final raw-goal audit.
+6. After confirmation, call `goal-plus_goal_plus_confirm_frozen_verifier`.
+7. Call `goal-plus_goal_plus_gate` before `goal-plus_search_freeze_spec`.
+8. Call `goal-plus_search_freeze_spec`.
+9. Call `goal-plus_search_create`, then `goal-plus_goal_plus_link_search_run`.
+10. Call `goal-plus_search_plan_next` with `requested_k=4`.
+11. Call `goal-plus_search_start_batch` with the returned `plan_id`.
+12. For each candidate, call `goal-plus_search_start_agent_session` to obtain a context handle plus a `launch` payload, then launch the OpenCode Task using the launch payload verbatim as a foreground Task call.
+13. When Task metadata is available, call `goal-plus_search_bind_opencode_session` with the runtime `agent_session_id` and Task `metadata.sessionId`.
+14. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `goal-plus_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
+15. After OpenCode Task return, call `goal-plus_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
+16. Call `goal-plus_search_select`.
+17. Call `goal-plus_search_report`.
+18. Ask before promotion, or call `goal-plus_search_promote` if you requested full promotion.
+19. Call `goal-plus_goal_plus_record_search_result`, then perform the final raw-goal audit.
 
 There is no batch-shortcut tool. Call `search_plan_next` followed by `search_start_batch`.
 

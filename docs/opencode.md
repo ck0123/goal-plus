@@ -33,22 +33,22 @@ For runtime and host log inspection, see
 
 ## Install The MCP Server
 
-Install this Python package so the `agentic-any-search-mcp` command is available
+Install this Python package so the `goal-plus` command is available
 on `PATH`:
 
 From Git:
 
 ```bash
-python -m pip install --user "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
-agentic-any-search-mcp --help
+python -m pip install --user "git+https://github.com/ck0123/goal-plus.git"
+goal-plus --help
 ```
 
 From an existing checkout:
 
 ```bash
-cd agentic-any-search-mcp
+cd goal-plus
 python -m pip install -e .
-agentic-any-search-mcp --help
+goal-plus --help
 ```
 
 The OpenCode MCP config should call the console script, not import from the
@@ -77,10 +77,10 @@ All scopes should configure the same installed command:
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "search-runtime": {
+    "goal-plus": {
       "type": "local",
       "command": [
-        "agentic-any-search-mcp",
+        "goal-plus",
         "--root",
         ".gp"
       ],
@@ -97,13 +97,13 @@ All scopes should configure the same installed command:
 For a Git install through user-level pip:
 
 ```bash
-python -m pip install --user -U "git+https://gitcode.com/yiyanzhi_akane1/agentic-any-search-mcp.git"
+python -m pip install --user -U "git+https://github.com/ck0123/goal-plus.git"
 ```
 
 For editable development installs:
 
 ```bash
-cd agentic-any-search-mcp
+cd goal-plus
 git pull
 python -m pip install -e ".[dev]"
 python -m pytest -q
@@ -118,10 +118,10 @@ From the project root:
 opencode
 ```
 
-OpenCode should start the local MCP server named `search-runtime` using:
+OpenCode should start the local MCP server named `goal-plus` using:
 
 ```bash
-agentic-any-search-mcp --root .gp
+goal-plus --root .gp
 ```
 
 The server uses stdio transport.
@@ -162,14 +162,14 @@ opencode mcp list
 Expected entry:
 
 ```text
-search-runtime connected
-agentic-any-search-mcp --root .gp
+goal-plus connected
+goal-plus --root .gp
 ```
 
 You can also run a safe negative probe:
 
 ```bash
-opencode run "Use the MCP tool search-runtime_search_status with run_id='missing-opencode-smoke'. Do not edit files. Report whether the tool was available."
+opencode run "Use the MCP tool goal-plus_search_status with run_id='missing-opencode-smoke'. Do not edit files. Report whether the tool was available."
 ```
 
 The expected result is that the tool is callable and reports that the run does not exist.
@@ -200,41 +200,41 @@ Expected behavior:
 
 ## Tool Prefix
 
-OpenCode prefixes MCP tool names by server name. With `search-runtime`, the
+OpenCode prefixes MCP tool names by server name. With `goal-plus`, the
 goal-plus tools are:
 
 ```text
-search-runtime_goal_plus_create
-search-runtime_goal_plus_status
-search-runtime_goal_plus_record_triage
-search-runtime_goal_plus_save_spec_draft
-search-runtime_goal_plus_confirm_frozen_verifier
-search-runtime_goal_plus_link_search_run
-search-runtime_goal_plus_record_search_result
-search-runtime_goal_plus_set_status
-search-runtime_goal_plus_gate
+goal-plus_goal_plus_create
+goal-plus_goal_plus_status
+goal-plus_goal_plus_record_triage
+goal-plus_goal_plus_save_spec_draft
+goal-plus_goal_plus_confirm_frozen_verifier
+goal-plus_goal_plus_link_search_run
+goal-plus_goal_plus_record_search_result
+goal-plus_goal_plus_set_status
+goal-plus_goal_plus_gate
 ```
 
 The internal Search Mode engine tools are:
 
 ```text
-search-runtime_search_freeze_spec
-search-runtime_search_create
-search-runtime_search_status
-search-runtime_search_list_history
-search-runtime_search_plan_next
-search-runtime_search_start_batch
-search-runtime_search_start_agent_session
-search-runtime_search_redispatch_candidate
-search-runtime_search_bind_agent_handle
-search-runtime_search_bind_opencode_session
-search-runtime_search_continue_agent_session
-search-runtime_search_get_agent_context
-search-runtime_search_run_verifier
-search-runtime_search_list_iterations
-search-runtime_search_select
-search-runtime_search_report
-search-runtime_search_promote
+goal-plus_search_freeze_spec
+goal-plus_search_create
+goal-plus_search_status
+goal-plus_search_list_history
+goal-plus_search_plan_next
+goal-plus_search_start_batch
+goal-plus_search_start_agent_session
+goal-plus_search_redispatch_candidate
+goal-plus_search_bind_agent_handle
+goal-plus_search_bind_opencode_session
+goal-plus_search_continue_agent_session
+goal-plus_search_get_agent_context
+goal-plus_search_run_verifier
+goal-plus_search_list_iterations
+goal-plus_search_select
+goal-plus_search_report
+goal-plus_search_promote
 ```
 
 There are no wait, abort, finish, submit, observation, status, or host-sync tools.

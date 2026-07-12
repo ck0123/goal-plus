@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook"
+            "command": "goal-plus --goal-plus-host-hook"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentic-any-search-mcp --goal-plus-host-hook"
+            "command": "goal-plus --goal-plus-host-hook"
           }
         ]
       }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_any_search_mcp.agent_hosts import (
+from goal_plus.agent_hosts import (
     UnsupportedHostCapability,
     get_agent_host_adapter,
     portable_strategy_mode,
@@ -29,7 +29,7 @@ def test_opencode_adapter_builds_existing_task_payload() -> None:
     adapter = get_agent_host_adapter("opencode")
 
     payload = adapter.build_launch_payload(
-        worker_agent_type="AnySearchAgent",
+        worker_agent_type="SearchCandidateAgent",
         candidate_id="cand_0001",
         agent_session_id="agent_0001",
         short_intent="try a new branch",
@@ -37,7 +37,7 @@ def test_opencode_adapter_builds_existing_task_payload() -> None:
     )
 
     assert payload == {
-        "subagent_type": "AnySearchAgent",
+        "subagent_type": "SearchCandidateAgent",
         "description": "cand_0001 try a new branch",
         "prompt": (
             "agent_session_id=agent_0001; "
@@ -60,7 +60,7 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     )
 
     assert payload["tool"] == "spawn_agent"
-    assert payload["agent_type"] == "any_search_agent"
+    assert payload["agent_type"] == "search_candidate_agent"
     assert payload["fork_turns"] == "none"
     assert payload["task_name"] == "search_agent_0001"
     assert "agent_session_id=agent-0001" in payload["message"]
@@ -71,7 +71,7 @@ def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> 
     adapter = get_agent_host_adapter("codex")
 
     payload = adapter.build_launch_payload(
-        worker_agent_type="any_search_agent",
+        worker_agent_type="search_candidate_agent",
         candidate_id="c001",
         agent_session_id="agent-0001",
         short_intent="try",
@@ -238,7 +238,7 @@ def test_claude_adapter_builds_foreground_agent_payload() -> None:
     )
 
     assert payload["tool"] == "Agent"
-    assert payload["agent_type"] == "any-search-agent"
+    assert payload["agent_type"] == "search-candidate-agent"
     assert payload["background"] is False
     assert "agent_session_id=agent_0001" in payload["message"]
 
@@ -247,7 +247,7 @@ def test_claude_adapter_builds_turn_budget_payload() -> None:
     adapter = get_agent_host_adapter("claude-code")
 
     payload = adapter.build_launch_payload(
-        worker_agent_type="any-search-agent-deep",
+        worker_agent_type="search-candidate-agent-deep",
         candidate_id="cand_0001",
         agent_session_id="agent_0001",
         short_intent="try",
@@ -255,7 +255,7 @@ def test_claude_adapter_builds_turn_budget_payload() -> None:
         worker_budget={"max_turns": 16, "on_exceed": "interrupt"},
     )
 
-    assert payload["agent_type"] == "any-search-agent-deep"
+    assert payload["agent_type"] == "search-candidate-agent-deep"
     assert payload["budget_control"] == {
         "mode": "host_turn_limit",
         "max_turns": 16,
@@ -269,7 +269,7 @@ def test_codex_continue_is_explicitly_unsupported() -> None:
 
     with pytest.raises(UnsupportedHostCapability, match="codex"):
         adapter.build_continue_payload(
-            worker_agent_type="any_search_agent",
+            worker_agent_type="search_candidate_agent",
             candidate_id="cand_0001",
             agent_session_id="agent_0001",
             external_id=None,

@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-from agentic_any_search_mcp.models import GoalPlusSpecDraft, GoalPlusTriage
+from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.models import GoalPlusSpecDraft, GoalPlusTriage
 
 
 def _write_search_run(root, run_id: str, frozen_spec_id: str) -> None:

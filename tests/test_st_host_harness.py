@@ -68,7 +68,7 @@ def test_claude_runner_uses_print_mode_with_project_mcp(tmp_path: Path) -> None:
 
 
 def test_st_active_env_guard_name_is_stable() -> None:
-    assert ST_ACTIVE_ENV == "AGENTIC_ANY_SEARCH_ST_ACTIVE"
+    assert ST_ACTIVE_ENV == "GOAL_PLUS_ST_ACTIVE"
 
 
 def test_link_host_assets_supports_all_agent_hosts(tmp_path: Path) -> None:
@@ -117,7 +117,7 @@ def test_codex_circle_packing_cycle_is_strict_two_by_two_scenario() -> None:
     )
     for required in (
         'worker_host="codex"',
-        'worker_agent_type="any_search_agent"',
+        'worker_agent_type="search_candidate_agent"',
         "inherits the parent Codex model",
         "only `task_name`, `message`, and `fork_turns`",
         '"max_candidates": 4',

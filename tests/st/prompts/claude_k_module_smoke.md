@@ -9,7 +9,7 @@ with these required edits before freezing:
 - Set `budget.max_candidates=1` and `budget.max_parallel=1`.
 - Set `strategy.name="random"`.
 - Set `strategy.worker_host="claude-code"`.
-- Set `strategy.worker_agent_type="any-search-agent-flash"`.
+- Set `strategy.worker_agent_type="search-candidate-agent-flash"`.
 - Set `strategy.worker_budget={"max_turns": 4, "on_exceed": "interrupt"}`.
 
 Freeze {{PROJECT_ROOT}}/tests/st/fixtures/k_module_problem/evaluator.py, then

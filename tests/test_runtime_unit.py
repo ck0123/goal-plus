@@ -8,16 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from agentic_any_search_mcp.models import (
+from goal_plus.models import (
     CandidateProposal,
     CandidateRecord,
     SearchSpec,
 )
-from agentic_any_search_mcp.runtime import (
+from goal_plus.runtime import (
     FileSearchRuntime,
     canonical_json,
     copy_source_tree,
     list_files,
+    load_json,
     path_matches,
     sha256_file,
     write_json,
@@ -64,6 +65,7 @@ def spec_for(project: Path, *, max_candidates: int = 4, direction: str = "maximi
                 }
             ],
             "strategy": {"name": "independent_branches"},
+            "workspace": {"backend": "copy"},
         }
     )
 
@@ -193,6 +195,46 @@ def test_freeze_spec_is_stable_and_copies_verifier(tmp_path: Path) -> None:
     assert Path(first.frozen_verifier_paths["evaluator.py"]).exists()
 
 
+def test_load_legacy_frozen_spec_without_workspace_uses_copy_backend(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+    frozen_path = runtime._spec_dir(frozen.frozen_spec_id) / "frozen_spec.json"
+    frozen_data = load_json(frozen_path)
+    frozen_data["spec"].pop("workspace")
+    write_json(frozen_path, frozen_data)
+
+    loaded = runtime._load_frozen_spec(frozen.frozen_spec_id)
+
+    assert loaded.spec.workspace.backend == "copy"
+
+
+def test_runtime_defaults_to_git_worktree_workspace(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data.pop("workspace")
+    spec = SearchSpec.model_validate(spec_data)
+
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    assert task.workspace_backend == "git_worktree"
+    assert task.workspace_branch == f"gp/{run_id}/c001"
+    common_dir = subprocess.check_output(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=task.workspace,
+        text=True,
+    ).strip()
+    assert (task.workspace / common_dir).resolve() == (
+        runtime._run_dir(run_id) / "workspace-repository" / ".git"
+    ).resolve()
+
+
 def test_freeze_spec_normalizes_verifier_cwd_equal_to_source_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -307,7 +349,7 @@ def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )
@@ -317,7 +359,7 @@ def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
     tasks = runtime.start_batch(run_id, plan.plan_id)
 
     assert plan.worker_policy["mode"] == "agent-session-pool"
-    assert plan.worker_policy["subagent_type"] == "AnySearchAgent"
+    assert plan.worker_policy["subagent_type"] == "SearchCandidateAgent"
     assert plan.worker_policy["requires_agent_session"] is True
     assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
     assert any(
@@ -408,7 +450,7 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )
@@ -425,7 +467,7 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     assert session.candidate_id == tasks[0].candidate_id
     assert session.workspace == tasks[0].workspace
     assert session.agent_session_id.startswith("agent_")
-    assert session.launch["subagent_type"] == "AnySearchAgent"
+    assert session.launch["subagent_type"] == "SearchCandidateAgent"
     assert session.host == "opencode"
     assert session.host_handle.host == "opencode"
     assert tasks[0].candidate_id in session.launch["description"]
@@ -442,7 +484,7 @@ def test_redispatch_candidate_creates_new_session_with_tier_override(tmp_path: P
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgentFlash",
+            "worker_agent_type": "SearchCandidateAgentFlash",
         },
         max_candidates=1,
     )
@@ -456,19 +498,19 @@ def test_redispatch_candidate_creates_new_session_with_tier_override(tmp_path: P
         run_id,
         task.candidate_id,
         {"goal": "resume with more steps"},
-        worker_agent_type="AnySearchAgentDeep",
+        worker_agent_type="SearchCandidateAgentDeep",
     )
 
     assert redispatched.agent_session_id != first.agent_session_id
     assert redispatched.candidate_id == first.candidate_id
     assert redispatched.workspace == first.workspace
-    assert redispatched.launch["subagent_type"] == "AnySearchAgentDeep"
+    assert redispatched.launch["subagent_type"] == "SearchCandidateAgentDeep"
     assert redispatched.agent_session_id in redispatched.launch["prompt"]
     assert "state_level_resume" in redispatched.launch["prompt"]
 
     refreshed_candidate = runtime._load_candidate_record(run_id, task.candidate_id)
     worker_policy = refreshed_candidate.task.strategy_metadata["worker_policy"]
-    assert worker_policy["worker_agent_type"] == "AnySearchAgentFlash"
+    assert worker_policy["worker_agent_type"] == "SearchCandidateAgentFlash"
 
 
 def test_redispatch_context_includes_previous_progress_handoff(tmp_path: Path) -> None:
@@ -552,7 +594,7 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
     assert session.host_handle.host == "codex"
     assert session.host_handle.task_name == session.launch["task_name"]
     assert session.launch["tool"] == "spawn_agent"
-    assert session.launch["agent_type"] == "any_search_agent"
+    assert session.launch["agent_type"] == "search_candidate_agent"
     assert session.launch["fork_turns"] == "none"
     assert "agent_session_id=" in session.launch["message"]
 
@@ -612,12 +654,12 @@ def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> N
         run_id,
         task.candidate_id,
         "resume after timeout",
-        worker_agent_type="any_search_agent_deep",
+        worker_agent_type="search_candidate_agent_deep",
         worker_budget={"max_runtime_seconds": 30, "max_turns": 12, "on_exceed": "interrupt"},
     )
 
     assert redispatched.agent_session_id != first.agent_session_id
-    assert redispatched.launch["agent_type"] == "any_search_agent_deep"
+    assert redispatched.launch["agent_type"] == "search_candidate_agent_deep"
     assert redispatched.launch["budget_control"] == {
         "mode": "parent_watchdog",
         "max_runtime_seconds": 30,
@@ -757,7 +799,7 @@ def test_start_agent_session_returns_claude_foreground_launch_payload(tmp_path: 
     assert session.host == "claude-code"
     assert session.host_handle.host == "claude-code"
     assert session.launch["tool"] == "Agent"
-    assert session.launch["agent_type"] == "any-search-agent"
+    assert session.launch["agent_type"] == "search-candidate-agent"
     assert session.launch["background"] is False
     assert "agent_session_id=" in session.launch["message"]
 
@@ -775,11 +817,11 @@ def test_redispatch_candidate_overrides_claude_tier_and_budget(tmp_path: Path) -
         run_id,
         task.candidate_id,
         {"goal": "resume with deep budget"},
-        worker_agent_type="any-search-agent-deep",
+        worker_agent_type="search-candidate-agent-deep",
         worker_budget={"max_turns": 16, "on_exceed": "interrupt"},
     )
 
-    assert redispatched.launch["agent_type"] == "any-search-agent-deep"
+    assert redispatched.launch["agent_type"] == "search-candidate-agent-deep"
     assert redispatched.launch["budget_control"] == {
         "mode": "host_turn_limit",
         "max_turns": 16,
@@ -796,7 +838,7 @@ def test_redispatch_candidate_rejects_claude_tier_budget_mismatch(tmp_path: Path
             "name": "random",
             "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
-            "worker_agent_type": "any-search-agent-flash",
+            "worker_agent_type": "search-candidate-agent-flash",
             "worker_budget": {
                 "max_turns": 4,
                 "on_exceed": "interrupt",
@@ -814,7 +856,7 @@ def test_redispatch_candidate_rejects_claude_tier_budget_mismatch(tmp_path: Path
             run_id,
             task.candidate_id,
             {"goal": "resume deeper"},
-            worker_agent_type="any-search-agent-deep",
+            worker_agent_type="search-candidate-agent-deep",
         )
 
 
@@ -827,7 +869,7 @@ def test_claude_worker_budget_flows_to_turn_limit_launch_payload(tmp_path: Path)
             "name": "random",
             "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
-            "worker_agent_type": "any-search-agent-deep",
+            "worker_agent_type": "search-candidate-agent-deep",
             "worker_budget": {
                 "max_turns": 16,
                 "on_exceed": "interrupt",
@@ -847,7 +889,7 @@ def test_claude_worker_budget_flows_to_turn_limit_launch_payload(tmp_path: Path)
         "max_turns": 16,
         "on_exceed": "interrupt",
     }
-    assert session.launch["agent_type"] == "any-search-agent-deep"
+    assert session.launch["agent_type"] == "search-candidate-agent-deep"
     assert session.launch["budget_control"] == {
         "mode": "host_turn_limit",
         "max_turns": 16,
@@ -878,8 +920,8 @@ def test_claude_worker_budget_selects_known_turn_budget_agent(tmp_path: Path) ->
 
     session = runtime.start_agent_session(run_id, task.candidate_id)
 
-    assert plan.worker_policy["worker_agent_type"] == "any-search-agent-flash"
-    assert session.launch["agent_type"] == "any-search-agent-flash"
+    assert plan.worker_policy["worker_agent_type"] == "search-candidate-agent-flash"
+    assert session.launch["agent_type"] == "search-candidate-agent-flash"
     assert session.launch["budget_control"]["max_turns"] == 4
 
 
@@ -892,7 +934,7 @@ def test_claude_worker_budget_rejects_mismatched_known_agent_type(tmp_path: Path
             "name": "random",
             "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
-            "worker_agent_type": "any-search-agent",
+            "worker_agent_type": "search-candidate-agent",
             "worker_budget": {
                 "max_turns": 16,
                 "on_exceed": "interrupt",
@@ -1072,7 +1114,7 @@ def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )
@@ -1109,7 +1151,7 @@ def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
     assert continued.opencode_session_id == "opencode_session_001"
     assert continued.directive == {"goal": "keep improving the same node"}
     assert continued.launch["task_id"] == "opencode_session_001"
-    assert continued.launch["subagent_type"] == "AnySearchAgent"
+    assert continued.launch["subagent_type"] == "SearchCandidateAgent"
     assert "required" not in continued.launch
     assert continued.agent_session_id in continued.launch["prompt"]
     assert task.candidate_id in continued.launch["prompt"]
@@ -1411,7 +1453,7 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -1636,7 +1678,7 @@ def test_evolve_planning_keeps_candidate_with_valid_iteration_after_latest_failu
             stderr="verifier failed" if score == 0 else "",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     runtime.run_verifier(run_id, first_tasks[0].candidate_id)
     runtime.run_verifier(run_id, first_tasks[0].candidate_id)
@@ -1715,7 +1757,7 @@ def test_openevolve_strategy_samples_exploration_parent_and_inspirations(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -1784,7 +1826,7 @@ def test_random_strategy_gen2_picks_scored_parent_with_seed(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -1828,7 +1870,7 @@ def test_random_strategy_gen2_without_seed_picks_scored_parent(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -1881,11 +1923,11 @@ def test_non_opencode_hosts_allow_default_and_random_strategies(
 @pytest.mark.parametrize(
     ("host", "expected_launch"),
     [
-        ("opencode", {"subagent_type": "AnySearchAgent"}),
-        ("codex", {"tool": "spawn_agent", "agent_type": "any_search_agent"}),
+        ("opencode", {"subagent_type": "SearchCandidateAgent"}),
+        ("codex", {"tool": "spawn_agent", "agent_type": "search_candidate_agent"}),
         (
             "claude-code",
-            {"tool": "Agent", "agent_type": "any-search-agent", "background": False},
+            {"tool": "Agent", "agent_type": "search-candidate-agent", "background": False},
         ),
     ],
 )
@@ -1986,7 +2028,7 @@ def test_non_opencode_hosts_reject_non_builtin_strategy_drivers(
         {
             "name": "random",
             "driver": "python",
-            "ref": "agentic_any_search_mcp.strategies.adaptevolve:AdaptEvolveStrategy",
+            "ref": "goal_plus.strategies.adaptevolve:AdaptEvolveStrategy",
             "worker_mode": "agent-session-pool",
             "worker_host": host,
         },
@@ -2054,7 +2096,7 @@ def test_python_strategy_worker_policy_controls_launch_payload(
         "            'requires_agent_proposals': False,\n"
         "            'worker_policy': {\n"
         "                'mode': 'agent-session-pool',\n"
-        "                'subagent_type': 'AnySearchAgentDeep',\n"
+        "                'subagent_type': 'SearchCandidateAgentDeep',\n"
         "                'requires_agent_session': True,\n"
         "            },\n"
         "            'work_orders': [\n"
@@ -2062,10 +2104,10 @@ def test_python_strategy_worker_policy_controls_launch_payload(
         "                    'slot': 1,\n"
         "                    'intent': 'dynamic deep worker',\n"
         "                    'hypothesis': 'dynamic deep worker',\n"
-        "                    'metadata': {'selected_worker_agent_type': 'AnySearchAgentDeep'},\n"
+        "                    'metadata': {'selected_worker_agent_type': 'SearchCandidateAgentDeep'},\n"
         "                }\n"
         "            ],\n"
-        "            'strategy_trace': {'selected_worker_agent_type': 'AnySearchAgentDeep'},\n"
+        "            'strategy_trace': {'selected_worker_agent_type': 'SearchCandidateAgentDeep'},\n"
         "        }\n",
         encoding="utf-8",
     )
@@ -2077,7 +2119,7 @@ def test_python_strategy_worker_policy_controls_launch_payload(
             "name": "dynamic_worker",
             "driver": "python",
             "ref": "dynamic_worker_strategy:Strategy",
-            "worker_agent_type": "AnySearchAgentFlash",
+            "worker_agent_type": "SearchCandidateAgentFlash",
         },
         max_candidates=1,
     )
@@ -2088,9 +2130,9 @@ def test_python_strategy_worker_policy_controls_launch_payload(
     tasks = runtime.start_batch(run_id, plan.plan_id)
     session = runtime.start_agent_session(run_id, tasks[0].candidate_id)
 
-    assert plan.worker_policy["subagent_type"] == "AnySearchAgentDeep"
-    assert tasks[0].strategy_metadata["worker_policy"]["subagent_type"] == "AnySearchAgentDeep"
-    assert session.launch["subagent_type"] == "AnySearchAgentDeep"
+    assert plan.worker_policy["subagent_type"] == "SearchCandidateAgentDeep"
+    assert tasks[0].strategy_metadata["worker_policy"]["subagent_type"] == "SearchCandidateAgentDeep"
+    assert session.launch["subagent_type"] == "SearchCandidateAgentDeep"
 
 
 def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
@@ -2104,13 +2146,13 @@ def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
         {
             "name": "adaptevolve",
             "driver": "python",
-            "ref": "agentic_any_search_mcp.strategies.adaptevolve:AdaptEvolveStrategy",
-            "worker_agent_type": "AnySearchAgent",
+            "ref": "goal_plus.strategies.adaptevolve:AdaptEvolveStrategy",
+            "worker_agent_type": "SearchCandidateAgent",
             "config": {
                 "tiers": [
-                    "AnySearchAgentFlash",
-                    "AnySearchAgentDeep",
-                    "AnySearchAgentExtraDeep",
+                    "SearchCandidateAgentFlash",
+                    "SearchCandidateAgentDeep",
+                    "SearchCandidateAgentExtraDeep",
                 ],
                 "low_score_threshold": 0.2,
                 "high_score_threshold": 0.8,
@@ -2126,9 +2168,9 @@ def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
     first_session = runtime.start_agent_session(run_id, first_tasks[0].candidate_id)
 
     assert plan1.strategy_trace["selection_rule"] == "adaptevolve bootstrap"
-    assert plan1.strategy_trace["selected_worker_agent_type"] == "AnySearchAgentFlash"
-    assert plan1.worker_policy["subagent_type"] == "AnySearchAgentFlash"
-    assert first_session.launch["subagent_type"] == "AnySearchAgentFlash"
+    assert plan1.strategy_trace["selected_worker_agent_type"] == "SearchCandidateAgentFlash"
+    assert plan1.worker_policy["subagent_type"] == "SearchCandidateAgentFlash"
+    assert first_session.launch["subagent_type"] == "SearchCandidateAgentFlash"
 
     def fake_run(*args, **kwargs):
         return subprocess.CompletedProcess(
@@ -2138,7 +2180,7 @@ def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(
         run_id,
         first_tasks[0].candidate_id,
@@ -2151,11 +2193,11 @@ def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
 
     assert plan2.strategy_trace["selection_rule"] == "adaptevolve mutate best parent"
     assert plan2.strategy_trace["parent_candidate_id"] == first_tasks[0].candidate_id
-    assert plan2.strategy_trace["selected_worker_agent_type"] == "AnySearchAgentDeep"
-    assert plan2.worker_policy["subagent_type"] == "AnySearchAgentDeep"
+    assert plan2.strategy_trace["selected_worker_agent_type"] == "SearchCandidateAgentDeep"
+    assert plan2.worker_policy["subagent_type"] == "SearchCandidateAgentDeep"
     assert followups[0].base_candidate_id == first_tasks[0].candidate_id
-    assert followups[0].strategy_metadata["worker_policy"]["subagent_type"] == "AnySearchAgentDeep"
-    assert followup_session.launch["subagent_type"] == "AnySearchAgentDeep"
+    assert followups[0].strategy_metadata["worker_policy"]["subagent_type"] == "SearchCandidateAgentDeep"
+    assert followup_session.launch["subagent_type"] == "SearchCandidateAgentDeep"
 
 
 def test_run_verifier_records_edit_surface_violation_in_iteration(
@@ -2189,7 +2231,7 @@ def test_run_verifier_records_edit_surface_violation_in_iteration(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     record = runtime._load_candidate_record(run_id, candidate_id)
@@ -2221,7 +2263,7 @@ def test_run_verifier_records_failure_class_on_timeout(
     def fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     report = runtime.run_verifier(
         run_id, candidate_id, agent_session_id=session.agent_session_id
     )
@@ -2263,7 +2305,7 @@ def test_run_verifier_records_iteration_with_agent_session_id(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )
@@ -2282,7 +2324,7 @@ def test_run_verifier_records_iteration_with_agent_session_id(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     record = runtime._load_candidate_record(run_id, candidate_id)
@@ -2303,7 +2345,7 @@ def test_run_verifier_without_agent_session_id_is_main_final_verify(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )
@@ -2322,7 +2364,7 @@ def test_run_verifier_without_agent_session_id_is_main_final_verify(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     # Main final verify call - no agent_session_id, no auto-attribution.
     report = runtime.run_verifier(run_id, candidate_id)
     assert report.aggregate_score == 0.6
@@ -2385,7 +2427,7 @@ def test_run_verifier_parses_subprocess_metrics_with_mock(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     report = runtime.run_verifier(run_id, candidate_id)
 
@@ -2406,7 +2448,7 @@ def test_run_verifier_handles_subprocess_timeout_with_mock(
     def fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     report = runtime.run_verifier(run_id, candidate_id)
 
@@ -2440,7 +2482,7 @@ def test_select_uses_metric_direction_for_minimize(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -2486,7 +2528,7 @@ def test_select_uses_best_iteration_when_artifact_is_current(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c001")
@@ -2531,7 +2573,7 @@ def test_select_can_recover_best_iteration_after_artifact_changed(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     c001_workspace = tasks[0].workspace
     c001_workspace.joinpath("initial_program.py").write_text(
@@ -2591,7 +2633,7 @@ def test_select_ignores_old_artifact_without_git_commit(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     c001_workspace = tasks[0].workspace
     c001_workspace.joinpath("initial_program.py").write_text(
@@ -2637,7 +2679,7 @@ def test_run_verifier_records_real_git_commit_for_iteration(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     runtime.run_verifier(run_id, candidate_id)
 
@@ -2681,7 +2723,7 @@ def test_select_checks_out_best_git_commit_before_final_verify(
             )
         return real_run(*args, **kwargs)
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     c001_workspace.joinpath("initial_program.py").write_text(
         "VALUE = 'fast'\n", encoding="utf-8"
@@ -2790,7 +2832,7 @@ def test_concurrent_run_verifiers_preserve_best_score(
         except BaseException as exc:  # pragma: no cover - surfaced after join
             errors.append(exc)
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     high = threading.Thread(target=verify, args=(tasks[0].candidate_id,))
     low = threading.Thread(target=verify, args=(tasks[1].candidate_id,))
@@ -2819,7 +2861,7 @@ def test_run_verifier_works_without_session_and_records_iterations(
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )
@@ -2841,7 +2883,7 @@ def test_run_verifier_works_without_session_and_records_iterations(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
 
     for expected_score in [0.4, 0.7, 0.9]:
         report = runtime.run_verifier(
@@ -2884,7 +2926,7 @@ def test_list_iterations_returns_all_records(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
@@ -2923,7 +2965,7 @@ def test_get_agent_context_returns_iterations(
             stderr="",
         )
 
-    monkeypatch.setattr("agentic_any_search_mcp.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     context = runtime.get_agent_context(session.agent_session_id)
@@ -2942,7 +2984,7 @@ def test_history_and_report_include_agent_sessions(tmp_path: Path) -> None:
         {
             "name": "independent_branches",
             "worker_mode": "agent-session-pool",
-            "worker_agent_type": "AnySearchAgent",
+            "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
     )

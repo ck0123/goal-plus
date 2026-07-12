@@ -13,8 +13,8 @@ def test_pi_assets_exist() -> None:
     for path in (
         ".pi/prompts/goal-plus.md",
         ".pi/skills/goal-plus/SKILL.md",
-        ".pi/prompts/any-search-worker.md",
-        ".pi/extensions/search-runtime.ts",
+        ".pi/prompts/search-candidate-worker.md",
+        ".pi/extensions/goal-plus.ts",
     ):
         assert (ROOT / path).exists(), f"missing {path}"
 
@@ -29,8 +29,8 @@ def test_pyproject_exposes_pi_console_scripts() -> None:
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
     assert 'requires-python = ">=3.10"' in text
-    assert 'agentic-any-search-pi-tool = "agentic_any_search_mcp.pi_tool:main"' in text
-    assert 'agentic-any-search-pi-worker = "agentic_any_search_mcp.pi_worker:main"' in text
+    assert 'goal-plus-pi-tool = "goal_plus.pi_tool:main"' in text
+    assert 'goal-plus-pi-worker = "goal_plus.pi_worker:main"' in text
 
 
 def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
@@ -58,7 +58,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "goal_plus_gate" in text
     assert "goal_plus_monitor_snapshot" in text
     assert "primary read-only monitoring path" in text
-    assert "agentic-any-search-pi-tool goal_plus_monitor_snapshot" in text
+    assert "goal-plus-pi-tool goal_plus_monitor_snapshot" in text
     assert "Do not use manual file tailing as the primary monitoring path" in text
     assert "goal_plus_link_search_run" in text
     assert 'worker_host: "pi-rpc"' in text
@@ -69,7 +69,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "`random` or `random_mode`" in text
     assert "pi_search_run_batch" in text
     assert "max_parallel=<budget.max_parallel>" in text
-    assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1" in text
+    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" in text
     assert "pi_search_run_candidate" in text
     assert "search_start_agent_session" in text
     assert "pi_rpc_run_worker" in text
@@ -94,7 +94,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
 
 
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
-    text = (ROOT / ".pi" / "prompts" / "any-search-worker.md").read_text(
+    text = (ROOT / ".pi" / "prompts" / "search-candidate-worker.md").read_text(
         encoding="utf-8"
     )
 
@@ -118,11 +118,11 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
 
 
 def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
-    text = (ROOT / ".pi" / "extensions" / "search-runtime.ts").read_text(
+    text = (ROOT / ".pi" / "extensions" / "goal-plus.ts").read_text(
         encoding="utf-8"
     )
 
-    assert "AGENTIC_ANY_SEARCH_PI_ROLE" in text
+    assert "GOAL_PLUS_PI_ROLE" in text
     assert 'role === "main"' in text
     assert 'role === "worker"' in text
     assert "goal_plus_create" in text
@@ -150,10 +150,10 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "assistantMessages" in text
     assert "estimated_cost" in text
     assert "sendUserMessage" in text
-    assert "AGENTIC_ANY_SEARCH_SOURCE_PATH" in text
+    assert "GOAL_PLUS_SOURCE_PATH" in text
     assert "sys.path.insert" in text
-    assert "agentic_any_search_mcp.pi_tool" in text
-    assert "agentic_any_search_mcp.pi_worker" in text
+    assert "goal_plus.pi_tool" in text
+    assert "goal_plus.pi_worker" in text
     assert "isPrintLikeInvocation" in text
     assert 'process.argv.includes("-p")' in text
     assert "if (!isPrintLikeInvocation)" in text
@@ -174,8 +174,8 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "workspaceGuard" in text
     assert "MAIN_GATED_TOOLS" in text
     assert "pi_rpc_run_worker" in text
-    assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER" in text
-    assert 'process.env.AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER === "1"' in text
+    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER" in text
+    assert 'process.env.GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER === "1"' in text
     assert "role === \"main\" && exposeLowLevelWorker" in text
     assert '"pi_search_run_candidate"' in text
     assert '"pi_search_run_batch"' in text
@@ -183,7 +183,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
 
 
 def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> None:
-    text = (ROOT / ".pi" / "extensions" / "search-runtime.ts").read_text(
+    text = (ROOT / ".pi" / "extensions" / "goal-plus.ts").read_text(
         encoding="utf-8"
     )
 
@@ -225,10 +225,10 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
 
     combined = "\n".join([pi_doc, adapters, debug, examples])
     assert "worker_host=\"pi-rpc\"" in combined
-    assert "agentic-any-search-pi-worker" in combined
-    assert "agentic-any-search-pi-tool" in combined
+    assert "goal-plus-pi-worker" in combined
+    assert "goal-plus-pi-tool" in combined
     assert "pi_search_run_batch" in combined
-    assert "AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1" in combined
+    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" in combined
     assert "pi_search_run_candidate" in combined
     assert "goal_plus_monitor_snapshot" in combined
     assert "read-only" in combined
@@ -248,7 +248,7 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "session_jsonl_restart" not in combined
     assert ".gp/host-logs/pi-rpc-" in combined
     assert "metadata-only event log" in combined
-    assert "AGENTIC_ANY_SEARCH_PI_RAW_LOG=1" in combined
+    assert "GOAL_PLUS_PI_RAW_LOG=1" in combined
     assert "native turn-level stop gate" in combined
     assert "Goal Plus stats" in combined
     assert "custom entry" in combined
@@ -260,7 +260,7 @@ def test_pi_goal_plus_skill_documents_multiple_search_tasks_and_monitoring() -> 
     text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    extension = (ROOT / ".pi" / "extensions" / "search-runtime.ts").read_text(
+    extension = (ROOT / ".pi" / "extensions" / "goal-plus.ts").read_text(
         encoding="utf-8"
     )
 

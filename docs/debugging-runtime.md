@@ -149,7 +149,7 @@ claude -p --verbose --output-format stream-json \
 Add `--include-hook-events` when diagnosing the shipped Goal Plus host hooks or
 externally supplied hooks, or `--include-partial-messages` when token-level
 streaming matters. For Claude Code this repository ships
-`agentic-any-search-mcp --goal-plus-host-hook` for
+`goal-plus --goal-plus-host-hook` for
 `PostToolUse(goal_plus_create)` session binding and session-scoped `Stop`
 gating; its PreToolUse and SubagentStop remain manual gate calls.
 `--debug-file` implicitly enables debug mode. Use `--debug api,mcp` for a
@@ -193,11 +193,11 @@ Claude Code also exposes `claude agents --json`, `claude logs <id>`, and
 
 ### Pi RPC
 
-Pi workers are launched by `agentic-any-search-pi-worker`, not by the MCP
+Pi workers are launched by `goal-plus-pi-worker`, not by the MCP
 server. Normal Pi Search Mode uses `pi_search_run_batch`, which starts agent
 sessions, runs foreground Pi RPC worker processes, binds returned handles, and
 can run final verifiers. The low-level `pi_rpc_run_worker` tool is hidden from
-the main Pi agent unless `AGENTIC_ANY_SEARCH_PI_EXPOSE_LOW_LEVEL_WORKER=1` is
+the main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is
 set for manual debugging.
 
 The runner starts:
@@ -206,7 +206,7 @@ The runner starts:
 pi --mode rpc --approve \
   --no-session \
   --session-id <agent_session_id> \
-  -e <repo>/.pi/extensions/search-runtime.ts
+  -e <repo>/.pi/extensions/goal-plus.ts
 ```
 
 Important paths:
@@ -216,7 +216,7 @@ Important paths:
 The default JSONL keeps event types, tool names/status, usage/counts, and
 bounded error summaries. It omits streaming `message_update` events plus prompt,
 reasoning, tool payload, and transcript content. Set
-`AGENTIC_ANY_SEARCH_PI_RAW_LOG=1` for a short debugging run when full RPC
+`GOAL_PLUS_PI_RAW_LOG=1` for a short debugging run when full RPC
 payloads are required; raw mode also creates the duplicate
 `.gp/host-logs/pi-rpc-<agent_session_id>.txt` stream.
 
@@ -231,7 +231,7 @@ For periodic monitoring, prefer the read-only MCP/Pi facade snapshot instead
 of repeatedly opening logs:
 
 ```bash
-agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+goal-plus-pi-tool goal_plus_monitor_snapshot \
   --root .gp \
   --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
   --pretty
@@ -347,7 +347,7 @@ c3d4e5f	0.651	discard	switch to rectangular grid (regressed)
 Use the read-only monitor snapshot as the primary live view:
 
 ```bash
-agentic-any-search-pi-tool goal_plus_monitor_snapshot \
+goal-plus-pi-tool goal_plus_monitor_snapshot \
   --root .gp \
   --args-json '{"goal_plus_id":"gp_...","stale_after_seconds":600}' \
   --pretty
@@ -418,7 +418,7 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
   FROM part WHERE session_id='<SID>' AND json_extract(data, '$.type')='tool'
   GROUP BY 1;
   ```
-- **Symptom**: `bash` count high, `search-runtime_search_run_verifier` count 0 or low
+- **Symptom**: `bash` count high, `goal-plus_search_run_verifier` count 0 or low
 - **Cause**: Agent didn't trust MCP path, or prompt was unclear about MCP being the official scorer
 - **Verification**: Look at bash command contents — if `python evaluator.py` appears, agent bypassed MCP
 

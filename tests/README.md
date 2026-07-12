@@ -111,7 +111,7 @@ markers select the runner:
 | `st_opencode` | `opencode run --command goal-plus` | OpenCode default unless `$ST_OPENCODE_MODEL` is set |
 | `st_codex` | `codex exec` | `gpt-5.6-terra` unless `$ST_CODEX_MODEL` is set |
 | `st_claude` | `claude -p` | Claude default unless `$ST_CLAUDE_MODEL` is set |
-| `st_pi_rpc` | `agentic-any-search-pi-worker` launching `pi --mode rpc` | Pi default unless runner args override it |
+| `st_pi_rpc` | `goal-plus-pi-worker` launching `pi --mode rpc` | Pi default unless runner args override it |
 
 The runner prepends a non-interactive confirmation preamble for Initial
 Search-Ready tasks so the frozen verifier, metric, edit surface, and promotion
@@ -120,10 +120,10 @@ rule are explicitly confirmed. Each scenario prompt is in
 placeholder that `conftest.load_prompt` renders with the absolute repo path so
 the host agent can find specs and fixtures without copying them.
 
-Host runner subprocesses set `AGENTIC_ANY_SEARCH_ST_ACTIVE=<scenario>`. If a
+Host runner subprocesses set `GOAL_PLUS_ST_ACTIVE=<scenario>`. If a
 host agent accidentally tries to run `pytest -m st` from inside an active ST,
 `tests/st/conftest.py` exits with code 4. This prevents recursive ST launches;
-the correct path is for the host agent to call `search-runtime` MCP tools
+the correct path is for the host agent to call `goal-plus` MCP tools
 directly, then launch foreground workers from runtime launch payloads.
 
 ST tests are skipped by default. Pass `-m st` to enable `tests/st`, pass
@@ -191,11 +191,11 @@ single skip reason so you see all problems at once:
 | Check | How |
 |---|---|
 | Host binary on PATH | `shutil.which` for `opencode`, `codex`, `claude`, or `pi` based on marker |
-| `agentic-any-search-mcp` server binary on PATH | `shutil.which` |
-| `search-runtime` MCP connected/configured | host-native MCP listing for the selected marker |
+| `goal-plus` server binary on PATH | `shutil.which` |
+| `goal-plus` MCP connected/configured | host-native MCP listing for the selected marker |
 | Configured model available | OpenCode only, via `opencode models`; Codex/Claude validate model during the real run |
 | ST specs + fixture evaluators present | `tests/st/fixtures/*/{spec.json,evaluator.py,initial_program.py,config.yaml}` exist |
-| Nested ST guard | `AGENTIC_ANY_SEARCH_ST_ACTIVE` is not set in the pytest process |
+| Nested ST guard | `GOAL_PLUS_ST_ACTIVE` is not set in the pytest process |
 
 When a check fails, ST tests are skipped with a concrete reason that includes
 the fix command. Use `pytest -rs` to see skip reasons in the summary.
@@ -245,7 +245,7 @@ accumulate there; clear with `rm -rf .gp/` if needed.
 opencode --version
 
 # 2. MCP server reachable
-opencode mcp list | grep "search-runtime.*connected"
+opencode mcp list | grep "goal-plus.*connected"
 # If missing, install the server and let opencode pick up opencode.json:
 pip install -e .
 opencode mcp list   # run from project root so opencode.json is loaded

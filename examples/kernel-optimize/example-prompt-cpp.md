@@ -62,14 +62,14 @@ Step 3 — fill and freeze this SearchSpec:
   ],
   "promotion_verifiers": [
     {"name": "frozen_hash_gate", "role": "anti_cheat_gate",
-     "command": ["search-runtime-internal", "check-frozen-hashes"]}
+     "command": ["goal-plus-internal", "check-frozen-hashes"]}
   ],
   "budget": {"max_candidates": 4, "max_parallel": 2},
   "strategy": {
     "name": "agent_guided",
     "driver": "builtin",
     "worker_mode": "agent-session-pool",
-    "worker_agent_type": "AnySearchAgentDeep",
+    "worker_agent_type": "SearchCandidateAgentDeep",
     "history_policy": {"scope": "top_n", "top_n": 5}
   }
 }

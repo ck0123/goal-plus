@@ -54,7 +54,7 @@ def _claude_available() -> bool:
 
 
 def _opencode_mcp_runtime_connected() -> tuple[bool, str]:
-    """Verify search-runtime MCP server shows up as connected in `opencode mcp list`."""
+    """Verify goal-plus MCP server shows up as connected in `opencode mcp list`."""
     if not _opencode_available():
         return False, "opencode binary not on PATH"
     proc = _run(["opencode", "mcp", "list"], timeout=20, cwd=ROOT)
@@ -62,11 +62,11 @@ def _opencode_mcp_runtime_connected() -> tuple[bool, str]:
         return False, "opencode mcp list timed out or failed to launch"
     if proc.returncode != 0:
         return False, f"opencode mcp list exited {proc.returncode}: {proc.stderr.strip()[:200]}"
-    if not re.search(r"search-runtime.*connected", proc.stdout):
+    if not re.search(r"goal-plus.*connected", proc.stdout):
         return False, (
-            "search-runtime MCP server not connected. "
+            "goal-plus MCP server not connected. "
             "Check opencode.json in project root, or run: "
-            "opencode mcp add search-runtime --command 'agentic-any-search-mcp --root .search'"
+            "opencode mcp add goal-plus --command 'goal-plus --root .search'"
         )
     return True, ""
 
@@ -79,8 +79,8 @@ def _codex_mcp_runtime_connected() -> tuple[bool, str]:
         return False, "codex mcp list timed out or failed to launch"
     if proc.returncode != 0:
         return False, f"codex mcp list exited {proc.returncode}: {proc.stderr.strip()[:200]}"
-    if "search-runtime" not in proc.stdout:
-        return False, "search-runtime MCP server not configured for Codex"
+    if "goal-plus" not in proc.stdout:
+        return False, "goal-plus MCP server not configured for Codex"
     return True, ""
 
 
@@ -92,17 +92,17 @@ def _claude_mcp_runtime_connected() -> tuple[bool, str]:
         return False, "claude mcp list timed out or failed to launch"
     if proc.returncode != 0:
         return False, f"claude mcp list exited {proc.returncode}: {proc.stderr.strip()[:200]}"
-    if "search-runtime" not in proc.stdout or "Connected" not in proc.stdout:
-        return False, "search-runtime MCP server not connected for Claude Code"
+    if "goal-plus" not in proc.stdout or "Connected" not in proc.stdout:
+        return False, "goal-plus MCP server not connected for Claude Code"
     return True, ""
 
 
 def _mcp_server_binary_available() -> tuple[bool, str]:
-    """Verify `agentic-any-search-mcp` (the MCP server entry point) is on PATH."""
-    path = shutil.which("agentic-any-search-mcp")
+    """Verify `goal-plus` (the MCP server entry point) is on PATH."""
+    path = shutil.which("goal-plus")
     if path is None:
         return False, (
-            "agentic-any-search-mcp binary not on PATH. "
+            "goal-plus binary not on PATH. "
             "Install with: pip install -e . (from project root)"
         )
     return True, ""
@@ -110,7 +110,7 @@ def _mcp_server_binary_available() -> tuple[bool, str]:
 
 def _pi_console_scripts_available() -> list[tuple[bool, str]]:
     checks = []
-    for command in ("agentic-any-search-pi-tool", "agentic-any-search-pi-worker"):
+    for command in ("goal-plus-pi-tool", "goal-plus-pi-worker"):
         checks.append(
             (
                 shutil.which(command) is not None,
@@ -193,21 +193,21 @@ def _host_checks(host: HostKind) -> list[tuple[bool, str]]:
         checks.extend(_pi_console_scripts_available())
     else:
         binary_ok, binary_msg = _mcp_server_binary_available()
-        checks.append((binary_ok, binary_msg or "agentic-any-search-mcp on PATH"))
+        checks.append((binary_ok, binary_msg or "goal-plus on PATH"))
 
     if host == "opencode" and _opencode_available():
         mcp_ok, mcp_msg = _opencode_mcp_runtime_connected()
-        checks.append((mcp_ok, mcp_msg or "search-runtime MCP connected for OpenCode"))
+        checks.append((mcp_ok, mcp_msg or "goal-plus MCP connected for OpenCode"))
         model = os.environ.get("ST_OPENCODE_MODEL")
         if model:
             model_ok, model_msg = _model_available(model)
             checks.append((model_ok, model_msg or f"model {model} available"))
     elif host == "codex" and _codex_available():
         mcp_ok, mcp_msg = _codex_mcp_runtime_connected()
-        checks.append((mcp_ok, mcp_msg or "search-runtime MCP configured for Codex"))
+        checks.append((mcp_ok, mcp_msg or "goal-plus MCP configured for Codex"))
     elif host == "claude-code" and _claude_available():
         mcp_ok, mcp_msg = _claude_mcp_runtime_connected()
-        checks.append((mcp_ok, mcp_msg or "search-runtime MCP connected for Claude Code"))
+        checks.append((mcp_ok, mcp_msg or "goal-plus MCP connected for Claude Code"))
 
     fixtures_ok, fixtures_msg = _fixtures_present()
     checks.append((fixtures_ok, fixtures_msg or "fixtures/specs present"))

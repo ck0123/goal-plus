@@ -65,9 +65,9 @@ def build_search_spec(
 ) -> dict:
     case = workspace.case
     verifier_module = (
-        "agentic_any_search_mcp.benchmarking.verifiers.mcq"
+        "goal_plus.benchmarking.verifiers.mcq"
         if case.answer_type == "mcq"
-        else "agentic_any_search_mcp.benchmarking.verifiers.numeric"
+        else "goal_plus.benchmarking.verifiers.numeric"
     )
     return {
         "objective": (

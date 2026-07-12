@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "search-runtime": {
-      "command": "agentic-any-search-mcp",
+    "goal-plus": {
+      "command": "goal-plus",
       "args": ["--root", ".gp"]
     }
   }

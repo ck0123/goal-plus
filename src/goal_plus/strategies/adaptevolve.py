@@ -4,10 +4,10 @@ from typing import Any
 
 
 DEFAULT_TIERS = [
-    "AnySearchAgentFlash",
-    "AnySearchAgent",
-    "AnySearchAgentDeep",
-    "AnySearchAgentExtraDeep",
+    "SearchCandidateAgentFlash",
+    "SearchCandidateAgent",
+    "SearchCandidateAgentDeep",
+    "SearchCandidateAgentExtraDeep",
 ]
 
 
@@ -121,14 +121,14 @@ class AdaptEvolveStrategy:
         high_score_threshold = float(self.config.get("high_score_threshold", 0.8))
 
         if failure_count >= int(self.config.get("extra_deep_failure_count", 2)):
-            return self._named_or_last("AnySearchAgentExtraDeep"), {
+            return self._named_or_last("SearchCandidateAgentExtraDeep"), {
                 "phase": "repeated_failure",
                 "best_score": best_score,
                 "failure_count": failure_count,
                 "reason": "multiple failed verified candidates",
             }
         if self._is_low_confidence(best, best_score, low_score_threshold):
-            return self._named_or_index("AnySearchAgentDeep", 1), {
+            return self._named_or_index("SearchCandidateAgentDeep", 1), {
                 "phase": "low_confidence",
                 "best_score": best_score,
                 "failure_count": failure_count,
@@ -143,7 +143,7 @@ class AdaptEvolveStrategy:
                 "threshold": high_score_threshold,
                 "reason": "best verified score is above high-score threshold",
             }
-        return self._named_or_index("AnySearchAgent", 1), {
+        return self._named_or_index("SearchCandidateAgent", 1), {
             "phase": "medium_confidence",
             "best_score": best_score,
             "failure_count": failure_count,
