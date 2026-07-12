@@ -33,18 +33,21 @@ Use `goal-plus` as the user-facing skill. The `search` skill is the internal
 Search Mode engine after Goal Plus has frozen and, when needed, confirmed a
 verifier-backed spec.
 
-This repository ships project-local Goal Plus host hooks:
-`.codex/hooks.json` runs `agentic-any-search-mcp --goal-plus-host-hook` for
-`PostToolUse` and `Stop`. Codex project hooks must be reviewed and trusted
-through `/hooks` before they run.
+This repository ships project-local Goal Plus host hooks for Codex 0.144.1 and
+newer. `.codex/hooks.json` runs
+`agentic-any-search-mcp --goal-plus-host-hook` for `UserPromptSubmit`,
+`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop`. Codex
+project hooks must be reviewed and trusted through `/hooks` before they run.
 
-`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
-current top-level Codex `session_id`. Subagent tool events are ignored for
-ownership binding. The Stop hook gates only an explicitly selected
+`UserPromptSubmit` pre-creates and binds `/goal-plus` or `$goal-plus` before the
+model turn, while `SessionStart` restores hidden context for an active bound
+goal. `PreToolUse` gates Search tools and mutating built-ins.
+`PostToolUse(goal_plus_create)` remains the compatibility binding path when the
+pre-model hook was unavailable. Subagent tool events are ignored for ownership
+binding. `Stop` and `SubagentStop` gate only an explicitly selected
 `GOAL_PLUS_ID` or an active Goal Plus record whose bound session matches the
-current Codex session. It does not wire PreToolUse or SubagentStop hooks. The
-skill still calls `goal_plus_gate` manually before Search Mode tools and
-before the final response.
+current Codex session. The skill continues to record explicit gate calls for
+auditability.
 
 Set `GOAL_PLUS_ID=gp_...` to force the hook to gate a specific active goal when
 multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` or
@@ -89,8 +92,65 @@ foreground launch payload from
 }
 ```
 
-The main Codex agent should call `spawn_agent` with those fields, then record
-the returned task name or nickname with `search_bind_agent_handle`.
+The main Codex agent should project this adapter payload onto the `spawn_agent`
+schema exposed by the current session, then record the returned task name or
+nickname with `search_bind_agent_handle`. Always use `task_name`, `message`,
+and the applicable fork field. Pass optional `agent_type`, `model`,
+`reasoning_effort`, and `service_tier` only when the tool schema exposes them.
+Codex configurations with `multi_agent_v2.hide_spawn_agent_metadata=true`
+intentionally hide those optional fields; in that mode a child inherits the
+parent model, and omitted launch metadata is not an adapter failure.
+
+Optional native launch controls live under `strategy.worker_launch` and flow
+to the returned adapter payload. The main agent passes each control only when
+the current `spawn_agent` schema exposes it:
+
+```json
+{
+  "strategy": {
+    "worker_host": "codex",
+    "worker_launch": {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high",
+      "service_tier": "priority"
+    }
+  }
+}
+```
+
+They are host launch choices, not runtime search state. Omit them to inherit
+the parent Codex configuration.
+
+For the regular Codex CLI, use the model slug shown by `/model`, such as
+`gpt-5.6-terra`. No additional provider override is required.
+
+## Worker And Orchestrator Boundary
+
+Every Codex launch message states that the child is a candidate worker, not the search orchestrator.
+It must call `search_get_agent_context`, work only in its candidate workspace,
+and call `search_run_verifier`. It must not call `search_plan_next`,
+`search_start_batch`, `search_select`, `search_report`, `search_promote`, or any
+`goal_plus_*` tool.
+
+This rule exists in both `.codex/agents/any_search_agent.toml` and the adapter
+message. The duplication is intentional: when the current `spawn_agent` schema
+hides `agent_type`, Codex launches a default child rather than the named local
+agent, so the launch message must preserve the same ownership boundary.
+
+## Verified Codex Cycle
+
+The opt-in `codex_circle_packing_cycle` ST runs the ordinary Codex CLI with
+`gpt-5.6-terra` and verifies two batches of two candidates:
+
+```bash
+python -m pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s -rs
+```
+
+The strict report contract requires `c001` through `c004`, four distinct
+`agent_session_id` values, `rounds: 2`, `batch_sizes: [2, 2]`, at least one
+verifier iteration per candidate, and a runtime-generated selection/report.
+This proves the portable `random` multi-round path; it does not enable the
+OpenCode-only high-touch strategies listed above.
 
 ## Worker Budget
 
@@ -120,18 +180,25 @@ The returned launch payload includes:
   "budget_control": {
     "mode": "parent_watchdog",
     "max_runtime_seconds": 600,
-    "wait_timeout_ms": 600000,
+    "initial_wait_timeout_ms": 555000,
+    "soft_closeout_seconds": 45,
+    "closeout_tool": "send_message",
+    "closeout_target": "search_agent_001",
+    "closeout_message": "Worker deadline is approaching. Stop starting new work, run one final search_run_verifier if needed, write .tmp/handoff.json, and return a concise summary.",
+    "final_wait_timeout_ms": 45000,
     "on_exceed": "interrupt",
+    "interrupt_tool": "interrupt_agent",
     "interrupt_target": "search_agent_001",
     "max_turns_hint": 8
   }
 }
 ```
 
-The parent Codex agent must wait with `wait_agent(timeout_ms=...)`. If the wait
-times out, it interrupts the child with `interrupt_agent` when available, or
-with `send_input(..., interrupt=true)` on Codex surfaces that expose interruption
-through message sending.
+The parent Codex agent first waits for `initial_wait_timeout_ms`. On timeout it
+sends the single `closeout_message`, giving the worker a chance to final-verify,
+write `.tmp/handoff.json`, and return. It then waits for
+`final_wait_timeout_ms`; only a second timeout triggers `interrupt_agent`.
+This is a two-stage host watchdog, not a runtime-owned wait loop.
 
 `max_turns` is only a hint for Codex workers. The enforceable control is
 `max_runtime_seconds`.
@@ -151,6 +218,12 @@ for the same candidate workspace and may override `worker_agent_type` or
 `worker_budget` for that launch. The worker should use `context.history` and
 `context.iterations` from the MCP runtime; there is no `plan.md` history file
 for Search Mode.
+
+Before either a normal return or a deadline closeout, the worker writes a
+bounded `.tmp/handoff.json`. A fresh redispatched worker recovers from the same
+candidate workspace plus runtime-owned `context.history`,
+`context.iterations`, Git state, and verifier evidence; it does not depend on
+the previous chat transcript.
 
 ## Debugging Logs
 

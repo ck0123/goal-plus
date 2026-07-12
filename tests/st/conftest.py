@@ -11,7 +11,13 @@ import pytest
 from .helpers.claude_runner import ClaudeRunner, find_claude
 from .helpers.codex_runner import CodexRunner, find_codex
 from .helpers.opencode_runner import OpenCodeRunner, find_opencode
-from .hosts import HOSTS, HostKind, ST_ACTIVE_ENV, link_host_assets, st_host_from_marker_names
+from .hosts import (
+    HOSTS,
+    HostKind,
+    ST_ACTIVE_ENV,
+    link_host_assets,
+    st_host_from_marker_names,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -13,6 +13,10 @@ from agentic_any_search_mcp.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_RO
 
 
 GOAL_ID_RE = re.compile(r"\bgp_\d+\b")
+GOAL_PLUS_PROMPT_RE = re.compile(
+    r"^\s*(?:/|\$)goal-plus(?:\s+(?P<goal>.*\S))?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 DISABLE_VALUES = {"1", "true", "yes", "on"}
 
 
@@ -108,6 +112,19 @@ def _tool_name(hook_input: dict[str, Any]) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+def _prompt(hook_input: dict[str, Any]) -> str:
+    value = hook_input.get("prompt")
+    return value if isinstance(value, str) else ""
+
+
+def _goal_plus_prompt(hook_input: dict[str, Any]) -> str | None:
+    match = GOAL_PLUS_PROMPT_RE.match(_prompt(hook_input))
+    if match is None:
+        return None
+    raw_goal = (match.group("goal") or "").strip()
+    return raw_goal or None
 
 
 def _is_goal_plus_create_tool(tool_name: str) -> bool:
@@ -224,6 +241,74 @@ def _select_session_goal_id(search_root: Path, session_id: str | None) -> str | 
     return None
 
 
+def _select_hook_goal_id(search_root: Path, hook_input: dict[str, Any]) -> str | None:
+    return _select_explicit_goal_id(search_root, hook_input) or _select_session_goal_id(
+        search_root,
+        _session_id(hook_input),
+    )
+
+
+def _goal_context(record: Any) -> str:
+    next_action = record.next_action
+    next_action_text = (
+        f"{next_action.kind}: {next_action.description}"
+        if next_action is not None
+        else "none"
+    )
+    return (
+        f"Goal Plus is active for this Codex session: goal_plus_id={record.goal_plus_id}.\n"
+        "The runtime record already exists; do not call goal_plus_create again.\n"
+        f"Current phase: {record.phase}; next action: {next_action_text}\n"
+        "Use the goal_plus_* tools and the linked Search runtime as authoritative."
+    )
+
+
+def _emit_additional_context(event_name: str, context: str) -> None:
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": event_name,
+                    "additionalContext": context,
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def _emit_pre_tool_block(reason: str) -> None:
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def _should_gate_tool(tool_name: str) -> bool:
+    normalized = tool_name.strip().lower().replace("-", "_")
+    logical_name = normalized.rsplit("__", 1)[-1]
+    return (
+        logical_name.startswith("search_")
+        or logical_name in {
+            "pi_rpc_run_worker",
+            "pi_search_run_candidate",
+            "bash",
+            "edit",
+            "write",
+            "exec_command",
+            "apply_patch",
+        }
+    )
+
+
 def _handle_post_tool_use(
     runtime: Any,
     hook_input: dict[str, Any],
@@ -276,6 +361,107 @@ def _emit_block(reason: str) -> None:
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
 
 
+def _emit_terminal_stats(record: Any) -> None:
+    counters = ",".join(
+        f"{name}={count}" for name, count in sorted(record.hook_counters.items())
+    ) or "none"
+    linked_run = (
+        record.linked_search.run_id
+        if record.linked_search is not None and record.linked_search.run_id
+        else "none"
+    )
+    message = (
+        "Goal Plus stats: "
+        f"goal_plus_id={record.goal_plus_id}; "
+        f"status={record.status}; "
+        f"phase={record.phase}; "
+        f"linked_run={linked_run}; "
+        f"gates={counters}"
+    )
+    print(json.dumps({"systemMessage": message}, ensure_ascii=False))
+
+
+def _handle_user_prompt_submit(
+    runtime: Any,
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> None:
+    session_id = _session_id(hook_input)
+    goal_id = _select_session_goal_id(search_root, session_id)
+    raw_goal = _goal_plus_prompt(hook_input)
+    if goal_id is None and raw_goal is not None and session_id is not None:
+        record = runtime.create_goal(raw_goal)
+        goal_id = record.goal_plus_id
+    if goal_id is None or session_id is None:
+        return
+    record = runtime.activate_session(
+        goal_id,
+        {
+            "host": _host_kind(hook_input),
+            "session_id": session_id,
+            "transcript_path": _transcript_path(hook_input),
+        },
+    )
+    runtime.gate(goal_id, event="user_prompt_submit", context=hook_input)
+    _emit_additional_context("UserPromptSubmit", _goal_context(record))
+
+
+def _handle_session_start(
+    runtime: Any,
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> None:
+    goal_id = _select_hook_goal_id(search_root, hook_input)
+    if goal_id is None:
+        return
+    _emit_additional_context("SessionStart", _goal_context(runtime.status(goal_id)))
+
+
+def _handle_pre_tool_use(
+    runtime: Any,
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> None:
+    if _is_subagent_context(hook_input) or not _should_gate_tool(_tool_name(hook_input)):
+        return
+    goal_id = _select_hook_goal_id(search_root, hook_input)
+    if goal_id is None:
+        return
+    gate = runtime.gate(goal_id, event="pre_tool_use", context=hook_input)
+    if gate.decision == "block":
+        _emit_pre_tool_block(gate.reason or "Goal Plus blocked this tool call.")
+
+
+def _handle_stop_event(
+    runtime: Any,
+    search_root: Path,
+    hook_input: dict[str, Any],
+    *,
+    event: str,
+) -> None:
+    goal_id = _select_hook_goal_id(search_root, hook_input)
+    if goal_id is None:
+        current_session_id = _session_id(hook_input)
+        active = _active_records(search_root)
+        if event == "stop" and active:
+            _record_session_gate_skipped(
+                runtime,
+                search_root,
+                hook_input,
+                current_session_id,
+            )
+        return
+    gate = runtime.gate(goal_id, event=event, context=hook_input)
+    if gate.decision == "block":
+        _emit_block(
+            gate.continuation_prompt
+            or gate.reason
+            or "Goal Plus is still active; continue before stopping."
+        )
+    elif event == "stop" and gate.status != "active":
+        _emit_terminal_stats(runtime.status(goal_id))
+
+
 def main() -> int:
     if _hook_disabled():
         return 0
@@ -286,6 +472,24 @@ def main() -> int:
 
     try:
         event_name = _hook_event_name(hook_input)
+        if event_name in {"UserPromptSubmit", "SessionStart", "PreToolUse"}:
+            from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
+
+            if event_name != "UserPromptSubmit" and not search_root.exists():
+                return 0
+            if event_name == "UserPromptSubmit":
+                if not search_root.exists() and _goal_plus_prompt(hook_input) is None:
+                    return 0
+                runtime = FileGoalPlusRuntime(search_root)
+                _handle_user_prompt_submit(runtime, search_root, hook_input)
+            elif event_name == "SessionStart":
+                runtime = FileGoalPlusRuntime(search_root)
+                _handle_session_start(runtime, search_root, hook_input)
+            else:
+                runtime = FileGoalPlusRuntime(search_root)
+                _handle_pre_tool_use(runtime, search_root, hook_input)
+            return 0
+
         if event_name == "PostToolUse":
             target = _post_tool_use_bind_target(hook_input)
             if target is None:
@@ -300,38 +504,20 @@ def main() -> int:
             _handle_post_tool_use(runtime, hook_input, goal_id, session_id)
             return 0
 
-        if event_name != "Stop":
+        if event_name not in {"Stop", "SubagentStop"}:
             return 0
-
-        goal_id = _select_explicit_goal_id(search_root, hook_input)
-        if goal_id is None:
-            current_session_id = _session_id(hook_input)
-            goal_id = _select_session_goal_id(search_root, current_session_id)
-            if goal_id is None:
-                active = _active_records(search_root)
-                if not active:
-                    return 0
-                from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
-
-                runtime = FileGoalPlusRuntime(search_root)
-                _record_session_gate_skipped(
-                    runtime,
-                    search_root,
-                    hook_input,
-                    current_session_id,
-                )
-                return 0
+        if not search_root.exists():
+            return 0
 
         from agentic_any_search_mcp.goal_plus import FileGoalPlusRuntime
 
         runtime = FileGoalPlusRuntime(search_root)
-        gate = runtime.gate(goal_id, event="stop", context=hook_input)
-        if gate.decision == "block":
-            _emit_block(
-                gate.continuation_prompt
-                or gate.reason
-                or "Goal Plus is still active; continue before stopping."
-            )
+        _handle_stop_event(
+            runtime,
+            search_root,
+            hook_input,
+            event="subagent_stop" if event_name == "SubagentStop" else "stop",
+        )
         return 0
     except Exception as exc:
         print(f"[goal-plus-hook] allowing host action because hook failed: {exc}", file=sys.stderr)

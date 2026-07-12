@@ -132,6 +132,24 @@ def test_strategy_spec_accepts_worker_budget() -> None:
     }
 
 
+@pytest.mark.codex
+def test_strategy_spec_accepts_codex_worker_launch_options() -> None:
+    spec = StrategySpec(
+        worker_host="codex",
+        worker_launch={
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high",
+            "service_tier": "priority",
+        },
+    )
+
+    assert spec.model_dump(mode="json")["worker_launch"] == {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "high",
+        "service_tier": "priority",
+    }
+
+
 def test_worker_budget_requires_runtime_or_turn_limit() -> None:
     with pytest.raises(ValidationError):
         WorkerBudget()

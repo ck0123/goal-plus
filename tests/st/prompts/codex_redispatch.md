@@ -4,7 +4,7 @@ is clear. Do not run pytest, codex, opencode, claude, or any `tests/st`
 command; doing so would recursively start this same ST instead of testing the
 runtime. If the required MCP or foreground-worker tools are unavailable, emit
 the final `st_report` with `extra.error` instead of launching another test.
-Use `gpt-5.3-codex-spark` as the model value in `extra.model`.
+Use `gpt-5.6-terra` as the model value in `extra.model`.
 
 Build a SearchSpec from {{PROJECT_ROOT}}/tests/st/fixtures/k_module_problem/spec.json
 with these required edits before freezing:
@@ -24,8 +24,11 @@ run this exact control-flow:
 2. Call `search_start_agent_session` for the single candidate.
 3. Launch the returned Codex foreground worker with `spawn_agent` using the
    returned launch payload. If `launch.budget_control.mode == "parent_watchdog"`,
-   use `wait_agent(timeout_ms=launch.budget_control.wait_timeout_ms)` and
-   interrupt only if the wait times out.
+   first use `wait_agent(timeout_ms=launch.budget_control.initial_wait_timeout_ms)`.
+   On timeout, send `launch.budget_control.closeout_message` to
+   `launch.budget_control.closeout_target`, wait once more for
+   `launch.budget_control.final_wait_timeout_ms`, and only then interrupt if it
+   still has not returned.
 4. Bind any returned Codex task name or nickname with `search_bind_agent_handle`.
 5. Run `search_run_verifier(run_id, candidate_id, "process")` from the main agent.
 6. Call `search_redispatch_candidate` for the same `candidate_id` with:
@@ -55,7 +58,7 @@ When the search is complete, output a fenced JSON block tagged `st_report` as th
 - report_path: string
 - extra: {
     host: "codex",
-    model: "gpt-5.3-codex-spark",
+    model: "gpt-5.6-terra",
     candidate_id: string,
     first_agent_session_id: string,
     redispatch_agent_session_id: string,

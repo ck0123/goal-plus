@@ -1199,6 +1199,7 @@ class FileSearchRuntime:
         )
 
     def _validate_host_strategy(self, strategy: StrategySpec) -> None:
+        self._validate_worker_launch_for_host(strategy)
         if strategy.worker_host == "opencode":
             return
         if strategy.driver != "builtin":
@@ -1216,6 +1217,25 @@ class FileSearchRuntime:
             worker_agent_type=strategy.worker_agent_type,
             worker_budget=strategy.worker_budget,
         )
+
+    def _validate_worker_launch_for_host(self, strategy: StrategySpec) -> None:
+        if strategy.worker_launch is None:
+            return
+        adapter = get_agent_host_adapter(strategy.worker_host)
+        requested = strategy.worker_launch.model_dump(mode="json", exclude_none=True)
+        capability_by_field = {
+            "model": adapter.capabilities.supports_model_override,
+            "reasoning_effort": adapter.capabilities.supports_reasoning_effort,
+            "service_tier": adapter.capabilities.supports_service_tier,
+        }
+        unsupported = sorted(
+            field for field in requested if not capability_by_field[field]
+        )
+        if unsupported:
+            raise ValueError(
+                f"{strategy.worker_host} worker_host does not support worker_launch "
+                f"fields: {', '.join(unsupported)}"
+            )
 
     def _validate_worker_budget_for_host(
         self,
@@ -1269,10 +1289,16 @@ class FileSearchRuntime:
             return None
         return strategy.worker_budget.model_dump(mode="json")
 
+    def _worker_launch_dict(self, strategy: StrategySpec) -> dict[str, Any] | None:
+        if strategy.worker_launch is None:
+            return None
+        return strategy.worker_launch.model_dump(mode="json", exclude_none=True)
+
     def _worker_policy(self, strategy: StrategySpec) -> dict[str, Any]:
         adapter = get_agent_host_adapter(strategy.worker_host)
         worker_agent_type = strategy.worker_agent_type
         worker_budget = self._worker_budget_dict(strategy)
+        worker_launch = self._worker_launch_dict(strategy)
         if (
             strategy.worker_host == "claude-code"
             and worker_agent_type is None
@@ -1289,11 +1315,18 @@ class FileSearchRuntime:
             "worker_agent_type": worker_agent_type,
             "subagent_type": worker_agent_type,
             "worker_budget": worker_budget,
+            "worker_launch": worker_launch,
             "supports_bind_handle": adapter.capabilities.supports_bind_handle,
             "supports_same_worker_continue": adapter.capabilities.supports_same_worker_continue,
             "supports_trace_export": adapter.capabilities.supports_trace_export,
             "uses_background_workers": adapter.capabilities.uses_background_workers,
             "continuation": adapter.capabilities.continuation,
+            "supports_soft_closeout": adapter.capabilities.supports_soft_closeout,
+            "supports_model_override": adapter.capabilities.supports_model_override,
+            "supports_reasoning_effort": adapter.capabilities.supports_reasoning_effort,
+            "supports_service_tier": adapter.capabilities.supports_service_tier,
+            "supports_usage_metadata": adapter.capabilities.supports_usage_metadata,
+            "supports_process_kill": adapter.capabilities.supports_process_kill,
             "directive_rule": (
                 "Worker directives should describe the candidate idea and deliverable, not score "
                 "targets or baseline scores. Workers must treat any score target in a directive as "
@@ -1362,6 +1395,17 @@ class FileSearchRuntime:
         if budget is not None:
             return dict(budget)
         return self._worker_budget_dict(frozen.spec.strategy)
+
+    def _candidate_worker_launch(
+        self,
+        frozen: FrozenSpec,
+        candidate_record: CandidateRecord,
+    ) -> dict[str, Any] | None:
+        worker_policy = candidate_record.task.strategy_metadata.get("worker_policy", {})
+        launch = worker_policy.get("worker_launch")
+        if launch is not None:
+            return dict(launch)
+        return self._worker_launch_dict(frozen.spec.strategy)
 
     def _normalize_worker_budget_override(
         self,
@@ -1443,6 +1487,7 @@ class FileSearchRuntime:
                 if worker_budget_override is not None
                 else self._candidate_worker_budget(frozen, candidate_record)
             ),
+            worker_launch=self._candidate_worker_launch(frozen, candidate_record),
             root=str(self.root_dir),
             cwd=str(candidate_record.task.workspace),
             worker_prompt=self._worker_prompt_for_host(frozen.spec.strategy.worker_host),

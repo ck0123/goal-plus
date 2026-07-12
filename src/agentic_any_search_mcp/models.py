@@ -102,6 +102,19 @@ class WorkerBudget(SearchModel):
         return self
 
 
+class WorkerLaunchOptions(SearchModel):
+    model: str | None = None
+    reasoning_effort: str | None = None
+    service_tier: str | None = None
+
+    @field_validator("model", "reasoning_effort", "service_tier")
+    @classmethod
+    def values_must_be_nonempty(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("worker launch option must be non-empty when provided")
+        return value
+
+
 class StrategySpec(SearchModel):
     name: str = "agent_guided"
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
@@ -111,6 +124,7 @@ class StrategySpec(SearchModel):
     worker_host: AgentHostKind = "opencode"
     worker_agent_type: str | None = None
     worker_budget: WorkerBudget | None = None
+    worker_launch: WorkerLaunchOptions | None = None
     history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
     parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)

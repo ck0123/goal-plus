@@ -43,6 +43,11 @@ SCENARIO_CASES = [
         id="codex_redispatch",
     ),
     pytest.param(
+        "codex_circle_packing_cycle",
+        marks=(pytest.mark.st, pytest.mark.st_codex),
+        id="codex_circle_packing_cycle",
+    ),
+    pytest.param(
         "claude_k_module_smoke",
         marks=(pytest.mark.st, pytest.mark.st_claude),
         id="claude_k_module_smoke",
@@ -180,7 +185,7 @@ def _assert_codex_redispatch(report: StReport) -> None:
     )
     extra = report.extra
     assert extra.get("host") == "codex"
-    assert extra.get("model") == "gpt-5.3-codex-spark"
+    assert extra.get("model") == "gpt-5.6-terra"
     assert extra.get("same_candidate") is True
     first = extra.get("first_agent_session_id")
     redispatched = extra.get("redispatch_agent_session_id")
@@ -189,6 +194,27 @@ def _assert_codex_redispatch(report: StReport) -> None:
     )
     assert extra.get("redispatch_budget_control_mode") == "parent_watchdog"
     assert len(extra.get("verifier_scores") or []) >= 1
+
+
+def _assert_codex_circle_packing_cycle(report: StReport) -> None:
+    expected_ids = ["c001", "c002", "c003", "c004"]
+    assert [candidate.get("candidate_id") for candidate in report.candidates] == expected_ids, (
+        "Codex cycle must report exactly c001 through c004 in order"
+    )
+    assert all(
+        candidate.get("status") == "evaluated"
+        and int(candidate.get("iterations") or 0) >= 1
+        for candidate in report.candidates
+    ), "all four Codex cycle candidates must be evaluated with verifier iterations"
+
+    extra = report.extra
+    assert extra.get("host") == "codex"
+    assert extra.get("model") == "gpt-5.6-terra"
+    assert extra.get("rounds") == 2
+    assert extra.get("batch_sizes") == [2, 2]
+    session_ids = extra.get("agent_session_ids") or []
+    assert len(session_ids) == 4, "cycle must report four agent_session_id values"
+    assert len(set(session_ids)) == 4, "cycle agent_session_id values must be distinct"
 
 
 def _assert_claude_k_module_smoke(report: StReport) -> None:
@@ -207,6 +233,7 @@ SCENARIO_ASSERTIONS = {
     "signal_processing_multi": _assert_signal_processing_multi,
     "swe_bench_20212": _assert_swe_bench_20212,
     "codex_redispatch": _assert_codex_redispatch,
+    "codex_circle_packing_cycle": _assert_codex_circle_packing_cycle,
     "claude_k_module_smoke": _assert_claude_k_module_smoke,
 }
 

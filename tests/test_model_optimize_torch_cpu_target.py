@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_DIR = ROOT / "examples" / "model-optimize"
@@ -66,6 +68,7 @@ def test_cpp_reference_fused_op_is_present_and_documented() -> None:
     assert "TORCH_LIBRARY" in text
 
 
+@pytest.mark.pi
 def test_pi_goal_skill_and_user_prompt_are_minimal_goal_inputs() -> None:
     skill_files = sorted(
         path.relative_to(ROOT).as_posix()

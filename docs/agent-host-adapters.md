@@ -70,17 +70,18 @@ checkpoints such as:
 
 Current repository assets include Goal Plus host hooks for Codex and Claude
 Code. Host settings run `agentic-any-search-mcp --goal-plus-host-hook`.
-`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
-current top-level host `session_id`; subagent tool events do not bind
-ownership. `Stop` then reads local `.gp/goal-plus` state and applies the
-same `goal_plus_gate(event="stop")` semantics only to an explicit
-`GOAL_PLUS_ID` or a record whose bound session matches the current host
-session. If that record still has a required next action, the hook returns a
-host-native block decision with the continuation prompt.
+Codex 0.144.1+ wires `UserPromptSubmit`, `SessionStart`, `PreToolUse`,
+`PostToolUse`, `Stop`, and `SubagentStop`: it pre-creates and binds an exact
+`/goal-plus` or `$goal-plus` prompt, restores hidden session context, gates
+Search/mutating tools, and gates both top-level and subagent stops.
+`PostToolUse(goal_plus_create)` remains a compatibility binding path.
+Terminal Stop emits a compact host `systemMessage` with non-LLM run counters.
+All ownership-sensitive events select only an explicit `GOAL_PLUS_ID` or the
+record bound to the current top-level session.
 
-OpenCode still has no shipped hook. Codex and Claude Code use session-scoped
-Stop backstops plus ownership binding; their `PreToolUse` and `SubagentStop`
-gate calls remain manual / instruction-driven in the skills. Pi is different:
+OpenCode still has no shipped hook. Claude Code retains session-scoped Stop
+backstops plus PostToolUse ownership binding; its `PreToolUse` and
+`SubagentStop` gate calls remain manual / instruction-driven. Pi is different:
 the project extension owns the native `/goal-plus` command for interactive/RPC
 sessions and an equivalent pre-model input transform for print/JSON, pre-creates
 the Goal Plus record, persists the
@@ -91,9 +92,8 @@ on `before_agent_start`, runs the pre-tool gate from `tool_call` for
 mutating built-ins, then runs the turn-level stop gate from `agent_end`.
 Completion statistics are emitted as a Pi custom entry/notification, not as an
 LLM message. The checked-in prompt template is a fallback when the extension is
-not loaded; correctness in normal Pi modes uses the native command. No host currently ships a
-`SubagentStop` hook; Pi also has no host process Stop hook that can block
-closing the process.
+not loaded; correctness in normal Pi modes uses the native command. Pi has no host process Stop hook;
+it also has no `SubagentStop` hook that can block closing the process.
 
 ## Host Selection
 
@@ -120,6 +120,23 @@ Valid host values are:
 
 If `worker_host` is omitted, the runtime defaults to `opencode`.
 
+## What The Unified Adapter Does
+
+The adapters share one runtime contract; they do not pretend the host tools
+have one identical call signature. The common layer owns:
+
+- host capability publication and validation
+- creation of a foreground launch payload from an `AgentSessionRecord`
+- host-handle binding and state-level redispatch metadata
+- mapping `worker_budget` and `worker_launch` into host-native intent
+
+The host main agent still projects that intent onto the current tool surface.
+For Codex in particular, the adapter may carry `agent_type`, `model`,
+`reasoning_effort`, and `service_tier`, while the current `spawn_agent` schema
+may intentionally hide those optional fields. The callable projection then
+uses `task_name`, `message`, and `fork_turns`; the child inherits the parent
+model. This is Codex-native behavior, not an alternate provider integration.
+
 ---
 
 ## Current Host Differences
@@ -130,13 +147,38 @@ If `worker_host` is omitted, the runtime defaults to `opencode`.
 | Default worker agent type | `AnySearchAgent` | `any_search_agent` | `any-search-agent` | `any-search-worker` prompt asset |
 | Launch tool | `Task` | `spawn_agent` | `Agent` | `pi_search_run_batch` convenience driver, `pi_search_run_candidate` single-candidate fallback, or debug-only `pi_rpc_run_worker` / `agentic-any-search-pi-worker` |
 | Worker mode | foreground Task | foreground spawned agent | foreground Agent, `background: false` | foreground `pi --mode rpc` process |
+| Launch-schema behavior | fixed `Task` fields from the OpenCode asset | project adapter metadata onto the current `spawn_agent` schema; hidden optional metadata is omitted and the parent model is inherited | project onto the foreground `Agent` tool exposed by the current Claude surface | runner maps payload fields to `pi --mode rpc` CLI/RPC options |
+| Worker/orchestrator boundary | `AnySearchAgent*` prompt owns one candidate | boundary is present both in `any_search_agent.toml` and every launch message, so it survives a hidden `agent_type` field | local agent definition owns one candidate | worker prompt plus runner-owned RPC process owns one candidate |
 | Bind tool | `search_bind_opencode_session` | `search_bind_agent_handle` | `search_bind_agent_handle` | `search_bind_agent_handle` |
 | Bound handle | OpenCode `metadata.sessionId` | task name, nickname, or returned agent id when available | reusable agent id/name when available; nickname otherwise | Pi `--session-id`, event log paths, assistant text, `metadata.pi_metrics`, or synthetic runner-failure metadata |
 | Same-worker continuation | supported with `Task(task_id=...)` | not supported by this adapter | conditional; Agent results may expose an id, but `SendMessage` is not reliable on every `claude -p` tool surface | not supported; use `search_redispatch_candidate` for state-level redispatch |
 | Host-native debug evidence | OpenCode DB/log plus `.gp` state | `codex exec --json`, `$CODEX_HOME/sessions` rollouts, optional TUI log | `claude -p --output-format stream-json`, `--debug-file`, `~/.claude/projects` transcripts | metadata-only `.gp/host-logs/pi-rpc-*.jsonl`, optional raw `.txt`, Goal Plus stats custom entry |
 | Trace export | supported for OpenCode logs | not implemented | not implemented | not implemented |
-| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | pre-model `/goal-plus` creation through native command or print/JSON input transform, persistent interactive custom state, pre-tool gate, turn-level stop gate, stats custom entry; no host process Stop or SubagentStop hook |
+| Goal Plus gate enforcement | manual skill/orchestrator calls; no Stop/PreToolUse hook shipped | Codex 0.144.1+ UserPromptSubmit precreation, SessionStart restore, PreToolUse gate, PostToolUse fallback binding, Stop and SubagentStop gates, terminal stats | PostToolUse session binding, session-scoped Stop hook; PreToolUse/SubagentStop manual | pre-model `/goal-plus` creation through native command or print/JSON input transform, persistent interactive custom state, pre-tool gate, turn-level stop gate, stats custom entry; no host process Stop or SubagentStop hook |
 | Strategy coverage | baseline host; all existing OpenCode-tested strategies | portable builtin strategies only | portable builtin strategies only | portable builtin strategies only |
+
+## Verification Status
+
+Support levels below distinguish checked-in contracts from real host execution.
+They are not claims that every strategy has parity.
+
+| Host/path | Evidence in this repository | Current conclusion |
+|---|---|---|
+| Codex adapter and assets | `pytest -m codex -q`; launch payload, watchdog, hooks, schema projection, worker boundary, and report assertions | fast contract coverage is in place |
+| Codex state-level redispatch | opt-in `codex_redispatch` ST through ordinary `codex exec -m gpt-5.6-terra` | same candidate can resume through a fresh `agent_session_id` and runtime history |
+| Codex-native 2 x 2 cycle | opt-in `codex_circle_packing_cycle` ST: two plans of two candidates, four unique worker sessions, four evaluated candidates, final selection/report | real `random` multi-round Search Mode is verified on Codex 0.144.1 with `gpt-5.6-terra` |
+| Claude worker budget | manual foreground-subagent `maxTurns` smoke in [worker-budget-smoke.md](worker-budget-smoke.md) | budget mapping is verified; a real two-round Search Mode ST is still pending |
+| Pi RPC worker and cycle | Pi-marked unit/integration tests plus opt-in `st_pi_rpc` scenarios | process watchdog, usage metadata, state redispatch, and the 2 x 2 scenario are covered by dedicated paths; rerun the opt-in ST for environment-specific provider evidence |
+| OpenCode | compatibility-baseline unit/assets and existing `st_opencode` scenarios | broadest strategy coverage and only implemented trace export |
+
+The Codex cycle exposed two boundaries that unit mocks alone did not prove:
+
+1. `spawn_agent` is dynamically shaped. Passing adapter metadata as mandatory
+   arguments fails when `multi_agent_v2.hide_spawn_agent_metadata=true`.
+2. A candidate worker must never call parent-owned planning, selection,
+   reporting, promotion, or Goal Plus tools. The boundary is embedded in the
+   launch message because a hidden `agent_type` also hides the specialized
+   worker definition.
 
 Portable builtin strategies are:
 
@@ -155,7 +197,7 @@ should be expanded one strategy at a time with explicit system tests.
 
 ## Single-Worker Autoresearch And Runtime Limits
 
-Single-worker autoresearch is supported by all three host assets: the worker
+Single-worker autoresearch is supported by all four host assets: the worker
 receives an `agent_session_id`, calls `search_get_agent_context`, works inside
 the assigned candidate workspace, runs `search_run_verifier`, and returns a
 summary for the main agent to select from.
@@ -165,7 +207,7 @@ Runtime length control is not currently equivalent across hosts:
 | Host | Single-worker autoresearch | Runtime cap exposed by current assets | What the cap controls |
 |---|---|---|---|
 | OpenCode | supported with the full `AnySearchAgent` loop | yes, `steps` in `.opencode/agents/*.md` | host step budget per Task; current tiers are 15, 50, 100, and 150 steps |
-| Codex | supported with the project Codex worker prompt | yes, through `worker_budget.max_runtime_seconds` and a parent watchdog | parent waits with `wait_agent(timeout_ms=...)`, then interrupts the child if the deadline expires |
+| Codex | supported with the project Codex worker prompt | yes, through `worker_budget.max_runtime_seconds` and a parent watchdog | parent waits for the initial interval, sends one closeout message, waits for the final interval, then interrupts on a second timeout |
 | Claude Code | supported with the project Claude worker prompt | yes, through `worker_budget.max_turns` and bounded `.claude/agents/*.md` definitions | host turn budget per foreground Agent; current tiers are 4, 8, and 16 turns |
 | Pi RPC | supported with `.pi/prompts/any-search-worker.md` | yes, through required `worker_budget.max_runtime_seconds` | the runner sends one closeout steer before the deadline, then aborts and kills the Pi RPC process group if it does not exit; `max_turns` is only a prompt hint |
 
@@ -190,11 +232,9 @@ Use `strategy.worker_budget` for host-neutral worker limits:
 ```
 
 OpenCode continues to use worker agent tiers such as `AnySearchAgentFlash` and
-`AnySearchAgentDeep`. Codex maps wall-clock budgets to a watchdog that waits
-for activity or completion and interrupts the child after the deadline, because
-`spawn_agent` itself does not accept a timeout argument. Depending on the Codex
-multi-agent surface, interruption may be exposed as `interrupt_agent` or as
-`send_input(..., interrupt=true)`. Claude Code maps turn budgets to `maxTurns`
+`AnySearchAgentDeep`. Codex maps wall-clock budgets to a two-stage watchdog:
+wait, send one bounded closeout message, wait again, then interrupt the child.
+`spawn_agent` itself does not accept a timeout argument. Claude Code maps turn budgets to `maxTurns`
 in the selected local agent definition. When `worker_agent_type` is omitted,
 Claude Code budgets of 4, 8, and 16 turns map to `any-search-agent-flash`,
 `any-search-agent`, and `any-search-agent-deep` respectively.
@@ -221,6 +261,15 @@ Host-specific validation prevents unsupported budget shapes:
   remain outside the high-level Pi tool.
 - Known Claude Code agent types must match their configured `maxTurns`; custom
   Claude agent types are allowed when specified explicitly.
+
+`strategy.worker_launch` is the shared adapter input for host-native launch
+choices. Codex includes `model`, `reasoning_effort`, and `service_tier` in its
+adapter payload, but the main agent must project that payload onto the current
+`spawn_agent` schema. Codex configurations may intentionally hide those
+optional fields; an omitted model override inherits the parent model. Pi maps
+`model` to its model pattern and `reasoning_effort` to its thinking level.
+Service tier is Codex-only. The capability matrix exposes these differences
+explicitly rather than pretending every host implements the same primitive.
 
 Main agents should choose worker size from task shape before freezing the spec.
 Use cheap/flash tiers only for smoke probes. If a worker stops because the
@@ -285,15 +334,16 @@ into Codex or Claude Code.
 | same-worker continuation algorithms | limited | limited | Codex adapter has no same-worker continuation; Claude Code may expose an agent id but `SendMessage` is not reliable on every tool surface | Prefer state-level resume with new-worker redispatch; treat same-worker continuation as a host-specific optimization only after a real smoke test |
 | trace-driven algorithms | not currently | not currently | trace export is only implemented for OpenCode logs | Add host trace exporters or keep these OpenCode-only |
 
-In practice, the safe expansion order is:
+In practice, the safe expansion order is now:
 
 1. Enable `independent_branches`.
 2. Enable `evolve`, `openevolve`, and the current `mcts` planner with mock/unit
    coverage first.
-3. Run one real two-round smoke for Codex and Claude Code on at least one
-   non-`random` strategy.
-4. Redesign worker tiers before enabling `adaptevolve`.
-5. Define the external planner contract before enabling `external_mcp`.
+3. Run one real two-round non-`random` smoke for Codex; the `random` 2 x 2
+   cycle is already verified.
+4. Run a real two-round smoke for Claude Code.
+5. Redesign worker tiers before enabling `adaptevolve`.
+6. Define the external planner contract before enabling `external_mcp`.
 
 ---
 

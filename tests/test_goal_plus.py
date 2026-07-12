@@ -457,6 +457,7 @@ def test_goal_mode_allows_mutation_after_triage(tmp_path) -> None:
     assert gate.decision == "allow"
 
 
+@pytest.mark.pi
 def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize kernel latency")
@@ -481,6 +482,7 @@ def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> N
     assert "user confirmation" in gate.reason or "frozen spec draft" in gate.reason
 
 
+@pytest.mark.pi
 def test_pre_tool_use_blocks_pi_candidate_driver_before_search_ready(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize kernel latency")

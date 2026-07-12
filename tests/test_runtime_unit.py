@@ -356,6 +356,7 @@ def test_promote_requires_search_runtime_selection(tmp_path: Path) -> None:
     assert runtime.promote(run_id, candidate_id).exists()
 
 
+@pytest.mark.codex
 def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -370,6 +371,7 @@ def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> N
     assert plan.worker_policy["uses_background_workers"] is False
 
 
+@pytest.mark.pi
 def test_worker_policy_uses_pi_rpc_state_redispatch(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -534,6 +536,7 @@ def test_redispatch_context_includes_previous_progress_handoff(tmp_path: Path) -
     assert resumed.launch["budget_control"]["max_runtime_seconds"] == 120
 
 
+@pytest.mark.codex
 def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -554,6 +557,7 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
     assert "agent_session_id=" in session.launch["message"]
 
 
+@pytest.mark.pi
 def test_start_agent_session_returns_pi_rpc_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -593,6 +597,7 @@ def test_start_agent_session_returns_pi_rpc_launch_payload(tmp_path: Path) -> No
     assert str(task.workspace) not in session.launch["prompt"]
 
 
+@pytest.mark.codex
 def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -616,13 +621,23 @@ def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> N
     assert redispatched.launch["budget_control"] == {
         "mode": "parent_watchdog",
         "max_runtime_seconds": 30,
-        "wait_timeout_ms": 30000,
+        "initial_wait_timeout_ms": 24000,
+        "soft_closeout_seconds": 6,
+        "closeout_tool": "send_message",
+        "closeout_target": redispatched.launch["task_name"],
+        "closeout_message": (
+            "Worker deadline is approaching. Stop starting new work, run one final "
+            "search_run_verifier if needed, write .tmp/handoff.json, and return a concise summary."
+        ),
+        "final_wait_timeout_ms": 6000,
         "on_exceed": "interrupt",
+        "interrupt_tool": "interrupt_agent",
         "interrupt_target": redispatched.launch["task_name"],
         "max_turns_hint": 12,
     }
 
 
+@pytest.mark.codex
 def test_codex_worker_budget_flows_to_watchdog_launch_payload(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -655,11 +670,77 @@ def test_codex_worker_budget_flows_to_watchdog_launch_payload(tmp_path: Path) ->
     assert session.launch["budget_control"] == {
         "mode": "parent_watchdog",
         "max_runtime_seconds": 600,
-        "wait_timeout_ms": 600000,
+        "initial_wait_timeout_ms": 555000,
+        "soft_closeout_seconds": 45,
+        "closeout_tool": "send_message",
+        "closeout_target": session.launch["task_name"],
+        "closeout_message": (
+            "Worker deadline is approaching. Stop starting new work, run one final "
+            "search_run_verifier if needed, write .tmp/handoff.json, and return a concise summary."
+        ),
+        "final_wait_timeout_ms": 45000,
         "on_exceed": "interrupt",
+        "interrupt_tool": "interrupt_agent",
         "interrupt_target": session.launch["task_name"],
         "max_turns_hint": 8,
     }
+
+
+@pytest.mark.codex
+def test_codex_worker_launch_options_flow_to_spawn_payload(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "codex",
+            "worker_launch": {
+                "model": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "service_tier": "priority",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert plan.worker_policy["worker_launch"] == {
+        "model": "gpt-5.6-terra",
+        "reasoning_effort": "high",
+        "service_tier": "priority",
+    }
+    assert session.launch["model"] == "gpt-5.6-terra"
+    assert session.launch["reasoning_effort"] == "high"
+    assert session.launch["service_tier"] == "priority"
+
+
+@pytest.mark.pi
+def test_pi_rpc_rejects_unsupported_worker_service_tier(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 60},
+            "worker_launch": {"service_tier": "priority"},
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    with pytest.raises(ValueError, match="service_tier"):
+        runtime.plan_next(run_id, requested_k=1)
 
 
 def test_start_agent_session_returns_claude_foreground_launch_payload(tmp_path: Path) -> None:
@@ -878,6 +959,7 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
         pi_runtime.plan_next(run_id, requested_k=1)
 
 
+@pytest.mark.codex
 def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -899,6 +981,7 @@ def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
     assert updated.opencode_session_id is None
 
 
+@pytest.mark.codex
 def test_codex_continue_agent_session_is_explicitly_unsupported(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -937,6 +1020,7 @@ def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path)
     assert "continue_existing_agent_session=true" in continued.launch["message"]
 
 
+@pytest.mark.pi
 def test_pi_rpc_continue_agent_session_requires_redispatch(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")

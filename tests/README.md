@@ -40,6 +40,7 @@ tests/
 │   │   ├── circle_packing_two_batch.md
 │   │   ├── circle_packing_random.md
 │   │   ├── claude_k_module_smoke.md
+│   │   ├── codex_circle_packing_cycle.md
 │   │   ├── codex_redispatch.md
 │   │   ├── k_module_smoke.md
 │   │   ├── k_module_then_circle_packing.md
@@ -91,7 +92,13 @@ Run on every change. No external dependencies beyond the venv.
 pytest                                 # all
 pytest tests/test_runtime_unit.py      # one file
 pytest -k history                      # by name pattern
+pytest -m codex                        # fast Codex unit/asset/parity slice
+pytest -m pi                           # fast Pi unit/asset/parity slice
 ```
+
+Host-specific fast tests use `pytest.mark.codex` or `pytest.mark.pi`.
+Real-host tests keep their opt-in `st_codex` or `st_pi_rpc` marker and are not
+selected by those fast slices.
 
 ## System Tests (ST, opt-in)
 
@@ -102,7 +109,7 @@ markers select the runner:
 | Marker | Runner | Default model |
 |---|---|---|
 | `st_opencode` | `opencode run --command goal-plus` | OpenCode default unless `$ST_OPENCODE_MODEL` is set |
-| `st_codex` | `codex exec` | `gpt-5.3-codex-spark` unless `$ST_CODEX_MODEL` is set |
+| `st_codex` | `codex exec` | `gpt-5.6-terra` unless `$ST_CODEX_MODEL` is set |
 | `st_claude` | `claude -p` | Claude default unless `$ST_CLAUDE_MODEL` is set |
 | `st_pi_rpc` | `agentic-any-search-pi-worker` launching `pi --mode rpc` | Pi default unless runner args override it |
 
@@ -129,8 +136,11 @@ ST tests are skipped by default. Pass `-m st` to enable `tests/st`, pass
 # Single scenario (smoke, ~2 min)
 pytest -m "st and st_opencode" -k k_module_smoke -v -s
 
-# Codex redispatch scenario, default model gpt-5.3-codex-spark
+# Codex redispatch scenario, default model gpt-5.6-terra
 pytest -m "st and st_codex" -k codex_redispatch -v -s
+
+# Codex circle-packing cycle, batch=2 and round=2
+pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s
 
 # Pi RPC worker smoke
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
@@ -155,7 +165,7 @@ pytest -m "st or st_pi" -v -s
 
 # Use a different host model
 ST_OPENCODE_MODEL=anthropic/claude-sonnet-4-6 pytest -m st -v -s
-ST_CODEX_MODEL=gpt-5.3-codex-spark pytest -m "st and st_codex" -v -s
+ST_CODEX_MODEL=gpt-5.6-terra pytest -m "st and st_codex" -v -s
 ST_CLAUDE_MODEL=sonnet pytest -m "st and st_claude" -v -s
 ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high pytest -m "st and st_pi_rpc" -v -s
 
@@ -254,6 +264,8 @@ pytest tests/st -m st --collect-only
 testpaths = tests
 pythonpath = src
 markers =
+    codex: Codex-specific unit, integration, asset, or parity test
+    pi: Pi-specific unit, integration, asset, or parity test
     st: system test that drives a real host code agent (slow, opt-in via `-m st`)
     st_opencode: ST case that runs through OpenCode
     st_codex: ST case that runs through Codex

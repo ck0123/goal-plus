@@ -34,7 +34,7 @@ HOSTS: dict[HostKind, StHost] = {
         display_name="Codex",
         binary="codex",
         model_env="ST_CODEX_MODEL",
-        default_model="gpt-5.3-codex-spark",
+        default_model="gpt-5.6-terra",
     ),
     "claude-code": StHost(
         kind="claude-code",

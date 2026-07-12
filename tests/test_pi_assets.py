@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.pi
 
 
 def test_pi_assets_exist() -> None:

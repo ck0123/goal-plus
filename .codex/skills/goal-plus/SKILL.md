@@ -15,7 +15,11 @@ prefix; match by the final logical tool name.
 
 ## Workflow
 
-1. Call `goal_plus_create(raw_goal=...)`.
+1. Read the hidden Codex hook context first. When it contains an active
+   `goal_plus_id`, the `UserPromptSubmit` hook already created and bound the
+   record before this model turn; use that id and do not call
+   `goal_plus_create` again. If no hook context is present, call
+   `goal_plus_create(raw_goal=...)` as a compatibility fallback.
 2. Inspect enough context to classify the task.
 3. Call `goal_plus_record_triage`.
 4. If triage chooses Goal Mode, work normally in the current workspace.
@@ -90,17 +94,18 @@ existing Search MCP flow.
 
 ## Hook Compatibility
 
-This repository ships Codex Goal Plus host hooks at `.codex/hooks.json` that
-run `agentic-any-search-mcp --goal-plus-host-hook`.
-`PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
-current top-level Codex `session_id`. The `Stop` hook is a final backstop for
-`goal_plus_gate(event="stop")`: if the session-bound Goal Plus record still has
-a required next action, Codex receives a continuation prompt instead of
-ending.
+This repository ships Codex 0.144.1 Goal Plus host hooks at
+`.codex/hooks.json`. They run
+`agentic-any-search-mcp --goal-plus-host-hook` for `UserPromptSubmit`,
+`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop`.
+`UserPromptSubmit` pre-creates and binds `/goal-plus` or `$goal-plus` before the
+model turn. `SessionStart` restores a session-bound active id. `PreToolUse`
+enforces the search and mutation gates. `PostToolUse(goal_plus_create)` remains
+a compatibility binding fallback. `Stop` and `SubagentStop` return runtime
+continuation prompts when a required action remains.
 
-The hook does not replace the explicit workflow calls above. It does not wire
-`PreToolUse` or `SubagentStop`, so call `goal_plus_gate(event="pre_tool_use",
-...)` before Search Mode tools and call the stop gate manually before the final
-response. Subagent tool events do not bind Goal Plus ownership. `goal_plus_gate`
-does not supervise worker lifecycle. Codex worker budget and foreground
-subagent behavior remain the responsibility of the internal `search` skill.
+Keep the explicit workflow calls above as auditable state transitions even
+though the hooks are enforcement backstops. Subagent tool events do not bind
+Goal Plus ownership. `goal_plus_gate` does not supervise worker lifecycle;
+Codex worker budget and foreground subagent behavior remain the responsibility
+of the internal `search` skill.

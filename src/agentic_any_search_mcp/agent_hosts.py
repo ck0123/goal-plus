@@ -29,6 +29,12 @@ class HostCapabilities:
     supports_trace_export: bool
     uses_background_workers: bool = False
     continuation: str | None = None
+    supports_soft_closeout: bool = False
+    supports_model_override: bool = False
+    supports_reasoning_effort: bool = False
+    supports_service_tier: bool = False
+    supports_usage_metadata: bool = False
+    supports_process_kill: bool = False
 
 
 class AgentHostAdapter(Protocol):
@@ -44,6 +50,7 @@ class AgentHostAdapter(Protocol):
         short_intent: str,
         one_paragraph_idea: str,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
         root: str | None = None,
         cwd: str | None = None,
         worker_prompt: str | None = None,
@@ -64,6 +71,7 @@ class AgentHostAdapter(Protocol):
         cwd: str | None = None,
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -88,6 +96,26 @@ def _budget_max_runtime_ms(worker_budget: dict[str, Any]) -> int | None:
     return int(seconds) * 1000
 
 
+def _soft_closeout_seconds(max_runtime_seconds: int) -> int:
+    return min(45, max(5, int(max_runtime_seconds) // 5))
+
+
+CODEX_CLOSEOUT_MESSAGE = (
+    "Worker deadline is approaching. Stop starting new work, run one final "
+    "search_run_verifier if needed, write .tmp/handoff.json, and return a concise summary."
+)
+
+CODEX_WORKER_BOUNDARY = (
+    "You are a Search candidate worker, not the search orchestrator. "
+    "First call search_get_agent_context with the supplied agent_session_id, "
+    "work only in that candidate workspace, and call search_run_verifier for "
+    "that agent session before returning. Do not call search_plan_next, "
+    "search_start_batch, search_select, search_report, or search_promote. "
+    "Do not call any `goal_plus_*` tool. Parent-run planning, selection, "
+    "reporting, promotion, and final audit are outside your role."
+)
+
+
 class OpenCodeAdapter:
     name: AgentHostKind = "opencode"
     capabilities = HostCapabilities(
@@ -105,6 +133,7 @@ class OpenCodeAdapter:
         short_intent: str,
         one_paragraph_idea: str,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
         root: str | None = None,
         cwd: str | None = None,
         worker_prompt: str | None = None,
@@ -133,6 +162,7 @@ class OpenCodeAdapter:
         cwd: str | None = None,
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not external_id:
             raise UnsupportedHostCapability(
@@ -159,6 +189,10 @@ class CodexAdapter:
         supports_bind_handle=True,
         supports_same_worker_continue=False,
         supports_trace_export=False,
+        supports_soft_closeout=True,
+        supports_model_override=True,
+        supports_reasoning_effort=True,
+        supports_service_tier=True,
     )
 
     def build_launch_payload(
@@ -170,6 +204,7 @@ class CodexAdapter:
         short_intent: str,
         one_paragraph_idea: str,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
         root: str | None = None,
         cwd: str | None = None,
         worker_prompt: str | None = None,
@@ -181,19 +216,44 @@ class CodexAdapter:
             "agent_type": worker_agent_type or "any_search_agent",
             "fork_turns": "none",
             "message": (
+                f"{CODEX_WORKER_BOUNDARY}\n\n"
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "
                 f"idea: {one_paragraph_idea}"
             ),
         }
+        if worker_launch:
+            payload.update(
+                {
+                    key: value
+                    for key, value in worker_launch.items()
+                    if key in {"model", "reasoning_effort", "service_tier"}
+                    and value is not None
+                }
+            )
         if worker_budget:
+            max_runtime_seconds = worker_budget.get("max_runtime_seconds")
             budget_control: dict[str, Any] = {
                 "mode": "parent_watchdog",
-                "max_runtime_seconds": worker_budget.get("max_runtime_seconds"),
-                "wait_timeout_ms": _budget_max_runtime_ms(worker_budget),
+                "max_runtime_seconds": max_runtime_seconds,
                 "on_exceed": worker_budget.get("on_exceed", "interrupt"),
+                "interrupt_tool": "interrupt_agent",
                 "interrupt_target": task_name,
             }
+            max_runtime_ms = _budget_max_runtime_ms(worker_budget)
+            if max_runtime_seconds is not None and max_runtime_ms is not None:
+                soft_closeout_seconds = _soft_closeout_seconds(int(max_runtime_seconds))
+                final_wait_timeout_ms = soft_closeout_seconds * 1000
+                budget_control.update(
+                    {
+                        "initial_wait_timeout_ms": max_runtime_ms - final_wait_timeout_ms,
+                        "soft_closeout_seconds": soft_closeout_seconds,
+                        "closeout_tool": "send_message",
+                        "closeout_target": task_name,
+                        "closeout_message": CODEX_CLOSEOUT_MESSAGE,
+                        "final_wait_timeout_ms": final_wait_timeout_ms,
+                    }
+                )
             if worker_budget.get("max_turns") is not None:
                 budget_control["max_turns_hint"] = worker_budget["max_turns"]
             payload["budget_control"] = budget_control
@@ -223,6 +283,7 @@ class ClaudeCodeAdapter:
         short_intent: str,
         one_paragraph_idea: str,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
         root: str | None = None,
         cwd: str | None = None,
         worker_prompt: str | None = None,
@@ -260,6 +321,7 @@ class ClaudeCodeAdapter:
         cwd: str | None = None,
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         target = external_id or task_name
         if not target:
@@ -286,6 +348,11 @@ class PiRpcAdapter:
         supports_trace_export=False,
         uses_background_workers=False,
         continuation="state_redispatch",
+        supports_soft_closeout=True,
+        supports_model_override=True,
+        supports_reasoning_effort=True,
+        supports_usage_metadata=True,
+        supports_process_kill=True,
     )
 
     def _budget_control(
@@ -302,9 +369,8 @@ class PiRpcAdapter:
             "on_exceed": worker_budget.get("on_exceed", "interrupt"),
         }
         if max_runtime_seconds is not None:
-            budget_control["soft_closeout_seconds"] = min(
-                45,
-                max(5, int(max_runtime_seconds) // 5),
+            budget_control["soft_closeout_seconds"] = _soft_closeout_seconds(
+                int(max_runtime_seconds)
             )
         if worker_budget.get("max_turns") is not None:
             budget_control["max_turns_hint"] = worker_budget["max_turns"]
@@ -338,6 +404,7 @@ class PiRpcAdapter:
         short_intent: str,
         one_paragraph_idea: str,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
         root: str | None = None,
         cwd: str | None = None,
         worker_prompt: str | None = None,
@@ -360,6 +427,11 @@ class PiRpcAdapter:
         }
         if worker_agent_type:
             payload["worker_agent_type"] = worker_agent_type
+        if worker_launch:
+            if worker_launch.get("model") is not None:
+                payload["model_pattern"] = worker_launch["model"]
+            if worker_launch.get("reasoning_effort") is not None:
+                payload["thinking_level"] = worker_launch["reasoning_effort"]
         budget_control = self._budget_control(worker_budget)
         if budget_control:
             payload["budget_control"] = budget_control
@@ -379,6 +451,7 @@ class PiRpcAdapter:
         cwd: str | None = None,
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         raise UnsupportedHostCapability(
             "pi-rpc workers do not persist full session JSONL; use "

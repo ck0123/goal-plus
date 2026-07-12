@@ -47,6 +47,7 @@ def test_opencode_adapter_builds_existing_task_payload() -> None:
     }
 
 
+@pytest.mark.codex
 def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     adapter = get_agent_host_adapter("codex")
 
@@ -65,6 +66,53 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     assert "agent_session_id=agent-0001" in payload["message"]
 
 
+@pytest.mark.codex
+def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type="any_search_agent",
+        candidate_id="c001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+    )
+
+    message = payload["message"]
+    assert "candidate worker, not the search orchestrator" in message
+    assert "search_get_agent_context" in message
+    assert "search_run_verifier" in message
+    assert "search_plan_next" in message
+    assert "search_start_batch" in message
+    assert "search_select" in message
+    assert "search_report" in message
+    assert "search_promote" in message
+    assert "Do not call any `goal_plus_*` tool" in message
+
+
+@pytest.mark.codex
+def test_codex_adapter_maps_native_worker_launch_options() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type=None,
+        candidate_id="cand-0001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_launch={
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high",
+            "service_tier": "priority",
+        },
+    )
+
+    assert payload["model"] == "gpt-5.6-terra"
+    assert payload["reasoning_effort"] == "high"
+    assert payload["service_tier"] == "priority"
+
+
+@pytest.mark.codex
 def test_codex_adapter_builds_watchdog_budget_payload() -> None:
     adapter = get_agent_host_adapter("codex")
 
@@ -84,13 +132,23 @@ def test_codex_adapter_builds_watchdog_budget_payload() -> None:
     assert payload["budget_control"] == {
         "mode": "parent_watchdog",
         "max_runtime_seconds": 600,
-        "wait_timeout_ms": 600000,
+        "initial_wait_timeout_ms": 555000,
+        "soft_closeout_seconds": 45,
+        "closeout_tool": "send_message",
+        "closeout_target": "search_agent_0001",
+        "closeout_message": (
+            "Worker deadline is approaching. Stop starting new work, run one final "
+            "search_run_verifier if needed, write .tmp/handoff.json, and return a concise summary."
+        ),
+        "final_wait_timeout_ms": 45000,
         "on_exceed": "interrupt",
+        "interrupt_tool": "interrupt_agent",
         "interrupt_target": "search_agent_0001",
         "max_turns_hint": 8,
     }
 
 
+@pytest.mark.pi
 def test_pi_rpc_adapter_builds_worker_payload() -> None:
     adapter = get_agent_host_adapter("pi-rpc")
 
@@ -129,6 +187,27 @@ def test_pi_rpc_adapter_builds_worker_payload() -> None:
     }
 
 
+@pytest.mark.pi
+def test_pi_rpc_adapter_maps_native_worker_launch_options() -> None:
+    adapter = get_agent_host_adapter("pi-rpc")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type=None,
+        candidate_id="c001",
+        agent_session_id="agent_0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_launch={
+            "model": "openai-codex/gpt-5.6-sol",
+            "reasoning_effort": "high",
+        },
+    )
+
+    assert payload["model_pattern"] == "openai-codex/gpt-5.6-sol"
+    assert payload["thinking_level"] == "high"
+
+
+@pytest.mark.pi
 def test_pi_rpc_adapter_rejects_same_session_continuation() -> None:
     adapter = get_agent_host_adapter("pi-rpc")
 
@@ -184,6 +263,7 @@ def test_claude_adapter_builds_turn_budget_payload() -> None:
     }
 
 
+@pytest.mark.codex
 def test_codex_continue_is_explicitly_unsupported() -> None:
     adapter = get_agent_host_adapter("codex")
 

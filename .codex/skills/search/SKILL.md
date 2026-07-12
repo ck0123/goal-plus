@@ -21,7 +21,13 @@ logical tool name.
 3. Call `search_start_batch`.
 4. For each new candidate, call `search_start_agent_session`.
 5. Launch a foreground Codex subagent with the returned launch payload:
-   - `spawn_agent(task_name=launch.task_name, agent_type=launch.agent_type, message=launch.message, fork_turns=launch.fork_turns)`
+   - Project the payload onto the current `spawn_agent` tool schema. Always pass
+     `task_name`, `message`, and `fork_turns` when those fields are exposed.
+   - Pass optional `agent_type`, `model`, `reasoning_effort`, or `service_tier`
+     metadata only when the current tool schema exposes the corresponding
+     field. Some Codex configurations intentionally hide this metadata.
+   - Do not fail merely because optional launch metadata is hidden. When no
+     model override can be passed, the worker inherits the parent Codex model.
 6. If `spawn_agent` returns a task name or nickname, call `search_bind_agent_handle` with:
    - `host: "codex"`
    - `task_name`
@@ -29,11 +35,19 @@ logical tool name.
 7. If `launch.budget_control.mode == "parent_watchdog"`, enforce the worker
    deadline from the parent agent:
    - launch the worker first with `spawn_agent(...)`
-   - wait for completion or activity with `wait_agent(timeout_ms=launch.budget_control.wait_timeout_ms)`
-   - if the wait times out and `launch.budget_control.on_exceed == "interrupt"`, stop the worker
-   - prefer `interrupt_agent(target=launch.budget_control.interrupt_target)` when the tool is available
-   - if this Codex surface exposes interruption through `send_input`, use `send_input(..., interrupt=true)` with a short stop message
-   - after interrupting, call `wait_agent` once more to observe the final stopped/completed status
+   - wait first with
+     `wait_agent(timeout_ms=launch.budget_control.initial_wait_timeout_ms)`
+   - if that initial wait times out, send exactly one soft closeout using
+     `send_message(target=launch.budget_control.closeout_target,
+     message=launch.budget_control.closeout_message)`
+   - wait again with
+     `wait_agent(timeout_ms=launch.budget_control.final_wait_timeout_ms)`
+   - if the final wait times out and `on_exceed == "interrupt"`, call
+     `interrupt_agent(target=launch.budget_control.interrupt_target)`
+   - after interruption, call `wait_agent` once more to observe the final state
+   - merge `timed_out`, `soft_closeout_sent`, the final assistant summary, and
+     `.tmp/handoff.json` when present by calling `search_bind_agent_handle`
+     again for the same `agent_session_id`
 8. If no `budget_control` is present, wait for candidate workers according to Codex foreground subagent behavior.
 9. If a worker stops before useful verifier evidence, call
    `search_redispatch_candidate(run_id, candidate_id, directive?,
@@ -50,7 +64,10 @@ Codex agent to enforce elapsed worker time. Codex `spawn_agent` does not accept
 a timeout argument, so the parent must combine `wait_agent` with an interrupt.
 
 Treat `budget_control.max_turns_hint` as a prompt-level hint only. The hard
-control for Codex is `budget_control.wait_timeout_ms` plus interruption.
+control for Codex is the sum of `budget_control.initial_wait_timeout_ms` and
+`budget_control.final_wait_timeout_ms`, followed by interruption. The
+`soft_closeout_seconds` field records the closeout window; it is not a
+runtime-owned worker timer.
 
 Choose the worker budget before freezing the spec. Codex does not expose a
 hard per-subagent step tier like OpenCode, so the enforceable escalation is a

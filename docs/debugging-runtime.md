@@ -125,6 +125,12 @@ in this environment exposes only the stable `codex debug` subcommands shown by
 `codex debug --help`, so treat rollout tracing as source/dev-only unless your
 Codex binary exposes it.
 
+For Goal Plus hook debugging on Codex 0.144.1+, inspect events for
+`UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
+`SubagentStop`. A missing precreated record usually means project hooks were
+not trusted; a Stop block should identify the session-bound `goal_plus_id` and
+the next required action.
+
 ### Claude Code
 
 For scripted or reproducible runs, capture both the stream output and the debug
@@ -140,10 +146,10 @@ claude -p --verbose --output-format stream-json \
 
 Add `--include-hook-events` when diagnosing the shipped Goal Plus host hooks or
 externally supplied hooks, or `--include-partial-messages` when token-level
-streaming matters. This repository ships
+streaming matters. For Claude Code this repository ships
 `agentic-any-search-mcp --goal-plus-host-hook` for
 `PostToolUse(goal_plus_create)` session binding and session-scoped `Stop`
-gating; PreToolUse and SubagentStop remain manual gate calls.
+gating; its PreToolUse and SubagentStop remain manual gate calls.
 `--debug-file` implicitly enables debug mode. Use `--debug api,mcp` for a
 narrower debug filter when API or MCP traffic is the focus.
 

@@ -168,15 +168,15 @@ Current host expectations:
   hook-enforced Goal Plus lifecycle gates in this repository.
 - Codex supports the portable builtin strategy subset. `worker_budget` requires
   `max_runtime_seconds` and is enforced by parent watchdog metadata:
-  `wait_agent(timeout_ms=...)`, then `interrupt_agent` or
-  `send_input(..., interrupt=true)` when the deadline expires. Codex ships
-  `PostToolUse(goal_plus_create)` session binding and a session-scoped Stop
-  hook backstop; PreToolUse/SubagentStop gates remain manual.
+  an initial `wait_agent`, one `send_message` closeout, a final wait, then
+  `interrupt_agent` when the deadline expires. Codex 0.144.1+ ships
+  `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
+  `SubagentStop` hooks with session ownership binding and terminal stats.
 - Claude Code supports the portable builtin strategy subset. `worker_budget`
   requires `max_turns` and maps known budgets to `.claude/agents/*.md`
   `maxTurns` definitions. Claude Code ships `PostToolUse(goal_plus_create)`
   session binding and a session-scoped Stop hook backstop;
-  PreToolUse/SubagentStop gates remain manual.
+  it does not yet wire PreToolUse or SubagentStop host hooks.
 - Pi RPC supports the portable builtin strategy subset. `worker_budget`
   requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
   `agentic-any-search-pi-worker` to launch foreground `pi --mode rpc` workers
@@ -205,8 +205,9 @@ and tests are updated together.
 
 Do not describe a host as fully hook-enforced Goal Plus unless the repository
 ships and tests hook wiring at all relevant Stop, SubagentStop, and PreToolUse
-checkpoints. Codex and Claude Code currently provide ownership binding plus a
-session-scoped Stop backstop, not full process supervision.
+checkpoints. Codex provides those Goal Plus lifecycle checkpoints, but this is
+not host process supervision. Claude Code currently provides ownership binding
+plus a session-scoped Stop backstop.
 
 ## Asset And Prompt Changes
 

@@ -5,7 +5,12 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
+import pytest
+
 from agentic_any_search_mcp import pi_worker
+
+
+pytestmark = pytest.mark.pi
 
 
 def _assistant_usage(
@@ -177,6 +182,8 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
                 return {"data": {"entries": entries, "leafId": None}}
             if command_type == "prompt":
                 return {"data": {}}
+            if command_type == "set_thinking_level":
+                return {"data": {}}
             if command_type == "get_state":
                 return {
                     "data": {
@@ -213,9 +220,10 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
             "cwd": str(cwd),
             "prompt": "do work",
             "budget_control": {"max_runtime_seconds": 30},
+            "model_pattern": "gpt-5.4-mini",
+            "thinking_level": "high",
         },
         extension_path=extension,
-        model_pattern="gpt-5.4-mini",
     )
 
     metrics = handle["metadata"]["pi_metrics"]
@@ -243,6 +251,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     }
     assert metrics["session_stats"] == {"tokens": {"input": 125}}
     assert commands.count("get_entries") == 2
+    assert "set_thinking_level" in commands
     assert popen_cmd[0:3] == ["pi", "--model", "gpt-5.4-mini"]
     assert "--no-session" in popen_cmd
     assert "--session-dir" not in popen_cmd

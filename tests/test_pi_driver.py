@@ -14,6 +14,9 @@ from agentic_any_search_mcp.tools import SearchTools
 from tests.test_runtime_unit import spec_for
 
 
+pytestmark = pytest.mark.pi
+
+
 def _make_project(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     project.mkdir()

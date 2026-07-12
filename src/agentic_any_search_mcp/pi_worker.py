@@ -608,7 +608,11 @@ def run_pi_rpc_worker(
         "AGENTIC_ANY_SEARCH_PI_ROLE": "worker",
         "AGENTIC_ANY_SEARCH_SOURCE_PATH": str(default_extension_path().parents[2]),
     }
-    selected_model_pattern = model_pattern or os.environ.get("AGENTIC_ANY_SEARCH_PI_MODEL")
+    selected_model_pattern = (
+        model_pattern
+        or launch.get("model_pattern")
+        or os.environ.get("AGENTIC_ANY_SEARCH_PI_MODEL")
+    )
     cmd = [pi_binary]
     if selected_model_pattern:
         cmd.extend(["--model", selected_model_pattern])

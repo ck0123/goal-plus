@@ -21,6 +21,7 @@ Run them with:
 pytest -m st                                      # all configured host ST cases
 pytest -m "st and st_opencode" -k k_module_smoke # single OpenCode scenario
 pytest -m "st and st_codex" -k codex_redispatch  # Codex redispatch smoke
+pytest -m "st and st_codex" -k codex_circle_packing_cycle # Codex 2x2 cycle
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module  # Pi RPC worker smoke
 ```
 

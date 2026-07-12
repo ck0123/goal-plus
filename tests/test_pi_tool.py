@@ -3,10 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agentic_any_search_mcp.pi_tool import call_pi_tool
 from agentic_any_search_mcp.runtime import FileSearchRuntime
 
 from tests.test_runtime_unit import make_project, spec_for
+
+
+pytestmark = pytest.mark.pi
 
 
 def test_pi_tool_calls_context_verifier_and_iterations(tmp_path: Path) -> None:

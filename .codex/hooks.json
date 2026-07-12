@@ -1,5 +1,41 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "timeout": 30,
+            "statusMessage": "Preparing Goal Plus context"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "timeout": 30,
+            "statusMessage": "Restoring Goal Plus context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "timeout": 30,
+            "statusMessage": "Checking Goal Plus tool gate"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [
@@ -20,6 +56,18 @@
             "command": "agentic-any-search-mcp --goal-plus-host-hook",
             "timeout": 30,
             "statusMessage": "Checking Goal Plus stop gate"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentic-any-search-mcp --goal-plus-host-hook",
+            "timeout": 30,
+            "statusMessage": "Checking Goal Plus subagent gate"
           }
         ]
       }

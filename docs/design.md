@@ -10,11 +10,12 @@ client owns the subagent process lifecycle. The main agent owns policy decisions
 through MCP tool calls.
 
 `goal_plus_gate` records deterministic phase decisions, but those decisions are
-enforced only when a host actually calls the gate. Codex and Claude Code ship
-Goal Plus host hooks through `agentic-any-search-mcp --goal-plus-host-hook`:
-`PostToolUse(goal_plus_create)` binds the record to the current top-level
-session, and `Stop` gates only that session or an explicit `GOAL_PLUS_ID`.
-OpenCode and all PreToolUse/SubagentStop checkpoints remain instruction-driven.
+enforced only when a host actually calls the gate. Codex 0.144.1+ wires
+`UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
+`SubagentStop` through `agentic-any-search-mcp --goal-plus-host-hook`. Claude
+Code ships PostToolUse ownership binding plus a session-scoped Stop backstop.
+OpenCode has no shipped hook; Claude PreToolUse/SubagentStop checkpoints remain
+instruction-driven.
 
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
 
@@ -36,7 +37,7 @@ User
   |
   | "/goal-plus: improve this measurable task"
   v
-OpenCode / Codex / Claude Code host agent
+OpenCode / Codex / Claude Code / Pi host agent
   |
   | reads host-local goal-plus skill
   | calls goal_plus_* MCP tools manually
@@ -216,7 +217,9 @@ MCP abort tool; stopping a running subagent is a host/user concern.
 In `agent-session-pool` mode the main agent should:
 
 1. Call `search_start_agent_session` for each candidate it wants to dispatch.
-2. Use the launch payload verbatim to spawn host workers as foreground calls.
+2. Project the launch payload onto the current host tool schema and spawn host
+   workers as foreground calls. This matters for Codex configurations that hide
+   optional `spawn_agent` metadata.
 3. Wait for the host worker to return. There is no MCP wait loop.
 4. Verify completed candidates with `search_run_verifier(run_id, candidate_id, "process")` (without `agent_session_id`) to confirm the final score.
 5. Start more sessions when candidate budget remains.
