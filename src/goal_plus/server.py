@@ -253,7 +253,11 @@ def create_mcp(
         confirmed_by: str = "user",
         evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record user confirmation for an initially search-ready frozen verifier."""
+        """Optionally record verifier approval evidence for compatibility/audit.
+
+        Search readiness is determined by a high-confidence spec draft with no
+        open questions; it does not require a separate user interaction.
+        """
         return goal_tools.goal_plus_confirm_frozen_verifier(
             goal_plus_id,
             confirmed_by,

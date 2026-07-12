@@ -3,7 +3,7 @@
 This doc is the information-flow counterpart to [design.md](design.md). `design.md` describes the data model and state machine; this doc describes **which agent does which step, what each agent actually sees at runtime, and which OpenCode platform constraints gate the flow**.
 
 The flow below describes one internal search task after `/goal-plus` has
-created a goal record, recorded triage, and frozen or confirmed a verifier-backed
+created a goal record, recorded triage, and frozen a verifier-backed
 spec. A Goal Plus task may repeat this flow with another frozen spec/run. Use
 this before designing strategy changes (evolve, mcts, hybrid). If a
 planned feature depends on an agent seeing data that the platform or runtime

@@ -46,7 +46,7 @@ Pi RPC. See
 | `model-opt-gpu/` | future standalone TorchBench `BERT_pytorch` source | `/goal-plus` host on V100 | **WIP, incomplete, not validated, and not recommended yet**; preparation prompt only |
 
 For each example, start through `/goal-plus`. The goal-plus layer records the
-raw goal, triage, frozen verifier confirmation, and final raw-goal audit. Once
+raw goal, triage, autonomous verifier/spec readiness, and final raw-goal audit. Once
 the task enters Search Mode, create the run, call `search_plan_next(run_id, k)`,
 then start the returned plan with `search_start_batch(run_id, plan_id)`. For
 multi-batch examples, plan + start the next batch after the first batch
@@ -174,8 +174,9 @@ opencode
 
 Then paste a plain-language prompt into `/goal-plus`. The host loads the
 goal-plus skill first and uses the internal `search` skill only after Search
-Mode starts. For non-interactive runs, include explicit text confirming the
-frozen verifier, metric, edit surface, and promotion rule.
+Mode starts. Interactive and non-interactive runs use the same autonomous
+admission rule; verifier/spec hints are optional and no confirmation text is
+required.
 
 ### circle_packing — fork-style continuation smoke test
 

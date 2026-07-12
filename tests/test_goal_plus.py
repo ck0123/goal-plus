@@ -93,10 +93,10 @@ def test_spec_discovery_stop_gate_blocks_with_next_action(tmp_path) -> None:
     assert "baseline command" in gate.continuation_prompt
 
 
-def test_initial_search_ready_spec_requires_user_confirmation_before_freeze(tmp_path) -> None:
+def test_initial_search_ready_spec_autonomously_allows_freeze(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize kernel latency")
-    runtime.record_triage(
+    triaged = runtime.record_triage(
         record.goal_plus_id,
         GoalPlusTriage(
             is_optimization=True,
@@ -107,6 +107,8 @@ def test_initial_search_ready_spec_requires_user_confirmation_before_freeze(tmp_
             reasons=["latency benchmark exists"],
         ),
     )
+    assert triaged.next_action.kind == "draft_initial_search_spec"  # type: ignore[union-attr]
+    assert "user confirmation" not in triaged.next_action.description  # type: ignore[union-attr]
 
     draft = runtime.save_spec_draft(
         record.goal_plus_id,
@@ -126,23 +128,12 @@ def test_initial_search_ready_spec_requires_user_confirmation_before_freeze(tmp_
             origin="initial",
         ),
     )
-    assert draft.next_action.kind == "confirm_frozen_verifier"  # type: ignore[union-attr]
+    assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
+    assert draft.spec_draft.user_confirmed_frozen_verifier is False  # type: ignore[union-attr]
 
-    blocked = runtime.gate(
-        record.goal_plus_id,
-        event="pre_tool_use",
-        context={"tool_name": "search_freeze_spec"},
-    )
-    assert blocked.decision == "block"
-    assert "user confirmation" in blocked.reason
-
-    confirmed = runtime.confirm_frozen_verifier(
-        record.goal_plus_id,
-        confirmed_by="user",
-        evidence={"message": "freeze this verifier"},
-    )
-    assert confirmed.spec_draft.user_confirmed_frozen_verifier is True  # type: ignore[union-attr]
-    assert confirmed.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
+    stop_gate = runtime.gate(record.goal_plus_id, event="stop", context={})
+    assert stop_gate.decision == "block"
+    assert "Autonomously freeze" in stop_gate.reason
 
     allowed = runtime.gate(
         record.goal_plus_id,
@@ -151,8 +142,25 @@ def test_initial_search_ready_spec_requires_user_confirmation_before_freeze(tmp_
     )
     assert allowed.decision == "allow"
 
+    # The legacy confirmation API remains available for old callers and audit
+    # evidence, but Search readiness no longer depends on it.
+    confirmed = runtime.confirm_frozen_verifier(
+        record.goal_plus_id,
+        confirmed_by="user",
+        evidence={"message": "freeze this verifier"},
+    )
+    assert confirmed.spec_draft.user_confirmed_frozen_verifier is True  # type: ignore[union-attr]
+    assert confirmed.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
 
-def test_in_progress_search_discovery_does_not_require_user_confirmation(tmp_path) -> None:
+    still_allowed = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": "search_freeze_spec"},
+    )
+    assert still_allowed.decision == "allow"
+
+
+def test_in_progress_search_discovery_uses_same_autonomous_admission(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Improve docs, then optimize verifier if found")
     runtime.record_triage(
@@ -543,7 +551,7 @@ def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> N
     )
 
     assert gate.decision == "block"
-    assert "user confirmation" in gate.reason or "frozen spec draft" in gate.reason
+    assert "frozen spec draft" in gate.reason
 
 
 @pytest.mark.pi
@@ -568,7 +576,7 @@ def test_pre_tool_use_blocks_pi_candidate_driver_before_search_ready(tmp_path) -
     )
 
     assert gate.decision == "block"
-    assert "user confirmation" in gate.reason or "frozen spec draft" in gate.reason
+    assert "frozen spec draft" in gate.reason
 
 
 def test_pre_tool_use_accepts_camel_case_tool_name(tmp_path) -> None:

@@ -19,11 +19,17 @@ downgrade it to ordinary Goal Mode merely because the requested run is small.
 
 ## Spec Discovery Mode
 
-Use Spec Discovery Mode when the target needs a frozen verifier or edit surface. Save candidate details with `goal_plus_save_spec_draft`; if the verifier is already frozen and trustworthy, call `goal_plus_confirm_frozen_verifier` with evidence.
+Use Spec Discovery Mode when the target needs a frozen verifier or edit surface. Save candidate details with `goal_plus_save_spec_draft`. Once the draft is high-confidence with no open questions, upgrade to Search Mode automatically. Do not ask the user to approve the verifier, metric, edit surface, promotion rule, or mode change. User hints are useful but optional; discover missing details from the workspace and decide from evidence.
 
 ## Search Mode
 
 When the goal is search-ready:
+
+`origin="initial"` and `origin="in_progress"` are provenance only and follow
+the same autonomous admission rule. The legacy
+`goal_plus_confirm_frozen_verifier` tool and
+`user_confirmed_frozen_verifier` field remain compatible with older runs, but
+they are optional audit evidence and must never pause `/goal-plus`.
 
 Before `search_freeze_spec`, ensure the SearchSpec strategy sets
 `worker_host: "pi-rpc"` and `worker_mode: "agent-session-pool"`. Pi Search Mode

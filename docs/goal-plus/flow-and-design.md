@@ -45,6 +45,9 @@ the final completion audit still checks whether the original goal is satisfied.
    the runtime.
 5. **Final success is broader than best score.** Selecting a best candidate is
    not automatically the same as completing the user's original goal.
+6. **One submission starts an autonomous run.** Search admission is an agent
+   decision backed by a high-confidence frozen spec, not a user approval gate.
+   User hints are useful but optional.
 
 ## Top-Level Flow
 
@@ -83,19 +86,10 @@ Goal Plus Orchestrator
   |
   +--> Optimization-shaped, spec clear
          |
-         +--> Initial Search-Ready
-         |      - save frozen spec draft
-         |      - show verifier/metric/edit surface to user
-         |      - require explicit frozen-verifier confirmation
-         |      - then enter Search Mode
-         |
-         +--> In-Progress Search Discovery
-                - construct verifier during goal work
-                - save frozen spec draft
-                - enter Search Mode without separate confirmation
-                |
-                v
-             Search Mode
+         +--> Search-Ready
+                - save high-confidence frozen spec draft
+                - retain initial/in-progress origin as provenance
+                - enter Search Mode automatically
                 - freeze spec and verifier artifacts
                 - create candidate workspaces
                 - dispatch host workers
@@ -155,16 +149,18 @@ candidate_budget: max candidates and worker budget
 promotion_rule: what must be true before applying the best candidate
 confidence: high | medium | low
 origin: initial | in_progress
-user_confirmed_frozen_verifier: bool
+user_confirmed_frozen_verifier: bool  # legacy compatibility/audit only
 open_questions: unresolved issues that block freezing
 ```
 
-When confidence is high and `origin="initial"`, the host agent must ask the user
-to confirm the frozen verifier, metric, edit surface, and promotion rule before
-`search_freeze_spec`. When confidence is high and `origin="in_progress"`, the
-host agent can proceed without a separate confirmation because verifier
-construction happened during the active goal run. When confidence is medium or
-low, it should either ask for the missing piece or continue in Goal Mode.
+When confidence is high and there are no open questions, the host agent proceeds
+through the Search Mode gate automatically. `origin="initial"` and
+`origin="in_progress"` are provenance only and have identical admission
+semantics. The legacy confirmation field/tool remain readable for older runs,
+but never block Search and must not cause another user interaction. When
+confidence is medium or low, the agent should continue discovery autonomously
+or continue in Goal Mode; it should ask the user only when the original goal is
+genuinely impossible to resolve from available context.
 
 ### Search Mode
 
@@ -274,7 +270,7 @@ src/goal_plus/goal_plus.py
 
 src/goal_plus/tools.py / server.py
   - goal_plus_* MCP facade and registration
-  - frozen-verifier confirmation for initially search-ready goals
+  - optional legacy frozen-verifier approval evidence for compatibility
 
 .opencode/command/goal-plus.md
   - load a goal-plus skill or instructions

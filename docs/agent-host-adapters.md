@@ -1,7 +1,7 @@
 # Agent Host Adapters
 
 `goal-plus` is host-neutral at the runtime layer. `/goal-plus`
-owns goal intake, triage, spec drafts, verifier confirmation, and final audit
+owns goal intake, triage, spec drafts, autonomous verifier readiness, and final audit
 state. The internal Search Mode engine owns durable search state, workspaces,
 verifier execution, scoring history, reports, and promotion patches. The
 selected code-agent host owns worker process lifecycle.

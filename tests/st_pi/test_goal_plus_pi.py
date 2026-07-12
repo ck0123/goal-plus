@@ -25,15 +25,14 @@ AUDIT_PROMPT = (
     "before_agent_start 上下文注入、tool_call pre-tool gate、agent_end stop gate、"
     "terminal stats 输出。不要修改文件。最后给出结论，并把 Goal Plus 状态设为 complete。"
 )
-SEARCH_PROMPT = (
-    "运行一个最小但完整的 Pi Goal Plus/Search smoke。读取 "
-    "examples/edgebench_ad_placement_search_spec.json，使用 "
-    "examples/edgebench-ad-placement/workspace/evaluator.py 作为冻结 verifier。"
-    "将本次 SearchSpec 限制为 worker_host=pi-rpc、worker_mode=agent-session-pool、"
-    "strategy.name=agent_guided、max_candidates=1、max_parallel=1，worker budget 为 "
-    "max_runtime_seconds=60、max_turns=4、on_exceed=interrupt。只允许候选修改 "
-    "initial_program.py。完成 candidate verifier、selection、report 和 promotion，然后把 "
-    "Goal Plus 状态设为 complete。"
+AUTONOMOUS_OPTIMIZATION_PROMPT = (
+    "优化 examples/edgebench-ad-placement/workspace 中的广告矩形布局程序："
+    "在保持所有公开案例输出合法的前提下，尽量提高综合得分。"
+    "先自行检查工作区，找出可重复的评估方法、优化指标和安全的修改边界，"
+    "再由 Goal Plus 自主选择合适的执行方式，不要等待额外的用户确认。"
+    "这是一个低成本冒烟验证：最多探索 1 个候选，并行度为 1，单个候选最多运行 "
+    "60 秒和 4 轮。只允许修改 initial_program.py，不要修改工作区中的其他文件。"
+    "完成后应用最佳的可验证结果、报告最终得分，并把 Goal Plus 状态设为 complete。"
 )
 MULTI_SEARCH_PROMPT = (
     "在同一个 Goal Plus 任务里顺序运行两个最小但完整的 Pi search task。两次都读取 "
@@ -155,25 +154,32 @@ def test_goal_plus_print_prompt_jsonl_has_typed_triage(
     record = _goal_record(search_root)
     assert record["status"] == "complete"
     events = _goal_events(search_root, record["goal_plus_id"])
-    assert [event["event_type"] for event in events] == [
-        "created",
-        "triage_recorded",
-        "status_changed",
-    ]
+    event_types = [event["event_type"] for event in events]
+    assert event_types[:2] == ["created", "triage_recorded"]
+    assert "status_changed" in event_types
+    assert "spec_draft_saved" not in event_types
+    assert "search_linked" not in event_types
+    triage = next(
+        event["payload"]
+        for event in events
+        if event["event_type"] == "triage_recorded"
+    )
+    assert triage["is_optimization"] is False
+    assert triage["recommended_phase"] == "goal"
     _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
 
 
 @pytest.mark.st_pi
-def test_goal_plus_print_search_reaches_linked_run(
+def test_goal_plus_print_autonomously_enters_search(
     st_pi_run_root: Path,
 ) -> None:
     search_root = st_pi_run_root / ".gp"
     session_dir = st_pi_run_root / "sessions"
     session_dir.mkdir(parents=True, exist_ok=True)
     command = [
-        *_pi_base_command(session_dir, "st-pi-goal-plus-search"),
+        *_pi_base_command(session_dir, "st-pi-goal-plus-autonomous-search"),
         "-p",
-        f"/goal-plus {SEARCH_PROMPT}",
+        f"/goal-plus {AUTONOMOUS_OPTIMIZATION_PROMPT}",
     ]
 
     result = subprocess.run(
@@ -189,6 +195,27 @@ def test_goal_plus_print_search_reaches_linked_run(
     assert result.returncode == 0, result.stderr[-2000:] or result.stdout[-2000:]
     record = _goal_record(search_root)
     assert record["status"] == "complete"
+    events = _goal_events(search_root, record["goal_plus_id"])
+    event_types = [event["event_type"] for event in events]
+    assert "triage_recorded" in event_types
+    assert "spec_draft_saved" in event_types
+    assert "frozen_verifier_confirmed" not in event_types
+    assert "search_linked" in event_types
+    triage = next(
+        event["payload"]
+        for event in events
+        if event["event_type"] == "triage_recorded"
+    )
+    assert triage["is_optimization"] is True
+    assert triage["recommended_phase"] in {"spec_discovery", "search"}
+    draft = next(
+        event["payload"]
+        for event in events
+        if event["event_type"] == "spec_draft_saved"
+    )
+    assert draft["confidence"] == "high"
+    assert draft.get("open_questions") == []
+    assert draft.get("user_confirmed_frozen_verifier") is False
     linked = record.get("linked_search") or {}
     assert linked.get("run_id"), record
     assert linked.get("selected_candidate_id"), record

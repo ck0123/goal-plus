@@ -48,7 +48,7 @@ Search MCP server
   v
 GoalPlusTools facade
   |
-  | records goal state, triage, confirmation, gates
+  | records goal state, triage, spec readiness, gates
   v
 FileGoalPlusRuntime
   |

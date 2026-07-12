@@ -49,7 +49,7 @@ tests/
 │   └── test_st_scenarios.py           # Parametrized ST cases
 └── st_pi/                             # Pi native /goal-plus print/TUI ST
     ├── conftest.py                    # Pi binary checks + per-test run root
-    └── test_goal_plus_pi.py           # Real Pi command/TUI Goal Plus cases
+    └── test_goal_plus_pi.py           # Real Pi command/TUI + autonomous Search admission cases
 ```
 
 ## Testing Contract
@@ -113,12 +113,13 @@ markers select the runner:
 | `st_claude` | `claude -p` | Claude default unless `$ST_CLAUDE_MODEL` is set |
 | `st_pi_rpc` | `goal-plus-pi-worker` launching `pi --mode rpc` | Pi default unless runner args override it |
 
-The runner prepends a non-interactive confirmation preamble for Initial
-Search-Ready tasks so the frozen verifier, metric, edit surface, and promotion
-rule are explicitly confirmed. Each scenario prompt is in
-`tests/st/prompts/<scenario>.md`; the prompt embeds an `{{PROJECT_ROOT}}`
-placeholder that `conftest.load_prompt` renders with the absolute repo path so
-the host agent can find specs and fixtures without copying them.
+The runner prepends a non-interactive autonomy preamble: the host agent must
+decide whether Search adds value, discover missing verifier/spec details, and
+enter Search when ready without asking for user confirmation. Each scenario
+prompt is in `tests/st/prompts/<scenario>.md`; the prompt embeds an
+`{{PROJECT_ROOT}}` placeholder that `conftest.load_prompt` renders with the
+absolute repo path so the host agent can find specs and fixtures without
+copying them.
 
 Host runner subprocesses set `GOAL_PLUS_ST_ACTIVE=<scenario>`. If a
 host agent accidentally tries to run `pytest -m st` from inside an active ST,
@@ -150,6 +151,9 @@ pytest -m "st and st_pi_rpc" -k circle_packing_two_batch -v -s
 
 # Pi native /goal-plus print/TUI entrypoints
 pytest -m st_pi -v -s
+
+# Pi native plain-language optimization must autonomously enter Search
+pytest -m st_pi -k autonomously_enters_search -v -s
 
 # Pi native one-Goal-Plus/two-search-task smoke
 pytest -m st_pi -k two_search_tasks -v -s

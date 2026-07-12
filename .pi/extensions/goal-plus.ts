@@ -624,7 +624,7 @@ function buildGoalPlusContext(status: GoalPlusStatusPayload): string {
 		"Rules:",
 		"- Keep the raw goal separate from implementation guesses.",
 		"- Update goal-plus state after each phase change.",
-		"- Do not enter Search Mode until the spec draft is high-confidence and any required initial verifier confirmation is recorded.",
+		"- Search is an autonomous upgrade: once the spec draft is high-confidence with no open questions, proceed through the Search Mode gate without asking the user for approval.",
 		"- Before claiming completion, audit the raw goal against current evidence and call goal_plus_set_status.",
 	];
 	if (action) {
@@ -654,7 +654,7 @@ function buildGoalStartPrompt(status: GoalPlusStatusPayload): string {
 		"- Except for loading the goal-plus skill, do not read or audit target files before goal_plus_record_triage.",
 		"- Start by recording triage with goal_plus_record_triage.",
 		"- If the raw goal explicitly requests verifier-guided Search Mode and supplies a measurable verifier or metric, do not downgrade it to ordinary Goal Mode.",
-		"- If the task is search-ready, follow the frozen-verifier and Search Mode gates.",
+		"- If the task is search-ready, enter Search Mode autonomously through the frozen-spec and Search Mode gates; do not ask the user to approve the transition.",
 		"- Never invent frozen_spec_id, run_id, plan_id, candidate_id, or agent_session_id values. Use only exact ids returned by the immediately preceding runtime tools; call search_create before goal_plus_link_search_run.",
 		"- If it is not search-ready, continue in Goal Mode and update goal-plus state before stopping.",
 	].join("\n");

@@ -70,8 +70,10 @@ def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert '"recommended_phase": "goal"' in text
     assert "goal_mode" in text
     assert "Do not send fields named `mode` or `reason`" in text
-    assert "Initial Search-Ready" in text
-    assert "In-Progress Search Discovery" in text
+    assert "Search is an autonomous upgrade" in text
+    assert "without asking the user" in text
+    assert "optional audit evidence" in text
+    assert "Never pause or ask the user" in text
     assert "Do not create a SearchSpec in Goal Mode" in text
     assert "search_freeze_spec" in text
     assert "final raw-goal audit" in text

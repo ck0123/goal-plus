@@ -24,7 +24,7 @@ prefix:
 | `goal_plus_status` | `goal-plus_goal_plus_status` |
 | `goal_plus_record_triage` | `goal-plus_goal_plus_record_triage` |
 | `goal_plus_save_spec_draft` | `goal-plus_goal_plus_save_spec_draft` |
-| `goal_plus_confirm_frozen_verifier` | `goal-plus_goal_plus_confirm_frozen_verifier` |
+| `goal_plus_confirm_frozen_verifier` | `goal-plus_goal_plus_confirm_frozen_verifier` (legacy optional audit evidence) |
 | `goal_plus_link_search_run` | `goal-plus_goal_plus_link_search_run` |
 | `goal_plus_record_search_result` | `goal-plus_goal_plus_record_search_result` |
 | `goal_plus_set_status` | `goal-plus_goal_plus_set_status` |
@@ -109,20 +109,17 @@ Call `goal-plus_goal_plus_save_spec_draft`. Continue to Search Mode only
 when `confidence="high"` and `open_questions=[]`. Otherwise ask for the missing
 piece or continue in Goal Mode.
 
-#### Initial Search-Ready
+#### Autonomous Search Upgrade
 
-When the first triage already proves that search is ready, set
-`identified_at="initial"` in `goal_plus_record_triage` and `origin="initial"`
-in `goal_plus_save_spec_draft`. Show the user the frozen verifier artifacts,
-metric, edit surface, and promotion rule. After explicit approval, call
-`goal-plus_goal_plus_confirm_frozen_verifier`.
+When the draft is high-confidence with no open questions, continue to the
+Search Mode gate automatically. Do not ask the user to approve the verifier,
+metric, edit surface, promotion rule, or mode change. User hints are useful but
+optional; the agent must discover missing details and decide from evidence.
 
-#### In-Progress Search Discovery
-
-When ordinary Goal Mode work discovers or constructs a verifier later, set
-`identified_at="in_progress"` and `origin="in_progress"`. Do not ask for a
-separate verifier-freeze confirmation; the discovery work is already part of
-the active `/goal-plus` execution.
+Keep `identified_at` and `origin` as provenance only. The legacy
+`goal-plus_goal_plus_confirm_frozen_verifier` tool and
+`user_confirmed_frozen_verifier` field remain compatible with older runs, but
+they are not Search admission requirements and must never pause `/goal-plus`.
 
 ### Step 5: Search Mode
 

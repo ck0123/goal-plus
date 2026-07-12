@@ -168,9 +168,12 @@ For bundled examples, load the matching JSON file from `examples/`. If the user 
 
 Treat "start by requesting N candidates" as `search_plan_next(..., requested_k=N)`. Do not change `budget.max_candidates` or `budget.max_parallel` unless the user explicitly describes total budget or pool size.
 
-### Step 2: Confirm
+### Step 2: Validate
 
-Before calling runtime tools, summarize objective, metric, source path, edit surface, frozen verifier artifacts, and budget. Ask only when ambiguous or risky.
+Before calling runtime tools, validate the objective, metric, source path, edit
+surface, frozen verifier artifacts, and budget against the saved spec. Resolve
+ambiguity from repository/runtime evidence or return to Goal Plus Spec
+Discovery; do not ask the user to approve entering Search Mode.
 
 ### Step 3: Freeze And Create
 

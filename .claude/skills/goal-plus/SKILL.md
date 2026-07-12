@@ -25,12 +25,12 @@ prefix; match by the final logical tool name.
    rule. Save them with `goal_plus_save_spec_draft`.
 6. Enter Search Mode only when the saved draft has `confidence="high"` and no
    open questions.
-7. For Initial Search-Ready goals, ask the user to confirm the frozen verifier,
-   metric, edit surface, and promotion rule, then call
-   `goal_plus_confirm_frozen_verifier`.
-8. For In-Progress Search Discovery, when the verifier is constructed during
-   goal execution, save the draft with `origin="in_progress"` and do not ask for
-   a separate verifier-freeze confirmation.
+7. Search is an autonomous upgrade. Once the draft is high-confidence with no
+   open questions, proceed to the Search Mode gate without asking the user to
+   approve the verifier, metric, edit surface, promotion rule, or mode change.
+   User-provided hints are useful evidence but are not required.
+8. Keep `origin="initial"` or `origin="in_progress"` as provenance only. It
+   must not change whether a search-ready draft can proceed.
 9. Before calling Search Mode tools such as `search_freeze_spec`, call
    `goal_plus_gate(event="pre_tool_use", context={"tool_name": "search_freeze_spec"})`.
 10. In Search Mode, use the internal `search` skill:
@@ -91,6 +91,11 @@ baseline, correctness gate, or edit surface is still unclear.
 Search Mode is for frozen, measurable optimization. It delegates candidate
 workspace creation, verifier execution, selection, report, and promotion to the
 existing Search MCP flow.
+
+`goal_plus_confirm_frozen_verifier` and
+`user_confirmed_frozen_verifier` remain readable for compatibility with older
+runs. They are optional audit evidence, not Search Mode admission requirements.
+Never pause or ask the user for them during `/goal-plus` execution.
 
 ## Hook Compatibility
 

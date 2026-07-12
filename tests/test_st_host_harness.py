@@ -12,6 +12,7 @@ from tests.st.hosts import (
 )
 from tests.st.helpers.claude_runner import ClaudeRunner
 from tests.st.helpers.codex_runner import CodexRunner
+from tests.st.helpers.opencode_runner import OpenCodeRunner
 
 
 def test_st_host_markers_select_one_agent() -> None:
@@ -50,6 +51,8 @@ def test_codex_runner_uses_exec_with_terra_model(tmp_path: Path) -> None:
     assert "--dangerously-bypass-approvals-and-sandbox" in cmd
     assert "do not run pytest" in cmd[-1]
     assert "Codex /goal-plus system test" in cmd[-1]
+    assert "Decide autonomously whether Search adds value" in cmd[-1]
+    assert "Do not ask for or wait for user confirmation" in cmd[-1]
     assert "run the prompt" in cmd[-1]
 
 
@@ -65,6 +68,17 @@ def test_claude_runner_uses_print_mode_with_project_mcp(tmp_path: Path) -> None:
     assert "bypassPermissions" in cmd
     assert "do not run pytest" in cmd[-1]
     assert "Claude Code /goal-plus system test" in cmd[-1]
+    assert "Decide autonomously whether Search adds value" in cmd[-1]
+    assert "Do not ask for or wait for user confirmation" in cmd[-1]
+
+
+def test_opencode_runner_requires_autonomous_search_admission(tmp_path: Path) -> None:
+    runner = OpenCodeRunner(project_root=tmp_path / "project", log_dir=tmp_path)
+
+    cmd = runner._build_cmd("run the prompt")
+
+    assert "Decide autonomously whether Search adds value" in cmd[-1]
+    assert "Do not ask for or wait for user confirmation" in cmd[-1]
 
 
 def test_st_active_env_guard_name_is_stable() -> None:

@@ -85,10 +85,10 @@ skills are serving-oriented: if their assumptions or parsers do not fit the
 standalone BERT trace, record the incompatibility and use direct torch.profiler
 evidence instead. Do not alter the workload merely to satisfy a skill.
 
-SearchSpec confirmation contract
+SearchSpec autonomous readiness contract
 
-After all preparation gates pass, draft and explicitly confirm a SearchSpec
-with these properties:
+After all preparation gates pass, autonomously draft and freeze a SearchSpec
+with these properties; do not wait for user confirmation:
 
 - objective: reduce measured BERT_pytorch V100 CUDA eval median latency by at
   least 10% relative to baseline_median_latency_ms;
@@ -115,7 +115,7 @@ feed-forward blocks, tensor layout, allocation removal, safe operator fusion,
 and new V100-compatible kernels under triton_ops/. Do not prescribe Triton when
 the measured bottleneck points elsewhere.
 
-The main agent owns resource assignment, batch planning, verifier confirmation,
+The main agent owns resource assignment, batch planning, verifier readiness,
 selection, and follow-up batches. The runtime does not schedule GPUs or own
 worker lifecycle. Continue bounded search until one of these occurs:
 

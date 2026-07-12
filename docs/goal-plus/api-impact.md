@@ -7,7 +7,7 @@ Define how `goal-plus` fits around the current MCP API surface.
 The current runtime exposes a `search_*` API for verifiable candidate search.
 That surface remains focused and becomes an internal Search Mode engine under
 `/goal-plus`. `goal-plus` adds a small state machine for goal intake, phase
-tracking, verifier-freeze confirmation, hook gating, and linking to an optional
+tracking, autonomous verifier/spec readiness, hook gating, and linking to an optional
 search run. It should not turn the existing search runtime into a generic
 worker supervisor.
 
@@ -159,7 +159,7 @@ spec_draft:
   promotion_rule: str
   confidence: "high" | "medium" | "low"
   origin?: "initial" | "in_progress"
-  user_confirmed_frozen_verifier: bool
+  user_confirmed_frozen_verifier: bool  # legacy compatibility/audit only
   open_questions: list[str]
 ```
 
@@ -167,14 +167,16 @@ Output: updated goal-plus state.
 
 The draft should freeze standards, not implementation plans.
 
-If `origin="initial"`, a high-confidence draft still requires explicit user
-confirmation before `search_freeze_spec`. If `origin="in_progress"`, the draft
-can proceed directly because verifier construction happened during the active
-goal execution.
+Any high-confidence draft with no open questions can proceed to
+`search_freeze_spec` automatically. `origin="initial"` and
+`origin="in_progress"` are provenance only and do not change Search admission.
+User hints may inform the draft, but a follow-up approval is never required.
 
 ### `goal_plus_confirm_frozen_verifier`
 
-Record explicit user confirmation for an initially search-ready frozen verifier.
+Compatibility API for recording optional verifier approval evidence on older
+or externally audited workflows. New `/goal-plus` runs do not call this tool as
+an admission step and never wait for user confirmation.
 
 Input:
 
@@ -186,7 +188,7 @@ evidence?: dict
 
 Output: updated goal-plus state with `next_action.kind="freeze_search_spec"`.
 
-This tool is not needed for in-progress verifier discovery.
+This tool is never required for autonomous Search admission.
 
 ### `goal_plus_link_search_run`
 
@@ -267,6 +269,11 @@ This is the bridge for hook-capable hosts. For a `Stop` hook, `block` means
 "do not let the model stop; continue with this prompt." For a `PreToolUse`
 hook, `block` means "this tool call is not valid in the current goal-plus
 phase."
+
+These are hard workflow controls, not approval prompts. A search-ready draft
+causes Stop to continue the agent toward `search_freeze_spec`, while PreToolUse
+blocks Search only when the measurable spec is still incomplete. Neither gate
+asks the user whether Search may begin.
 
 The current repository registers `goal_plus_gate` as an MCP tool and ships a
 small host hook helper for Codex and Claude Code.
@@ -457,12 +464,12 @@ Recommended behavior after `goal-plus` exists:
 /goal-any-optimize <objective>
   -> goal_plus_create(...)
   -> normal /goal-plus triage
-  -> if search-ready, require the same frozen-verifier confirmation rules
+  -> if search-ready, autonomously pass the frozen-spec/Search gates
   -> use existing search flow only after Goal Plus enters Search Mode
 ```
 
-The command must not bypass Goal Plus triage, frozen-spec creation,
-confirmation, or final raw-goal audit.
+The command must not bypass Goal Plus triage, frozen-spec creation, Search Mode
+gates, or final raw-goal audit.
 
 ## Open Questions
 

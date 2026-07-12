@@ -179,19 +179,19 @@ The expected result is that the tool is callable and reports that the run does n
 In OpenCode:
 
 ```text
-Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Show and confirm the frozen verifier, metric, edit surface, and promotion rule before Search Mode. Then run the k_module smoke test end-to-end.
+Use /goal-plus. Load examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Decide autonomously whether the verifier-backed spec is search-ready, then run the k_module smoke test end-to-end without asking for user confirmation.
 ```
 
 Headless:
 
 ```bash
-opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. This prompt explicitly confirms the frozen verifier, metric, edit surface, and promotion rule. Keep all edits inside candidate workspaces."
+opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Decide autonomously whether Search is justified and keep all edits inside candidate workspaces."
 ```
 
 Expected behavior:
 
 1. The `goal-plus` skill creates a goal-plus record and records triage.
-2. For this initial search-ready task, the agent saves a spec draft and records frozen-verifier confirmation.
+2. For this search-ready task, the agent saves a high-confidence spec draft and autonomously passes the Search Mode gate.
 3. The internal `search` skill freezes `tests/fixtures/k_module_problem/evaluator.py`.
 4. Runtime plans the next strategy step and creates candidate workspaces under `.gp/runs/<run_id>/workspace/`.
 5. The host edits each candidate workspace.
@@ -208,7 +208,7 @@ goal-plus_goal_plus_create
 goal-plus_goal_plus_status
 goal-plus_goal_plus_record_triage
 goal-plus_goal_plus_save_spec_draft
-goal-plus_goal_plus_confirm_frozen_verifier
+goal-plus_goal_plus_confirm_frozen_verifier  # legacy optional audit evidence
 goal-plus_goal_plus_link_search_run
 goal-plus_goal_plus_record_search_result
 goal-plus_goal_plus_set_status

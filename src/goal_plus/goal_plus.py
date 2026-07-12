@@ -323,7 +323,7 @@ class FileGoalPlusRuntime:
                 "spec_draft": spec_draft,
                 "next_action": GoalPlusNextAction(
                     kind="freeze_search_spec",
-                    description="Freeze the confirmed SearchSpec and verifier artifacts, then create a search run.",
+                    description="Freeze the search-ready SearchSpec and verifier artifacts, then create a search run.",
                     required=True,
                 ),
                 "updated_at": utc_timestamp(),
@@ -590,8 +590,6 @@ class FileGoalPlusRuntime:
                 ),
             )
         missing = ", ".join(triage.missing) if triage.missing else "spec details"
-        if triage.recommended_phase == "search" and triage.identified_at == "initial":
-            missing = "user confirmation for the frozen verifier"
         return (
             "spec_discovery",
             GoalPlusNextAction(
@@ -651,18 +649,9 @@ class FileGoalPlusRuntime:
                 required=True,
                 metadata={"open_questions": spec_draft.open_questions},
             )
-        if (
-            spec_draft.origin == "initial"
-            and not spec_draft.user_confirmed_frozen_verifier
-        ):
-            return GoalPlusNextAction(
-                kind="confirm_frozen_verifier",
-                description="Ask the user to confirm the frozen verifier, metric, edit surface, and promotion rule before Search Mode.",
-                required=True,
-            )
         return GoalPlusNextAction(
             kind="freeze_search_spec",
-            description="Freeze the high-confidence SearchSpec and verifier artifacts, then create a search run.",
+            description="Autonomously freeze the high-confidence SearchSpec and verifier artifacts, then create a search run.",
             required=True,
         )
 
@@ -671,10 +660,6 @@ class FileGoalPlusRuntime:
             record.spec_draft is not None
             and record.spec_draft.confidence == "high"
             and not record.spec_draft.open_questions
-            and (
-                record.spec_draft.origin != "initial"
-                or record.spec_draft.user_confirmed_frozen_verifier
-            )
         )
 
     def _search_block_reason(self, record: GoalPlusRecord) -> str:
@@ -683,8 +668,6 @@ class FileGoalPlusRuntime:
             return "Search tools require a high-confidence frozen spec draft first."
         if spec_draft.confidence != "high" or spec_draft.open_questions:
             return "Search tools require a high-confidence frozen spec draft first."
-        if spec_draft.origin == "initial" and not spec_draft.user_confirmed_frozen_verifier:
-            return "Search tools require user confirmation of the initial frozen verifier first."
         return "Search tools require a search-ready spec draft first."
 
     def _tool_name(self, context: dict[str, Any]) -> str:

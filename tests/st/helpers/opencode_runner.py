@@ -41,9 +41,10 @@ class OpenCodeRunner:
         if self.model:
             cmd += ["-m", self.model]
         cmd.append(
-            "This is a non-interactive /goal-plus system test. If the task is "
-            "Initial Search-Ready, this prompt explicitly confirms the frozen "
-            "verifier, metric, edit surface, and promotion rule.\n\n"
+            "This is a non-interactive /goal-plus system test. Decide "
+            "autonomously whether Search adds value, discover any missing "
+            "verifier/spec details, and enter Search when the draft is ready. "
+            "Do not ask for or wait for user confirmation.\n\n"
             + prompt
         )
         return cmd

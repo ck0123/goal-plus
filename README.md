@@ -12,10 +12,14 @@ report, and export a promotion patch.
 
 The project is not OpenCode-only. Current checked-in host assets target:
 
+- Pi
 - Codex
 - Claude Code
 - OpenCode
-- Pi
+
+For new deployments, prefer Pi first and Codex second. They are the primary
+host paths for current development and end-to-end validation; Claude Code and
+OpenCode remain supported compatibility paths.
 
 The MCP runtime stays host-neutral. Host-specific behavior is in the checked-in
 host configs, skills, hooks, and worker-agent prompts.
@@ -68,17 +72,17 @@ This repository already includes project-local config for all supported hosts.
 
 | Host | Project config | User entrypoint | Notes |
 |---|---|---|---|
+| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/goal-plus.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `goal-plus-pi-worker`; stats are Pi custom entries, not LLM messages. |
 | Codex | `.codex/config.example.toml`, `.codex/hooks.json`, `.codex/skills/` | Copy the example to the ignored local `.codex/config.toml`, then use the `goal-plus` skill / `/goal-plus` prompt | Codex 0.144.1+ ships `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop` Goal Plus hooks. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
-| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/goal-plus.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `goal-plus-pi-worker`; stats are Pi custom entries, not LLM messages. |
 
 Host-specific setup and debugging details live in:
 
+- [Pi reference](docs/pi.md)
 - [Codex reference](docs/codex.md)
 - [Claude Code reference](docs/claude-code.md)
 - [OpenCode reference](docs/opencode.md)
-- [Pi reference](docs/pi.md)
 - [Host adapter capability matrix](docs/agent-host-adapters.md)
 - [Runtime and host log debugging](docs/debugging-runtime.md)
 
@@ -87,6 +91,14 @@ Host-specific setup and debugging details live in:
 Use `/goal-plus` for both ordinary goals and optimization-shaped goals. The
 workflow starts with `goal_plus_create`, records triage, and only enters Search
 Mode after the goal has a verifier-backed spec.
+
+`/goal-plus` has the same interaction contract as a normal `/goal`: one user
+submission starts an autonomous run. The agent decides from repository evidence
+whether Goal Mode is sufficient, whether it must discover a verifier-backed
+spec, and whether parallel Search adds value. User hints may improve that
+decision, but entering Search never requires a follow-up confirmation. Host
+hooks and runtime gates enforce phase completeness; they do not create approval
+checkpoints.
 
 One Goal Plus record is the complete user task. It may contain multiple
 `search task` records when the final audit identifies another verifier-backed
@@ -103,7 +115,7 @@ Use /goal-plus. Fix this bug and verify the test suite.
 ```text
 Use /goal-plus. Optimize this model-serving path for lower p95 latency. First
 identify the benchmark, correctness gate, editable files, and promotion rule.
-If the verifier is frozen and search-ready, run Search Mode with Codex workers.
+If the verifier is frozen and search-ready, run Search Mode with Pi RPC workers.
 ```
 
 OpenCode also keeps `/goal-any-optimize` as a legacy alias, but `/goal-plus` is
@@ -119,7 +131,7 @@ common MCP flow:
 3. `search_plan_next`
 4. `search_start_batch`
 5. `search_start_agent_session`
-6. launch the returned foreground worker in Codex, Claude Code, OpenCode, or Pi RPC
+6. launch the returned foreground worker in Pi RPC, Codex, Claude Code, or OpenCode
 7. bind the host handle with `search_bind_agent_handle` or
    `search_bind_opencode_session`
 8. worker calls `search_get_agent_context`
@@ -156,7 +168,7 @@ the detailed resume and continuation matrix.
 
 ## Strategies
 
-The portable strategy subset for Codex, Claude Code, and Pi RPC is:
+The portable strategy subset for Pi RPC, Codex, and Claude Code is:
 
 - `agent_guided`
 - `agent`
@@ -174,17 +186,17 @@ Python strategy plugins, and trace export. See
 ## Repository Layout
 
 ```text
-opencode.json                         # project-local OpenCode MCP config
-.mcp.json                             # project-local Claude Code MCP config
+.pi/                                  # Pi prompts, skills, and extension
 .codex/config.example.toml            # tracked Codex MCP config template
 .codex/config.toml                    # ignored local Codex MCP config
 .codex/hooks.json                     # Codex Goal Plus host hooks
-.pi/                                  # Pi prompts, skills, and extension
-scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
-.opencode/                            # OpenCode commands, skills, worker agents
 .codex/skills/                        # Codex skills
 .codex/agents/                        # Codex worker agent config
+.mcp.json                             # project-local Claude Code MCP config
 .claude/                              # Claude Code settings, skills, worker agents
+opencode.json                         # project-local OpenCode MCP config
+.opencode/                            # OpenCode commands, skills, worker agents
+scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
 docs/                                 # design, host, debug, and strategy docs
 examples/                             # bundled SearchSpec examples
 src/goal_plus/           # runtime, models, tools, server

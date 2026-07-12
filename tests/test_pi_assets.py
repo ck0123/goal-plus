@@ -54,6 +54,10 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "Goal Mode" in text
     assert "Spec Discovery Mode" in text
     assert "Search Mode" in text
+    assert "upgrade to Search Mode automatically" in text
+    assert "Do not ask the user" in text
+    assert "User hints are useful but optional" in text
+    assert "optional audit evidence" in text
     assert "goal_plus_create" in text
     assert "goal_plus_gate" in text
     assert "goal_plus_monitor_snapshot" in text

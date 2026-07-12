@@ -213,7 +213,10 @@ class GoalPlusSpecDraft(SearchModel):
     promotion_rule: str = Field(min_length=1)
     confidence: GoalPlusConfidence
     origin: GoalPlusDiscoveryOrigin | None = None
-    user_confirmed_frozen_verifier: bool = False
+    user_confirmed_frozen_verifier: bool = Field(
+        default=False,
+        description="Legacy compatibility/audit field; not required for Search admission.",
+    )
     open_questions: list[str] = Field(default_factory=list)
 
 
