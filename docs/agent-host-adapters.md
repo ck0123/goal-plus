@@ -68,6 +68,17 @@ driver for steps 5 through 10 across the candidate ids returned by
 fallback. Both still use the same runtime records and return step evidence;
 they do not plan batches, select winners, write reports, or promote patches.
 
+Codex and Pi Search candidate workers also have a one-shot informational time
+advisory. At worker PostTool boundaries, the host reads durable candidate
+session/iteration timestamps and warns when the available time is below the
+observed average time per subagent verifier submission. Codex injects
+`PostToolUse.additionalContext`; Pi RPC sends `steer` after
+`tool_execution_end`. Both paths validate that the event belongs to a Search
+candidate, ignore main/ordinary-subagent/final-checker events, and leave the
+worker free to choose its response. `GOAL_PLUS_OUTER_DEADLINE_AT` optionally
+provides an RFC 3339 or Unix-epoch outer deadline; the worker budget remains a
+fallback.
+
 ## Goal Plus Enforcement Levels
 
 Do not conflate Search Mode worker support with enforced Goal Plus lifecycle
@@ -86,8 +97,11 @@ Current repository assets include Goal Plus host hooks for Codex and Claude
 Code. Host settings run `goal-plus --goal-plus-host-hook`.
 Codex 0.144.1+ wires `UserPromptSubmit`, `SessionStart`, `PreToolUse`,
 `PostToolUse`, `Stop`, and `SubagentStop`: it pre-creates and binds an exact
-`/goal-plus` or `$goal-plus` prompt, restores hidden session context, gates
-Search/mutating tools, and gates both top-level and subagent stops.
+`$goal-plus` skill prompt, restores hidden session context, gates
+Search/mutating tools, and gates both top-level and subagent stops. The hook
+parser retains `/goal-plus` as a compatibility spelling for clients that
+forward it as prompt text, but Codex CLI does not register that spelling as a
+native slash command; users invoke the skill with `$goal-plus` or `/skills`.
 `PostToolUse(goal_plus_create)` remains a compatibility binding path.
 Terminal Stop emits a compact host `systemMessage` with non-LLM run counters.
 All ownership-sensitive events select only an explicit `GOAL_PLUS_ID` or the

@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from goal_plus.time_advisory import (
+    build_search_time_advisory,
+    find_agent_session,
+    is_search_candidate_session,
+)
 
 
 GOAL_ID_RE = re.compile(r"\bgp_\d+\b")
@@ -181,6 +188,38 @@ def _tool_use_id(hook_input: dict[str, Any]) -> str | None:
     return None
 
 
+def _tool_input(hook_input: dict[str, Any]) -> dict[str, Any]:
+    value = _raw_tool_input(hook_input)
+    return value if isinstance(value, dict) else {}
+
+
+def _raw_tool_input(hook_input: dict[str, Any]) -> Any:
+    for key in ("tool_input", "toolInput", "input"):
+        value = hook_input.get(key)
+        if isinstance(value, (dict, list, str)):
+            return value
+    return {}
+
+
+def _runtime_agent_session_ids(value: Any) -> list[str]:
+    """Extract candidate-session-looking IDs from JSON or Code Mode source."""
+    found: list[str] = []
+    if isinstance(value, dict):
+        direct = value.get("agent_session_id")
+        if isinstance(direct, str) and direct:
+            found.append(direct)
+        for item in value.values():
+            found.extend(_runtime_agent_session_ids(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(_runtime_agent_session_ids(item))
+    elif isinstance(value, str):
+        found.extend(
+            re.findall(r"\bagent_[A-Za-z0-9][A-Za-z0-9_.:-]*\b", value)
+        )
+    return list(dict.fromkeys(found))
+
+
 def _is_subagent_context(hook_input: dict[str, Any]) -> bool:
     if _hook_event_name(hook_input) == "SubagentStop":
         return True
@@ -214,6 +253,146 @@ def _is_final_checker_context(hook_input: dict[str, Any]) -> bool:
         ):
             return True
     return False
+
+
+def _subagent_identity(hook_input: dict[str, Any]) -> str | None:
+    for key in (
+        "agent_id",
+        "agentId",
+        "agent_transcript_path",
+        "agentTranscriptPath",
+    ):
+        value = hook_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+    target = hook_input.get("target")
+    if isinstance(target, dict):
+        for key in ("agent_id", "agentId", "agent", "transcript_path"):
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _time_advisory_dir(search_root: Path) -> Path:
+    return search_root / "host-logs" / "codex-time-advisory"
+
+
+def _identity_path(search_root: Path, identity: str) -> Path:
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return _time_advisory_dir(search_root) / "workers" / f"{digest}.json"
+
+
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_json_object(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp-{os.getpid()}")
+    temporary.write_text(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _search_candidate_agent_session_id(
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> str | None:
+    if not _is_subagent_context(hook_input) or _is_final_checker_context(hook_input):
+        return None
+    identity = _subagent_identity(hook_input)
+    direct: str | None = None
+    for candidate_session_id in _runtime_agent_session_ids(
+        _raw_tool_input(hook_input)
+    ):
+        session = find_agent_session(search_root, candidate_session_id)
+        if (
+            session is not None
+            and session.host == "codex"
+            and is_search_candidate_session(session)
+        ):
+            direct = candidate_session_id
+            break
+    if direct is not None:
+        if identity is not None:
+            _write_json_object(
+                _identity_path(search_root, identity),
+                {
+                    "agent_session_id": direct,
+                    "mapped_at": datetime.now(timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                },
+            )
+        return direct
+    if identity is None:
+        return None
+    mapping = _read_json_object(_identity_path(search_root, identity))
+    mapped = mapping.get("agent_session_id") if mapping else None
+    if not isinstance(mapped, str) or not mapped:
+        return None
+    session = find_agent_session(search_root, mapped)
+    if (
+        session is None
+        or session.host != "codex"
+        or not is_search_candidate_session(session)
+    ):
+        return None
+    return mapped
+
+
+def _claim_time_advisory(
+    search_root: Path,
+    agent_session_id: str,
+    payload: dict[str, Any],
+    tool_name: str,
+) -> bool:
+    path = _time_advisory_dir(search_root) / "sent" / f"{agent_session_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    evidence = {
+        **payload,
+        "trigger_tool": tool_name,
+        "sent_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(evidence, handle, sort_keys=True, ensure_ascii=False)
+        handle.write("\n")
+    return True
+
+
+def _search_candidate_time_advisory(
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> str | None:
+    agent_session_id = _search_candidate_agent_session_id(search_root, hook_input)
+    if agent_session_id is None:
+        return None
+    advisory = build_search_time_advisory(search_root, agent_session_id)
+    if advisory is None:
+        return None
+    if not _claim_time_advisory(
+        search_root,
+        agent_session_id,
+        advisory,
+        _tool_name(hook_input),
+    ):
+        return None
+    return str(advisory["message"])
 
 
 def _host_kind(hook_input: dict[str, Any]) -> str:
@@ -579,6 +758,10 @@ def main() -> int:
             return 0
 
         if event_name == "PostToolUse":
+            time_advisory = _search_candidate_time_advisory(search_root, hook_input)
+            if time_advisory is not None:
+                _emit_additional_context("PostToolUse", time_advisory)
+                return 0
             target = _post_tool_use_bind_target(hook_input)
             if target is None:
                 return 0

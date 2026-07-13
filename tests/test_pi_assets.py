@@ -131,10 +131,24 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "verifier-recorded iterations" in text
     assert "Stop starting new optimization iterations" in text
     assert "final verifier" in text
+    assert "time advisory after a tool result is informational" in text
     assert "trust direct reads and the runtime context" in text
     assert "workspace only" in text
     assert "runtime history" in text
     assert "do not rely on transcript" in text
+
+
+def test_pi_skill_documents_post_tool_time_advisory() -> None:
+    text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(text.split())
+
+    assert "advisory time estimate after completed worker tools" in normalized
+    assert "last subagent verifier - first candidate session" in normalized
+    assert "GOAL_PLUS_OUTER_DEADLINE_AT" in text
+    assert "one informational `steer`" in text
+    assert "does not stop the worker" in text
 
 
 def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:

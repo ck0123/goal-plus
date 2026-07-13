@@ -537,3 +537,126 @@ def test_run_pi_rpc_worker_steers_once_before_hard_deadline(
     assert handle["metadata"]["soft_closeout_seconds"] == 6
     assert handle["metadata"]["soft_closeout_sent"] is True
     assert handle["metadata"]["timed_out"] is False
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_sent"),
+    [("worker", True), ("final-checker", False)],
+)
+def test_run_pi_rpc_worker_checks_time_advisory_after_worker_tool_only(
+    monkeypatch,
+    tmp_path: Path,
+    role: str,
+    expected_sent: bool,
+) -> None:
+    extension = tmp_path / "goal-plus.ts"
+    extension.write_text("// fake extension\n", encoding="utf-8")
+    cwd = tmp_path / "workspace"
+    cwd.mkdir()
+    commands: list[dict[str, Any]] = []
+    advisory_calls: list[dict[str, Any]] = []
+
+    class FakeProc:
+        returncode = None
+
+    class FakeRpcClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            self.state_calls = 0
+            self.drained = False
+
+        def start(self) -> None:
+            return None
+
+        def drain_completed_tools(self) -> list[str]:
+            if self.drained:
+                return []
+            self.drained = True
+            return ["search_run_verifier"]
+
+        def auto_retry_pending(self) -> bool:
+            return False
+
+        def command(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            commands.append(payload)
+            command_type = str(payload["type"])
+            if command_type == "get_entries":
+                return {"data": {"entries": [], "leafId": None}}
+            if command_type in {"prompt", "steer"}:
+                return {"data": {}}
+            if command_type == "get_state":
+                self.state_calls += 1
+                return {
+                    "data": {
+                        "isStreaming": self.state_calls == 1,
+                        "isCompacting": False,
+                        "pendingMessageCount": 0,
+                    }
+                }
+            if command_type == "get_last_assistant_text":
+                return {"data": {"text": "done"}}
+            if command_type == "get_session_stats":
+                return {"data": {}}
+            raise AssertionError(f"unexpected command {command_type}")
+
+    def fake_advisory(
+        root: Path,
+        agent_session_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        advisory_calls.append(
+            {"root": root, "agent_session_id": agent_session_id, **kwargs}
+        )
+        return {
+            "run_id": "run_1",
+            "candidate_id": "c001",
+            "agent_session_id": agent_session_id,
+            "remaining_seconds": 5.0,
+            "average_submission_seconds": 20.0,
+            "total_verifier_count": 1,
+            "low_sample": True,
+            "candidates": [],
+            "message": "dynamic time advisory",
+        }
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
+
+    def fake_kill_process_group(proc: FakeProc) -> None:
+        proc.returncode = 0
+
+    monkeypatch.setattr(pi_worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(pi_worker, "_RpcClient", FakeRpcClient)
+    monkeypatch.setattr(pi_worker, "_kill_process_group", fake_kill_process_group)
+    monkeypatch.setattr(pi_worker, "build_search_time_advisory", fake_advisory)
+    monkeypatch.setattr(pi_worker.time, "sleep", lambda _seconds: None)
+
+    handle = pi_worker.run_pi_rpc_worker(
+        {
+            "agent_session_id": "agent_time",
+            "candidate_id": "c001",
+            "run_id": "run_1",
+            "session_id": "agent_time",
+            "root": str(tmp_path / ".gp"),
+            "cwd": str(cwd),
+            "prompt": "do work",
+            "role": role,
+            "budget_control": {"max_runtime_seconds": 60},
+        },
+        extension_path=extension,
+    )
+
+    dynamic_steers = [
+        command
+        for command in commands
+        if command["type"] == "steer"
+        and command.get("message") == "dynamic time advisory"
+    ]
+    assert bool(advisory_calls) is expected_sent
+    assert bool(dynamic_steers) is expected_sent
+    assert handle["metadata"]["time_advisory_sent"] is expected_sent
+    if expected_sent:
+        assert handle["metadata"]["time_advisory"]["trigger_tool"] == (
+            "search_run_verifier"
+        )
+    else:
+        assert handle["metadata"]["time_advisory"] is None

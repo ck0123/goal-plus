@@ -224,6 +224,21 @@ This is a two-stage host watchdog, not a runtime-owned wait loop.
 `max_turns` is only a hint for Codex workers. The enforceable control is
 `max_runtime_seconds`.
 
+The `PostToolUse` hook adds a separate informational timing check inside Search
+candidate subagents. The first
+`search_get_agent_context(agent_session_id)` PostTool event maps the native
+subagent identity to the validated runtime session without binding Goal Plus
+main-session ownership. Later PostTool events compare available time with the
+verifier-count-weighted average of each candidate's elapsed time from earliest
+session to latest subagent verifier. If one average submission no longer fits,
+the hook injects one `additionalContext` advisory with the concrete candidate
+timings. Main-agent, ordinary-subagent, and final-checker events are ignored;
+the advisory never stops the worker. Set `GOAL_PLUS_OUTER_DEADLINE_AT` to an
+RFC 3339 timestamp or Unix epoch when an outer benchmark deadline is available;
+otherwise the session's worker budget is used. Delivery evidence stays under
+ignored `.gp/host-logs/codex-time-advisory/` and is summarized by
+`goal_plus_monitor_snapshot`.
+
 If a worker is interrupted before it records any verifier iteration or usable
 score, treat the budget as too small for that task. For later planned work,
 call `search_redispatch_candidate` for the same candidate with a larger

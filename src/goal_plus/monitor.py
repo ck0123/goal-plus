@@ -105,6 +105,30 @@ def _load_agent_sessions(run_dir: Path) -> list[AgentSessionRecord]:
     ]
 
 
+def _time_advisory_evidence(
+    root: Path,
+    session: AgentSessionRecord,
+) -> dict[str, Any] | None:
+    metadata = session.host_handle.metadata
+    pi_advisory = metadata.get("time_advisory")
+    if isinstance(pi_advisory, dict):
+        return pi_advisory
+    if session.host != "codex":
+        return None
+    path = (
+        root
+        / "host-logs"
+        / "codex-time-advisory"
+        / "sent"
+        / f"{session.agent_session_id}.json"
+    )
+    try:
+        payload = load_json(path)
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _load_plans(run_dir: Path) -> list[SearchPlan]:
     return [
         SearchPlan.model_validate(load_json(path))
@@ -559,6 +583,7 @@ def goal_plus_monitor_snapshot(
         for session in sessions:
             candidate = by_candidate.get(session.candidate_id)
             metadata = session.host_handle.metadata
+            time_advisory = _time_advisory_evidence(root, session)
             metrics = metadata.get("pi_metrics") if isinstance(metadata.get("pi_metrics"), dict) else {}
             usage_delta = metrics.get("usage_delta") if isinstance(metrics, dict) else None
             usage_total = metrics.get("usage_total") if isinstance(metrics, dict) else None
@@ -651,6 +676,8 @@ def goal_plus_monitor_snapshot(
                     "error": metadata.get("error"),
                     "soft_closeout_seconds": metadata.get("soft_closeout_seconds"),
                     "soft_closeout_sent": bool(metadata.get("soft_closeout_sent")),
+                    "time_advisory_sent": time_advisory is not None,
+                    "time_advisory": time_advisory,
                     "raw_logging": bool(metadata.get("raw_logging")),
                     "liveness": liveness,
                 }

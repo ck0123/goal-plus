@@ -121,6 +121,7 @@ def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
     text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     assert "budget_control" in text
     assert "parent_watchdog" in text
@@ -131,6 +132,9 @@ def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
     assert "wait_agent" in text
     assert "send_message" in text
     assert "interrupt_agent" in text
+    assert "advisory-only timing" in text
+    assert "GOAL_PLUS_OUTER_DEADLINE_AT" in text
+    assert "Main agent, ordinary subagent, and final-checker" in normalized
 
 
 def test_codex_worker_records_progress_handoff_before_returning() -> None:
@@ -141,6 +145,7 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert ".tmp/handoff.json" in text
     assert "summary" in text
     assert "next_action" in text
+    assert "PostTool time advisory is informational" in text
 
 
 def test_codex_search_skill_documents_state_level_resume() -> None:

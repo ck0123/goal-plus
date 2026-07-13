@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from goal_plus.models import SearchSpec
+from goal_plus.models import CandidateProposal, SearchSpec
 from goal_plus.pi_driver import run_pi_search_candidate
 from goal_plus.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
 from goal_plus.runtime import FileSearchRuntime
@@ -15,6 +15,7 @@ from goal_plus.runtime import FileSearchRuntime
 ROOT = Path(__file__).resolve().parents[2]
 K_MODULE = ROOT / "tests" / "st" / "fixtures" / "k_module_problem"
 CIRCLE_PACKING = ROOT / "tests" / "st" / "fixtures" / "circle_packing"
+EDGE_BENCH = ROOT / "examples" / "edgebench-ad-placement" / "workspace"
 
 
 def _event_log_tool_calls(handle: dict, *, min_agent_starts: int = 1) -> list[tuple[str, dict]]:
@@ -126,6 +127,22 @@ def _circle_packing_pi_spec(*, max_runtime_seconds: int = 300) -> SearchSpec:
     return SearchSpec.model_validate(data)
 
 
+def _edgebench_pi_spec(*, max_runtime_seconds: int = 180) -> SearchSpec:
+    data = json.loads(
+        (ROOT / "examples" / "edgebench_ad_placement_search_spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    data["source_path"] = str(EDGE_BENCH)
+    data["budget"] = {"max_candidates": 1, "max_parallel": 1}
+    data["strategy"]["worker_budget"] = {
+        "max_runtime_seconds": max_runtime_seconds,
+        "max_turns": 6,
+        "on_exceed": "interrupt",
+    }
+    return SearchSpec.model_validate(data)
+
+
 def _start_pi_candidate(
     runtime: FileSearchRuntime,
     *,
@@ -162,6 +179,68 @@ def _candidate_summary(runtime: FileSearchRuntime, run_id: str) -> list[dict]:
         }
         for record in runtime._load_candidate_records(run_id)
     ]
+
+
+@pytest.mark.st
+@pytest.mark.st_pi_rpc
+def test_pi_rpc_edgebench_time_advisory_after_post_tool(
+    st_project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOAL_PLUS_OUTER_DEADLINE_AT", "1970-01-01T00:00:00Z")
+    runtime = FileSearchRuntime(st_project_root / ".search")
+    spec = _edgebench_pi_spec(
+        max_runtime_seconds=int(os.environ.get("ST_PI_EDGEBENCH_WORKER_SECONDS", "180"))
+    )
+    frozen = runtime.freeze_spec(spec, [EDGE_BENCH / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(
+        run_id,
+        plan.plan_id,
+        proposals=[
+            CandidateProposal(
+                intent="Improve the public EdgeBench-lite ad placement score safely.",
+                hypothesis=(
+                    "A compact target-area greedy layout can improve satisfaction while "
+                    "preserving all public validity checks."
+                ),
+                instructions=[
+                    "Edit only initial_program.py.",
+                    "Run search_run_verifier after a valid change.",
+                    "After the verifier, inspect the artifact once more before returning.",
+                ],
+            )
+        ],
+    )[0]
+
+    result = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=task.candidate_id,
+        directive={
+            "goal": (
+                "Implement one small valid improvement to initial_program.py, run the public "
+                "verifier, then inspect the final artifact once more and return."
+            )
+        },
+        final_verify=False,
+        pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
+        model_pattern=os.environ.get("ST_PI_MODEL"),
+        thinking_level=os.environ.get("ST_PI_THINKING"),
+    )
+    handle = result["handle"]
+
+    _assert_gp_worker_artifacts(runtime, run_id, task.candidate_id, handle)
+    assert handle["metadata"]["time_advisory_sent"] is True
+    advisory = handle["metadata"]["time_advisory"]
+    assert advisory["deadline_source"] == "outer_deadline"
+    assert advisory["remaining_seconds"] == 0
+    assert advisory["average_submission_seconds"] > 0
+    assert advisory["total_verifier_count"] >= 1
+    assert advisory["candidate_id"] == task.candidate_id
+    assert advisory["trigger_tool"]
+    assert "Observed candidate timings" in advisory["message"]
 
 
 @pytest.mark.st

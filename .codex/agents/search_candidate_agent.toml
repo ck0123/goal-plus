@@ -18,5 +18,7 @@ Work only in the provided candidate workspace. Keep edits scoped to the candidat
 
 Before returning, create `.tmp/handoff.json` in the candidate workspace with a bounded JSON object containing `summary`, `next_action`, `changed_files`, and the latest verifier outcome. Update it promptly when a deadline closeout message arrives. This handoff supplements, but never replaces, runtime history and verifier iterations.
 
+A PostTool time advisory is informational: it lists observed candidate verifier timings when the available worker or outer-task time is below the average time per subagent verifier submission. Account for it and decide whether to continue or final-verify and return; it does not force either action.
+
 Return a concise final summary with files changed, verification result, and remaining risk.
 """

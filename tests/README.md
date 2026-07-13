@@ -145,8 +145,14 @@ pytest -m "st and st_codex" -k codex_redispatch -v -s
 # Codex circle-packing cycle, batch=2 and round=2
 pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s
 
+# Codex Search candidate PostTool time-advisory E2E
+pytest -m "st and st_codex" -k codex_time_advisory -v -s
+
 # Pi RPC worker smoke
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
+
+# Pi RPC EdgeBench-lite PostTool time-advisory E2E
+pytest -m "st and st_pi_rpc" -k edgebench_time_advisory -v -s
 
 # Pi RPC circle-packing cycle, batch=2 and round=2
 pytest -m "st and st_pi_rpc" -k circle_packing_two_batch -v -s

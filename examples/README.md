@@ -275,6 +275,11 @@ Suggested first-batch directions:
 After each candidate finishes, run the public process verifier. Select and report across all candidates. Do not add promotion verifiers for this example; external benchmark judges should stay outside GP.
 ```
 
+The real Pi RPC smoke `pytest -m "st and st_pi_rpc" -k
+edgebench_time_advisory -v -s` runs one candidate from this example with an
+outer deadline supplied by the harness and asserts that a worker PostTool event
+produces exactly one informational verifier-time advisory.
+
 ### k_module — AdaptEvolve smoke test
 
 ```

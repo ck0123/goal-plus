@@ -79,6 +79,16 @@ control for Codex is the sum of `budget_control.initial_wait_timeout_ms` and
 `soft_closeout_seconds` field records the closeout window; it is not a
 runtime-owned worker timer.
 
+Project `PostToolUse` hooks also provide a separate, advisory-only timing
+signal to Search candidate subagents. After `search_get_agent_context` binds
+the worker identity, each subagent tool completion may compare the available
+worker/outer-task time with the observed average verifier-submission time. The
+hook injects at most one message per `agent_session_id`, lists each sampled
+candidate's elapsed time and verifier count, and never stops the worker. Main
+agent, ordinary subagent, and final-checker PostTool events must not trigger it.
+An outer harness may set `GOAL_PLUS_OUTER_DEADLINE_AT` to an RFC 3339 timestamp
+or Unix epoch; otherwise the worker budget is used when available.
+
 Choose the worker budget before freezing the spec. Codex does not expose a
 hard per-subagent step tier like OpenCode, so the enforceable escalation is a
 larger `worker_budget.max_runtime_seconds` for the next search run or a

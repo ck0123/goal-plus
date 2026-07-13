@@ -174,6 +174,19 @@ applies if the worker does not exit. `max_turns` is only included as a prompt
 hint. Monitor snapshots expose `soft_closeout_seconds`, `soft_closeout_sent`,
 and `timed_out` separately.
 
+The runner also listens for worker `tool_execution_end` events. After a Search
+candidate has at least one subagent verifier iteration, each completed tool is
+an opportunity to compare available time with the observed average submission
+time: for each sampled candidate, `(latest subagent verifier - earliest agent
+session) / subagent verifier count`, then a verifier-count-weighted aggregate.
+When the available time is smaller, the runner sends one informational `steer`
+that includes the actual per-candidate timings. It does not stop the worker and
+does not replace the hard watchdog. Main workers and final-check reviewers do
+not enter this path. An EdgeBench or other outer harness can supply an RFC 3339
+or Unix-epoch deadline through `GOAL_PLUS_OUTER_DEADLINE_AT`; otherwise the Pi
+worker deadline is used. Monitor snapshots expose `time_advisory_sent` and the
+advisory evidence.
+
 ## Runtime Flow
 
 Pi does not expose a separate user-facing `search` skill. After `goal-plus`

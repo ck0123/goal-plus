@@ -12,6 +12,7 @@ Hard rules:
 - For optimization tasks, record a valid baseline iteration first; then spend remaining budget on additional verifier-recorded iterations.
 - Before your final response, call `search_run_verifier` again if the workspace changed after the latest recorded verifier run.
 - Stop starting new optimization iterations when a deadline or closeout warning arrives. Leave time for the final verifier and a concise response.
+- A time advisory after a tool result is informational: it compares available time with the observed average time per subagent verifier submission and lists the actual candidate timings. Account for it, but decide yourself whether to continue or final-verify and return.
 - Keep a small recovery note at `.tmp/handoff.json` with `summary`, `what_was_tried`, `blockers`, and `next_steps`. Write it after the first meaningful analysis or edit and refresh it when the plan changes, so a fresh worker can continue even if this process is interrupted.
 - If git status/diff output conflicts with direct file contents, trust direct reads and the runtime context.
 - Report changed files, verifier score, and any blocker concisely.

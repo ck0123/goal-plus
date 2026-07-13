@@ -254,6 +254,14 @@ Claude Code use their own foreground agent limits. Users can interrupt anytime
 and query current best via `search_list_history` / `search_status`. There is no
 MCP abort tool; stopping a running subagent is a host/user concern.
 
+Codex and Pi can emit a host-owned, advisory-only timing message at Search
+candidate PostTool boundaries. It uses existing `AgentSessionRecord.created_at`
+and subagent `IterationRecord.created_at` evidence to estimate
+`sum(last verifier - first session) / sum(subagent verifier count)`. The host
+compares that estimate with its worker deadline and, when supplied by an outer
+harness, `GOAL_PLUS_OUTER_DEADLINE_AT`. This read-only calculation does not add
+a runtime deadline, wait loop, or stop action.
+
 ## Main Agent Responsibilities
 
 In `agent-session-pool` mode the main agent should:

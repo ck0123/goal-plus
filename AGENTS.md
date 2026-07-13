@@ -169,7 +169,9 @@ Current host expectations:
 - Codex supports the portable builtin strategy subset. `worker_budget` requires
   `max_runtime_seconds` and is enforced by parent watchdog metadata:
   an initial `wait_agent`, one `send_message` closeout, a final wait, then
-  `interrupt_agent` when the deadline expires. Codex 0.144.1+ ships
+  `interrupt_agent` when the deadline expires. Search candidate PostTool hooks
+  may inject one advisory when available time is below the observed average
+  verifier-submission time; this does not stop the worker. Codex 0.144.1+ ships
   `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
   `SubagentStop` hooks with session ownership binding and terminal stats.
 - Claude Code supports the portable builtin strategy subset. `worker_budget`
@@ -181,7 +183,9 @@ Current host expectations:
   requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
   `goal-plus-pi-worker` to launch foreground `pi --mode rpc` workers
   with `--no-session` from candidate workspaces and explicitly loads
-  `.pi/extensions/goal-plus.ts`. Pi RPC does not support same-worker
+  `.pi/extensions/goal-plus.ts`. The runner may send one advisory `steer` after
+  a Search candidate tool completes when available time is below the observed
+  average verifier-submission time. Pi RPC does not support same-worker
   continuation; recover with `search_redispatch_candidate`, MCP history,
   verifier evidence, Git state, and bounded progress handoff metadata. Pi has
   extension pre-tool guarding and skill stop gates, but no Codex Stop hook

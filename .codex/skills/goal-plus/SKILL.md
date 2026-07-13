@@ -154,8 +154,11 @@ model turn. It also recognizes `/goal-plus-with-final-check` and explicit
 `/goal-plus edit` updates. `SessionStart` restores a session-bound active id.
 `PreToolUse`
 enforces the search and mutation gates. `PostToolUse(goal_plus_create)` remains
-a compatibility binding fallback. `Stop` and `SubagentStop` return runtime
-continuation prompts when a required action remains.
+a compatibility binding fallback. Search candidate subagent PostTool events
+also perform a read-only, one-shot verifier-time advisory check; they never
+bind Goal Plus ownership, and main/final-checker/ordinary-subagent events are
+ignored. `Stop` and `SubagentStop` return runtime continuation prompts when a
+required action remains.
 
 Keep the explicit workflow calls above as auditable state transitions even
 though the hooks are enforcement backstops. Subagent tool events do not bind

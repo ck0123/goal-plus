@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from goal_plus.time_advisory import build_search_time_advisory
+
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
@@ -316,6 +318,7 @@ class _RpcClient:
         self.raw_logging = raw_logging
         self._condition = threading.Condition()
         self._responses: dict[str, dict[str, Any]] = {}
+        self._completed_tools: list[str] = []
         self._counter = 0
         self._auto_retry_until = 0.0
         self._stdout_thread = threading.Thread(target=self._read_stdout, daemon=True)
@@ -385,6 +388,13 @@ class _RpcClient:
                 with self._condition:
                     self._auto_retry_until = 0.0
                     self._condition.notify_all()
+            if event.get("type") == "tool_execution_end":
+                tool_name = event.get("toolName")
+                with self._condition:
+                    self._completed_tools.append(
+                        str(tool_name) if tool_name is not None else "unknown"
+                    )
+                    self._condition.notify_all()
 
     def _read_stderr(self) -> None:
         assert self.proc.stderr is not None
@@ -410,6 +420,12 @@ class _RpcClient:
     def auto_retry_pending(self) -> bool:
         with self._condition:
             return time.monotonic() < self._auto_retry_until
+
+    def drain_completed_tools(self) -> list[str]:
+        with self._condition:
+            completed = list(self._completed_tools)
+            self._completed_tools.clear()
+        return completed
 
 
 def default_extension_path() -> Path:
@@ -650,6 +666,9 @@ def run_pi_rpc_worker(
     assistant_text: str | None = None
     timed_out = False
     soft_closeout_sent = False
+    time_advisory_sent = False
+    time_advisory: dict[str, Any] | None = None
+    last_time_advisory_check = 0.0
     started_at = _utc_timestamp()
     started_monotonic = time.monotonic()
     deadline = started_monotonic + timeout_seconds
@@ -701,6 +720,43 @@ def run_pi_rpc_worker(
                 or int(data.get("pendingMessageCount") or 0) > 0
             )
             remaining_after_state = deadline - time.monotonic()
+            drain_completed_tools = getattr(rpc, "drain_completed_tools", lambda: [])
+            completed_tools = drain_completed_tools()
+            if (
+                worker_active
+                and str(launch.get("role") or "worker") == "worker"
+                and not time_advisory_sent
+                and completed_tools
+            ):
+                force_check = any(
+                    tool_name.replace("-", "_").endswith("search_run_verifier")
+                    for tool_name in completed_tools
+                )
+                now_monotonic = time.monotonic()
+                if force_check or now_monotonic - last_time_advisory_check >= 10:
+                    last_time_advisory_check = now_monotonic
+                    try:
+                        advisory = build_search_time_advisory(
+                            root,
+                            agent_session_id,
+                            remaining_seconds=max(0.0, deadline - now_monotonic),
+                        )
+                    except Exception:
+                        advisory = None
+                    if advisory is not None:
+                        try:
+                            rpc.command(
+                                {"type": "steer", "message": advisory["message"]},
+                                timeout=min(5, max(0.1, remaining_after_state)),
+                            )
+                        except Exception:
+                            pass
+                        else:
+                            time_advisory_sent = True
+                            time_advisory = {
+                                **advisory,
+                                "trigger_tool": completed_tools[-1],
+                            }
             if (
                 worker_active
                 and not soft_closeout_sent
@@ -794,6 +850,8 @@ def run_pi_rpc_worker(
             "timed_out": timed_out,
             "soft_closeout_seconds": soft_closeout_seconds,
             "soft_closeout_sent": soft_closeout_sent,
+            "time_advisory_sent": time_advisory_sent,
+            "time_advisory": time_advisory,
             "exit_code": proc.returncode,
             "continuation": "state_redispatch",
         },

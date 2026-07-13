@@ -4,11 +4,16 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.models import SearchSpec
+from goal_plus.monitor import goal_plus_monitor_snapshot
+from goal_plus.runtime import FileSearchRuntime
+from tests.test_runtime_unit import make_project, spec_with_host
 
 
 HOOK_CLI = [
@@ -20,7 +25,12 @@ HOOK_CLI = [
 pytestmark = pytest.mark.codex
 
 
-def _run_hook(tmp_path: Path, search_root: Path, hook_input: dict) -> subprocess.CompletedProcess[str]:
+def _run_hook(
+    tmp_path: Path,
+    search_root: Path,
+    hook_input: dict,
+    **env: str,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         HOOK_CLI,
         cwd=tmp_path,
@@ -32,6 +42,7 @@ def _run_hook(tmp_path: Path, search_root: Path, hook_input: dict) -> subprocess
             **os.environ,
             "GOAL_PLUS_SEARCH_ROOT": str(search_root),
             "GOAL_PLUS_PROJECT_ROOT": str(tmp_path),
+            **env,
         },
     )
 
@@ -42,6 +53,40 @@ def _additional_context(result: subprocess.CompletedProcess[str], event: str) ->
     specific = payload["hookSpecificOutput"]
     assert specific["hookEventName"] == event
     return specific["additionalContext"]
+
+
+def _codex_search_worker(
+    tmp_path: Path,
+) -> tuple[FileSearchRuntime, str, str, str]:
+    project = make_project(tmp_path)
+    payload = spec_with_host(
+        project,
+        "codex",
+        strategy_name="random",
+        max_candidates=1,
+    ).model_dump(mode="json")
+    payload["strategy"]["worker_budget"] = {
+        "max_runtime_seconds": 600,
+        "max_turns": 8,
+        "on_exceed": "interrupt",
+    }
+    runtime = FileSearchRuntime(tmp_path / ".gp")
+    frozen = runtime.freeze_spec(SearchSpec.model_validate(payload), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "test"})
+    old_start = datetime.now(timezone.utc) - timedelta(seconds=90)
+    runtime._write_agent_session(
+        session.model_copy(
+            update={
+                "created_at": old_start.replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            }
+        )
+    )
+    return runtime, run_id, task.candidate_id, session.agent_session_id
 
 
 def test_user_prompt_submit_precreates_and_binds_goal(tmp_path: Path) -> None:
@@ -335,6 +380,121 @@ def test_session_start_restores_bound_goal_context(tmp_path: Path) -> None:
     context = _additional_context(result, "SessionStart")
     assert record.goal_plus_id in context
     assert "record_triage" in context
+
+
+def test_post_tool_time_advisory_only_targets_search_candidate_subagent_once(
+    tmp_path: Path,
+) -> None:
+    runtime, run_id, candidate_id, agent_session_id = _codex_search_worker(tmp_path)
+    search_root = runtime.root_dir
+    context_tool = {
+        "hook_event_name": "PostToolUse",
+        "tool_name": "mcp__goal-plus__search_get_agent_context",
+        "tool_input": {"agent_session_id": agent_session_id},
+        "tool_response": {
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "agent_session_id": agent_session_id,
+        },
+    }
+
+    main = _run_hook(
+        tmp_path,
+        search_root,
+        {**context_tool, "session_id": "main-session"},
+        GOAL_PLUS_OUTER_DEADLINE_AT="1970-01-01T00:00:00Z",
+    )
+    ordinary_subagent = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "agent_id": "ordinary-agent",
+            "agent_type": "explorer",
+            "tool_name": "read",
+            "tool_input": {"path": "README.md"},
+        },
+        GOAL_PLUS_OUTER_DEADLINE_AT="1970-01-01T00:00:00Z",
+    )
+    final_checker = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            **context_tool,
+            "agent_id": "reviewer-agent",
+            "agent_type": "goal_plus_final_checker",
+        },
+        GOAL_PLUS_OUTER_DEADLINE_AT="1970-01-01T00:00:00Z",
+    )
+    assert main.stdout == ""
+    assert ordinary_subagent.stdout == ""
+    assert final_checker.stdout == ""
+
+    mapped = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "agent_id": "search-worker-agent",
+            "agent_type": "default",
+            "tool_name": "functions.exec",
+            "tool_input": (
+                "const r = await tools.mcp__goal_plus__search_get_agent_context("
+                f'{{agent_session_id:"{agent_session_id}"}}); text(r);'
+            ),
+        },
+        GOAL_PLUS_OUTER_DEADLINE_AT="1970-01-01T00:00:00Z",
+    )
+    assert mapped.stdout == ""
+
+    runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=agent_session_id,
+    )
+    advisory = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "agent_id": "search-worker-agent",
+            "agent_type": "search_candidate_agent",
+            "tool_name": "read",
+            "tool_input": {"path": "initial_program.py"},
+        },
+        GOAL_PLUS_OUTER_DEADLINE_AT="1970-01-01T00:00:00Z",
+    )
+
+    context = _additional_context(advisory, "PostToolUse")
+    assert "Time advisory (informational only)" in context
+    assert candidate_id in context
+    assert "no action is forced" in context
+
+    repeated = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "agent_id": "search-worker-agent",
+            "agent_type": "search_candidate_agent",
+            "tool_name": "edit",
+            "tool_input": {"path": "initial_program.py"},
+        },
+        GOAL_PLUS_OUTER_DEADLINE_AT="1970-01-01T00:00:00Z",
+    )
+    assert repeated.stdout == ""
+    evidence = list(
+        (search_root / "host-logs" / "codex-time-advisory" / "sent").glob("*.json")
+    )
+    assert len(evidence) == 1
+    payload = json.loads(evidence[0].read_text(encoding="utf-8"))
+    assert payload["agent_session_id"] == agent_session_id
+    assert payload["candidate_id"] == candidate_id
+    assert payload["trigger_tool"] == "read"
+    snapshot = goal_plus_monitor_snapshot(runtime.root_dir, run_id=run_id)
+    [subagent] = snapshot["subagents"]
+    assert subagent["time_advisory_sent"] is True
+    assert subagent["time_advisory"]["agent_session_id"] == agent_session_id
 
 
 def test_pre_tool_use_blocks_search_before_spec_is_ready(tmp_path: Path) -> None:

@@ -43,7 +43,7 @@
             "type": "command",
             "command": "goal-plus --goal-plus-host-hook",
             "timeout": 30,
-            "statusMessage": "Binding Goal Plus session"
+            "statusMessage": "Checking Goal Plus post-tool actions"
           }
         ]
       }

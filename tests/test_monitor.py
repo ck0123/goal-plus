@@ -58,6 +58,13 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
                 "runner_failed": False,
                 "soft_closeout_seconds": 45,
                 "soft_closeout_sent": True,
+                "time_advisory_sent": True,
+                "time_advisory": {
+                    "remaining_seconds": 30,
+                    "average_submission_seconds": 90,
+                    "total_verifier_count": 1,
+                    "message": "time advisory",
+                },
                 "raw_logging": False,
                 "pi_metrics": {
                     "duration_seconds": 12.5,
@@ -138,6 +145,8 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert subagent["duration_seconds"] == 12.5
     assert subagent["soft_closeout_seconds"] == 45
     assert subagent["soft_closeout_sent"] is True
+    assert subagent["time_advisory_sent"] is True
+    assert subagent["time_advisory"]["remaining_seconds"] == 30
     assert subagent["raw_logging"] is False
     assert subagent["runner_failed"] is False
     assert subagent["progress_handoff"] is None

@@ -172,6 +172,15 @@ the candidate workspace before running the verifier, so search progress must be
 visible as verifier-recorded runtime iterations with real `git_head` values, not
 hidden in the worker transcript or scratch scripts.
 
+Pi RPC workers also check an advisory time estimate after completed worker
+tools. Once verifier evidence exists, the runner compares available worker or
+outer-task time with `(last subagent verifier - first candidate session) /
+subagent verifier count`, aggregated across sampled candidates. If one average
+submission no longer fits, it sends one informational `steer` to that Search
+candidate only. It does not stop the worker or replace the hard watchdog. Set
+`GOAL_PLUS_OUTER_DEADLINE_AT` in the outer harness to an RFC 3339 timestamp or
+Unix epoch when an end-to-end deadline is available.
+
 ## Skill Boundary
 
 Pi exposes `goal-plus` as the complete user-facing skill. Do not split Search
@@ -201,7 +210,8 @@ linked search tasks, per-task planning/started round counts, aggregate task,
 candidate, worker-session, verifier, and Pi cost counts, selected candidate,
 selected commit, report and promotion paths,
 candidate scores, per-iteration git heads, agent sessions, verifier iterations,
-Pi RPC token/cost/context metrics, and stale/timed-out warnings. It does not
+one-shot time-advisory evidence, Pi RPC token/cost/context metrics, and
+stale/timed-out warnings. It does not
 start, wait for, or stop workers.
 
 If the MCP tool is not directly exposed in the current host, use the matching

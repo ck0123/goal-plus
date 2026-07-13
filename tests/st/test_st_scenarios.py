@@ -12,6 +12,9 @@ stdout.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from .conftest import load_prompt
@@ -46,6 +49,11 @@ SCENARIO_CASES = [
         "codex_circle_packing_cycle",
         marks=(pytest.mark.st, pytest.mark.st_codex),
         id="codex_circle_packing_cycle",
+    ),
+    pytest.param(
+        "codex_time_advisory",
+        marks=(pytest.mark.st, pytest.mark.st_codex),
+        id="codex_time_advisory",
     ),
     pytest.param(
         "claude_k_module_smoke",
@@ -217,6 +225,15 @@ def _assert_codex_circle_packing_cycle(report: StReport) -> None:
     assert len(set(session_ids)) == 4, "cycle agent_session_id values must be distinct"
 
 
+def _assert_codex_time_advisory(report: StReport) -> None:
+    assert len(report.candidates) == 1
+    assert report.candidates[0].get("status") == "evaluated"
+    assert int(report.candidates[0].get("iterations") or 0) >= 1
+    assert report.extra.get("host") == "codex"
+    assert report.extra.get("model") == "gpt-5.6-terra"
+    assert report.extra.get("agent_session_id")
+
+
 def _assert_claude_k_module_smoke(report: StReport) -> None:
     assert len(report.candidates) >= 1, (
         f"claude k_module smoke should have >=1 candidate, got {len(report.candidates)}"
@@ -234,6 +251,7 @@ SCENARIO_ASSERTIONS = {
     "swe_bench_20212": _assert_swe_bench_20212,
     "codex_redispatch": _assert_codex_redispatch,
     "codex_circle_packing_cycle": _assert_codex_circle_packing_cycle,
+    "codex_time_advisory": _assert_codex_time_advisory,
     "claude_k_module_smoke": _assert_claude_k_module_smoke,
 }
 
@@ -242,7 +260,14 @@ SCENARIO_ASSERTIONS = {
 def test_scenario(
     scenario: str,
     st_runner,
+    st_project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    if scenario == "codex_time_advisory":
+        monkeypatch.setenv(
+            "GOAL_PLUS_OUTER_DEADLINE_AT",
+            "1970-01-01T00:00:00Z",
+        )
     prompt = load_prompt(scenario)
     result = st_runner.run_streaming(prompt, scenario=scenario, timeout=2400)
 
@@ -265,6 +290,28 @@ def test_scenario(
 
     _assert_common_contract(report, scenario)
     SCENARIO_ASSERTIONS[scenario](report)
+
+    if scenario == "codex_time_advisory":
+        agent_session_id = report.extra["agent_session_id"]
+        evidence_path = (
+            st_project_root
+            / ".gp"
+            / "host-logs"
+            / "codex-time-advisory"
+            / "sent"
+            / f"{agent_session_id}.json"
+        )
+        assert evidence_path.is_file(), (
+            "Codex Search candidate PostTool hook did not record an advisory "
+            f"for {agent_session_id}"
+        )
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        assert evidence["agent_session_id"] == agent_session_id
+        assert evidence["run_id"] == report.run_id
+        assert evidence["deadline_source"] == "outer_deadline"
+        assert evidence["remaining_seconds"] == 0
+        assert evidence["average_submission_seconds"] > 0
+        assert evidence["total_verifier_count"] >= 1
 
     # Smoke keyword check: run_id must appear somewhere in the raw output
     assert report.run_id in result.stdout, (
