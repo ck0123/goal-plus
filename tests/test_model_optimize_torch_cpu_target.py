@@ -53,7 +53,10 @@ def test_torch_cpu_target_runs_on_one_cpu_thread() -> None:
     assert benchmark["tokens_per_second"] > 0
     assert profile["valid"] is True
     assert any(item["id"] == "fuse_vector_tail" for item in profile["opportunities"])
-    assert any(item["id"] == "remove_redundant_projection" for item in profile["opportunities"])
+    assert not any(
+        item["id"] == "remove_redundant_projection"
+        for item in profile["opportunities"]
+    )
 
 
 def test_cpp_reference_fused_op_is_present_and_documented() -> None:

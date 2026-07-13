@@ -22,9 +22,6 @@ The target includes two intentionally obvious opportunities:
 
 - `fuse_vector_tail`: the last vector path in `model.py` is a sequence of
   elementwise operations that can be fused into a custom C++ CPU operator.
-- `remove_redundant_projection`: `serving.py` computes a repeated projection
-  that is not used by the output.
-
 The example prompt and this workspace README explain the domain rules. The
 reference C++ CPU operator pattern is in
 `cpp_reference/fused_vector_tail.cpp`.

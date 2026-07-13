@@ -31,11 +31,6 @@ def run_workload(workload: dict | None = None) -> torch.Tensor:
 
     for step in range(int(data["decode_steps"])):
         features = make_features(batch_size, feature_dim, step)
-        # Intentional redundant code: this projection is expensive enough to be
-        # visible in a toy benchmark and is never used by the output.
-        redundant_projection = torch.sin(features @ model.proj)
-        if redundant_projection.numel() == -1:
-            raise AssertionError("unreachable")
         outputs.append(model.forward(features))
 
     return torch.stack(outputs).sum(dim=0)

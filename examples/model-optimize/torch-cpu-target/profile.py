@@ -27,15 +27,6 @@ def profile() -> dict:
                 "suggested_mode": "search",
                 "evidence": "The tail is a chain of elementwise torch ops over the final hidden tensor.",
             },
-            {
-                "id": "remove_redundant_projection",
-                "kind": "source-cleanup",
-                "files": ["serving.py"],
-                "symbol": "run_workload",
-                "metric": "tokens_per_second",
-                "suggested_mode": "single-or-search",
-                "evidence": "serving.py computes redundant_projection and never uses it.",
-            },
         ],
     }
 
