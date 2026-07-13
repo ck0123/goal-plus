@@ -56,6 +56,14 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
 
 
+def test_expected_outputs_schema_describes_artifact_paths_not_stdout_parser() -> None:
+    schema = VerifierCommand.model_json_schema()
+    description = schema["properties"]["expected_outputs"]["description"]
+
+    assert "artifact path or glob strings" in description
+    assert "does not parse verifier stdout metrics" in description
+
+
 def test_search_spec_supports_copy_and_git_worktree_workspace_backends() -> None:
     default_spec = SearchSpec.model_validate(valid_spec_dict())
     assert default_spec.workspace.backend == "git_worktree"

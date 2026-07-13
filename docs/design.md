@@ -271,7 +271,24 @@ The MCP runtime does not perform process supervision. Stopping a running subagen
 
 ## Verification And Isolation
 
-Verifier commands run from each candidate workspace. The runtime adds the workspace to `PYTHONPATH` and parses the last JSON object printed to stdout as metrics. Hard gates such as edit-surface violations and frozen verifier hash failures force the score to `0.0`.
+Verifier commands run from each candidate workspace. The runtime adds the
+workspace to `PYTHONPATH` and parses the last JSON object printed to stdout as
+metrics. A `ranking_signal` is valid only when that object contains a finite
+numeric value under `spec.metric_name` or a supported fallback score key.
+Successful process exit without such a value is
+`failure_class="MissingNumericMetric"`, not a passing verifier.
+
+Before writing a frozen bundle, `search_freeze_spec` executes every
+`ranking_signal` once in `source_path` and requires both a zero exit status and
+a finite numeric metric. It also rejects verifier artifacts under ignored
+workspace paths, including the runtime roots `.gp/` and `.search/`, because
+those paths cannot be materialized into candidate workspaces. Custom verifier
+files should use a source-owned path such as `.goal-plus-verifiers/`.
+`VerifierCommand.expected_outputs` contains expected artifact path/glob strings;
+it is not a stdout metric parser.
+
+Hard gates such as edit-surface violations and frozen verifier hash failures
+force the score to `0.0`.
 
 The `copy` backend creates an independent source snapshot for each candidate:
 

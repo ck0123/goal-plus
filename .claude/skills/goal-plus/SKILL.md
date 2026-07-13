@@ -22,7 +22,11 @@ prefix; match by the final logical tool name.
    Do not create a SearchSpec in Goal Mode.
 5. If triage chooses Spec Discovery Mode, identify baseline, metric,
    correctness gate, edit surface, verifier artifacts, budget, and promotion
-   rule. Save them with `goal_plus_save_spec_draft`.
+   rule. A ranking verifier must emit a final JSON object with a finite numeric
+   `spec.metric_name`; keep its files in a source-owned path such as
+   `.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs`
+   lists artifact paths/globs and is not a stdout parser. Save the complete
+   contract with `goal_plus_save_spec_draft`.
 6. Enter Search Mode only when the saved draft has `confidence="high"` and no
    open questions.
 7. Search is an autonomous upgrade. Once the draft is high-confidence with no

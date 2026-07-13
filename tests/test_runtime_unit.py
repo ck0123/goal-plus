@@ -195,6 +195,201 @@ def test_freeze_spec_is_stable_and_copies_verifier(tmp_path: Path) -> None:
     assert Path(first.frozen_verifier_paths["evaluator.py"]).exists()
 
 
+def test_freeze_spec_rejects_plain_text_ranking_score(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "print('Score = 18941966307')\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="emitted no finite numeric metric") as exc_info:
+        runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    assert '{"combined_score":123.0}' in str(exc_info.value)
+    assert "expected_outputs lists artifact paths only" in str(exc_info.value)
+    assert list(runtime.specs_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "metric_value",
+    ["'18941966307'", "True", "float('nan')", "float('inf')"],
+)
+def test_freeze_spec_rejects_non_numeric_or_non_finite_ranking_score(
+    tmp_path: Path,
+    metric_value: str,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        f"print(json.dumps({{'combined_score': {metric_value}}}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="emitted no finite numeric metric"):
+        runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+
+@pytest.mark.parametrize("runtime_dir", [".gp", ".search"])
+def test_freeze_spec_rejects_verifier_artifact_under_runtime_root(
+    tmp_path: Path,
+    runtime_dir: str,
+) -> None:
+    project = make_project(tmp_path)
+    verifier = project / runtime_dir / "verifiers" / "score.sh"
+    verifier.parent.mkdir(parents=True)
+    verifier.write_text(
+        "#!/usr/bin/env bash\nprintf '{\"combined_score\": 1}\\n'\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project).model_dump(mode="json")
+    spec_data["process_verifiers"][0]["command"] = [
+        "bash",
+        f"{runtime_dir}/verifiers/score.sh",
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(
+        ValueError,
+        match=f"ignored Goal Plus runtime directory '{runtime_dir}'",
+    ):
+        runtime.freeze_spec(SearchSpec.model_validate(spec_data), [verifier])
+
+
+def test_freeze_spec_rejects_verifier_artifact_outside_source_path(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    verifier = tmp_path / "external-verifier.py"
+    verifier.write_text(
+        "import json\nprint(json.dumps({'combined_score': 1}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="outside source_path"):
+        runtime.freeze_spec(spec_for(project), [verifier])
+
+
+def test_source_owned_verifier_is_present_in_git_worktree_candidate(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    verifier = project / ".goal-plus-verifiers" / "score.sh"
+    verifier.parent.mkdir()
+    verifier.write_text(
+        "#!/usr/bin/env bash\nprintf '{\"combined_score\": 1}\\n'\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["workspace"] = {"backend": "git_worktree"}
+    spec_data["process_verifiers"][0]["command"] = [
+        "bash",
+        ".goal-plus-verifiers/score.sh",
+    ]
+    spec_data["edit_surface"]["deny"].append(".goal-plus-verifiers/")
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [verifier])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    candidate_verifier = task.workspace / ".goal-plus-verifiers" / "score.sh"
+
+    assert candidate_verifier.exists()
+    assert sha256_file(candidate_verifier) == frozen.verifier_hashes[
+        ".goal-plus-verifiers/score.sh"
+    ]
+
+
+def test_create_run_reuses_frozen_verifier_with_current_source_baseline(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=1),
+        [project / "evaluator.py"],
+    )
+    first_run_id = runtime.create_run(frozen.frozen_spec_id)
+    project.joinpath("initial_program.py").write_text(
+        "VALUE = 7\n",
+        encoding="utf-8",
+    )
+
+    second_run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(second_run_id, requested_k=1)
+    task = runtime.start_batch(second_run_id, plan.plan_id)[0]
+
+    assert second_run_id != first_run_id
+    assert task.workspace.joinpath("initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 7\n"
+    assert sha256_file(task.workspace / "evaluator.py") == frozen.verifier_hashes[
+        "evaluator.py"
+    ]
+
+
+def test_runtime_marks_missing_ranking_metric_as_failure(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        "if 'VALUE = 0' in Path('initial_program.py').read_text():\n"
+        "    print(json.dumps({'combined_score': 0}))\n"
+        "else:\n"
+        "    print('Score = 42')\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+    report = runtime.run_verifier(run_id, task.candidate_id)
+
+    result = report.verifier_results[0]
+    assert report.process_passed is False
+    assert report.aggregate_score == 0.0
+    assert result.failure_class == "MissingNumericMetric"
+    assert result.metrics["expected_metric_name"] == "combined_score"
+    assert result.metrics["stdout_tail"] == "Score = 42"
+
+
+def test_select_chooses_highest_json_ranking_metric(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from initial_program import VALUE\n"
+        "print(json.dumps({'combined_score': VALUE}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=3), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=3)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    for task, score in zip(tasks, [10, 20, 30], strict=True):
+        task.workspace.joinpath("initial_program.py").write_text(
+            f"VALUE = {score}\n",
+            encoding="utf-8",
+        )
+        report = runtime.run_verifier(run_id, task.candidate_id)
+        assert report.aggregate_score == score
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c003"
+    assert selection["selected_score"] == 30.0
+
+
 def test_load_legacy_frozen_spec_without_workspace_uses_copy_backend(
     tmp_path: Path,
 ) -> None:

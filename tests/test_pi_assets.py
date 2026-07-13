@@ -39,7 +39,12 @@ def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
     assert 'goal_plus_create(raw_goal="$ARGUMENTS")' in text
     assert 'worker_host: "pi-rpc"' in text
     assert 'worker_mode: "agent-session-pool"' in text
+    assert 'numeric `spec.metric_name`' in text
+    assert ".goal-plus-verifiers/" in text
+    assert "`expected_outputs` lists artifact paths/globs only" in text
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
+    assert ".goal-plus-verifiers/" in text
+    assert "`expected_outputs` lists" in text
     assert "{{input}}" not in text
     assert text.index("goal_plus_create") < text.index("Goal Plus")
     assert text.index("goal_plus_create") < text.index("goal_plus_record_triage")
@@ -72,6 +77,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "Pi-supported strategy names" in text
     assert "`agent_guided`, `agent`, or `default`" in text
     assert "`random` or `random_mode`" in text
+    assert "reuse an existing `frozen_spec_id`" in text
     assert "pi_search_run_batch" in text
     assert "max_parallel=<budget.max_parallel>" in text
     assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" in text

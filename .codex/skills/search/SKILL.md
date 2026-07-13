@@ -13,6 +13,16 @@ Use the logical `search_*` tools exposed by the `goal-plus` MCP server.
 Codex may display MCP tools with a client-specific prefix; match by the final
 logical tool name.
 
+## Verifier Freeze Contract
+
+Before `search_freeze_spec`, run the proposed `ranking_signal` from
+`source_path` and confirm its final non-empty stdout line is JSON with a finite
+numeric `spec.metric_name`, for example `{"combined_score": 123.0}`. Put custom
+verifier files in a source-owned materialized path such as
+`.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs` accepts
+artifact path/glob strings only and does not parse stdout. The runtime repeats
+this preflight and rejects an invalid freeze before any candidate starts.
+
 ## Main Workflow
 
 1. Call `search_freeze_spec` for the Goal Plus spec draft, or `search_create`

@@ -27,7 +27,12 @@ def create_mcp(
 
         Returns `frozen_spec_id`. Call before `search_create`. Verifier files
         are hash-pinned; modifying them during candidate execution forces the
-        score to 0.0.
+        score to 0.0. Freeze preflights every `ranking_signal`: it must exit 0
+        and print a final JSON object containing a finite numeric
+        `spec.metric_name`, for example `{"score": 123.0}`. Verifier artifacts
+        must live in a source-owned materialized path, never `.gp` or `.search`.
+        `expected_outputs` contains artifact path/glob strings only; it is not
+        a stdout parser configuration.
         """
         return tools.search_freeze_spec(spec, verifier_artifact_paths)
 

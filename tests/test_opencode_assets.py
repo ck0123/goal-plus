@@ -35,6 +35,11 @@ def test_search_skill_is_internal_search_mode_engine() -> None:
     assert "goal-plus_search_redispatch_candidate" in skill
     assert "Do not start candidate execution before" in skill
     assert "k_module" in skill
+    assert "## Verifier Freeze Contract" in skill
+    assert 'numeric `spec.metric_name`' in skill
+    assert ".goal-plus-verifiers/" in skill
+    assert "`expected_outputs` accepts" in skill
+    assert "existing `frozen_spec_id`" in skill
 
 
 def test_opencode_search_skill_keeps_opencode_bind_contract() -> None:
@@ -101,6 +106,8 @@ def test_opencode_goal_plus_skill_documents_progressive_modes() -> None:
     assert "call the internal `search` skill" in combined
     assert "final raw-goal audit" in combined
     assert "not enforced by OpenCode itself" in combined
+    assert ".goal-plus-verifiers/" in skill
+    assert "`expected_outputs`" in skill
 
 
 def test_search_skill_uses_foreground_tasks() -> None:

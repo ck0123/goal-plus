@@ -59,6 +59,10 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
     assert "search_bind_agent_handle" in text
     assert "search_bind_opencode_session" not in text
     assert "background" not in text.lower()
+    assert "## Verifier Freeze Contract" in text
+    assert 'numeric `spec.metric_name`' in text
+    assert ".goal-plus-verifiers/" in text
+    assert "`expected_outputs` accepts" in text
 
 
 def test_codex_search_skill_projects_launch_metadata_to_current_tool_schema() -> None:
@@ -109,6 +113,8 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert "spawn_agent" in text
     assert 'fork_turns="none"' in text
     assert "never submit" in text
+    assert ".goal-plus-verifiers/" in text
+    assert "`expected_outputs`" in text
 
 
 def test_codex_search_skill_documents_worker_budget_watchdog() -> None:

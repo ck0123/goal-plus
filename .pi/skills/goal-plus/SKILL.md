@@ -30,6 +30,14 @@ downgrade it to ordinary Goal Mode merely because the requested run is small.
 
 Use Spec Discovery Mode when the target needs a frozen verifier or edit surface. Save candidate details with `goal_plus_save_spec_draft`. Once the draft is high-confidence with no open questions, upgrade to Search Mode automatically. Do not ask the user to approve the verifier, metric, edit surface, promotion rule, or mode change. User hints are useful but optional; discover missing details from the workspace and decide from evidence.
 
+A ranking verifier must emit a final JSON object with a finite numeric
+`spec.metric_name`, for example `{"combined_score": 123.0}`. Keep custom
+verifier files in a source-owned materialized path such as
+`.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs` lists
+artifact paths/globs and is not a stdout parser. `search_freeze_spec` repeats
+this preflight and rejects the spec before candidate workers start when the
+contract is invalid.
+
 ## Search Mode
 
 When the goal is search-ready:
@@ -54,7 +62,8 @@ Only offer names from this subset when drafting a Pi SearchSpec. Do not silently
 rewrite an already frozen unsupported strategy; let runtime validation reject
 it and create a corrected draft before freezing instead.
 
-1. `search_freeze_spec`
+1. `search_freeze_spec`, or reuse an existing `frozen_spec_id` when the later
+   cycle keeps the same verifier and edit contract
 2. `search_create`
 3. `goal_plus_link_search_run`
 4. `search_plan_next`

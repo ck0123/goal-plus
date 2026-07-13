@@ -17,6 +17,16 @@ goal. The MCP runtime is not a process supervisor — OpenCode owns the actual
 `Task` lifecycle, step cap, and return value. The runtime owns specs, plans,
 workspaces, verifier scoring, history, reports, and promotion patches.
 
+## Verifier Freeze Contract
+
+Before `search_freeze_spec`, run the proposed `ranking_signal` from
+`source_path` and confirm its final non-empty stdout line is JSON with a finite
+numeric `spec.metric_name`, for example `{"combined_score": 123.0}`. Put custom
+verifier files in a source-owned materialized path such as
+`.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs` accepts
+artifact path/glob strings only and does not parse stdout. The runtime repeats
+this preflight and rejects an invalid freeze before any candidate starts.
+
 ## OpenCode Host Notes
 
 Run OpenCode normally through `/goal-plus`:
@@ -183,6 +193,10 @@ Call:
 goal-plus_search_freeze_spec(spec=<spec>, verifier_artifact_paths=[...])
 goal-plus_search_create(frozen_spec_id="<id>")
 ```
+
+For a later cycle with the same verifier and edit contract, skip refreezing and
+call `search_create` with the existing `frozen_spec_id`; the new run
+materializes the current source baseline.
 
 Record `run_id`.
 

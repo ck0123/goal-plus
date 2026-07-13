@@ -50,6 +50,10 @@ def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
     assert "SendMessage" in text
     assert "background: false" in text
     assert "background subagent" not in text.lower()
+    assert "## Verifier Freeze Contract" in text
+    assert 'numeric `spec.metric_name`' in text
+    assert ".goal-plus-verifiers/" in text
+    assert "`expected_outputs` accepts" in text
 
 
 def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
@@ -77,6 +81,8 @@ def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert "Do not create a SearchSpec in Goal Mode" in text
     assert "search_freeze_spec" in text
     assert "final raw-goal audit" in text
+    assert ".goal-plus-verifiers/" in text
+    assert "`expected_outputs`" in text
 
 
 def test_claude_worker_agent_calls_context_and_verifier() -> None:

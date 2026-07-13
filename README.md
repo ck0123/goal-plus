@@ -162,6 +162,20 @@ common MCP flow:
 10. main agent confirms the final score, selects, reports, and optionally
     promotes
 
+`search_freeze_spec` executes each `ranking_signal` once in `source_path`
+before it writes the frozen bundle. The verifier must exit successfully and
+print a JSON object containing a finite numeric `metric_name`, for example
+`{"combined_score": 123.0}`. Put custom verifier files in a source-owned path
+such as `.goal-plus-verifiers/`; `.gp/` and `.search/` are runtime state and are
+never candidate inputs. `expected_outputs` lists artifact paths or globs and
+does not configure stdout parsing.
+
+When a later optimization cycle keeps the same verifier and edit contract,
+call `search_create` with the existing `frozen_spec_id` instead of rediscovering
+and refreezing it. Candidate materialization snapshots the current
+`source_path` baseline for the new run; create a new frozen spec only when the
+verifier contract changes.
+
 If the raw-goal audit requires another frozen search, repeat from
 `search_freeze_spec`/`search_create` and link the new `run_id` to the same Goal
 Plus record. `linked_search` remains the current-task compatibility view;

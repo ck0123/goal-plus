@@ -151,7 +151,13 @@ class VerifierCommand(SearchModel):
     cwd: str = "."
     timeout_seconds: int = Field(default=300, gt=0)
     feedback_policy: FeedbackPolicy = FeedbackPolicy.VISIBLE_TO_WORKERS
-    expected_outputs: list[str] = Field(default_factory=list)
+    expected_outputs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Expected artifact path or glob strings in the candidate workspace; "
+            "this field does not parse verifier stdout metrics."
+        ),
+    )
 
 
 class SearchSpec(SearchModel):

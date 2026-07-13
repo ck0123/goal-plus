@@ -6,6 +6,7 @@ import calendar
 import hashlib
 import importlib
 import json
+import math
 import os
 import random
 import shutil
@@ -51,6 +52,8 @@ from goal_plus.models import (
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
 from goal_plus.workspaces import (
+    IGNORED_NAMES,
+    IGNORED_SUFFIXES,
     copy_source_tree,
     initialize_workspace_git_baseline,
     list_files,
@@ -194,12 +197,49 @@ class FileSearchRuntime:
         spec = _normalize_verifier_cwds_for_candidate_workspace(spec)
         source_root = Path(spec.source_path).resolve()
         verifier_hashes: dict[str, str] = {}
+        artifact_entries: list[tuple[Path, str]] = []
 
         for artifact in verifier_artifacts:
             artifact_path = Path(artifact).resolve()
             if not artifact_path.exists() or not artifact_path.is_file():
                 raise FileNotFoundError(f"verifier artifact not found: {artifact_path}")
+            try:
+                artifact_path.relative_to(source_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Verifier artifact is outside source_path '{source_root}': "
+                    f"{artifact_path}. Move it into a source-owned, materialized "
+                    "path such as '.goal-plus-verifiers/'."
+                ) from exc
             rel_path = relative_artifact_path(source_root, artifact_path)
+            ignored_part = next(
+                (part for part in Path(rel_path).parts if part in IGNORED_NAMES),
+                None,
+            )
+            if ignored_part is not None:
+                if ignored_part in {DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT}:
+                    raise ValueError(
+                        "Verifier artifact is under the ignored Goal Plus runtime "
+                        f"directory '{ignored_part}': {rel_path}. Move it to a "
+                        "source-owned path such as "
+                        "'.goal-plus-verifiers/score.sh'."
+                    )
+                raise ValueError(
+                    f"Verifier artifact is under ignored workspace path "
+                    f"'{ignored_part}': {rel_path}. Move it to a source-owned, "
+                    "materialized path."
+                )
+            if Path(rel_path).suffix in IGNORED_SUFFIXES:
+                raise ValueError(
+                    f"Verifier artifact uses ignored workspace suffix "
+                    f"'{Path(rel_path).suffix}': {rel_path}. Move it to a "
+                    "source-owned, materialized path."
+                )
+            artifact_entries.append((artifact_path, rel_path))
+
+        self._preflight_ranking_verifiers(spec)
+
+        for artifact_path, rel_path in artifact_entries:
             verifier_hashes[rel_path] = sha256_file(artifact_path)
 
         spec_payload = spec.model_dump(mode="json")
@@ -208,9 +248,7 @@ class FileSearchRuntime:
         spec_dir = self._spec_dir(frozen_spec_id)
         frozen_verifier_paths: dict[str, str] = {}
 
-        for artifact in verifier_artifacts:
-            artifact_path = Path(artifact).resolve()
-            rel_path = relative_artifact_path(source_root, artifact_path)
+        for artifact_path, rel_path in artifact_entries:
             frozen_path = spec_dir / "frozen_verifiers" / rel_path
             frozen_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(artifact_path, frozen_path)
@@ -226,6 +264,72 @@ class FileSearchRuntime:
         )
         write_json(spec_dir / "frozen_spec.json", frozen.model_dump(mode="json"))
         return frozen
+
+    def _preflight_ranking_verifiers(self, spec: SearchSpec) -> None:
+        source_root = Path(spec.source_path).resolve()
+        workspace = source_root if source_root.is_dir() else source_root.parent
+        ranking_verifiers = [
+            command
+            for command in [*spec.process_verifiers, *spec.promotion_verifiers]
+            if command.role == VerifierRole.RANKING_SIGNAL
+        ]
+
+        for command in ranking_verifiers:
+            cwd = (workspace / command.cwd).resolve()
+            if not cwd.is_dir():
+                raise ValueError(
+                    f"Ranking verifier '{command.name}' has a missing working "
+                    f"directory: {cwd}"
+                )
+            if command.command[0] == "goal-plus-internal":
+                raise ValueError(
+                    f"Ranking verifier '{command.name}' cannot use a "
+                    "goal-plus-internal command; use a process verifier that "
+                    "prints the numeric metric as JSON."
+                )
+
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
+            try:
+                completed = subprocess.run(
+                    command.command,
+                    cwd=cwd,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=command.timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError(
+                    f"Ranking verifier '{command.name}' timed out during freeze "
+                    f"preflight after {command.timeout_seconds} seconds."
+                ) from exc
+            except OSError as exc:
+                raise ValueError(
+                    f"Ranking verifier '{command.name}' could not start during "
+                    f"freeze preflight: {exc}"
+                ) from exc
+
+            if completed.returncode != 0:
+                stderr_tail = completed.stderr.strip()[-2000:]
+                detail = f" Stderr tail: {stderr_tail}" if stderr_tail else ""
+                raise ValueError(
+                    f"Ranking verifier '{command.name}' failed during freeze "
+                    f"preflight with exit code {completed.returncode}.{detail}"
+                )
+
+            metrics = self._parse_metrics(completed.stdout)
+            score = self._score_from_metrics(spec.metric_name, metrics)
+            if score is None:
+                example = canonical_json({spec.metric_name: 123.0})
+                raise ValueError(
+                    f"Ranking verifier '{command.name}' exited successfully but "
+                    "emitted no finite numeric metric. The final non-empty stdout "
+                    f"line must be a JSON object such as: {example}. "
+                    "VerifierCommand.expected_outputs lists artifact paths only; "
+                    "it does not parse stdout."
+                )
 
     def create_run(self, frozen_spec_id: str) -> str:
         frozen = self._load_frozen_spec(frozen_spec_id)
@@ -2517,8 +2621,21 @@ class FileSearchRuntime:
             metrics = self._parse_metrics(completed.stdout)
             metrics.setdefault("returncode", completed.returncode)
             metrics.setdefault("elapsed_seconds", elapsed)
-            passed = completed.returncode == 0 and "error" not in metrics
             score = self._score_from_metrics(frozen.spec.metric_name, metrics)
+            missing_numeric_metric = (
+                completed.returncode == 0
+                and "error" not in metrics
+                and command.role == VerifierRole.RANKING_SIGNAL
+                and score is None
+            )
+            if missing_numeric_metric:
+                metrics["expected_metric_name"] = frozen.spec.metric_name
+                metrics["stdout_tail"] = completed.stdout.strip()[-2000:]
+            passed = (
+                completed.returncode == 0
+                and "error" not in metrics
+                and not missing_numeric_metric
+            )
             log_path.write_text(
                 "\n".join(
                     [
@@ -2541,7 +2658,15 @@ class FileSearchRuntime:
                 score=score,
                 metrics=metrics,
                 log_path=log_path,
-                failure_class=None if passed else "VerifierCommandFailed",
+                failure_class=(
+                    None
+                    if passed
+                    else (
+                        "MissingNumericMetric"
+                        if missing_numeric_metric
+                        else "VerifierCommandFailed"
+                    )
+                ),
             )
         except subprocess.TimeoutExpired as exc:
             log_path.write_text(str(exc), encoding="utf-8")
@@ -2596,8 +2721,10 @@ class FileSearchRuntime:
     def _score_from_metrics(self, metric_name: str, metrics: dict[str, Any]) -> float | None:
         for key in (metric_name, "combined_score", "score", "overall_score"):
             value = metrics.get(key)
-            if isinstance(value, int | float):
-                return float(value)
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                score = float(value)
+                if math.isfinite(score):
+                    return score
         return None
 
     def _aggregate_score(self, metric_name: str, results: list[VerifierResult]) -> float | None:
