@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.models import GoalPlusSpecDraftInput, SearchSpec
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.tools import GoalPlusTools, SearchTools
@@ -22,17 +23,22 @@ def create_mcp(
     mcp = FastMCP("goal-plus")
 
     @mcp.tool()
-    def search_freeze_spec(spec: dict[str, Any], verifier_artifact_paths: list[str]) -> dict[str, Any]:
+    def search_freeze_spec(
+        spec: SearchSpec,
+        verifier_artifact_paths: list[str],
+    ) -> dict[str, Any]:
         """Freeze a SearchSpec and its verifier files into an immutable bundle.
 
         Returns `frozen_spec_id`. Call before `search_create`. Verifier files
         are hash-pinned; modifying them during candidate execution forces the
         score to 0.0. Freeze preflights every `ranking_signal`: it must exit 0
         and print a final JSON object containing a finite numeric
-        `spec.metric_name`, for example `{"score": 123.0}`. Verifier artifacts
-        must live in a source-owned materialized path, never `.gp` or `.search`.
-        `expected_outputs` contains artifact path/glob strings only; it is not
-        a stdout parser configuration.
+        `spec.metric_name`, for example `{"score": 123.0}`. The verifier
+        command may be inline or call an existing repository tool. Optional
+        custom verifier files must be materialized during Spec Discovery in a
+        source-owned path, never `.gp` or `.search`. `expected_outputs`
+        contains artifact path/glob strings only; it is not a stdout parser
+        configuration.
         """
         return tools.search_freeze_spec(spec, verifier_artifact_paths)
 
@@ -262,7 +268,7 @@ def create_mcp(
     @mcp.tool()
     def goal_plus_save_spec_draft(
         goal_plus_id: str,
-        spec_draft: dict[str, Any],
+        spec_draft: GoalPlusSpecDraftInput,
     ) -> dict[str, Any]:
         """Save the discovered frozen-spec candidate before search_freeze_spec."""
         return goal_tools.goal_plus_save_spec_draft(goal_plus_id, spec_draft)

@@ -550,7 +550,7 @@ def test_pre_tool_use_ignores_unrelated_tool(tmp_path: Path) -> None:
     assert runtime.status(record.goal_plus_id).hook_counters == {}
 
 
-def test_subagent_stop_uses_session_bound_goal_gate(tmp_path: Path) -> None:
+def test_unbound_search_candidate_stop_requires_own_verifier(tmp_path: Path) -> None:
     search_root = tmp_path / ".gp"
     runtime = FileGoalPlusRuntime(search_root)
     record = runtime.create_goal("Optimize model throughput")
@@ -572,7 +572,105 @@ def test_subagent_stop_uses_session_bound_goal_gate(tmp_path: Path) -> None:
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
-    assert "Classify whether the raw goal" in payload["reason"]
+    assert "must complete at least one search_run_verifier" in payload["reason"]
+    assert "parent-owned" in payload["reason"]
+    assert runtime.status(record.goal_plus_id).hook_counters["subagent_stop"] == 1
+
+
+def test_search_candidate_stop_is_owned_by_its_verifier_not_parent_next_action(
+    tmp_path: Path,
+) -> None:
+    search_runtime, run_id, candidate_id, agent_session_id = _codex_search_worker(
+        tmp_path
+    )
+    search_root = search_runtime.root_dir
+    goal_runtime = FileGoalPlusRuntime(search_root)
+    record = goal_runtime.create_goal("Optimize model throughput")
+    goal_runtime.activate_session(
+        record.goal_plus_id,
+        {"host": "codex", "session_id": "session-codex"},
+    )
+    agent_identity = "search-worker-agent"
+
+    mapped = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PostToolUse",
+            "agent_id": agent_identity,
+            "agent_type": "search_candidate_agent",
+            "tool_name": "mcp__goal-plus__search_get_agent_context",
+            "tool_input": {"agent_session_id": agent_session_id},
+        },
+    )
+    assert mapped.stdout == ""
+
+    before_verifier = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "session-codex",
+            "agent_id": agent_identity,
+        },
+    )
+    blocked = json.loads(before_verifier.stdout)
+    assert blocked["decision"] == "block"
+    assert agent_session_id in blocked["reason"]
+    assert "search_run_verifier" in blocked["reason"]
+
+    search_runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=agent_session_id,
+    )
+    after_verifier = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "session-codex",
+            "agent_id": agent_identity,
+        },
+    )
+    assert after_verifier.stdout == ""
+
+    parent_stop = _run_hook(
+        tmp_path,
+        search_root,
+        {"hook_event_name": "Stop", "session_id": "session-codex"},
+    )
+    parent_payload = json.loads(parent_stop.stdout)
+    assert parent_payload["decision"] == "block"
+    assert "Classify whether the raw goal" in parent_payload["reason"]
+    counters = goal_runtime.status(record.goal_plus_id).hook_counters
+    assert counters["subagent_stop"] == 2
+    assert counters["stop"] == 1
+
+
+def test_ordinary_subagent_stop_does_not_inherit_parent_next_action(
+    tmp_path: Path,
+) -> None:
+    search_root = tmp_path / ".gp"
+    runtime = FileGoalPlusRuntime(search_root)
+    record = runtime.create_goal("Implement a feature")
+    runtime.activate_session(
+        record.goal_plus_id,
+        {"host": "codex", "session_id": "session-codex"},
+    )
+
+    result = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "session-codex",
+            "agent_id": "ordinary-worker",
+            "agent_type": "explorer",
+        },
+    )
+
+    assert result.stdout == ""
     assert runtime.status(record.goal_plus_id).hook_counters["subagent_stop"] == 1
 
 

@@ -17,8 +17,11 @@ from goal_plus.models import (
     GoalPlusNextAction,
     GoalPlusRecord,
     GoalPlusSpecDraft,
+    GoalPlusSpecDraftInput,
     GoalPlusStatus,
     GoalPlusTriage,
+    SearchSpec,
+    SearchSpecDraft,
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
@@ -383,8 +386,16 @@ class FileGoalPlusRuntime:
         parsed = (
             spec_draft
             if isinstance(spec_draft, GoalPlusSpecDraft)
-            else GoalPlusSpecDraft.model_validate(spec_draft)
+            else GoalPlusSpecDraftInput.model_validate(spec_draft)
         )
+        if parsed.confidence == "high" and not parsed.open_questions:
+            search_spec = parsed.search_spec
+            search_spec_data = (
+                search_spec.model_dump(exclude_none=True)
+                if isinstance(search_spec, SearchSpecDraft)
+                else search_spec
+            )
+            SearchSpec.model_validate(search_spec_data)
         record = self._load_record(goal_plus_id)
         origin = parsed.origin or (
             record.triage.identified_at if record.triage is not None else "in_progress"
@@ -878,6 +889,30 @@ class FileGoalPlusRuntime:
             ):
                 return self._record_gate(record, event, "allow")
 
+            subagent_role = context.get("goal_plus_subagent_role")
+            if subagent_role == "search_candidate":
+                if context.get("search_candidate_verifier_complete") is True:
+                    return self._record_gate(record, event, "allow")
+                agent_session_id = context.get("search_candidate_agent_session_id")
+                session_detail = (
+                    f" {agent_session_id}" if isinstance(agent_session_id, str) else ""
+                )
+                reason = (
+                    f"Search candidate{session_detail} must complete at least one "
+                    "search_run_verifier call with its own agent_session_id before "
+                    "stopping. Selection, reporting, promotion, and final audit remain "
+                    "parent-owned."
+                )
+                return self._record_gate(
+                    record,
+                    event,
+                    "block",
+                    reason=reason,
+                    continuation_prompt=reason,
+                )
+            if subagent_role == "ordinary":
+                return self._record_gate(record, event, "allow")
+
         if event in {"stop", "subagent_stop"} and record.next_action is not None:
             if record.next_action.required:
                 return self._record_gate(
@@ -1043,7 +1078,7 @@ class FileGoalPlusRuntime:
             return False
         if record.next_action.kind == "address_final_check_findings":
             return False
-        return record.phase in {"intake", "spec_discovery", "final_audit", "final_check"}
+        return record.phase in {"intake", "final_audit", "final_check"}
 
     def _mutation_block_reason(self, record: GoalPlusRecord) -> str:
         action = record.next_action

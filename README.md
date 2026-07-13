@@ -75,7 +75,7 @@ This repository already includes project-local config for all supported hosts.
 | Host | Project config | User entrypoint | Notes |
 |---|---|---|---|
 | Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/goal-plus.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `goal-plus-pi-worker`; Search candidate tool completions can produce one verifier-time advisory, while stats remain Pi custom entries. |
-| Codex | `.codex/config.example.toml`, `.codex/hooks.json`, `.codex/skills/` | Copy the example to the ignored local `.codex/config.toml`, then use the `goal-plus` skill / `/goal-plus` prompt | Codex 0.144.1+ ships `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop` Goal Plus hooks. Search candidate PostTool events can inject one verifier-time advisory. Review/trust project hooks when Codex asks. |
+| Codex | `.codex/config.example.toml`, `.codex/hooks.json`, `.codex/skills/` | Copy the example to the ignored local `.codex/config.toml`, then use the `goal-plus` skill / `/goal-plus` prompt | Codex 0.144.1+ ships `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and ownership-aware `SubagentStop` Goal Plus hooks. A candidate is released after its own verifier submission while parent actions remain parent-owned. Search candidate PostTool events can inject one verifier-time advisory. Review/trust project hooks when Codex asks. |
 | Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
 | OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
 
@@ -165,10 +165,13 @@ common MCP flow:
 `search_freeze_spec` executes each `ranking_signal` once in `source_path`
 before it writes the frozen bundle. The verifier must exit successfully and
 print a JSON object containing a finite numeric `metric_name`, for example
-`{"combined_score": 123.0}`. Put custom verifier files in a source-owned path
-such as `.goal-plus-verifiers/`; `.gp/` and `.search/` are runtime state and are
-never candidate inputs. `expected_outputs` lists artifact paths or globs and
-does not configure stdout parsing.
+`{"combined_score": 123.0}`. The command may be inline or call an existing
+repository tool. If a custom verifier file is needed, materialize it during
+Spec Discovery in a source-owned path such as `.goal-plus-verifiers/` before
+freezing; `.gp/` and `.search/` are runtime state and are never candidate
+inputs. `expected_outputs` lists artifact paths or globs and does not configure
+stdout parsing. The MCP freeze tool exposes the complete nested `SearchSpec`
+schema so callers do not need to infer field names from validation errors.
 
 When a later optimization cycle keeps the same verifier and edit contract,
 call `search_create` with the existing `frozen_spec_id` instead of rediscovering

@@ -349,6 +349,43 @@ def _search_candidate_agent_session_id(
     return mapped
 
 
+def _declares_search_candidate(hook_input: dict[str, Any]) -> bool:
+    for key in ("agent_type", "agentType", "task_name", "taskName", "role"):
+        value = hook_input.get(key)
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized.startswith("search_candidate"):
+            return True
+    return False
+
+
+def _search_candidate_stop_context(
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve candidate-owned completion without inheriting parent actions."""
+    agent_session_id = _search_candidate_agent_session_id(search_root, hook_input)
+    if agent_session_id is None:
+        if not _declares_search_candidate(hook_input):
+            return None
+        return {
+            "goal_plus_subagent_role": "search_candidate",
+            "search_candidate_verifier_complete": False,
+        }
+    session = find_agent_session(search_root, agent_session_id)
+    if session is None:
+        return None
+    verifier_runs = session.counters.get("verifier_runs", 0)
+    return {
+        "goal_plus_subagent_role": "search_candidate",
+        "search_candidate_agent_session_id": agent_session_id,
+        "search_candidate_id": session.candidate_id,
+        "search_candidate_verifier_runs": verifier_runs,
+        "search_candidate_verifier_complete": verifier_runs > 0,
+    }
+
+
 def _claim_time_advisory(
     search_root: Path,
     agent_session_id: str,
@@ -702,6 +739,7 @@ def _handle_stop_event(
                 current_session_id,
             )
         return
+    gate_context = hook_input
     if event == "subagent_stop" and _is_final_checker_context(hook_input):
         record = runtime.status(goal_id)
         latest = record.final_checks[-1] if record.final_checks else None
@@ -718,7 +756,24 @@ def _handle_stop_event(
                 summary="Codex final checker stopped before submitting a verdict.",
                 checker_metadata={"hook_event": "SubagentStop"},
             )
-    gate = runtime.gate(goal_id, event=event, context=hook_input)
+    elif event == "subagent_stop":
+        candidate_context = _search_candidate_stop_context(search_root, hook_input)
+        if candidate_context is not None:
+            gate_context = {**hook_input, **candidate_context}
+        else:
+            record = runtime.status(goal_id)
+            latest = record.final_checks[-1] if record.final_checks else None
+            pending_final_check = (
+                latest is not None
+                and latest.goal_revision == record.goal_revision
+                and latest.status == "pending"
+            )
+            if not pending_final_check:
+                gate_context = {
+                    **hook_input,
+                    "goal_plus_subagent_role": "ordinary",
+                }
+    gate = runtime.gate(goal_id, event=event, context=gate_context)
     if gate.decision == "block":
         _emit_block(
             gate.continuation_prompt

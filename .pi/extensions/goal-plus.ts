@@ -56,6 +56,132 @@ const GoalPlusNextAction = Type.Object(
 	},
 	{ additionalProperties: false },
 );
+const PositiveInteger = Type.Integer({ exclusiveMinimum: 0 });
+const NullableString = Type.Union([Type.String(), Type.Null()]);
+const NullablePositiveInteger = Type.Union([PositiveInteger, Type.Null()]);
+const VerifierRole = Type.Union([
+	Type.Literal("validity_gate"),
+	Type.Literal("process_gate"),
+	Type.Literal("ranking_signal"),
+	Type.Literal("diagnostic_signal"),
+	Type.Literal("promotion_gate"),
+	Type.Literal("anti_cheat_gate"),
+]);
+const FeedbackPolicy = Type.Union([
+	Type.Literal("visible_to_workers"),
+	Type.Literal("summary_only"),
+	Type.Literal("final_only"),
+]);
+const VerifierCommand = Type.Object(
+	{
+		name: Type.String({ minLength: 1 }),
+		role: VerifierRole,
+		command: Type.Array(Type.String(), { minItems: 1 }),
+		cwd: Type.Optional(Type.String()),
+		timeout_seconds: Type.Optional(PositiveInteger),
+		feedback_policy: Type.Optional(FeedbackPolicy),
+		expected_outputs: Type.Optional(Type.Array(Type.String())),
+	},
+	{ additionalProperties: false },
+);
+const EditSurface = Type.Object(
+	{
+		allow: Type.Array(Type.String(), { minItems: 1 }),
+		deny: Type.Optional(Type.Array(Type.String())),
+		max_file_changes: Type.Optional(NullablePositiveInteger),
+	},
+	{ additionalProperties: false },
+);
+const SearchBudget = Type.Object(
+	{
+		max_candidates: PositiveInteger,
+		max_parallel: PositiveInteger,
+		max_tokens: Type.Optional(NullablePositiveInteger),
+	},
+	{ additionalProperties: false },
+);
+const WorkerBudget = Type.Object(
+	{
+		max_runtime_seconds: Type.Optional(NullablePositiveInteger),
+		max_turns: Type.Optional(NullablePositiveInteger),
+		on_exceed: Type.Optional(Type.Literal("interrupt")),
+	},
+	{ additionalProperties: false },
+);
+const WorkerLaunch = Type.Object(
+	{
+		model: Type.Optional(NullableString),
+		reasoning_effort: Type.Optional(NullableString),
+		service_tier: Type.Optional(NullableString),
+	},
+	{ additionalProperties: false },
+);
+const HistoryPolicy = Type.Object(
+	{
+		scope: Type.Optional(
+			Type.Union([
+				Type.Literal("top_n"),
+				Type.Literal("last_batch"),
+				Type.Literal("all"),
+				Type.Literal("selected_parent_and_inspirations"),
+				Type.Literal("frontier"),
+			]),
+		),
+		top_n: Type.Optional(PositiveInteger),
+		include: Type.Optional(Type.Array(Type.String())),
+	},
+	{ additionalProperties: false },
+);
+const StrategySpec = Type.Object(
+	{
+		name: Type.Optional(Type.String({ minLength: 1 })),
+		driver: Type.Optional(
+			Type.Union([Type.Literal("builtin"), Type.Literal("python"), Type.Literal("external_mcp")]),
+		),
+		ref: Type.Optional(NullableString),
+		agent_role: Type.Optional(Type.String()),
+		worker_mode: Type.Optional(Type.Literal("agent-session-pool")),
+		worker_host: Type.Optional(
+			Type.Union([
+				Type.Literal("opencode"),
+				Type.Literal("codex"),
+				Type.Literal("claude-code"),
+				Type.Literal("pi-rpc"),
+			]),
+		),
+		worker_agent_type: Type.Optional(NullableString),
+		worker_budget: Type.Optional(Type.Union([WorkerBudget, Type.Null()])),
+		worker_launch: Type.Optional(Type.Union([WorkerLaunch, Type.Null()])),
+		history_policy: Type.Optional(HistoryPolicy),
+		parent_policy: Type.Optional(LooseObject),
+		config: Type.Optional(LooseObject),
+	},
+	{ additionalProperties: false },
+);
+const WorkspaceSpec = Type.Object(
+	{
+		backend: Type.Optional(Type.Union([Type.Literal("copy"), Type.Literal("git_worktree")])),
+	},
+	{ additionalProperties: false },
+);
+const SearchSpecSchema = Type.Object(
+	{
+		objective: Type.String({ minLength: 1 }),
+		metric_name: Type.String({ minLength: 1 }),
+		metric_direction: Type.Union([Type.Literal("minimize"), Type.Literal("maximize")]),
+		source_path: Type.String({ minLength: 1 }),
+		edit_surface: EditSurface,
+		budget: SearchBudget,
+		process_verifiers: Type.Array(VerifierCommand, { minItems: 1 }),
+		promotion_verifiers: Type.Optional(Type.Array(VerifierCommand)),
+		constraints: Type.Optional(LooseObject),
+		root_hypotheses: Type.Optional(Type.Array(Type.String())),
+		strategy: Type.Optional(StrategySpec),
+		workspace: Type.Optional(WorkspaceSpec),
+	},
+	{ additionalProperties: false },
+);
+const SearchSpecDraftSchema = Type.Partial(SearchSpecSchema);
 const GoalPlusSpecDraft = Type.Object(
 	{
 		baseline: LooseObject,
@@ -63,7 +189,7 @@ const GoalPlusSpecDraft = Type.Object(
 		correctness_gate: LooseObject,
 		edit_surface: LooseObject,
 		verifier_artifacts: Type.Optional(Type.Array(Type.String())),
-		search_spec: LooseObject,
+		search_spec: SearchSpecDraftSchema,
 		promotion_rule: Type.String(),
 		confidence: GoalPlusConfidence,
 		origin: Type.Optional(GoalPlusDiscoveryOrigin),
@@ -195,7 +321,7 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 	),
 	search_freeze_spec: Type.Object(
 		{
-			spec: LooseObject,
+			spec: SearchSpecSchema,
 			verifier_artifact_paths: Type.Array(Type.String()),
 		},
 		{ additionalProperties: false },

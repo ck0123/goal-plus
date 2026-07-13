@@ -12,6 +12,10 @@ When this Pi prompt opens Search Mode, the SearchSpec strategy must set
 through the Pi RPC driver, not the default OpenCode host.
 
 Before freezing, require each `ranking_signal` to print a final JSON object
-with a finite numeric `spec.metric_name`. Keep verifier artifacts in a
-source-owned materialized path such as `.goal-plus-verifiers/`, never `.gp/`
-or `.search/`; `expected_outputs` lists artifact paths/globs only.
+with a finite numeric `spec.metric_name`. The command may be inline or call an
+existing tool. Create a custom verifier file only when needed, and materialize
+it during Spec Discovery before freezing in a source-owned path such as
+`.goal-plus-verifiers/`, never `.gp/` or `.search/`. Spec Discovery may use
+`bash`, `write`, and `edit` for this work. The freeze tool exposes the full
+nested `SearchSpec` schema; do not guess fields from validation errors.
+`expected_outputs` lists artifact paths/globs only.

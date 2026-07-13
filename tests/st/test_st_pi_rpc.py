@@ -49,6 +49,7 @@ def _assert_gp_worker_artifacts(
     handle: dict,
     *,
     min_agent_starts: int = 1,
+    expected_changed_file: str = "initial_program.py",
 ) -> None:
     calls = _event_log_tool_calls(handle, min_agent_starts=min_agent_starts)
     record = runtime._load_candidate_record(run_id, candidate_id)
@@ -66,7 +67,7 @@ def _assert_gp_worker_artifacts(
         index > edit_indexes[0] and name == "search_run_verifier"
         for index, (name, _args) in enumerate(calls)
     )
-    assert "initial_program.py" in record.detected_changed_files
+    assert expected_changed_file in record.detected_changed_files
     assert record.touched_denied_files is False
     assert record.changed_outside_allowed is False
 
@@ -192,7 +193,14 @@ def test_pi_rpc_edgebench_time_advisory_after_post_tool(
     spec = _edgebench_pi_spec(
         max_runtime_seconds=int(os.environ.get("ST_PI_EDGEBENCH_WORKER_SECONDS", "180"))
     )
-    frozen = runtime.freeze_spec(spec, [EDGE_BENCH / "evaluator.py"])
+    frozen = runtime.freeze_spec(
+        spec,
+        [
+            EDGE_BENCH / ".goal-plus-verifiers" / "ad_local_score.py",
+            EDGE_BENCH / "tools" / "bin" / "gen",
+            EDGE_BENCH / "tools" / "bin" / "tester",
+        ],
+    )
     run_id = runtime.create_run(frozen.frozen_spec_id)
     plan = runtime.plan_next(run_id, requested_k=1)
     task = runtime.start_batch(
@@ -200,13 +208,13 @@ def test_pi_rpc_edgebench_time_advisory_after_post_tool(
         plan.plan_id,
         proposals=[
             CandidateProposal(
-                intent="Improve the public EdgeBench-lite ad placement score safely.",
+                intent="Improve the public EdgeBench-format ad placement score safely.",
                 hypothesis=(
                     "A compact target-area greedy layout can improve satisfaction while "
                     "preserving all public validity checks."
                 ),
                 instructions=[
-                    "Edit only initial_program.py.",
+                    "Edit only solution.cpp.",
                     "Run search_run_verifier after a valid change.",
                     "After the verifier, inspect the artifact once more before returning.",
                 ],
@@ -220,7 +228,7 @@ def test_pi_rpc_edgebench_time_advisory_after_post_tool(
         candidate_id=task.candidate_id,
         directive={
             "goal": (
-                "Implement one small valid improvement to initial_program.py, run the public "
+                "Implement one small valid improvement to solution.cpp, run the public "
                 "verifier, then inspect the final artifact once more and return."
             )
         },
@@ -231,7 +239,13 @@ def test_pi_rpc_edgebench_time_advisory_after_post_tool(
     )
     handle = result["handle"]
 
-    _assert_gp_worker_artifacts(runtime, run_id, task.candidate_id, handle)
+    _assert_gp_worker_artifacts(
+        runtime,
+        run_id,
+        task.candidate_id,
+        handle,
+        expected_changed_file="solution.cpp",
+    )
     assert handle["metadata"]["time_advisory_sent"] is True
     advisory = handle["metadata"]["time_advisory"]
     assert advisory["deadline_source"] == "outer_deadline"

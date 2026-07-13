@@ -1,27 +1,56 @@
-# EdgeBench-Lite Ad Placement Workspace
+# Ad Placement Optimization
 
-Write the solver in `initial_program.py`.
+Write `solution.cpp` in the project root. This workspace mirrors the current
+EdgeBench `ad_placement_optimization` work contract while keeping all fixture
+cases public and synthetic.
 
-Given each public case from `cases.py`, place one integer rectangle per ad on a
-`10000 x 10000` grid. Rectangle `i` must contain the ad anchor point
-`(x_i + 0.5, y_i + 0.5)`. Rectangles must stay inside the grid and must not
-overlap. The score rewards rectangle areas close to each ad's target area.
+Place rectangular ads for `n` companies on a `10000 x 10000` grid. Company `i`
+requires rectangle `i` to contain `(x_i + 0.5, y_i + 0.5)`, and its satisfaction
+is highest when the rectangle area is close to `r_i`. Rectangles must use
+integer coordinates, remain inside the grid, and not overlap.
 
-Implement either:
+For a valid rectangle with area `s_i`, satisfaction is
+`1 - (1 - min(r_i, s_i) / max(r_i, s_i))^2`. The tester reports the nearest
+integer to `1,000,000,000 * sum(satisfaction) / n`.
 
-- `solve_case(case) -> list[list[int]]`, returning rectangles
-  `[x1, y1, x2, y2]` in ad order for one case.
-- `solve_all(cases)`, returning either a list of per-case rectangle lists or a
-  dict keyed by `case_id`.
+## Input
 
-Only edit `initial_program.py`. Do not edit `cases.py` or `evaluator.py`.
-
-Check your score with:
-
-```bash
-python -c "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+```text
+n
+x_0 y_0 r_0
+...
+x_{n-1} y_{n-1} r_{n-1}
 ```
 
-Practical feasibility hint: if a rectangle covers another ad's anchor point,
-that other ad may become impossible to place later without overlap. Expansion
-heuristics should usually avoid covering any anchor point except their own.
+## Output
+
+Print one rectangle per ad in input order:
+
+```text
+x1_0 y1_0 x2_0 y2_0
+...
+x1_{n-1} y1_{n-1} x2_{n-1} y2_{n-1}
+```
+
+## Local testing
+
+The generator accepts a seed file, not a raw seed:
+
+```bash
+printf '0\n' > /tmp/seeds.txt
+rm -rf /tmp/ad_cases
+./tools/bin/gen /tmp/seeds.txt -d /tmp/ad_cases
+g++ -std=c++17 -O2 solution.cpp -o /tmp/ad_solution
+/tmp/ad_solution < /tmp/ad_cases/0000.txt > /tmp/output.txt
+./tools/bin/tester /tmp/ad_cases/0000.txt /tmp/output.txt
+# stderr: Score = <number>
+```
+
+For multiple cases, write one seed per line, for example `seq 0 9 >
+/tmp/seeds.txt`. The solver has a five-second limit per local case.
+The EdgeBench work contract also specifies a 1 GB memory limit, no GPU, and no
+internet access; this local fixture does not simulate a container-level memory
+limit.
+
+Only `solution.cpp` is submitted/editable. Do not modify `tools/` or
+`.goal-plus-verifiers/`. A hidden EdgeBench judge is deliberately not included.

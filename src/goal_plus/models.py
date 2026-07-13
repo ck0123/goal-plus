@@ -4,7 +4,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 class SearchModel(BaseModel):
@@ -182,6 +189,23 @@ class SearchSpec(SearchModel):
         return value
 
 
+class SearchSpecDraft(SearchModel):
+    """Partially discovered SearchSpec with the same nested field contracts."""
+
+    objective: str | None = Field(default=None, min_length=1)
+    metric_name: str | None = Field(default=None, min_length=1)
+    metric_direction: Literal["minimize", "maximize"] | None = None
+    source_path: str | None = Field(default=None, min_length=1)
+    edit_surface: EditSurface | None = None
+    budget: Budget | None = None
+    process_verifiers: list[VerifierCommand] | None = Field(default=None, min_length=1)
+    promotion_verifiers: list[VerifierCommand] | None = None
+    constraints: dict[str, Any] | None = None
+    root_hypotheses: list[str] | None = None
+    strategy: StrategySpec | None = None
+    workspace: WorkspaceSpec | None = None
+
+
 GoalPlusStatus = Literal["active", "needs_user", "blocked", "complete", "abandoned"]
 GoalPlusPhase = Literal[
     "intake",
@@ -254,7 +278,7 @@ class GoalPlusSpecDraft(SearchModel):
     correctness_gate: dict[str, Any]
     edit_surface: dict[str, Any]
     verifier_artifacts: list[str] = Field(default_factory=list)
-    search_spec: dict[str, Any]
+    search_spec: SearchSpecDraft | dict[str, Any] = Field(union_mode="left_to_right")
     promotion_rule: str = Field(min_length=1)
     confidence: GoalPlusConfidence
     origin: GoalPlusDiscoveryOrigin | None = None
@@ -263,6 +287,20 @@ class GoalPlusSpecDraft(SearchModel):
         description="Legacy compatibility/audit field; not required for Search admission.",
     )
     open_questions: list[str] = Field(default_factory=list)
+
+    @field_serializer("search_spec")
+    def serialize_search_spec(
+        self, value: SearchSpecDraft | dict[str, Any]
+    ) -> dict[str, Any]:
+        if isinstance(value, SearchSpecDraft):
+            return value.model_dump(mode="json", exclude_none=True)
+        return value
+
+
+class GoalPlusSpecDraftInput(GoalPlusSpecDraft):
+    """Strict tool-input shape; persisted legacy drafts remain backward-readable."""
+
+    search_spec: SearchSpecDraft
 
 
 class GoalPlusLinkedSearch(SearchModel):

@@ -98,14 +98,20 @@ Code. Host settings run `goal-plus --goal-plus-host-hook`.
 Codex 0.144.1+ wires `UserPromptSubmit`, `SessionStart`, `PreToolUse`,
 `PostToolUse`, `Stop`, and `SubagentStop`: it pre-creates and binds an exact
 `$goal-plus` skill prompt, restores hidden session context, gates
-Search/mutating tools, and gates both top-level and subagent stops. The hook
+Search/mutating tools, and gates both top-level and subagent stops. Top-level
+Stop owns the global Goal Plus next action. SubagentStop is role-aware: Search
+candidates are held only until their own verifier submission is recorded,
+ordinary subagents do not inherit parent actions, and final-check reviewers
+retain their independent gate. The hook
 parser retains `/goal-plus` as a compatibility spelling for clients that
 forward it as prompt text, but Codex CLI does not register that spelling as a
 native slash command; users invoke the skill with `$goal-plus` or `/skills`.
 `PostToolUse(goal_plus_create)` remains a compatibility binding path.
 Terminal Stop emits a compact host `systemMessage` with non-LLM run counters.
 All ownership-sensitive events select only an explicit `GOAL_PLUS_ID` or the
-record bound to the current top-level session.
+record bound to the current top-level session; candidate ownership is then
+resolved from the durable Codex agent identity to Search `agent_session_id`
+mapping.
 
 OpenCode still has no shipped hook. Claude Code retains session-scoped Stop
 backstops plus PostToolUse ownership binding; its `PreToolUse` and
@@ -122,6 +128,12 @@ Completion statistics are emitted as a Pi custom entry/notification, not as an
 LLM message. The checked-in prompt template is a fallback when the extension is
 not loaded; correctness in normal Pi modes uses the native command. Pi has no host process Stop hook;
 it also has no `SubagentStop` hook that can block closing the process.
+
+Across hook-enabled hosts, `spec_discovery` deliberately allows host
+inspection and editing tools. Search tools are still gated until a complete
+high-confidence draft exists, but discovery can execute public CLI probes or
+materialize an optional custom verifier. The MCP freeze tool and Pi extension
+both expose the nested `SearchSpec` contract directly.
 
 ## Host Selection
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.models import GoalPlusSpecDraft, GoalPlusTriage
@@ -15,6 +16,24 @@ def _write_search_run(root, run_id: str, frozen_spec_id: str) -> None:
         json.dumps({"run_id": run_id, "frozen_spec_id": frozen_spec_id}),
         encoding="utf-8",
     )
+
+
+def _complete_search_spec() -> dict:
+    return {
+        "objective": "minimize latency",
+        "metric_name": "avg_latency_ms",
+        "metric_direction": "minimize",
+        "source_path": ".",
+        "edit_surface": {"allow": ["kernel.py"], "deny": ["verify.py"]},
+        "budget": {"max_candidates": 2, "max_parallel": 1},
+        "process_verifiers": [
+            {
+                "name": "latency",
+                "role": "ranking_signal",
+                "command": ["python", "verify.py"],
+            }
+        ],
+    }
 
 
 def test_goal_plus_runtime_defaults_to_gp_root(tmp_path, monkeypatch) -> None:
@@ -333,6 +352,62 @@ def test_spec_discovery_stop_gate_blocks_with_next_action(tmp_path) -> None:
     assert "baseline command" in gate.continuation_prompt
 
 
+@pytest.mark.parametrize("tool_name", ["bash", "write", "edit", "apply_patch"])
+def test_spec_discovery_allows_host_tools_needed_to_discover_and_materialize_verifier(
+    tmp_path, tool_name: str
+) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize model throughput")
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": True,
+            "confidence": "medium",
+            "recommended_phase": "spec_discovery",
+            "reasons": ["throughput is measurable"],
+            "missing": ["public verifier"],
+        },
+    )
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="pre_tool_use",
+        context={"tool_name": tool_name},
+    )
+
+    assert gate.decision == "allow"
+
+
+def test_ready_spec_draft_requires_complete_search_spec_at_save_boundary(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("Optimize model throughput")
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": True,
+            "confidence": "high",
+            "recommended_phase": "search",
+            "reasons": ["throughput is measurable"],
+        },
+    )
+
+    with pytest.raises(ValidationError):
+        runtime.save_spec_draft(
+            record.goal_plus_id,
+            GoalPlusSpecDraft(
+                baseline={},
+                metric={"name": "throughput"},
+                correctness_gate={},
+                edit_surface={"allow": ["kernel.py"]},
+                search_spec={"metric_name": "throughput"},
+                promotion_rule="highest valid throughput",
+                confidence="high",
+            ),
+        )
+
+    assert runtime.status(record.goal_plus_id).spec_draft is None
+
+
 def test_initial_search_ready_spec_autonomously_allows_freeze(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize kernel latency")
@@ -358,11 +433,7 @@ def test_initial_search_ready_spec_autonomously_allows_freeze(tmp_path) -> None:
             correctness_gate={"command": "python verify.py"},
             edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
             verifier_artifacts=["verify.py", "bench.py"],
-            search_spec={
-                "objective": "minimize latency",
-                "metric_name": "avg_latency_ms",
-                "metric_direction": "minimize",
-            },
+            search_spec=_complete_search_spec(),
             promotion_rule="correctness pass and lower latency",
             confidence="high",
             origin="initial",
@@ -370,6 +441,14 @@ def test_initial_search_ready_spec_autonomously_allows_freeze(tmp_path) -> None:
     )
     assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
     assert draft.spec_draft.user_confirmed_frozen_verifier is False  # type: ignore[union-attr]
+
+    for tool_name in ("bash", "write", "edit"):
+        discovery_tool = runtime.gate(
+            record.goal_plus_id,
+            event="pre_tool_use",
+            context={"tool_name": tool_name},
+        )
+        assert discovery_tool.decision == "allow"
 
     stop_gate = runtime.gate(record.goal_plus_id, event="stop", context={})
     assert stop_gate.decision == "block"
@@ -422,11 +501,7 @@ def test_in_progress_search_discovery_uses_same_autonomous_admission(tmp_path) -
             correctness_gate={"command": "python verify.py"},
             edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
             verifier_artifacts=["verify.py", "bench.py"],
-            search_spec={
-                "objective": "minimize latency",
-                "metric_name": "avg_latency_ms",
-                "metric_direction": "minimize",
-            },
+            search_spec=_complete_search_spec(),
             promotion_rule="correctness pass and lower latency",
             confidence="high",
             origin="in_progress",
@@ -466,11 +541,7 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
             correctness_gate={"command": "python verify.py"},
             edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
             verifier_artifacts=["verify.py", "bench.py"],
-            search_spec={
-                "objective": "minimize latency",
-                "metric_name": "avg_latency_ms",
-                "metric_direction": "minimize",
-            },
+            search_spec=_complete_search_spec(),
             promotion_rule="correctness pass and lower latency",
             confidence="high",
             origin="in_progress",
@@ -537,11 +608,7 @@ def test_pre_tool_use_defers_promotion_selection_check_to_search_runtime(tmp_pat
             correctness_gate={"command": "python verify.py"},
             edit_surface={"allow": ["kernel.py"], "deny": ["verify.py"]},
             verifier_artifacts=["verify.py", "bench.py"],
-            search_spec={
-                "objective": "minimize latency",
-                "metric_name": "avg_latency_ms",
-                "metric_direction": "minimize",
-            },
+            search_spec=_complete_search_spec(),
             promotion_rule="correctness pass and lower latency",
             confidence="high",
             origin="in_progress",

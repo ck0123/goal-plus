@@ -131,7 +131,10 @@ For Goal Plus hook debugging on Codex 0.144.1+, inspect events for
 `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
 `SubagentStop`. A missing precreated record usually means project hooks were
 not trusted; a Stop block should identify the session-bound `goal_plus_id` and
-the next required action.
+the next required action. A Search candidate SubagentStop block should name its
+`agent_session_id` and ask for its own verifier call. Once that session's
+`counters.verifier_runs` is positive, parent-only selection/report/promotion
+must not block the candidate return.
 
 ### Claude Code
 

@@ -1,28 +1,27 @@
 {
-  "objective": "maximize EdgeBench-lite ad placement satisfaction on public deterministic cases",
-  "metric_name": "combined_score",
+  "objective": "maximize the summed EdgeBench-format ad placement score on public deterministic cases",
+  "metric_name": "local_score_sum",
   "metric_direction": "maximize",
   "source_path": "examples/edgebench-ad-placement/workspace",
   "edit_surface": {
     "allow": [
-      "initial_program.py"
+      "solution.cpp"
     ],
     "deny": [
       "README.md",
-      "cases.py",
-      "evaluator.py"
+      "tools/**",
+      ".goal-plus-verifiers/**"
     ]
   },
   "process_verifiers": [
     {
-      "name": "ad_placement_public_score",
+      "name": "local_ad_score",
       "role": "ranking_signal",
       "command": [
         "python",
-        "-c",
-        "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), sort_keys=True))"
+        ".goal-plus-verifiers/ad_local_score.py"
       ],
-      "timeout_seconds": 30
+      "timeout_seconds": 90
     }
   ],
   "promotion_verifiers": [],
@@ -42,8 +41,8 @@
   },
   "constraints": {
     "suggested_batch_size": 4,
-    "task_summary": "Place non-overlapping integer rectangles on a 10000x10000 grid. Each rectangle must contain its ad point, and satisfaction is highest when rectangle area matches the target area.",
-    "edgebench_alignment": "This is an EdgeBench-inspired public-feedback example. The process verifier is work-visible search feedback. No hidden judge is wired into GP; real EdgeBench judge ownership belongs to the external SForge harness."
+    "task_summary": "Edit solution.cpp. Read n followed by n x/y/r triples and print n non-overlapping integer rectangles. Use tools/bin/gen with a seed file and tools/bin/tester for public local scoring.",
+    "edgebench_alignment": "The submitted file, text I/O, generator CLI, tester CLI, Score = <integer> output, compiler mode, five-second per-case limit, CPU-only/no-internet rule, and documented 1 GB memory limit match EdgeBench ad_placement_optimization. Cases and scoring remain public synthetic fixtures; no hidden judge is wired into GP."
   },
   "root_hypotheses": []
 }

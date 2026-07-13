@@ -151,7 +151,7 @@ pytest -m "st and st_codex" -k codex_time_advisory -v -s
 # Pi RPC worker smoke
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s
 
-# Pi RPC EdgeBench-lite PostTool time-advisory E2E
+# Pi RPC EdgeBench-format public-fixture PostTool time-advisory E2E
 pytest -m "st and st_pi_rpc" -k edgebench_time_advisory -v -s
 
 # Pi RPC circle-packing cycle, batch=2 and round=2

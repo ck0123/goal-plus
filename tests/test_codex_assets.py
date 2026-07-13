@@ -17,6 +17,7 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
     assert "[mcp_servers.goal-plus]" in text
     assert 'command = "goal-plus"' in text
     assert 'args = ["--root", ".gp"]' in text
+    assert 'cwd = "."' not in text
     assert ".codex/config.toml" in gitignore
 
 
@@ -45,6 +46,8 @@ def test_codex_assets_wire_goal_plus_host_hooks() -> None:
     assert "UserPromptSubmit" in text
     assert "PreToolUse" in text
     assert "SubagentStop" in text
+    assert "blocked until its own verifier submission" in text
+    assert "Ordinary subagents do not inherit the parent's next action" in text
     assert "goal-plus --goal-plus-host-hook" in text
 
 

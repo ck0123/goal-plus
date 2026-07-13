@@ -106,11 +106,14 @@ Discovery turns a fuzzy optimization request into a SearchSpec draft. Produce:
 - unresolved questions, if any
 
 The ranking verifier must emit a final JSON object with a finite numeric
-`spec.metric_name`, for example `{"combined_score": 123.0}`. Keep custom
-verifier files in a source-owned materialized path such as
-`.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs` lists
-artifact paths/globs and is not a stdout parser. `search_freeze_spec` repeats
-this preflight before candidate workers can start.
+`spec.metric_name`, for example `{"combined_score": 123.0}`. Its command may
+be inline or call an existing repository tool. Create a custom verifier file
+only when needed; materialize it during Spec Discovery before freezing, in a
+source-owned path such as `.goal-plus-verifiers/`, never `.gp/` or `.search/`.
+Spec Discovery may use host inspection and write tools for this work. The
+freeze tool exposes the complete nested `SearchSpec` schema.
+`expected_outputs` lists artifact paths/globs and is not a stdout parser.
+`search_freeze_spec` repeats this preflight before candidate workers can start.
 
 Call `goal-plus_goal_plus_save_spec_draft`. Continue to Search Mode only
 when `confidence="high"` and `open_questions=[]`. Otherwise ask for the missing

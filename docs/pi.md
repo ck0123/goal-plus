@@ -78,6 +78,13 @@ hidden Goal Plus context before agent starts, and calls
 explicitly exposed `pi_rpc_run_worker` debugging calls, and mutating built-ins
 (`bash`, `edit`, `write`).
 
+The hook still checks those built-ins in every phase, but the runtime permits
+them during `spec_discovery`. This lets the main agent inspect public commands
+and materialize an optional custom verifier before freeze while Search tools
+remain blocked until the typed draft is complete. Both Pi
+`search_freeze_spec.spec` and the MCP server expose the full nested
+`SearchSpec` schema instead of an unstructured object.
+
 At turn end, the extension calls `goal_plus_gate(event="stop")`. If the gate
 blocks, it queues the runtime continuation prompt and triggers another Pi turn.
 This gives Pi a native turn-level stop gate. It is not a host process Stop hook

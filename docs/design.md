@@ -17,6 +17,13 @@ Code ships PostToolUse ownership binding plus a session-scoped Stop backstop.
 OpenCode has no shipped hook; Claude PreToolUse/SubagentStop checkpoints remain
 instruction-driven.
 
+Codex stop gates follow role ownership rather than treating every pending goal
+action as subagent work. The top-level Stop gate owns the global next action. A
+Search candidate SubagentStop is blocked only until that candidate session has
+recorded a verifier call; parent-only selection, reporting, promotion, and
+final audit do not keep the completed worker alive. Ordinary subagents are
+released, while final-check reviewers keep their independent gate.
+
 The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
 
 - freeze a `SearchSpec` and verifier artifacts
@@ -134,6 +141,14 @@ There is no separate submit step.
 `ScoreReport` is produced by `search_run_verifier`. It records pass/fail state, aggregate score, raw metrics, changed-file violations, frozen verifier violations, and failure class.
 
 ## State Flow
+
+During `spec_discovery`, Search tools remain gated until a complete,
+high-confidence draft exists, but host inspection and editing tools are
+available so the main agent can inspect public tooling and, when necessary,
+materialize a verifier before freezing it. Partial drafts use the same typed
+nested fields as `SearchSpec`; `search_freeze_spec` exposes the complete schema.
+Custom verifier files are optional because a verifier command may instead be
+inline or call an existing repository tool.
 
 ```text
 draft SearchSpec
@@ -290,8 +305,10 @@ Before writing a frozen bundle, `search_freeze_spec` executes every
 `ranking_signal` once in `source_path` and requires both a zero exit status and
 a finite numeric metric. It also rejects verifier artifacts under ignored
 workspace paths, including the runtime roots `.gp/` and `.search/`, because
-those paths cannot be materialized into candidate workspaces. Custom verifier
-files should use a source-owned path such as `.goal-plus-verifiers/`.
+those paths cannot be materialized into candidate workspaces. A verifier may
+be inline or call an existing repository tool. Custom verifier files are
+needed only when neither is suitable; materialize them during Spec Discovery
+in a source-owned path such as `.goal-plus-verifiers/` before freezing.
 `VerifierCommand.expected_outputs` contains expected artifact path/glob strings;
 it is not a stdout metric parser.
 

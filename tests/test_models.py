@@ -13,8 +13,10 @@ from goal_plus.models import (
     CandidateProposal,
     CandidateTask,
     EditSurface,
+    GoalPlusSpecDraft,
     SearchPlan,
     SearchSpec,
+    SearchSpecDraft,
     StrategySpec,
     VerifierCommand,
     WorkerBudget,
@@ -54,6 +56,68 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["metric_direction"] == "maximize"
     assert dumped["strategy"]["name"] == "agent_guided"
     assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
+
+
+def test_goal_plus_spec_draft_exposes_typed_partial_search_spec() -> None:
+    draft = GoalPlusSpecDraft(
+        baseline={},
+        metric={"name": "combined_score"},
+        correctness_gate={},
+        edit_surface={},
+        search_spec={
+            "metric_name": "combined_score",
+            "edit_surface": {"allow": ["solution.cpp"]},
+            "process_verifiers": [
+                {
+                    "name": "public_score",
+                    "role": "ranking_signal",
+                    "command": ["python", "verify.py"],
+                }
+            ],
+        },
+        promotion_rule="highest public score",
+        confidence="medium",
+        open_questions=["Confirm the source path."],
+    )
+
+    assert isinstance(draft.search_spec, SearchSpecDraft)
+    assert draft.search_spec.edit_surface is not None
+    assert draft.search_spec.edit_surface.allow == ["solution.cpp"]
+    assert draft.model_dump(mode="json")["search_spec"] == {
+        "metric_name": "combined_score",
+        "edit_surface": {
+            "allow": ["solution.cpp"],
+            "deny": [],
+        },
+        "process_verifiers": [
+            {
+                "name": "public_score",
+                "role": "ranking_signal",
+                "command": ["python", "verify.py"],
+                "cwd": ".",
+                "timeout_seconds": 300,
+                "feedback_policy": "visible_to_workers",
+                "expected_outputs": [],
+            }
+        ],
+    }
+
+
+def test_goal_plus_spec_draft_keeps_legacy_unstructured_search_spec_readable() -> None:
+    draft = GoalPlusSpecDraft(
+        baseline={},
+        metric={},
+        correctness_gate={},
+        edit_surface={},
+        search_spec={"allowed_paths": ["legacy.py"], "process_verifier": "old"},
+        promotion_rule="legacy record",
+        confidence="high",
+    )
+
+    assert isinstance(draft.search_spec, dict)
+    assert draft.model_dump(mode="json")["search_spec"]["allowed_paths"] == [
+        "legacy.py"
+    ]
 
 
 def test_expected_outputs_schema_describes_artifact_paths_not_stdout_parser() -> None:

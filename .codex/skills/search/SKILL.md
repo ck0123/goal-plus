@@ -17,11 +17,14 @@ logical tool name.
 
 Before `search_freeze_spec`, run the proposed `ranking_signal` from
 `source_path` and confirm its final non-empty stdout line is JSON with a finite
-numeric `spec.metric_name`, for example `{"combined_score": 123.0}`. Put custom
-verifier files in a source-owned materialized path such as
-`.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs` accepts
-artifact path/glob strings only and does not parse stdout. The runtime repeats
-this preflight and rejects an invalid freeze before any candidate starts.
+numeric `spec.metric_name`, for example `{"combined_score": 123.0}`. The
+command may be inline or call an existing repository tool. Create a custom
+verifier file only when needed and materialize it during Spec Discovery before
+freezing, in a source-owned path such as `.goal-plus-verifiers/`, never `.gp/`
+or `.search/`. The freeze tool exposes the complete nested `SearchSpec` schema.
+`expected_outputs` accepts artifact path/glob strings only and does not parse
+stdout. The runtime repeats this preflight and rejects an invalid freeze before
+any candidate starts.
 
 ## Main Workflow
 

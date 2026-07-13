@@ -157,8 +157,12 @@ enforces the search and mutation gates. `PostToolUse(goal_plus_create)` remains
 a compatibility binding fallback. Search candidate subagent PostTool events
 also perform a read-only, one-shot verifier-time advisory check; they never
 bind Goal Plus ownership, and main/final-checker/ordinary-subagent events are
-ignored. `Stop` and `SubagentStop` return runtime continuation prompts when a
-required action remains.
+ignored. Top-level `Stop` enforces the parent-owned Goal Plus next action.
+`SubagentStop` is ownership-aware: a Search candidate is blocked only until its
+own `search_run_verifier(..., agent_session_id=...)` call is durably recorded,
+then it may return while the parent continues selection, reporting, promotion,
+and final audit. Ordinary subagents do not inherit parent actions; final-check
+reviewers retain their independent-review gate.
 
 Keep the explicit workflow calls above as auditable state transitions even
 though the hooks are enforcement backstops. Subagent tool events do not bind

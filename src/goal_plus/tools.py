@@ -8,6 +8,7 @@ from goal_plus.models import (
     CandidateProposal,
     GoalPlusNextAction,
     GoalPlusSpecDraft,
+    GoalPlusSpecDraftInput,
     GoalPlusTriage,
     SearchSpec,
 )
@@ -21,9 +22,14 @@ class SearchTools:
     def __init__(self, runtime: FileSearchRuntime) -> None:
         self.runtime = runtime
 
-    def search_freeze_spec(self, spec: dict[str, Any], verifier_artifact_paths: list[str]) -> dict[str, Any]:
+    def search_freeze_spec(
+        self,
+        spec: dict[str, Any] | SearchSpec,
+        verifier_artifact_paths: list[str],
+    ) -> dict[str, Any]:
+        parsed_spec = spec if isinstance(spec, SearchSpec) else SearchSpec.model_validate(spec)
         frozen = self.runtime.freeze_spec(
-            SearchSpec.model_validate(spec),
+            parsed_spec,
             [Path(path) for path in verifier_artifact_paths],
         )
         return frozen.model_dump(mode="json")
@@ -222,11 +228,16 @@ class GoalPlusTools:
     def goal_plus_save_spec_draft(
         self,
         goal_plus_id: str,
-        spec_draft: dict[str, Any],
+        spec_draft: dict[str, Any] | GoalPlusSpecDraft,
     ) -> dict[str, Any]:
+        parsed_draft = (
+            spec_draft
+            if isinstance(spec_draft, GoalPlusSpecDraft)
+            else GoalPlusSpecDraftInput.model_validate(spec_draft)
+        )
         return self.runtime.save_spec_draft(
             goal_plus_id,
-            GoalPlusSpecDraft.model_validate(spec_draft),
+            parsed_draft,
         ).model_dump(mode="json")
 
     def goal_plus_confirm_frozen_verifier(

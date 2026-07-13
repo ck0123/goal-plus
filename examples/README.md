@@ -38,7 +38,7 @@ Pi RPC. See
 | `search-mode/k_module_openevolve_search_spec.json` | `tests/fixtures/k_module_problem` | OpenEvolve-style sampling with `SearchCandidateAgentFlash` | 2 candidates, pool=1, two sequential batches |
 | `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `SearchCandidateAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
 | `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `SearchCandidateAgent` (50 steps) | 8 candidates, pool=4, two batches |
-| `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-inspired public-feedback optimization, 4 candidates, pool=2 |
+| `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-format C++/text-I/O public fixture, 4 candidates, pool=2 |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `SearchCandidateAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
 | `kernel-optimize/` | reusable PyTorch-reference kernel verifier template | `/goal-plus` host | Correctness + latency verifier and a worked C++ prompt; not a standalone fixture |
@@ -131,7 +131,7 @@ tests/fixtures/swe_bench_20212/evaluator.py
 
 ## Strategy Modes
 
-The default strategy is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch (pick parents, write one proposal per slot). OpenCode-oriented fixture examples pin `independent_branches` to keep their demo flows independent of history. The Pi RPC EdgeBench-lite example uses `agent_guided` directly. Select strategies from the configured host's supported subset; non-OpenCode hosts currently accept `agent_guided`/`agent`/`default` and `random`/`random_mode` only.
+The default strategy is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch (pick parents, write one proposal per slot). OpenCode-oriented fixture examples pin `independent_branches` to keep their demo flows independent of history. The Pi RPC EdgeBench-format example uses `agent_guided` directly. Select strategies from the configured host's supported subset; non-OpenCode hosts currently accept `agent_guided`/`agent`/`default` and `random`/`random_mode` only.
 
 ```json
 {
@@ -251,22 +251,23 @@ Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores +
 Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash. Freeze tests/fixtures/k_module_problem/evaluator.py and run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start 2 sessions → Task → bind_opencode_session → run_verifier on each → select → report.
 ```
 
-### EdgeBench-lite ad placement — public-feedback optimization
+### EdgeBench-format ad placement — public-feedback optimization
 
-This is an EdgeBench-inspired local example, not an official EdgeBench run. It
-keeps the useful boundary for GP: workers see only public deterministic cases
-and a public process verifier. Hidden judge ownership remains external to GP
-and is not modeled by this SearchSpec. The example uses different data,
-execution limits, and score scaling, so its `combined_score` is not directly
-comparable to EdgeBench leaderboard results.
+This local fixture matches the current EdgeBench
+`ad_placement_optimization` agent-visible format: edit/submit `solution.cpp`,
+compile as C++17, read and write the same text shapes, invoke
+`tools/bin/gen SEEDS_FILE -d OUTPUT_DIR`, invoke
+`tools/bin/tester INPUT OUTPUT`, parse `Score = <integer>` from stderr, and use
+five-second per-case limits. Its deterministic cases and tester are public
+synthetic substitutes; no real EdgeBench judge is called and the resulting
+`local_score_sum` is not a leaderboard score.
 
-A sustained 16-candidate Pi run is recorded in
-[`edgebench-ad-placement/report.md`](edgebench-ad-placement/report.md). It ran
-for 60.95 minutes in eight sequential two-candidate batches and completed
-selection, reporting, promotion, and Goal Plus final audit.
+The retained [`edgebench-ad-placement/report.md`](edgebench-ad-placement/report.md)
+is historical evidence from the retired Python-shaped fixture. It does not
+describe the current C++ example.
 
 ```
-Load examples/edgebench_ad_placement_search_spec.json. It is already configured for Pi RPC with the portable agent_guided strategy and a 240-second worker watchdog. Freeze examples/edgebench-ad-placement/workspace/evaluator.py as the verifier artifact. Run two batches of Pi RPC candidates and provide one agent-guided proposal per candidate.
+Load examples/edgebench_ad_placement_search_spec.json. It is already configured for Pi RPC with the portable agent_guided strategy and a 240-second worker watchdog. Freeze examples/edgebench-ad-placement/workspace/.goal-plus-verifiers/ad_local_score.py, examples/edgebench-ad-placement/workspace/tools/bin/gen, and examples/edgebench-ad-placement/workspace/tools/bin/tester as verifier artifacts. Run two batches of Pi RPC candidates and provide one agent-guided proposal per candidate.
 
 Suggested first-batch directions:
   - c001: target-area greedy rectangles, sorted by largest target first, never covering another ad anchor.
@@ -275,7 +276,7 @@ Suggested first-batch directions:
 After each candidate finishes, run the public process verifier. Select and report across all candidates. Do not add promotion verifiers for this example; external benchmark judges should stay outside GP.
 ```
 
-The real Pi RPC smoke `pytest -m "st and st_pi_rpc" -k
+The opt-in real Pi RPC smoke `pytest -m "st and st_pi_rpc" -k
 edgebench_time_advisory -v -s` runs one candidate from this example with an
 outer deadline supplied by the harness and asserts that a worker PostTool event
 produces exactly one informational verifier-time advisory.

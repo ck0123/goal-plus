@@ -358,7 +358,7 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
             "metric": {},
             "correctness_gate": {},
             "edit_surface": {},
-            "search_spec": {},
+            "search_spec": spec_dict(),
             "promotion_rule": "must pass",
             "confidence": "high",
         },

@@ -238,6 +238,17 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "parameters: toolParameters(name)" in text
     assert "parameters: JsonArgs" not in text
     assert "goal_plus_record_triage: Type.Object" in text
+    assert "const SearchSpecSchema = Type.Object" in text
+    assert "const SearchSpecDraftSchema = Type.Partial(SearchSpecSchema)" in text
+    assert "spec: SearchSpecSchema" in text
+    assert "search_spec: SearchSpecDraftSchema" in text
+    assert "metric_direction: Type.Union" in text
+    assert "process_verifiers: Type.Array(VerifierCommand" in text
+    assert "worker_budget: Type.Optional(Type.Union" in text
+    freeze_schema = text.split("search_freeze_spec: Type.Object", 1)[1].split(
+        "search_create: Type.Object", 1
+    )[0]
+    assert "spec: LooseObject" not in freeze_schema
     assert "goal_plus_monitor_snapshot: Type.Object" in text
     assert "goal_plus_update_goal: Type.Object" in text
     assert "goal_plus_prepare_final_check: Type.Object" in text

@@ -1,5 +1,10 @@
 # EdgeBench-Lite Pi Goal Plus E2E Report
 
+> Historical evidence only: this run used the retired Python-shaped fixture.
+> The current example submits `solution.cpp` and follows the EdgeBench
+> text/CLI contract, so these scores and artifact names are not current
+> validation.
+
 This report records a sustained Pi Goal Plus/Search run of the local
 EdgeBench-inspired ad-placement example. It demonstrates the GP workflow; it
 is a reference example, not an official EdgeBench hidden-judge result. Its

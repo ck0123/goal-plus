@@ -18,20 +18,24 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_SPECS = [
     (
         "circle_packing_search_spec.json",
-        "tests/fixtures/circle_packing/evaluator.py",
+        ["tests/fixtures/circle_packing/evaluator.py"],
         "combined_score",
         {"max_candidates": 4, "max_parallel": 2, "worker_agent_type": "SearchCandidateAgentFlash"},
     ),
     (
         "signal_processing_search_spec.json",
-        "tests/fixtures/signal_processing/evaluator.py",
+        ["tests/fixtures/signal_processing/evaluator.py"],
         "overall_score",
         {"max_candidates": 8, "max_parallel": 4, "worker_agent_type": "SearchCandidateAgent"},
     ),
     (
         "edgebench_ad_placement_search_spec.json",
-        "examples/edgebench-ad-placement/workspace/evaluator.py",
-        "combined_score",
+        [
+            "examples/edgebench-ad-placement/workspace/.goal-plus-verifiers/ad_local_score.py",
+            "examples/edgebench-ad-placement/workspace/tools/bin/gen",
+            "examples/edgebench-ad-placement/workspace/tools/bin/tester",
+        ],
+        "local_score_sum",
         {
             "max_candidates": 4,
             "max_parallel": 2,
@@ -92,10 +96,10 @@ def test_search_mode_example_specs_are_valid(
     assert not Path(parsed.source_path).is_absolute()
 
 
-@pytest.mark.parametrize(("spec_name", "verifier_path", "metric_name", "expected"), EXAMPLE_SPECS)
+@pytest.mark.parametrize(("spec_name", "verifier_paths", "metric_name", "expected"), EXAMPLE_SPECS)
 def test_two_round_example_specs_are_valid(
     spec_name: str,
-    verifier_path: str,
+    verifier_paths: list[str],
     metric_name: str,
     expected: dict,
 ) -> None:
@@ -119,15 +123,15 @@ def test_two_round_example_specs_are_valid(
         )
         assert parsed.strategy.worker_budget.max_turns == expected["max_turns"]
     assert not Path(parsed.source_path).is_absolute()
-    assert (ROOT / verifier_path).exists()
+    assert all((ROOT / verifier_path).exists() for verifier_path in verifier_paths)
 
 
-@pytest.mark.parametrize(("spec_name", "verifier_path", "metric_name", "expected"), EXAMPLE_SPECS)
+@pytest.mark.parametrize(("spec_name", "verifier_paths", "metric_name", "expected"), EXAMPLE_SPECS)
 def test_two_round_examples_create_batches_and_verify_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     spec_name: str,
-    verifier_path: str,
+    verifier_paths: list[str],
     metric_name: str,
     expected: dict,
 ) -> None:
@@ -135,7 +139,7 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     tools = SearchTools(FileSearchRuntime(tmp_path / ".search"))
     spec = load_example_spec(spec_name)
 
-    frozen = tools.search_freeze_spec(spec, [verifier_path])
+    frozen = tools.search_freeze_spec(spec, verifier_paths)
     run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
 
     def verify_baseline(candidate_id: str) -> None:

@@ -46,10 +46,14 @@ model turn, while `SessionStart` restores hidden context for an active bound
 goal. `PreToolUse` gates Search tools and mutating built-ins.
 `PostToolUse(goal_plus_create)` remains the compatibility binding path when the
 pre-model hook was unavailable. Subagent tool events are ignored for ownership
-binding. `Stop` and `SubagentStop` gate only an explicitly selected
-`GOAL_PLUS_ID` or an active Goal Plus record whose bound session matches the
-current Codex session. The skill continues to record explicit gate calls for
-auditability.
+binding. Top-level `Stop` gates an explicitly selected `GOAL_PLUS_ID` or an
+active Goal Plus record whose bound session matches the current Codex session.
+`SubagentStop` additionally resolves role ownership: a Search candidate is
+blocked until its own verifier submission is durably recorded, then it is
+released while the parent owns selection, reporting, promotion, and final
+audit. Ordinary subagents do not inherit the parent's next action. Final-check
+reviewers retain the independent-review gate. The skill continues to record
+explicit gate calls for auditability.
 
 The same hook recognizes `/goal-plus edit <full revised goal>`,
 `/goal-plus resume`, and `/goal-plus-with-final-check <goal>`. Edit updates the
@@ -80,11 +84,16 @@ The MCP server is configured as:
 [mcp_servers.gp-runtime]
 command = "goal-plus"
 args = ["--root", ".gp"]
-cwd = "."
 startup_timeout_sec = 10
 tool_timeout_sec = 300
 enabled = true
 ```
+
+Deliberately omit MCP `cwd`. Codex then launches the local stdio server from
+the runtime project cwd, including the directory selected with `codex -C`.
+Setting `cwd = "."` pins the server to the Codex process launch directory and
+can split MCP `.gp` state from the project-local hooks when `-C` points
+elsewhere.
 
 ## Supported Strategies
 

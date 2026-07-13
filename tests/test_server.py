@@ -101,6 +101,46 @@ def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
     assert "agent_session_id" in schema["properties"]
 
 
+def test_freeze_spec_exposes_complete_nested_search_spec_schema(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+    tools = asyncio.run(mcp.get_tools())
+
+    spec_schema = tools["search_freeze_spec"].parameters["properties"]["spec"]
+
+    assert set(spec_schema["required"]) >= {
+        "objective",
+        "metric_name",
+        "metric_direction",
+        "source_path",
+        "edit_surface",
+        "budget",
+        "process_verifiers",
+    }
+    assert spec_schema["properties"]["edit_surface"]["required"] == ["allow"]
+    verifier = spec_schema["properties"]["process_verifiers"]["items"]
+    assert set(verifier["required"]) == {"name", "role", "command"}
+    assert "ranking_signal" in verifier["properties"]["role"]["enum"]
+    assert verifier["properties"]["command"]["type"] == "array"
+    strategy = spec_schema["properties"]["strategy"]
+    assert "worker_budget" in strategy["properties"]
+
+
+def test_spec_draft_exposes_partial_nested_search_spec_schema(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+    tools = asyncio.run(mcp.get_tools())
+
+    draft = tools["goal_plus_save_spec_draft"].parameters["properties"][
+        "spec_draft"
+    ]
+    typed_search_spec = draft["properties"]["search_spec"]
+
+    assert "objective" in typed_search_spec["properties"]
+    assert "edit_surface" in typed_search_spec["properties"]
+    assert "budget" in typed_search_spec["properties"]
+    assert "process_verifiers" in typed_search_spec["properties"]
+    assert "required" not in typed_search_spec
+
+
 def test_goal_plus_gate_exposes_hook_friendly_schema(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
