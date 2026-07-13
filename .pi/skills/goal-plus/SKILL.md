@@ -1,13 +1,22 @@
 ---
 name: goal-plus
-description: Use when Pi receives a /goal-plus request that may need Goal Mode, Spec Discovery Mode, or bounded Search Mode.
+description: Use when Pi receives a /goal-plus, /goal-plus edit, or /goal-plus-with-final-check request that may need Goal Mode, Spec Discovery Mode, bounded Search Mode, or an independent final reviewer.
 ---
 
 # Goal Plus For Pi
 
 ## Entry Contract
 
-The native Pi `/goal-plus` command creates the Goal Plus record before the model turn starts. If a compatibility prompt path is used and no active `goal_plus_id` is already present, the first tool call must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists. Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.
+The native Pi `/goal-plus` command creates the Goal Plus record before the model turn starts. `/goal-plus-with-final-check` creates it with `policy.final_check.mode="required"`. `/goal-plus edit <full revised goal>` calls `goal_plus_update_goal` for the active record and increments `goal_revision`; the latest raw goal supersedes older revisions. `/goal-plus resume` continues the same durable active revision after an interrupted Pi turn. If a compatibility prompt path is used and no active `goal_plus_id` is already present, the first tool call must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists. Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.
+
+Before resuming an active record, treat the latest user message as authoritative
+for this turn. Keep the current revision when the message only continues or
+steers the existing objective. If it changes the effective scope, deliverables,
+or success criteria, call `goal_plus_update_goal` with the complete revised
+objective and current `expected_revision`, then re-triage before further work.
+If it is unrelated, respond without changing the goal. If its relationship to
+the goal is unclear, clarify before revising or resuming; do not resume merely
+because the Goal Plus record is active.
 
 ## Goal Mode
 
@@ -64,12 +73,28 @@ it and create a corrected draft before freezing instead.
 10. Run the raw-goal audit. If another verifier-backed search is needed,
     freeze/create and link a new `run_id`, then repeat the Search Mode flow
     under the same `goal_plus_id`.
-11. Run the final raw-goal audit and then `goal_plus_set_status`.
+11. Run the final raw-goal audit. For a normal record, finish with
+    `goal_plus_set_status`. If `policy.final_check.mode="required"`, instead:
+    - call `goal_plus_prepare_final_check(checker_host="pi")`
+    - pass the exact returned `launch` object to
+      `pi_goal_plus_run_final_check`
+    - let the stateless, read-only Pi reviewer call
+      `goal_plus_submit_final_check` itself
+    - address failed findings and prepare a fresh check
+    A passing required check atomically marks the record complete.
 
 One Goal Plus record is the complete user task. `search_tasks` is its
 append-only search-task history; each item is one `run_id` over one frozen
 spec. `linked_search` is only the current-task compatibility view. A search
 task may contain multiple planning/search rounds.
+
+`goal_revisions` and `final_checks` are append-only histories. An interrupted
+Pi turn keeps the active Goal Plus id; the next session/turn restores it from
+native state. A checker process exit or timeout records that attempt as
+`interrupted`; call `goal_plus_prepare_final_check` to launch a fresh attempt.
+Editing the goal supersedes pending checks and
+requires fresh triage and a new check, while older Search tasks remain audit
+history only.
 
 Never invent `frozen_spec_id`, `run_id`, `plan_id`, `candidate_id`, or
 `agent_session_id` values. Use only exact ids returned by the immediately

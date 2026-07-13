@@ -177,7 +177,14 @@ class SearchSpec(SearchModel):
 
 
 GoalPlusStatus = Literal["active", "needs_user", "blocked", "complete", "abandoned"]
-GoalPlusPhase = Literal["intake", "goal", "spec_discovery", "search", "final_audit"]
+GoalPlusPhase = Literal[
+    "intake",
+    "goal",
+    "spec_discovery",
+    "search",
+    "final_audit",
+    "final_check",
+]
 GoalPlusConfidence = Literal["high", "medium", "low"]
 GoalPlusRecommendedPhase = Literal["goal", "spec_discovery", "search"]
 GoalPlusDiscoveryOrigin = Literal["initial", "in_progress"]
@@ -191,6 +198,38 @@ class GoalPlusNextAction(SearchModel):
     description: str = Field(min_length=1)
     required: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+GoalPlusFinalCheckMode = Literal["disabled", "required"]
+GoalPlusFinalCheckStatus = Literal[
+    "pending",
+    "passed",
+    "failed",
+    "interrupted",
+    "superseded",
+]
+GoalPlusFinalCheckerHost = Literal["codex", "pi"]
+
+
+class GoalPlusGoalRevision(SearchModel):
+    revision: int = Field(ge=1)
+    raw_goal: str = Field(min_length=1)
+    reason: str | None = None
+    created_at: str
+
+
+class GoalPlusFinalCheck(SearchModel):
+    check_id: str = Field(min_length=1)
+    goal_revision: int = Field(ge=1)
+    checker_host: GoalPlusFinalCheckerHost
+    status: GoalPlusFinalCheckStatus = "pending"
+    requested_phase: GoalPlusPhase
+    requested_at: str
+    completed_at: str | None = None
+    summary: str | None = None
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    checker_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GoalPlusTriage(SearchModel):
@@ -221,6 +260,7 @@ class GoalPlusSpecDraft(SearchModel):
 
 
 class GoalPlusLinkedSearch(SearchModel):
+    goal_revision: int = Field(default=1, ge=1)
     frozen_spec_id: str | None = None
     run_id: str | None = None
     linked_at: str | None = None
@@ -249,6 +289,9 @@ class GoalPlusRecord(SearchModel):
     status: GoalPlusStatus = "active"
     phase: GoalPlusPhase = "intake"
     policy: dict[str, Any] = Field(default_factory=dict)
+    goal_revision: int = Field(default=1, ge=1)
+    goal_revisions: list[GoalPlusGoalRevision] = Field(default_factory=list)
+    final_checks: list[GoalPlusFinalCheck] = Field(default_factory=list)
     triage: GoalPlusTriage | None = None
     spec_draft: GoalPlusSpecDraft | None = None
     search_tasks: list[GoalPlusLinkedSearch] = Field(default_factory=list)
@@ -261,10 +304,27 @@ class GoalPlusRecord(SearchModel):
 
     @model_validator(mode="after")
     def synchronize_search_task_compatibility_view(self) -> "GoalPlusRecord":
+        if not self.goal_revisions:
+            self.goal_revisions = [
+                GoalPlusGoalRevision(
+                    revision=self.goal_revision,
+                    raw_goal=self.raw_goal,
+                    reason="legacy record imported",
+                    created_at=self.created_at,
+                )
+            ]
+        latest_revision = self.goal_revisions[-1]
+        if latest_revision.revision != self.goal_revision or latest_revision.raw_goal != self.raw_goal:
+            raise ValueError("raw_goal and goal_revision must match the latest goal revision")
         if not self.search_tasks and self.linked_search is not None:
             self.search_tasks = [self.linked_search.model_copy(deep=True)]
         elif self.search_tasks:
-            self.linked_search = self.search_tasks[-1].model_copy(deep=True)
+            latest_task = self.search_tasks[-1]
+            self.linked_search = (
+                latest_task.model_copy(deep=True)
+                if latest_task.goal_revision == self.goal_revision
+                else None
+            )
         return self
 
 

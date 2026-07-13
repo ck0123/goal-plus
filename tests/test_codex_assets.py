@@ -97,6 +97,18 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert "Do not create a SearchSpec in Goal Mode" in text
     assert "search_freeze_spec" in text
     assert "final raw-goal audit" in text
+    assert "/goal-plus-with-final-check" in text
+    assert "/goal-plus edit" in text
+    assert "treat the latest user message as" in text
+    assert "scope, deliverables, or success criteria" in text
+    assert "goal_plus_update_goal" in text
+    assert "clarify before revising or resuming" in text
+    assert "merely because the Goal Plus record is active" in text
+    assert "goal_plus_prepare_final_check" in text
+    assert "goal_plus_submit_final_check" in text
+    assert "spawn_agent" in text
+    assert 'fork_turns="none"' in text
+    assert "never submit" in text
 
 
 def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
@@ -154,6 +166,25 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert "search_select" in text
     assert "search_report" in text
     assert "search_promote" in text
+
+
+def test_codex_final_checker_and_with_check_alias_are_read_only_and_independent() -> None:
+    checker = (ROOT / ".codex" / "agents" / "goal_plus_final_checker.toml").read_text(
+        encoding="utf-8"
+    )
+    alias = (
+        ROOT / ".codex" / "skills" / "goal-plus-with-final-check" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert 'name = "goal_plus_final_checker"' in checker
+    assert "Work read-only" in checker
+    assert "goal_plus_status" in checker
+    assert "goal_plus_submit_final_check" in checker
+    assert "Never edit files" in checker
+    assert "name: goal-plus-with-final-check" in alias
+    assert 'checker_host="codex"' in alias
+    assert "spawn_agent" in alias
+    assert "/goal-plus resume" in alias
 
 
 def test_codex_docs_record_log_inspection_paths() -> None:

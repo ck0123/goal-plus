@@ -166,6 +166,10 @@ def test_goal_plus_monitor_snapshot_does_not_attach_unlinked_latest_run(
     )
 
     assert snapshot["goal_plus"]["goal_plus_id"] == goal.goal_plus_id
+    assert snapshot["goal_plus"]["goal_revision"] == 1
+    assert snapshot["goal_plus"]["goal_revisions_total"] == 1
+    assert snapshot["goal_plus"]["final_check_policy"] == {"mode": "disabled"}
+    assert snapshot["goal_plus"]["latest_final_check"] is None
     assert snapshot["goal_plus"]["linked_search"] is None
     assert snapshot["run"] is None
     assert snapshot["subagents"] == []

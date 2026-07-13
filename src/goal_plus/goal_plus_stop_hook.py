@@ -14,7 +14,8 @@ from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
 
 GOAL_ID_RE = re.compile(r"\bgp_\d+\b")
 GOAL_PLUS_PROMPT_RE = re.compile(
-    r"^\s*(?:/|\$)goal-plus(?:\s+(?P<goal>.*\S))?\s*$",
+    r"^\s*(?:/|\$)(?P<command>goal-plus(?:-with-final-check)?)"
+    r"(?:\s+(?P<body>.*\S))?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 DISABLE_VALUES = {"1", "true", "yes", "on"}
@@ -120,11 +121,29 @@ def _prompt(hook_input: dict[str, Any]) -> str:
 
 
 def _goal_plus_prompt(hook_input: dict[str, Any]) -> str | None:
+    request = _goal_plus_request(hook_input)
+    if request is None:
+        return None
+    raw_goal = request.get("raw_goal")
+    return raw_goal if isinstance(raw_goal, str) and raw_goal else None
+
+
+def _goal_plus_request(hook_input: dict[str, Any]) -> dict[str, Any] | None:
     match = GOAL_PLUS_PROMPT_RE.match(_prompt(hook_input))
     if match is None:
         return None
-    raw_goal = (match.group("goal") or "").strip()
-    return raw_goal or None
+    command = match.group("command").lower()
+    body = (match.group("body") or "").strip()
+    if command == "goal-plus" and body.lower() == "resume":
+        return {"action": "resume", "raw_goal": None}
+    if command == "goal-plus" and body.lower().startswith("edit "):
+        raw_goal = body[5:].strip()
+        return {"action": "edit", "raw_goal": raw_goal or None}
+    return {
+        "action": "start",
+        "raw_goal": body or None,
+        "final_check": command == "goal-plus-with-final-check",
+    }
 
 
 def _is_goal_plus_create_tool(tool_name: str) -> bool:
@@ -181,6 +200,18 @@ def _is_subagent_context(hook_input: dict[str, Any]) -> bool:
         if target_type in {"agent", "subagent"}:
             return True
         if target.get("agent") or target.get("agent_id") or target.get("agentId"):
+            return True
+    return False
+
+
+def _is_final_checker_context(hook_input: dict[str, Any]) -> bool:
+    for key in ("agent_type", "agentType", "task_name", "taskName", "role"):
+        value = hook_input.get(key)
+        if isinstance(value, str) and (
+            value == "goal_plus_final_checker"
+            or value == "final-checker"
+            or value.startswith("goal_plus_final_check_")
+        ):
             return True
     return False
 
@@ -258,7 +289,17 @@ def _goal_context(record: Any) -> str:
     return (
         f"Goal Plus is active for this Codex session: goal_plus_id={record.goal_plus_id}.\n"
         "The runtime record already exists; do not call goal_plus_create again.\n"
+        f"Current goal revision: {record.goal_revision}.\n"
+        f"Current raw goal: {record.raw_goal}\n"
+        f"Final-check policy: {record.policy.get('final_check', {'mode': 'disabled'})}.\n"
         f"Current phase: {record.phase}; next action: {next_action_text}\n"
+        "Load and follow the goal-plus skill for this turn.\n"
+        "Treat the latest user message as authoritative for whether to continue, revise, "
+        "or discuss something unrelated; do not resume merely because Goal Plus is active.\n"
+        "If it changes the effective scope, deliverables, or success criteria, call "
+        "goal_plus_update_goal with the complete revised raw goal and current expected "
+        "revision, then re-triage. Otherwise keep the revision unchanged and clarify "
+        "ambiguous intent before resuming.\n"
         "Use the goal_plus_* tools and the linked Search runtime as authoritative."
     )
 
@@ -375,6 +416,8 @@ def _emit_terminal_stats(record: Any) -> None:
         f"goal_plus_id={record.goal_plus_id}; "
         f"status={record.status}; "
         f"phase={record.phase}; "
+        f"goal_revision={record.goal_revision}; "
+        f"final_checks={len(record.final_checks)}; "
         f"search_tasks={len(record.search_tasks)}; "
         f"linked_run={linked_run}; "
         f"gates={counters}"
@@ -389,9 +432,37 @@ def _handle_user_prompt_submit(
 ) -> None:
     session_id = _session_id(hook_input)
     goal_id = _select_session_goal_id(search_root, session_id)
-    raw_goal = _goal_plus_prompt(hook_input)
-    if goal_id is None and raw_goal is not None and session_id is not None:
-        record = runtime.create_goal(raw_goal)
+    request = _goal_plus_request(hook_input)
+    if (
+        goal_id is not None
+        and request is not None
+        and request.get("action") == "edit"
+        and isinstance(request.get("raw_goal"), str)
+    ):
+        current = runtime.status(goal_id)
+        runtime.update_goal(
+            goal_id,
+            raw_goal=request["raw_goal"],
+            expected_revision=current.goal_revision,
+            reason="user edited the Goal Plus objective through Codex",
+        )
+    elif (
+        goal_id is None
+        and request is not None
+        and request.get("action") == "start"
+        and isinstance(request.get("raw_goal"), str)
+        and session_id is not None
+    ):
+        policy = (
+            {"final_check": {"mode": "required"}}
+            if request.get("final_check") is True
+            else None
+        )
+        record = runtime.create_goal(
+            request["raw_goal"],
+            source_path=str(search_root.parent),
+            policy=policy,
+        )
         goal_id = record.goal_plus_id
     if goal_id is None or session_id is None:
         return
@@ -452,6 +523,22 @@ def _handle_stop_event(
                 current_session_id,
             )
         return
+    if event == "subagent_stop" and _is_final_checker_context(hook_input):
+        record = runtime.status(goal_id)
+        latest = record.final_checks[-1] if record.final_checks else None
+        if (
+            latest is not None
+            and latest.goal_revision == record.goal_revision
+            and latest.status == "pending"
+        ):
+            runtime.submit_final_check(
+                goal_id,
+                check_id=latest.check_id,
+                goal_revision=record.goal_revision,
+                verdict="interrupted",
+                summary="Codex final checker stopped before submitting a verdict.",
+                checker_metadata={"hook_event": "SubagentStop"},
+            )
     gate = runtime.gate(goal_id, event=event, context=hook_input)
     if gate.decision == "block":
         _emit_block(

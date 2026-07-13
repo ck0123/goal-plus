@@ -256,12 +256,28 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert "--no-session" in popen_cmd
     assert "--session-dir" not in popen_cmd
     assert popen_env["GOAL_PLUS_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
+    assert popen_env["GOAL_PLUS_PI_ROLE"] == "worker"
     assert handle["metadata"]["raw_logging"] is False
     assert handle["metadata"]["text_log"] is None
     assert handle["metadata"]["session_file"] is None
     assert handle["metadata"]["continuation"] == "state_redispatch"
     assert handle["metadata"]["progress_handoff"]["status"] == "completed"
     assert handle["metadata"]["progress_handoff"]["summary"] == "done"
+
+    popen_env.clear()
+    pi_worker.run_pi_rpc_worker(
+        {
+            "role": "final-checker",
+            "agent_session_id": "fc_1",
+            "session_id": "fc_1",
+            "root": str(tmp_path / ".search"),
+            "cwd": str(cwd),
+            "prompt": "audit and submit",
+            "budget_control": {"max_runtime_seconds": 30},
+        },
+        extension_path=extension,
+    )
+    assert popen_env["GOAL_PLUS_PI_ROLE"] == "final-checker"
 
 
 def test_workspace_progress_handoff_preserves_model_and_git_progress(

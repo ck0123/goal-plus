@@ -304,12 +304,19 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     record = goal_plus_record()
     runtime.create_goal.return_value = record
     runtime.status.return_value = record
+    runtime.update_goal.return_value = record.model_copy(update={"goal_revision": 2})
     runtime.list_events.return_value = [{"event_type": "created"}]
     runtime.record_triage.return_value = record
     runtime.save_spec_draft.return_value = record
     runtime.confirm_frozen_verifier.return_value = record
     runtime.link_search_run.return_value = record
     runtime.record_search_result.return_value = record
+    runtime.prepare_final_check.return_value = {
+        "goal_plus_id": "gp_0001",
+        "check": {"check_id": "fc_0001_r1_001"},
+        "launch": {"tool": "spawn_agent"},
+    }
+    runtime.submit_final_check.return_value = record.model_copy(update={"status": "complete"})
     runtime.set_status.return_value = record.model_copy(update={"status": "complete"})
     runtime.gate.return_value = GoalPlusGateResult(
         decision="block",
@@ -330,6 +337,12 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     assert status["evidence_log"][0]["event_type"] == "created"
     assert status["search_tasks_total"] == 0
     assert status["current_search_run_id"] is None
+    assert tools.goal_plus_update_goal(
+        "gp_0001",
+        "Revised objective",
+        expected_revision=1,
+        reason="user edit",
+    )["goal_revision"] == 2
     assert tools.goal_plus_record_triage(
         "gp_0001",
         {
@@ -364,6 +377,16 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
         promotion_artifact_path="/tmp/c001.patch",
         summary="c001 selected",
     )["goal_plus_id"] == "gp_0001"
+    prepared = tools.goal_plus_prepare_final_check("gp_0001", "codex")
+    assert prepared["launch"]["tool"] == "spawn_agent"
+    assert tools.goal_plus_submit_final_check(
+        "gp_0001",
+        "fc_0001_r1_001",
+        1,
+        "pass",
+        "all requirements proven",
+        evidence=[{"kind": "pytest"}],
+    )["status"] == "complete"
     assert tools.goal_plus_set_status(
         "gp_0001",
         status="complete",
@@ -380,6 +403,12 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
         raw_goal="Optimize a benchmark if possible",
         source_path=".",
         policy={"max_discovery_turns": 1},
+    )
+    runtime.update_goal.assert_called_once_with(
+        "gp_0001",
+        raw_goal="Revised objective",
+        expected_revision=1,
+        reason="user edit",
     )
     runtime.confirm_frozen_verifier.assert_called_once_with(
         "gp_0001",

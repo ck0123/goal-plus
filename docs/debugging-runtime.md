@@ -240,6 +240,9 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
 The snapshot summarizes the complete Goal Plus search-task history and the
 selected run's detailed state. `search_tasks` contains per-run state, frozen
 spec, strategy, and round summaries;
+the top-level goal payload includes `goal_revision`, `goal_revisions_total`,
+`final_check_policy`, and `latest_final_check`, which are the first fields to
+inspect after an interrupted edit or reviewer run.
 `search_task_aggregate` totals task, planning-round, started-round, candidate,
 worker-session, verifier-run, and Pi cost counts. The selected task retains the
 detailed run, strategy, candidate, session, duration/cost/context, file-mtime,

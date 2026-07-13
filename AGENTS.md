@@ -222,8 +222,10 @@ the runtime contract, update the matching assets and tests:
   `.opencode/agents/search-orchestrator.md`, and
   `tests/test_opencode_assets.py`.
 - Codex: `.codex/skills/goal-plus/SKILL.md`,
+  `.codex/skills/goal-plus-with-final-check/SKILL.md`,
   `.codex/skills/search/SKILL.md`,
-  `.codex/agents/search_candidate_agent.toml`, `.codex/config.example.toml`, and
+  `.codex/agents/search_candidate_agent.toml`,
+  `.codex/agents/goal_plus_final_checker.toml`, `.codex/config.example.toml`, and
   `tests/test_codex_assets.py`.
 - Claude Code: `.claude/skills/goal-plus/SKILL.md`,
   `.claude/skills/search/SKILL.md`,

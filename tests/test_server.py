@@ -39,12 +39,15 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_promote",
         "goal_plus_create",
         "goal_plus_status",
+        "goal_plus_update_goal",
         "goal_plus_monitor_snapshot",
         "goal_plus_record_triage",
         "goal_plus_save_spec_draft",
         "goal_plus_confirm_frozen_verifier",
         "goal_plus_link_search_run",
         "goal_plus_record_search_result",
+        "goal_plus_prepare_final_check",
+        "goal_plus_submit_final_check",
         "goal_plus_set_status",
         "goal_plus_gate",
     }
@@ -134,6 +137,27 @@ def test_goal_plus_create_has_no_mode_hint_and_confirm_tool_is_registered(
     assert "goal_plus_id" in confirm_schema["properties"]
     assert "confirmed_by" in confirm_schema["properties"]
     assert "evidence" in confirm_schema["properties"]
+    update_schema = tools["goal_plus_update_goal"].parameters
+    prepare_schema = tools["goal_plus_prepare_final_check"].parameters
+    submit_schema = tools["goal_plus_submit_final_check"].parameters
+    assert set(update_schema["required"]) >= {
+        "goal_plus_id",
+        "raw_goal",
+        "expected_revision",
+    }
+    assert "checker_host" in prepare_schema["properties"]
+    assert set(submit_schema["required"]) >= {
+        "goal_plus_id",
+        "check_id",
+        "goal_revision",
+        "verdict",
+        "summary",
+    }
+    assert submit_schema["properties"]["verdict"]["enum"] == [
+        "pass",
+        "fail",
+        "interrupted",
+    ]
 
 
 def test_create_mcp_constructs_runtime_with_configured_root(

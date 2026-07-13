@@ -53,6 +53,15 @@ The runtime does not wait for, abort, supervise, or synchronize host workers.
 It records provenance and verifier counters only after the host or worker calls
 the corresponding MCP tools.
 
+Codex and Pi additionally support required delivery review. The shared runtime
+creates a revision-bound request with `goal_plus_prepare_final_check`; Codex
+launches its returned foreground `spawn_agent` message, while Pi passes the
+returned launch object to `pi_goal_plus_run_final_check`. Both reviewers submit
+their own structured result through `goal_plus_submit_final_check`. This is a
+host-owned foreground launch, not runtime process supervision. Goal edits and
+interrupted checker attempts use the same durable Goal Plus state; interruption
+requires a fresh check while preserving the active goal revision.
+
 Pi main-agent assets expose `pi_search_run_batch` as the default host-native
 driver for steps 5 through 10 across the candidate ids returned by
 `search_start_batch`; `pi_search_run_candidate` is the single-candidate

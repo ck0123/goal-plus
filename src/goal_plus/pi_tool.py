@@ -37,11 +37,14 @@ SEARCH_TOOL_NAMES = {
 GOAL_PLUS_TOOL_NAMES = {
     "goal_plus_create",
     "goal_plus_status",
+    "goal_plus_update_goal",
     "goal_plus_record_triage",
     "goal_plus_save_spec_draft",
     "goal_plus_confirm_frozen_verifier",
     "goal_plus_link_search_run",
     "goal_plus_record_search_result",
+    "goal_plus_prepare_final_check",
+    "goal_plus_submit_final_check",
     "goal_plus_set_status",
     "goal_plus_gate",
 }

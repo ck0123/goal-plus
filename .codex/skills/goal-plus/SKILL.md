@@ -1,6 +1,6 @@
 ---
 name: goal-plus
-description: Run a Codex goal with optional upgrade to Agentic Search through the goal-plus MCP server.
+description: Run, resume, or edit a Codex Goal Plus task, including /goal-plus-with-final-check tasks that require an independent final reviewer, with optional upgrade to Agentic Search through the goal-plus MCP server.
 ---
 
 # Goal Plus for Codex
@@ -20,6 +20,21 @@ prefix; match by the final logical tool name.
    record before this model turn; use that id and do not call
    `goal_plus_create` again. If no hook context is present, call
    `goal_plus_create(raw_goal=...)` as a compatibility fallback.
+   `/goal-plus-with-final-check` is pre-created with
+   `policy.final_check.mode="required"`. `/goal-plus edit <full revised goal>`
+   updates the same record before the model turn; use the new `goal_revision`
+   and do not continue against an older revision. `/goal-plus resume` restores
+   the same active revision after a host interruption.
+   Before resuming an active record, treat the latest user message as
+   authoritative for this turn:
+   - If it continues or steers the existing objective without changing its
+     scope, deliverables, or success criteria, keep the current revision.
+   - If it changes the effective scope, deliverables, or success criteria,
+     call `goal_plus_update_goal` with the complete revised objective and the
+     current `expected_revision`, then re-triage before doing further work.
+   - If it is unrelated, respond without changing the goal. If its relationship
+     to the goal is unclear, clarify before revising or resuming. Do not resume
+     work merely because the Goal Plus record is active.
 2. Inspect enough context to classify the task.
 3. Call `goal_plus_record_triage`.
 4. If triage chooses Goal Mode, work normally in the current workspace.
@@ -48,9 +63,19 @@ prefix; match by the final logical tool name.
     freeze/create a new run and repeat steps 9-12 with the same
     `goal_plus_id`. Each distinct `run_id` is appended as another search task;
     do not reuse a prior `run_id` for a new frozen spec.
-14. Finish with a final raw-goal audit, then call
+14. Finish with a final raw-goal audit. For a normal Goal Plus record, call
     `goal_plus_set_status(status="complete", evidence=[...])` only when the
-    original objective is satisfied.
+    current objective is satisfied. When `policy.final_check.mode="required"`:
+    - call `goal_plus_prepare_final_check(checker_host="codex")`
+    - project `launch.task_name`, `launch.message`, and `launch.fork_turns`
+      onto the current `spawn_agent` schema and launch it foreground
+    - use `fork_turns="none"`; the reviewer must reconstruct the result from
+      the workspace and runtime evidence, not inherit the parent transcript
+    - wait for the reviewer to return; it must call
+      `goal_plus_submit_final_check` itself
+    - on failure, address its findings and prepare a fresh check; never submit
+      a reviewer verdict on the reviewer's behalf
+    A passing required check atomically marks the Goal Plus record complete.
 15. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
 
@@ -59,6 +84,13 @@ history of Search Mode tasks, one `run_id` over one frozen spec each;
 `linked_search` is only the current-task compatibility view. Within a search
 task, planning and started search rounds are reported separately by
 `goal_plus_monitor_snapshot`.
+
+Goal edits are also append-only: `goal_revisions` preserves every effective
+objective. Updating a goal resets intake/triage for the new revision and makes
+older Search tasks and final checks historical without deleting them. If a
+turn is interrupted, call `goal_plus_status` and resume the durable revision.
+If a reviewer is interrupted, its attempt is recorded as `interrupted`; call
+`goal_plus_prepare_final_check` to create and launch a fresh attempt.
 
 ## Triage Schema
 
@@ -114,7 +146,9 @@ This repository ships Codex 0.144.1 Goal Plus host hooks at
 `goal-plus --goal-plus-host-hook` for `UserPromptSubmit`,
 `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop`.
 `UserPromptSubmit` pre-creates and binds `/goal-plus` or `$goal-plus` before the
-model turn. `SessionStart` restores a session-bound active id. `PreToolUse`
+model turn. It also recognizes `/goal-plus-with-final-check` and explicit
+`/goal-plus edit` updates. `SessionStart` restores a session-bound active id.
+`PreToolUse`
 enforces the search and mutation gates. `PostToolUse(goal_plus_create)` remains
 a compatibility binding fallback. `Stop` and `SubagentStop` return runtime
 continuation prompts when a required action remains.

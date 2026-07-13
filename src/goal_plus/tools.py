@@ -195,6 +195,20 @@ class GoalPlusTools:
         payload["evidence_log"] = self.runtime.list_events(goal_plus_id)
         return payload
 
+    def goal_plus_update_goal(
+        self,
+        goal_plus_id: str,
+        raw_goal: str,
+        expected_revision: int,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.update_goal(
+            goal_plus_id,
+            raw_goal=raw_goal,
+            expected_revision=expected_revision,
+            reason=reason,
+        ).model_dump(mode="json")
+
     def goal_plus_record_triage(
         self,
         goal_plus_id: str,
@@ -255,6 +269,38 @@ class GoalPlusTools:
             report_path=report_path,
             promotion_artifact_path=promotion_artifact_path,
             summary=summary,
+        ).model_dump(mode="json")
+
+    def goal_plus_prepare_final_check(
+        self,
+        goal_plus_id: str,
+        checker_host: str,
+    ) -> dict[str, Any]:
+        return self.runtime.prepare_final_check(
+            goal_plus_id,
+            checker_host=checker_host,  # type: ignore[arg-type]
+        )
+
+    def goal_plus_submit_final_check(
+        self,
+        goal_plus_id: str,
+        check_id: str,
+        goal_revision: int,
+        verdict: str,
+        summary: str,
+        findings: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        checker_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime.submit_final_check(
+            goal_plus_id,
+            check_id=check_id,
+            goal_revision=goal_revision,
+            verdict=verdict,
+            summary=summary,
+            findings=findings,
+            evidence=evidence,
+            checker_metadata=checker_metadata,
         ).model_dump(mode="json")
 
     def goal_plus_set_status(

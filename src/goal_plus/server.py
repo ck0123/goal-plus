@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
@@ -232,6 +232,21 @@ def create_mcp(
         return goal_tools.goal_plus_status(goal_plus_id)
 
     @mcp.tool()
+    def goal_plus_update_goal(
+        goal_plus_id: str,
+        raw_goal: str,
+        expected_revision: int,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace the effective objective in-place and begin a new auditable revision."""
+        return goal_tools.goal_plus_update_goal(
+            goal_plus_id,
+            raw_goal,
+            expected_revision,
+            reason,
+        )
+
+    @mcp.tool()
     def goal_plus_record_triage(
         goal_plus_id: str,
         triage: dict[str, Any],
@@ -290,6 +305,37 @@ def create_mcp(
             report_path,
             promotion_artifact_path,
             summary,
+        )
+
+    @mcp.tool()
+    def goal_plus_prepare_final_check(
+        goal_plus_id: str,
+        checker_host: Literal["codex", "pi"],
+    ) -> dict[str, Any]:
+        """Create or resume the required final-check request and return a host launch payload."""
+        return goal_tools.goal_plus_prepare_final_check(goal_plus_id, checker_host)
+
+    @mcp.tool()
+    def goal_plus_submit_final_check(
+        goal_plus_id: str,
+        check_id: str,
+        goal_revision: int,
+        verdict: Literal["pass", "fail", "interrupted"],
+        summary: str,
+        findings: list[dict[str, Any]] | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        checker_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record an independent final-check verdict for an exact goal revision."""
+        return goal_tools.goal_plus_submit_final_check(
+            goal_plus_id,
+            check_id,
+            goal_revision,
+            verdict,
+            summary,
+            findings,
+            evidence,
+            checker_metadata,
         )
 
     @mcp.tool()

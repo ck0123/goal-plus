@@ -34,6 +34,7 @@ const GoalPlusRecommendedPhase = Type.Union([
 	Type.Literal("search"),
 ]);
 const GoalPlusDiscoveryOrigin = Type.Union([Type.Literal("initial"), Type.Literal("in_progress")]);
+const GoalPlusFinalCheckerHost = Type.Union([Type.Literal("codex"), Type.Literal("pi")]);
 const GoalPlusTriage = Type.Object(
 	{
 		is_optimization: Type.Boolean(),
@@ -81,6 +82,15 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{ additionalProperties: false },
 	),
 	goal_plus_status: Type.Object({ goal_plus_id: Type.String() }, { additionalProperties: false }),
+	goal_plus_update_goal: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			raw_goal: Type.String(),
+			expected_revision: Type.Number(),
+			reason: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
 	goal_plus_monitor_snapshot: Type.Object(
 		{
 			goal_plus_id: Type.Optional(Type.String()),
@@ -127,6 +137,30 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			report_path: Type.Optional(Type.String()),
 			promotion_artifact_path: Type.Optional(Type.String()),
 			summary: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_prepare_final_check: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			checker_host: GoalPlusFinalCheckerHost,
+		},
+		{ additionalProperties: false },
+	),
+	goal_plus_submit_final_check: Type.Object(
+		{
+			goal_plus_id: Type.String(),
+			check_id: Type.String(),
+			goal_revision: Type.Number(),
+			verdict: Type.Union([
+				Type.Literal("pass"),
+				Type.Literal("fail"),
+				Type.Literal("interrupted"),
+			]),
+			summary: Type.String(),
+			findings: Type.Optional(Type.Array(LooseObject)),
+			evidence: Type.Optional(Type.Array(LooseObject)),
+			checker_metadata: Type.Optional(LooseObject),
 		},
 		{ additionalProperties: false },
 	),
@@ -278,6 +312,10 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
+	pi_goal_plus_run_final_check: Type.Object(
+		{ launch: LooseObject },
+		{ additionalProperties: false },
+	),
 };
 const MAIN_GATED_TOOLS = new Set([
 	"bash",
@@ -286,6 +324,7 @@ const MAIN_GATED_TOOLS = new Set([
 	"pi_rpc_run_worker",
 	"pi_search_run_candidate",
 	"pi_search_run_batch",
+	"pi_goal_plus_run_final_check",
 ]);
 
 interface GoalPlusNativeState {
@@ -308,6 +347,10 @@ interface GoalPlusNextActionPayload {
 interface GoalPlusStatusPayload {
 	goal_plus_id?: string;
 	raw_goal?: string;
+	goal_revision?: number;
+	goal_revisions?: unknown[];
+	policy?: Record<string, unknown>;
+	final_checks?: unknown[];
 	status?: string;
 	phase?: string;
 	next_action?: GoalPlusNextActionPayload | null;
@@ -617,6 +660,8 @@ function buildGoalPlusContext(status: GoalPlusStatusPayload): string {
 		`goal_plus_id: ${status.goal_plus_id ?? activeGoalPlusId ?? "unknown"}`,
 		`status: ${status.status ?? "unknown"}`,
 		`phase: ${status.phase ?? "unknown"}`,
+		`goal_revision: ${status.goal_revision ?? 1}`,
+		`final_check_policy: ${JSON.stringify(status.policy?.final_check ?? { mode: "disabled" })}`,
 		"",
 		"Raw goal:",
 		status.raw_goal ?? "",
@@ -626,6 +671,7 @@ function buildGoalPlusContext(status: GoalPlusStatusPayload): string {
 		"- Update goal-plus state after each phase change.",
 		"- Search is an autonomous upgrade: once the spec draft is high-confidence with no open questions, proceed through the Search Mode gate without asking the user for approval.",
 		"- Before claiming completion, audit the raw goal against current evidence and call goal_plus_set_status.",
+		"- If final_check.mode is required, completion must come from a passing independent final check for this exact goal revision.",
 	];
 	if (action) {
 		lines.push(
@@ -644,6 +690,7 @@ function buildGoalStartPrompt(status: GoalPlusStatusPayload): string {
 		"Continue this Goal Plus task.",
 		"",
 		`goal_plus_id: ${status.goal_plus_id ?? activeGoalPlusId ?? "unknown"}`,
+		`goal_revision: ${status.goal_revision ?? 1}`,
 		"",
 		"Raw goal:",
 		status.raw_goal ?? "",
@@ -651,30 +698,54 @@ function buildGoalStartPrompt(status: GoalPlusStatusPayload): string {
 		"Important:",
 		"- The goal_plus_create tool has already created this record. Do not call goal_plus_create again for this goal.",
 		"- Load and follow the goal-plus skill.",
+		"- Treat the latest user message as authoritative for whether to continue, revise, or discuss something unrelated; do not resume merely because Goal Plus is active.",
+		"- If it changes the effective scope, deliverables, or success criteria, call goal_plus_update_goal with the complete revised raw goal and current expected_revision, then re-triage. Otherwise keep the revision unchanged and clarify ambiguous intent before resuming.",
 		"- Except for loading the goal-plus skill, do not read or audit target files before goal_plus_record_triage.",
 		"- Start by recording triage with goal_plus_record_triage.",
 		"- If the raw goal explicitly requests verifier-guided Search Mode and supplies a measurable verifier or metric, do not downgrade it to ordinary Goal Mode.",
 		"- If the task is search-ready, enter Search Mode autonomously through the frozen-spec and Search Mode gates; do not ask the user to approve the transition.",
 		"- Never invent frozen_spec_id, run_id, plan_id, candidate_id, or agent_session_id values. Use only exact ids returned by the immediately preceding runtime tools; call search_create before goal_plus_link_search_run.",
 		"- If it is not search-ready, continue in Goal Mode and update goal-plus state before stopping.",
+		"- If this record requires final check, call goal_plus_prepare_final_check(checker_host=\"pi\"), then pass its launch payload to pi_goal_plus_run_final_check.",
 	].join("\n");
 }
 
-function rawGoalFromSlashInput(text: string): string | undefined {
-	const match = text.match(/^\/goal-plus(?:\s+([\s\S]*))?$/);
-	return match ? (match[1] ?? "").trim() : undefined;
+interface GoalPlusSlashRequest {
+	action: "start" | "edit" | "resume";
+	rawGoal: string;
+	withFinalCheck: boolean;
+}
+
+function goalPlusRequestFromSlashInput(text: string): GoalPlusSlashRequest | undefined {
+	const match = text.match(/^\/(goal-plus(?:-with-final-check)?)(?:\s+([\s\S]*))?$/);
+	if (!match) return undefined;
+	const command = match[1];
+	const body = (match[2] ?? "").trim();
+	if (command === "goal-plus" && body.toLowerCase() === "resume") {
+		return { action: "resume", rawGoal: "", withFinalCheck: false };
+	}
+	if (command === "goal-plus" && body.toLowerCase().startsWith("edit ")) {
+		return { action: "edit", rawGoal: body.slice(5).trim(), withFinalCheck: false };
+	}
+	return {
+		action: "start",
+		rawGoal: body,
+		withFinalCheck: command === "goal-plus-with-final-check",
+	};
 }
 
 async function createGoalPlusStart(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	rawGoal: string,
+	withFinalCheck = false,
 ): Promise<string | undefined> {
 	const commandCtx = commandContextFrom(ctx);
 	const startEntryCount = ctx.sessionManager.getEntries().length;
 	const result = await runJsonCli(pi, commandCtx, "goal_plus_create", {
 		raw_goal: rawGoal,
 		source_path: ctx.cwd,
+		policy: withFinalCheck ? { final_check: { mode: "required" } } : undefined,
 	});
 	const status = statusFrom(result.details);
 	if (!status?.goal_plus_id) {
@@ -700,6 +771,62 @@ async function createGoalPlusStart(
 	return buildGoalStartPrompt(status);
 }
 
+async function updateGoalPlusStart(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	rawGoal: string,
+): Promise<string | undefined> {
+	if (!activeGoalPlusId) {
+		ctx.ui.notify("No active Goal Plus record to edit", "error");
+		return undefined;
+	}
+	const commandCtx = commandContextFrom(ctx);
+	const current = await refreshActiveGoal(pi, commandCtx, canPersistGoalState(ctx.mode));
+	if (!current?.goal_plus_id || typeof current.goal_revision !== "number") return undefined;
+	const result = await runJsonCli(pi, commandCtx, "goal_plus_update_goal", {
+		goal_plus_id: current.goal_plus_id,
+		raw_goal: rawGoal,
+		expected_revision: current.goal_revision,
+		reason: "user edited the Goal Plus objective through Pi",
+	});
+	const status = statusFrom(result.details);
+	if (!status?.goal_plus_id) return undefined;
+	activateGoal(pi, status, undefined, canPersistGoalState(ctx.mode));
+	return [
+		"The Goal Plus objective was edited by the user.",
+		`goal_plus_id: ${status.goal_plus_id}`,
+		`goal_revision: ${status.goal_revision ?? "unknown"}`,
+		"The new raw goal supersedes the previous objective. Re-run goal_plus_record_triage before continuing.",
+		"Preserve prior search tasks only as historical evidence; do not treat an older revision's result or final check as current.",
+	].join("\n");
+}
+
+async function resumeGoalPlusStart(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+): Promise<string | undefined> {
+	if (!activeGoalPlusId) {
+		ctx.ui.notify("No interrupted Goal Plus record to resume", "error");
+		return undefined;
+	}
+	const status = await refreshActiveGoal(
+		pi,
+		commandContextFrom(ctx),
+		canPersistGoalState(ctx.mode),
+	);
+	if (!status || isTerminalStatus(status.status)) {
+		ctx.ui.notify("The previous Goal Plus record is already terminal", "error");
+		return undefined;
+	}
+	return [
+		"Resume the interrupted Goal Plus task from durable runtime state.",
+		`goal_plus_id: ${status.goal_plus_id ?? activeGoalPlusId}`,
+		`goal_revision: ${status.goal_revision ?? 1}`,
+		"Treat the current raw goal, revision, next_action, Search history, and final-check state as authoritative.",
+		"Do not recreate the Goal Plus record or silently restart completed phases.",
+	].join("\n");
+}
+
 function sendUserMessage(pi: ExtensionAPI, message: string, deliverAsFollowUp: boolean) {
 	if (!deliverAsFollowUp) {
 		pi.sendUserMessage(message);
@@ -720,7 +847,7 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 			const startEntryCount = ctx.sessionManager.getEntries().length;
 			const canPersistPiState = canPersistGoalState(ctx.mode);
 			const result = await runJsonCli(pi, commandCtx, name, params as Record<string, unknown>);
-			if (name === "goal_plus_create") {
+			if (["goal_plus_create", "goal_plus_update_goal", "goal_plus_submit_final_check"].includes(name)) {
 				activateGoal(pi, result.details, startEntryCount, canPersistPiState);
 			}
 			if (name === "search_get_agent_context") {
@@ -729,6 +856,66 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 				sawContext = true;
 			}
 			return result;
+		},
+	});
+}
+
+function registerPiFinalCheckTool(pi: ExtensionAPI) {
+	pi.registerTool({
+		name: "pi_goal_plus_run_final_check",
+		label: "Pi Goal Plus Final Check",
+		description: "Launch the foreground Pi RPC final-check reviewer from goal_plus_prepare_final_check.launch.",
+		parameters: toolParameters("pi_goal_plus_run_final_check"),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const commandCtx = commandContextFrom(ctx);
+			const invocation = projectModuleInvocation(commandCtx, "goal-plus-pi-worker", "goal_plus.pi_worker");
+			const launch = (params as { launch: Record<string, unknown> }).launch;
+			const result = await pi.exec(invocation.command, [
+				...invocation.argsPrefix,
+				"run",
+				"--launch-json",
+				JSON.stringify(launch),
+			]);
+			const goalPlusId = typeof launch.goal_plus_id === "string" ? launch.goal_plus_id : activeGoalPlusId;
+			const checkId = typeof launch.check_id === "string" ? launch.check_id : undefined;
+			const goalRevision = typeof launch.goal_revision === "number" ? launch.goal_revision : undefined;
+			const handle = result.code === 0 ? JSON.parse(result.stdout || "{}") : undefined;
+			let statusResult = goalPlusId
+				? await runJsonCli(pi, commandCtx, "goal_plus_status", { goal_plus_id: goalPlusId })
+				: undefined;
+			const status = statusFrom(statusResult?.details);
+			const latestCheck = Array.isArray(status?.final_checks) ? status.final_checks.at(-1) : undefined;
+			const checkerTimedOut = isRecord(handle) && isRecord(handle.metadata) && handle.metadata.timed_out === true;
+			if (
+				goalPlusId && checkId && goalRevision !== undefined &&
+				isRecord(latestCheck) && latestCheck.check_id === checkId && latestCheck.status === "pending"
+			) {
+				await runJsonCli(pi, commandCtx, "goal_plus_submit_final_check", {
+					goal_plus_id: goalPlusId,
+					check_id: checkId,
+					goal_revision: goalRevision,
+					verdict: "interrupted",
+					summary: result.code !== 0
+						? "Pi final checker process failed before submitting a verdict."
+						: checkerTimedOut
+							? "Pi final checker timed out before submitting a verdict."
+							: "Pi final checker exited before submitting a verdict.",
+					checker_metadata: { exit_code: result.code, timed_out: checkerTimedOut },
+				});
+				statusResult = await runJsonCli(pi, commandCtx, "goal_plus_status", { goal_plus_id: goalPlusId });
+			}
+			if (result.code !== 0) {
+				const failure = commandFailure("pi_goal_plus_run_final_check", invocation, result);
+				const details = { ...failure.details, status: statusResult?.details };
+				return { content: [{ type: "text" as const, text: failure.text }], details };
+			}
+			const details = { handle, status: statusResult?.details };
+			cachedGoalStatus = statusFrom(statusResult?.details);
+			return {
+				content: [{ type: "text" as const, text: JSON.stringify(details, null, 2) }],
+				details,
+			};
 		},
 	});
 }
@@ -777,6 +964,9 @@ function extractCandidatePath(event: ToolCallEvent): string | undefined {
 }
 
 function workspaceGuard(event: ToolCallEvent) {
+	if (role === "final-checker" && ["edit", "write"].includes(event.toolName)) {
+		return { block: true, reason: "Final-check reviewers are read-only." };
+	}
 	if (role !== "worker") return undefined;
 	if (event.toolName === "search_get_agent_context") return undefined;
 	if (!sawContext) {
@@ -833,16 +1023,32 @@ export default function (pi: ExtensionAPI) {
 	}
 	if (!isPrintLikeInvocation) {
 		pi.registerCommand("goal-plus", {
-			description: "Run native Pi Goal Plus",
+			description: "Run, edit, or resume native Pi Goal Plus",
 			handler: async (args, ctx) => {
-				const rawGoal = args.trim();
-				if (!rawGoal) {
-					ctx.ui.notify("Usage: /goal-plus <goal>", "error");
+				const request = goalPlusRequestFromSlashInput(`/goal-plus ${args}`);
+				if (!request || (request.action !== "resume" && !request.rawGoal)) {
+					ctx.ui.notify("Usage: /goal-plus <goal>, /goal-plus edit <full revised goal>, or /goal-plus resume", "error");
 					return;
 				}
 				const deliverAsFollowUp = !ctx.isIdle();
-				const prompt = await createGoalPlusStart(pi, ctx, rawGoal);
+				const prompt = request.action === "resume"
+					? await resumeGoalPlusStart(pi, ctx)
+					: request.action === "edit"
+						? await updateGoalPlusStart(pi, ctx, request.rawGoal)
+						: await createGoalPlusStart(pi, ctx, request.rawGoal);
 				if (prompt) sendUserMessage(pi, prompt, deliverAsFollowUp);
+			},
+		});
+		pi.registerCommand("goal-plus-with-final-check", {
+			description: "Run native Pi Goal Plus with a required independent final check",
+			handler: async (args, ctx) => {
+				const rawGoal = args.trim();
+				if (!rawGoal) {
+					ctx.ui.notify("Usage: /goal-plus-with-final-check <goal>", "error");
+					return;
+				}
+				const prompt = await createGoalPlusStart(pi, ctx, rawGoal, true);
+				if (prompt) sendUserMessage(pi, prompt, !ctx.isIdle());
 			},
 		});
 	}
@@ -850,12 +1056,15 @@ export default function (pi: ExtensionAPI) {
 	const mainTools = [
 		"goal_plus_create",
 		"goal_plus_status",
+		"goal_plus_update_goal",
 		"goal_plus_monitor_snapshot",
 		"goal_plus_record_triage",
 		"goal_plus_save_spec_draft",
 		"goal_plus_confirm_frozen_verifier",
 		"goal_plus_link_search_run",
 		"goal_plus_record_search_result",
+		"goal_plus_prepare_final_check",
+		"goal_plus_submit_final_check",
 		"goal_plus_set_status",
 		"goal_plus_gate",
 		"search_freeze_spec",
@@ -872,21 +1081,28 @@ export default function (pi: ExtensionAPI) {
 		"pi_search_run_batch",
 	];
 	const workerTools = ["search_get_agent_context", "search_run_verifier", "search_list_iterations"];
-	for (const tool of role === "worker" ? workerTools : mainTools) {
+	const finalCheckerTools = ["goal_plus_status", "goal_plus_submit_final_check"];
+	const roleTools = role === "worker" ? workerTools : role === "final-checker" ? finalCheckerTools : mainTools;
+	for (const tool of roleTools) {
 		registerRuntimeTool(pi, tool);
 	}
+	if (role === "main") registerPiFinalCheckTool(pi);
 	if (role === "main" && exposeLowLevelWorker) registerPiWorkerTool(pi);
 	pi.on("input", async (event, ctx) => {
 		if (role !== "main" || (ctx.mode !== "print" && ctx.mode !== "json")) {
 			return { action: "continue" };
 		}
-		const rawGoal = rawGoalFromSlashInput(event.text);
-		if (rawGoal === undefined) return { action: "continue" };
-		if (!rawGoal) {
-			ctx.ui.notify("Usage: /goal-plus <goal>", "error");
+		const request = goalPlusRequestFromSlashInput(event.text);
+		if (request === undefined) return { action: "continue" };
+		if (request.action !== "resume" && !request.rawGoal) {
+			ctx.ui.notify("Goal Plus command requires a goal", "error");
 			return { action: "handled" };
 		}
-		const prompt = await createGoalPlusStart(pi, ctx, rawGoal);
+		const prompt = request.action === "resume"
+			? await resumeGoalPlusStart(pi, ctx)
+			: request.action === "edit"
+				? await updateGoalPlusStart(pi, ctx, request.rawGoal)
+				: await createGoalPlusStart(pi, ctx, request.rawGoal, request.withFinalCheck);
 		return prompt
 			? { action: "transform", text: prompt, images: event.images }
 			: { action: "handled" };

@@ -1,4 +1,6 @@
-# Goal Plus
+# Goal Plus(GP)
+
+English | [简体中文](README_zh.md)
 
 `goal-plus` is the host-neutral runtime behind `/goal-plus`. MCP is its shared
 control plane; Goal Plus is the product and user-facing workflow.
@@ -10,7 +12,7 @@ and metric, create isolated candidate workspaces, launch host-native workers,
 score candidates with runtime-owned checks, select the best result, write a
 report, and export a promotion patch.
 
-The project is not OpenCode-only. Current checked-in host assets target:
+Current checked-in host assets target:
 
 - Pi
 - Codex
@@ -91,6 +93,27 @@ Host-specific setup and debugging details live in:
 Use `/goal-plus` for both ordinary goals and optimization-shaped goals. The
 workflow starts with `goal_plus_create`, records triage, and only enters Search
 Mode after the goal has a verifier-backed spec.
+
+Codex and Pi also support these lifecycle commands:
+
+```text
+/goal-plus edit <full revised goal>
+/goal-plus resume
+/goal-plus-with-final-check <goal>
+```
+
+An edit keeps the same `goal_plus_id`, appends a new `goal_revision`, resets
+triage for the revised objective, and keeps prior Search tasks as historical
+evidence. A with-check run requires an independent host-native reviewer for the
+current revision; the runtime rejects ordinary completion until that reviewer
+passes. Interrupted turns retain the active record. A checker interruption is
+recorded as its own attempt, and the parent prepares a fresh reviewer attempt.
+
+The commands are explicit fallbacks. During an active Goal Plus conversation,
+Codex and Pi treat the latest user message as authoritative: implementation
+steering keeps the current revision, a change to scope/deliverables/success
+criteria calls `goal_plus_update_goal` and re-triages, and unrelated or
+ambiguous messages do not silently rewrite or resume the goal.
 
 `/goal-plus` has the same interaction contract as a normal `/goal`: one user
 submission starts an autonomous run. The agent decides from repository evidence

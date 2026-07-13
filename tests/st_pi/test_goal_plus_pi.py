@@ -170,6 +170,48 @@ def test_goal_plus_print_prompt_jsonl_has_typed_triage(
 
 
 @pytest.mark.st_pi
+def test_goal_plus_with_final_check_runs_pi_reviewer(
+    st_pi_run_root: Path,
+) -> None:
+    search_root = st_pi_run_root / ".gp"
+    session_dir = st_pi_run_root / "sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        *_pi_base_command(session_dir, "st-pi-goal-plus-final-check"),
+        "-p",
+        (
+            "/goal-plus-with-final-check Read pyproject.toml and prove that the project "
+            "name is goal-plus. Do not edit any file. Use Goal Mode and finish only through "
+            "the independent Pi final reviewer."
+        ),
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=_run_env(search_root),
+        text=True,
+        capture_output=True,
+        timeout=int(os.environ.get("ST_PI_FINAL_CHECK_TIMEOUT", "600")),
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr[-3000:] or result.stdout[-3000:]
+    record = _goal_record(search_root)
+    assert record["status"] == "complete"
+    assert record["policy"]["final_check"]["mode"] == "required"
+    assert record["goal_revision"] == 1
+    assert record["final_checks"][-1]["checker_host"] == "pi"
+    assert record["final_checks"][-1]["status"] == "passed"
+    event_types = [
+        event["event_type"]
+        for event in _goal_events(search_root, record["goal_plus_id"])
+    ]
+    assert "final_check_requested" in event_types
+    assert "final_check_submitted" in event_types
+
+
+@pytest.mark.st_pi
 def test_goal_plus_print_autonomously_enters_search(
     st_pi_run_root: Path,
 ) -> None:

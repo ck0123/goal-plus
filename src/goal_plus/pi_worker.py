@@ -605,7 +605,7 @@ def run_pi_rpc_worker(
     env = {
         **os.environ,
         "GOAL_PLUS_ROOT": str(root),
-        "GOAL_PLUS_PI_ROLE": "worker",
+        "GOAL_PLUS_PI_ROLE": str(launch.get("role") or "worker"),
         "GOAL_PLUS_SOURCE_PATH": str(default_extension_path().parents[2]),
     }
     selected_model_pattern = (
@@ -712,11 +712,16 @@ def run_pi_rpc_worker(
                         {
                             "type": "steer",
                             "message": (
-                                "Worker deadline is approaching. Stop starting new analysis, edits, "
-                                "or optimization iterations. If the workspace changed since the latest "
-                                "recorded verifier, run one final search_run_verifier now; otherwise "
-                                "return a concise summary immediately. Do not start another optimization "
-                                "iteration."
+                                "Final-check deadline is approaching. Stop new analysis and submit the "
+                                "structured goal_plus_submit_final_check verdict now."
+                                if launch.get("role") == "final-checker"
+                                else (
+                                    "Worker deadline is approaching. Stop starting new analysis, edits, "
+                                    "or optimization iterations. If the workspace changed since the latest "
+                                    "recorded verifier, run one final search_run_verifier now; otherwise "
+                                    "return a concise summary immediately. Do not start another optimization "
+                                    "iteration."
+                                )
                             ),
                         },
                         timeout=min(5, max(0.1, remaining_after_state)),

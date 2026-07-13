@@ -186,11 +186,18 @@ def _goal_payload(record: GoalPlusRecord | None) -> dict[str, Any] | None:
         return None
     linked = record.linked_search.model_dump(mode="json") if record.linked_search else None
     next_action = record.next_action.model_dump(mode="json") if record.next_action else None
+    latest_final_check = (
+        record.final_checks[-1].model_dump(mode="json") if record.final_checks else None
+    )
     return {
         "goal_plus_id": record.goal_plus_id,
         "status": record.status,
         "phase": record.phase,
         "raw_goal": record.raw_goal,
+        "goal_revision": record.goal_revision,
+        "goal_revisions_total": len(record.goal_revisions),
+        "final_check_policy": record.policy.get("final_check", {"mode": "disabled"}),
+        "latest_final_check": latest_final_check,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "search_tasks_total": len(record.search_tasks),

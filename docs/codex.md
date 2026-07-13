@@ -15,8 +15,10 @@ The tracked project-local MCP configuration template is:
 .codex/config.example.toml
 .codex/hooks.json
 .codex/skills/goal-plus/SKILL.md
+.codex/skills/goal-plus-with-final-check/SKILL.md
 .codex/skills/search/SKILL.md
 .codex/agents/search_candidate_agent.toml
+.codex/agents/goal_plus_final_checker.toml
 scripts/hooks/goal_plus_stop.py
 ```
 
@@ -48,6 +50,25 @@ binding. `Stop` and `SubagentStop` gate only an explicitly selected
 `GOAL_PLUS_ID` or an active Goal Plus record whose bound session matches the
 current Codex session. The skill continues to record explicit gate calls for
 auditability.
+
+The same hook recognizes `/goal-plus edit <full revised goal>`,
+`/goal-plus resume`, and `/goal-plus-with-final-check <goal>`. Edit updates the
+bound record in place,
+increments `goal_revision`, and injects the revised objective before the next
+model turn. With-check creation stores `policy.final_check.mode="required"`.
+Those commands are fallbacks rather than the only continuation path. The
+hidden context and skill require Codex to interpret each latest user message:
+keep the revision for continuation or implementation steering, call
+`goal_plus_update_goal` and re-triage when scope/deliverables/success criteria
+change, and clarify unrelated or ambiguous intent instead of automatically
+resuming merely because a record is active.
+At completion, Codex calls `goal_plus_prepare_final_check(checker_host="codex")`
+and launches the returned `spawn_agent` payload foreground with
+`fork_turns="none"`. The reviewer, not the parent, submits the verdict with
+`goal_plus_submit_final_check`. Repeated preparation is idempotent while a
+check remains pending; an objective edit supersedes it. If a final-check
+subagent stops without submitting a verdict, `SubagentStop` records the attempt
+as interrupted and allows the parent to launch a fresh checker.
 
 Set `GOAL_PLUS_ID=gp_...` to force the hook to gate a specific active goal when
 multiple Goal Plus records are active. Set `GOAL_PLUS_STOP_HOOK_DISABLED=1` or

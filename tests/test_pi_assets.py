@@ -49,6 +49,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     assert "name: goal-plus" in text
     assert "Goal Mode" in text
@@ -91,6 +92,15 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "complete user-facing skill" in text
     assert "goal_plus_record_search_result" in text
     assert "final raw-goal audit" in text
+    assert "/goal-plus-with-final-check" in text
+    assert "goal_plus_update_goal" in text
+    assert "treat the latest user message as authoritative" in normalized
+    assert "scope, deliverables, or success criteria" in normalized
+    assert "clarify before revising or resuming" in normalized
+    assert "merely because the Goal Plus record is active" in normalized
+    assert "goal_plus_prepare_final_check" in text
+    assert "pi_goal_plus_run_final_check" in text
+    assert "goal_plus_submit_final_check" in text
     assert "native Pi `/goal-plus` command creates" in text
     assert "queues" in text
     assert "the continuation prompt" in text
@@ -136,6 +146,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "pi_search_run_batch" in text
     assert "pi_search_run_candidate" in text
     assert 'pi.registerCommand("goal-plus"' in text
+    assert 'pi.registerCommand("goal-plus-with-final-check"' in text
     assert "goal-plus-native-state" in text
     assert 'pi.on("session_start"' in text
     assert 'pi.on("before_agent_start"' in text
@@ -165,11 +176,18 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "function canPersistGoalState" in text
     assert 'pi.on("input"' in text
     assert 'action: "transform"' in text
-    assert "rawGoalFromSlashInput" in text
+    assert "goalPlusRequestFromSlashInput" in text
     assert "createGoalPlusStart" in text
+    assert "updateGoalPlusStart" in text
+    assert "resumeGoalPlusStart" in text
+    assert "/goal-plus resume" in text
+    assert 'action: "resume"' in text
     assert "do not downgrade it to ordinary Goal Mode" in text
+    assert "Treat the latest user message as authoritative" in text
+    assert "scope, deliverables, or success criteria" in text
+    assert "clarify ambiguous intent before resuming" in text
     assert "Never invent frozen_spec_id" in text
-    assert 'if (name === "goal_plus_create")' in text
+    assert '"goal_plus_update_goal", "goal_plus_submit_final_check"' in text
     assert "activateGoal(pi, result.details, startEntryCount, canPersistPiState)" in text
     assert 'if (name === "goal_plus_create" && canPersistPiState)' not in text
     assert "activateGoal(pi, status, startEntryCount, canPersistGoalState(ctx.mode))" in text
@@ -184,6 +202,11 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert '"pi_search_run_candidate"' in text
     assert '"pi_search_run_batch"' in text
     assert "block" in text
+    assert 'role === "final-checker"' in text
+    assert "registerPiFinalCheckTool" in text
+    assert "Final-check reviewers are read-only" in text
+    assert 'verdict: "interrupted"' in text
+    assert "timed out before submitting a verdict" in text
 
 
 def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> None:
@@ -196,6 +219,10 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "parameters: JsonArgs" not in text
     assert "goal_plus_record_triage: Type.Object" in text
     assert "goal_plus_monitor_snapshot: Type.Object" in text
+    assert "goal_plus_update_goal: Type.Object" in text
+    assert "goal_plus_prepare_final_check: Type.Object" in text
+    assert "goal_plus_submit_final_check: Type.Object" in text
+    assert "pi_goal_plus_run_final_check: Type.Object" in text
     assert "pi_search_run_candidate: Type.Object" in text
     assert "runtime_multiplier" in text
     assert "pi_search_run_batch: Type.Object" in text

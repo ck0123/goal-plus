@@ -46,6 +46,246 @@ def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
     assert runtime.list_events(record.goal_plus_id)[0]["event_type"] == "created"
 
 
+def test_update_goal_creates_revision_and_supersedes_pending_check(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal(
+        "Implement the first requirement",
+        policy={"final_check": {"mode": "required"}},
+    )
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+    request = runtime.prepare_final_check(record.goal_plus_id, "codex")
+
+    updated = runtime.update_goal(
+        record.goal_plus_id,
+        raw_goal="Implement both the first and second requirements",
+        expected_revision=1,
+        reason="user added a requirement after interruption",
+    )
+
+    assert updated.goal_plus_id == record.goal_plus_id
+    assert updated.goal_revision == 2
+    assert [revision.revision for revision in updated.goal_revisions] == [1, 2]
+    assert updated.goal_revisions[-1].raw_goal == updated.raw_goal
+    assert updated.final_checks[0].check_id == request["check"]["check_id"]
+    assert updated.final_checks[0].status == "superseded"
+    assert updated.phase == "intake"
+    assert updated.triage is None
+    assert updated.next_action.kind == "record_triage"  # type: ignore[union-attr]
+    with pytest.raises(RuntimeError, match="revision conflict"):
+        runtime.update_goal(
+            record.goal_plus_id,
+            raw_goal="stale edit",
+            expected_revision=1,
+        )
+
+
+def test_required_final_check_blocks_stop_and_completes_only_after_pass(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal(
+        "Ship a complete implementation",
+        source_path=".",
+        policy={"final_check": {"mode": "required"}},
+    )
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+
+    gate = runtime.gate(record.goal_plus_id, event="stop", context={})
+    assert gate.decision == "block"
+    assert "independent final check" in gate.continuation_prompt
+    with pytest.raises(RuntimeError, match="requires a passing final check"):
+        runtime.set_status(record.goal_plus_id, status="complete")
+
+    first = runtime.prepare_final_check(record.goal_plus_id, "codex")
+    resumed = runtime.prepare_final_check(record.goal_plus_id, "codex")
+    assert resumed["check"]["check_id"] == first["check"]["check_id"]
+    assert first["launch"]["tool"] == "spawn_agent"
+    assert first["launch"]["fork_turns"] == "none"
+    assert first["launch"]["agent_type"] == "goal_plus_final_checker"
+    assert "goal_plus_submit_final_check" in first["launch"]["message"]
+
+    failed = runtime.submit_final_check(
+        record.goal_plus_id,
+        check_id=first["check"]["check_id"],
+        goal_revision=1,
+        verdict="fail",
+        summary="One explicit requirement is still missing.",
+        findings=[{"requirement": "tests", "problem": "missing interruption coverage"}],
+        evidence=[{"kind": "test_inventory", "result": "missing"}],
+    )
+    assert failed.status == "active"
+    assert failed.next_action.kind == "address_final_check_findings"  # type: ignore[union-attr]
+    assert runtime.gate(
+        record.goal_plus_id,
+        event="subagent_stop",
+        context={"agent_type": "goal_plus_final_checker"},
+    ).decision == "allow"
+
+    second = runtime.prepare_final_check(record.goal_plus_id, "codex")
+    assert second["check"]["check_id"] != first["check"]["check_id"]
+    completed = runtime.submit_final_check(
+        record.goal_plus_id,
+        check_id=second["check"]["check_id"],
+        goal_revision=1,
+        verdict="pass",
+        summary="Every requirement is implemented and covered.",
+        evidence=[{"kind": "pytest", "result": "passed"}],
+    )
+    assert completed.status == "complete"
+    assert completed.final_checks[-1].status == "passed"
+    assert runtime.gate(record.goal_plus_id, event="stop", context={}).decision == "allow"
+
+
+def test_interrupted_final_check_requires_fresh_host_review(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal(
+        "Ship after an independent review",
+        source_path=".",
+        policy={"final_check": {"mode": "required"}},
+    )
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+    first = runtime.prepare_final_check(record.goal_plus_id, "pi")
+    assert first["launch"]["tool"] == "pi_goal_plus_run_final_check"
+    assert first["launch"]["role"] == "final-checker"
+
+    interrupted = runtime.submit_final_check(
+        record.goal_plus_id,
+        check_id=first["check"]["check_id"],
+        goal_revision=1,
+        verdict="interrupted",
+        summary="Pi reviewer timed out before recording a verdict.",
+        checker_metadata={"timed_out": True},
+    )
+    assert interrupted.status == "active"
+    assert interrupted.final_checks[-1].status == "interrupted"
+    assert interrupted.next_action.kind == "retry_final_check"  # type: ignore[union-attr]
+    assert runtime.gate(record.goal_plus_id, event="stop", context={}).decision == "block"
+
+    second = runtime.prepare_final_check(record.goal_plus_id, "pi")
+    assert second["check"]["check_id"] != first["check"]["check_id"]
+    assert second["check"]["status"] == "pending"
+
+
+def test_pending_final_checker_can_stop_without_blocking_parent_cleanup(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal(
+        "Review me",
+        policy={"final_check": {"mode": "required"}},
+    )
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+    runtime.prepare_final_check(record.goal_plus_id, "codex")
+
+    gate = runtime.gate(
+        record.goal_plus_id,
+        event="subagent_stop",
+        context={"agent_type": "goal_plus_final_checker"},
+    )
+    assert gate.decision == "allow"
+
+
+def test_goal_update_keeps_old_search_result_historical(tmp_path) -> None:
+    root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(root)
+    record = runtime.create_goal("Optimize revision one")
+    _write_search_run(root, "run_001", "spec_abc")
+    linked = runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    assert linked.search_tasks[0].goal_revision == 1
+
+    revised = runtime.update_goal(
+        record.goal_plus_id,
+        "Optimize a different revision two objective",
+        expected_revision=1,
+    )
+    assert revised.linked_search is None
+
+    run_dir = root / "runs" / "run_001"
+    (run_dir / "report.md").write_text("# report\n", encoding="utf-8")
+    promotion = run_dir / "promotion" / "c001.patch"
+    promotion.parent.mkdir(parents=True)
+    promotion.write_text("patch\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "frozen_spec_id": "spec_abc",
+                "state": "promoted",
+                "selected_candidate_id": "c001",
+            }
+        ),
+        encoding="utf-8",
+    )
+    late = runtime.record_search_result(record.goal_plus_id, "run_001")
+    assert late.goal_revision == 2
+    assert late.phase == "intake"
+    assert late.linked_search is None
+    assert late.search_tasks[0].result_recorded_at is not None
+
+
+@pytest.mark.pi
+def test_pi_final_check_launch_is_foreground_stateless_and_revision_bound(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".gp")
+    record = runtime.create_goal(
+        "Verify the Pi delivery",
+        source_path=".",
+        policy={"final_check": {"mode": "required"}},
+    )
+    runtime.record_triage(
+        record.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+    request = runtime.prepare_final_check(record.goal_plus_id, "pi")
+    launch = request["launch"]
+    assert launch["tool"] == "pi_goal_plus_run_final_check"
+    assert launch["role"] == "final-checker"
+    assert launch["session_id"] == request["check"]["check_id"]
+    assert launch["budget_control"]["max_runtime_seconds"] == 300
+    assert "goal_plus_submit_final_check" in launch["prompt"]
+
+    runtime.update_goal(
+        record.goal_plus_id,
+        "Verify the revised Pi delivery",
+        expected_revision=1,
+    )
+    with pytest.raises(RuntimeError, match="stale for goal revision"):
+        runtime.submit_final_check(
+            record.goal_plus_id,
+            check_id=request["check"]["check_id"],
+            goal_revision=1,
+            verdict="pass",
+            summary="old review",
+            evidence=[{"kind": "pytest", "result": "passed"}],
+        )
+
+
 def test_goal_like_triage_allows_stop_without_search(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Tidy docs wording")

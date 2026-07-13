@@ -47,6 +47,26 @@ model runs. The checked-in `.pi/prompts/goal-plus.md` remains a compatibility
 fallback for environments that do not load the extension; only that fallback
 depends on the model calling `goal_plus_create` first.
 
+Pi also registers `/goal-plus edit <full revised goal>`, `/goal-plus resume`, and
+`/goal-plus-with-final-check <goal>`. Edit preserves the active
+`goal_plus_id`, appends a `goal_revision`, and resets triage while retaining old
+Search tasks as history. With-check creation requires a final independent Pi
+reviewer. The main agent calls `goal_plus_prepare_final_check(checker_host="pi")`
+and passes the exact launch object to `pi_goal_plus_run_final_check`. That tool
+starts a foreground, stateless Pi RPC process with
+`GOAL_PLUS_PI_ROLE=final-checker`; the extension exposes only status and final
+check submission tools and blocks edit/write calls. The reviewer submits its
+own structured verdict. A pass completes atomically; a failure returns an
+actionable repair step. An aborted main turn preserves the active id, and a
+checker exit or timeout is recorded as an interrupted attempt, after which a
+fresh check can be prepared without losing the active Goal Plus revision.
+
+The explicit edit/resume commands are fallbacks. The Pi skill and native start
+prompt require the main agent to interpret the latest user message before
+resuming: steering keeps the current revision, a change to
+scope/deliverables/success criteria updates the complete goal and re-triages,
+and unrelated or ambiguous intent does not silently rewrite or resume it.
+
 The Pi extension runs as `GOAL_PLUS_PI_ROLE=main` by default and
 exposes `goal_plus_*`, `search_*`, `pi_search_run_batch`, and
 `pi_search_run_candidate`. The low-level `pi_rpc_run_worker` tool is hidden in

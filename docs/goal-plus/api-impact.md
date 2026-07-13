@@ -117,6 +117,21 @@ evidence_log
 hook_counters
 ```
 
+### `goal_plus_update_goal`
+
+Replace the effective objective under the same id and append an auditable
+revision.
+
+```text
+goal_plus_id: str
+raw_goal: str
+expected_revision: int
+reason?: str
+```
+
+The update resets intake/triage, supersedes pending final checks, and preserves
+older Search tasks as historical evidence. Stale revisions are rejected.
+
 ### `goal_plus_record_triage`
 
 Record the orchestrator's classification decision.
@@ -242,6 +257,28 @@ next_action?: dict
 Output: updated goal-plus state.
 
 Only `complete`, `blocked`, and `abandoned` are terminal.
+For `policy.final_check.mode="required"`, `complete` is rejected unless the
+current goal revision has a passing final check.
+
+### `goal_plus_prepare_final_check`
+
+Create or resume a pending revision-bound reviewer request.
+
+```text
+goal_plus_id: str
+checker_host: "codex" | "pi"
+```
+
+Output includes the check record and exact foreground host launch payload. The
+runtime does not launch or supervise the reviewer.
+
+### `goal_plus_submit_final_check`
+
+Record the independent reviewer's structured result for an exact check and
+goal revision. A failure creates a required repair action. A pass with concrete
+evidence atomically completes the Goal Plus record. `verdict="interrupted"`
+records a checker exit/timeout without treating it as a semantic failure and
+requires a fresh reviewer attempt.
 
 ### `goal_plus_gate`
 

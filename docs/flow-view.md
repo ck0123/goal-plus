@@ -2,6 +2,21 @@
 
 This doc is the information-flow counterpart to [design.md](design.md). `design.md` describes the data model and state machine; this doc describes **which agent does which step, what each agent actually sees at runtime, and which OpenCode platform constraints gate the flow**.
 
+For Codex and Pi with `policy.final_check.mode="required"`, final delivery uses
+a separate foreground reviewer after ordinary Goal work or Search promotion:
+
+```text
+Main -> goal_plus_prepare_final_check(host)
+     -> host launches returned reviewer payload with fresh context
+Reviewer -> goal_plus_status -> read-only audit -> goal_plus_submit_final_check
+Runtime -> fail: required repair action | pass: atomic Goal Plus completion
+```
+
+The runtime persists the request and verdict but does not launch, wait for, or
+interrupt the reviewer. Re-preparing a still-pending check is idempotent. A
+checker interruption records an interrupted attempt and requires a fresh
+request. A goal edit increments `goal_revision` and supersedes any pending request.
+
 The flow below describes one internal search task after `/goal-plus` has
 created a goal record, recorded triage, and frozen a verifier-backed
 spec. A Goal Plus task may repeat this flow with another frozen spec/run. Use

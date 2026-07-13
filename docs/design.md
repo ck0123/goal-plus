@@ -203,6 +203,27 @@ After `goal_plus_record_search_result` and the raw-goal audit, the main agent
 may finish the Goal Plus task or create and link another search task. Starting
 another task does not overwrite earlier task evidence.
 
+### Goal Revisions And Required Final Check
+
+`GoalPlusRecord.raw_goal` is the compatibility view of the latest entry in the
+append-only `goal_revisions` history. `goal_plus_update_goal` uses optimistic
+`expected_revision` concurrency, keeps the same `goal_plus_id`, returns the
+record to intake/triage, and preserves older Search tasks with their original
+`goal_revision`. Late results from an older revision remain evidence but cannot
+move the new revision into final audit.
+
+`policy.final_check.mode="required"` adds a final-check gate after Goal Mode or
+the final raw-goal audit. `goal_plus_prepare_final_check` creates an idempotent
+pending check and returns a host-native foreground launch payload. The host,
+not the runtime, launches the Codex or Pi reviewer. The reviewer works from a
+fresh context, stays read-only, and calls `goal_plus_submit_final_check` for the
+exact `check_id` and `goal_revision`. A failed verdict returns the parent to a
+required repair action; a passing verdict atomically marks the Goal Plus record
+complete. Updating the objective supersedes pending checks, so an older review
+can never complete a newer revision. If the host reviewer stops or times out
+before submitting, the attempt is recorded as interrupted and the parent must
+prepare a fresh check.
+
 There is no batch-shortcut compatibility helper. For fixed-work-order strategies, call `search_plan_next` followed by `search_start_batch`. For proposal-based strategies, do the same and pass proposals to `start_batch`.
 
 ## Agent Host Adapters

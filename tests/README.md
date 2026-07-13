@@ -26,6 +26,8 @@ tests/
 ├── test_pi_tool.py                    # Pi JSON CLI facade
 ├── test_pi_driver.py                  # Pi native candidate driver orchestration
 ├── test_pi_worker.py                  # Pi RPC worker runner metrics and retries
+├── test_codex_goal_plus_hooks.py      # Codex create/edit/resume/with-check hook scenarios
+├── test_goal_plus.py                  # Goal revisions and final-check state-machine scenarios
 ├── st/                                # System tests (real host code-agent run)
 │   ├── conftest.py                    # Pre-flight checks + fixtures
 │   ├── hosts.py                       # Host marker mapping and asset linking
@@ -151,6 +153,10 @@ pytest -m "st and st_pi_rpc" -k circle_packing_two_batch -v -s
 
 # Pi native /goal-plus print/TUI entrypoints
 pytest -m st_pi -v -s
+
+# Real Codex and Pi required-final-check reviewer smokes
+pytest -m "st and st_codex" -k goal_plus_required_final_checker -v -s
+pytest -m st_pi -k with_final_check_runs_pi_reviewer -v -s
 
 # Pi native plain-language optimization must autonomously enter Search
 pytest -m st_pi -k autonomously_enters_search -v -s
