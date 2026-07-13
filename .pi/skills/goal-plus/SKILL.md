@@ -67,6 +67,43 @@ Only offer names from this subset when drafting a Pi SearchSpec. Do not silently
 rewrite an already frozen unsupported strategy; let runtime validation reject
 it and create a corrected draft before freezing instead.
 
+### Search Run Budget Planning
+
+Choose the whole-run candidate budget before `search_freeze_spec`; it is frozen
+and cannot grow inside that run. `budget.max_candidates` is the total number of
+distinct candidate workspaces across all rounds. `budget.max_parallel` is only
+the maximum width of one planned batch. Therefore the planned round capacity is
+approximately `ceil(max_candidates / max_parallel)`. If the two values are
+equal, the run normally has only one full batch.
+
+When the user or outer harness supplies a wall-clock, attempt, or token budget:
+
+1. Reserve time for main-agent final verification, selection, reporting, and
+   promotion.
+2. Choose a batch width `max_parallel` that the host can support. When no better
+   resource signal exists, recommend 4; this is a planning recommendation, not
+   a runtime default.
+3. Estimate one batch duration from `worker_budget.max_runtime_seconds`, prior
+   observed worker durations, and Pi launch/verifier overhead. Under actual
+   concurrent `pi_search_run_batch` execution use the slowest worker duration,
+   not the sum of all workers.
+4. Estimate `rounds = floor((remaining_seconds - final_reserve_seconds) /
+   estimated_batch_seconds)`, subject to explicit attempt/token caps, then set
+   `max_candidates = rounds * max_parallel`. Keep at least one candidate only
+   when enough time remains to produce and verify useful work.
+
+For example, 7200 seconds remaining, 900 seconds reserved, and 1260 seconds per
+batch gives 5 rounds; with `max_parallel=3`, set `max_candidates=15`.
+
+After every completed batch, refresh remaining time and
+`search_list_history` before calling `search_plan_next` again. `requested_k` is
+only the request for that round; use at most `max_parallel` and the remaining
+total candidate budget. Do not treat its default value 4 as the whole-run
+budget. Do not call `search_select` while another useful batch fits the
+remaining budget. Select only when the candidate cap is exhausted, another
+batch no longer fits before the final reserve, an explicit attempt/token cap is
+reached, or a declared early-stop condition holds.
+
 1. `search_freeze_spec`, or reuse an existing `frozen_spec_id` when the later
    cycle keeps the same verifier and edit contract
 2. `search_create`

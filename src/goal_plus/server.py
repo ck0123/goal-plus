@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.models import GoalPlusSpecDraftInput, SearchSpec
@@ -38,7 +40,10 @@ def create_mcp(
         custom verifier files must be materialized during Spec Discovery in a
         source-owned path, never `.gp` or `.search`. `expected_outputs`
         contains artifact path/glob strings only; it is not a stdout parser
-        configuration.
+        configuration. `spec.budget.max_candidates` is the immutable total
+        candidate cap across the whole run and all rounds;
+        `spec.budget.max_parallel` is the per-batch planning cap. Equal values
+        normally permit only one full batch.
         """
         return tools.search_freeze_spec(spec, verifier_artifact_paths)
 
@@ -80,8 +85,27 @@ def create_mcp(
         return tools.search_list_history(run_id, top_n, sort_by)
 
     @mcp.tool()
-    def search_plan_next(run_id: str, requested_k: int = 4) -> dict[str, Any]:
-        """Plan the next batch of candidate workspaces. Returns `plan_id` + candidate tasks."""
+    def search_plan_next(
+        run_id: str,
+        requested_k: Annotated[
+            int,
+            Field(
+                gt=0,
+                description=(
+                    "Candidate count requested for this planning round only. "
+                    "The runtime plans min(requested_k, remaining total "
+                    "candidate budget, budget.max_parallel). The default 4 is "
+                    "a batch-size request, not a whole-run budget."
+                ),
+            ),
+        ] = 4,
+    ) -> dict[str, Any]:
+        """Plan one candidate batch/round from the frozen whole-run budget.
+
+        `requested_k` applies only to this call. The actual `planned_k` is the
+        minimum of `requested_k`, the remaining `budget.max_candidates`, and
+        `budget.max_parallel`. Returns `plan_id` plus candidate tasks.
+        """
         return tools.search_plan_next(run_id, requested_k)
 
     @mcp.tool()

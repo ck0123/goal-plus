@@ -56,6 +56,22 @@ def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
     assert "`expected_outputs` accepts" in text
 
 
+def test_claude_search_skill_documents_whole_run_budget_planning() -> None:
+    text = (ROOT / ".claude" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(text.split())
+
+    assert "## Search Run Budget Planning" in text
+    assert "total number of distinct candidate workspaces across all rounds" in normalized
+    assert "`ceil(max_candidates / max_parallel)`" in text
+    assert "recommend 4" in text
+    assert "`max_candidates = rounds * max_parallel`" in text
+    assert "set `max_candidates=15`" in text
+    assert "default value 4 as the whole-run budget" in normalized
+    assert "Do not call `search_select` while" in normalized
+
+
 def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     text = (ROOT / ".claude" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"

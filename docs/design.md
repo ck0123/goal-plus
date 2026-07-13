@@ -261,6 +261,19 @@ OpenCode/Codex/Claude Code capability matrix and adapter contract.
 planned batch. The runtime does not supervise host worker lifecycle after the
 host launches those workers.
 
+The maximum number of full-width planning rounds is approximately
+`ceil(max_candidates / max_parallel)`. Equal values normally permit only one
+full batch. `requested_k` belongs to one `search_plan_next` call; the runtime
+computes `planned_k = min(requested_k, remaining max_candidates,
+max_parallel)`. Its default value 4 is not a default whole-run budget.
+
+When an outer host supplies a wall-clock budget, the main agent—not the
+runtime—should reserve final-verification/reporting time, estimate a batch
+duration from the worker budget or observed durations, choose a supported batch
+width, and derive `max_candidates` from the number of batches that fit. It
+should refresh the remaining time after each batch and select only when no
+further useful batch fits or another declared stop condition holds.
+
 There are no runtime-owned time-based deadlines. Host workers run until their
 host-local budget, step cap, or user interruption stops them. OpenCode worker
 tiers use `SearchCandidateAgent` (default, 50 steps), `SearchCandidateAgentFlash` (15),

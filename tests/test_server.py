@@ -124,6 +124,34 @@ def test_freeze_spec_exposes_complete_nested_search_spec_schema(tmp_path: Path) 
     strategy = spec_schema["properties"]["strategy"]
     assert "worker_budget" in strategy["properties"]
 
+    budget = spec_schema["properties"]["budget"]["properties"]
+    assert "entire frozen search run and all planning rounds" in budget[
+        "max_candidates"
+    ]["description"]
+    assert "not a per-round limit" in budget["max_candidates"]["description"]
+    assert "one planned batch" in budget["max_parallel"]["description"]
+    assert "not the total candidate count" in budget["max_parallel"]["description"]
+
+    freeze_description = " ".join(tools["search_freeze_spec"].description.split())
+    assert "immutable total candidate cap" in freeze_description
+    assert "per-batch planning cap" in freeze_description
+
+
+def test_plan_next_exposes_per_round_budget_semantics(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+    tools = asyncio.run(mcp.get_tools())
+
+    plan_tool = tools["search_plan_next"]
+    requested_k = plan_tool.parameters["properties"]["requested_k"]
+
+    assert requested_k["default"] == 4
+    assert requested_k["exclusiveMinimum"] == 0
+    assert "planning round only" in requested_k["description"]
+    assert "remaining total candidate budget" in requested_k["description"]
+    assert "not a whole-run budget" in requested_k["description"]
+    assert "minimum of `requested_k`" in plan_tool.description
+    assert "remaining `budget.max_candidates`" in plan_tool.description
+
 
 def test_spec_draft_exposes_partial_nested_search_spec_schema(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
@@ -139,6 +167,17 @@ def test_spec_draft_exposes_partial_nested_search_spec_schema(tmp_path: Path) ->
     assert "budget" in typed_search_spec["properties"]
     assert "process_verifiers" in typed_search_spec["properties"]
     assert "required" not in typed_search_spec
+
+    draft_budget_schema = typed_search_spec["properties"]["budget"]
+    draft_budget = next(
+        option
+        for option in draft_budget_schema["anyOf"]
+        if option.get("type") == "object"
+    )["properties"]
+    assert "entire frozen search run and all planning rounds" in draft_budget[
+        "max_candidates"
+    ]["description"]
+    assert "one planned batch" in draft_budget["max_parallel"]["description"]
 
 
 def test_goal_plus_gate_exposes_hook_friendly_schema(tmp_path: Path) -> None:

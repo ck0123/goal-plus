@@ -94,8 +94,16 @@ const EditSurface = Type.Object(
 );
 const SearchBudget = Type.Object(
 	{
-		max_candidates: PositiveInteger,
-		max_parallel: PositiveInteger,
+		max_candidates: Type.Integer({
+			exclusiveMinimum: 0,
+			description:
+				"Hard cap on total distinct candidate workspaces across the entire frozen search run and all planning rounds. This is not a per-round limit and cannot be increased after freeze. Setting it equal to max_parallel normally permits only one full batch.",
+		}),
+		max_parallel: Type.Integer({
+			exclusiveMinimum: 0,
+			description:
+				"Maximum candidates that search_plan_next may place in one planned batch. This controls batch width or recommended concurrency, not the total candidate count.",
+		}),
 		max_tokens: Type.Optional(NullablePositiveInteger),
 	},
 	{ additionalProperties: false },
@@ -339,7 +347,13 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 	search_plan_next: Type.Object(
 		{
 			run_id: Type.String(),
-			requested_k: Type.Optional(Type.Number()),
+			requested_k: Type.Optional(
+				Type.Integer({
+					exclusiveMinimum: 0,
+					description:
+						"Candidate count requested for this planning round only. The runtime plans min(requested_k, remaining total candidate budget, budget.max_parallel). The default 4 is a batch-size request, not a whole-run budget.",
+				}),
+			),
 		},
 		{ additionalProperties: false },
 	),
@@ -442,6 +456,14 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{ launch: LooseObject },
 		{ additionalProperties: false },
 	),
+};
+const RuntimeToolDescriptions: Record<string, string> = {
+	goal_plus_save_spec_draft:
+		"Save the discovered SearchSpec draft. Its budget uses whole-run max_candidates and per-batch max_parallel semantics; do not invent per-round budget fields.",
+	search_freeze_spec:
+		"Freeze an immutable SearchSpec and verifier bundle. budget.max_candidates is the total cap across the whole run and all rounds; budget.max_parallel is the per-batch cap. Equal values normally permit only one full batch.",
+	search_plan_next:
+		"Plan one candidate batch/round. requested_k applies only to this call; planned_k is min(requested_k, remaining max_candidates, max_parallel). The default request of 4 is not a whole-run budget.",
 };
 const MAIN_GATED_TOOLS = new Set([
 	"bash",
@@ -965,7 +987,7 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 	pi.registerTool({
 		name,
 		label: name,
-		description: `Call goal-plus facade tool ${name}.`,
+		description: RuntimeToolDescriptions[name] ?? `Call goal-plus facade tool ${name}.`,
 		parameters: toolParameters(name),
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

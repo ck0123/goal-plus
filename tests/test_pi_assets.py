@@ -113,6 +113,22 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
 
 
+def test_pi_goal_plus_skill_documents_whole_run_budget_planning() -> None:
+    text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(text.split())
+
+    assert "### Search Run Budget Planning" in text
+    assert "total number of distinct candidate workspaces across all rounds" in normalized
+    assert "`ceil(max_candidates / max_parallel)`" in text
+    assert "recommend 4" in text
+    assert "`max_candidates = rounds * max_parallel`" in text
+    assert "set `max_candidates=15`" in text
+    assert "default value 4 as the whole-run budget" in normalized
+    assert "Do not call `search_select` while" in normalized
+
+
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     text = (ROOT / ".pi" / "prompts" / "search-candidate-worker.md").read_text(
         encoding="utf-8"
@@ -245,6 +261,13 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "metric_direction: Type.Union" in text
     assert "process_verifiers: Type.Array(VerifierCommand" in text
     assert "worker_budget: Type.Optional(Type.Union" in text
+    assert "const RuntimeToolDescriptions" in text
+    assert "RuntimeToolDescriptions[name]" in text
+    assert "Hard cap on total distinct candidate workspaces" in text
+    assert "This is not a per-round limit" in text
+    assert "Maximum candidates that search_plan_next may place in one planned batch" in text
+    assert "default 4 is a batch-size request, not a whole-run budget" in text
+    assert "planned_k is min(requested_k, remaining max_candidates, max_parallel)" in text
     freeze_schema = text.split("search_freeze_spec: Type.Object", 1)[1].split(
         "search_create: Type.Object", 1
     )[0]

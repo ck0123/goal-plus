@@ -95,6 +95,12 @@ Each `SearchSpec` must include an explicit `budget`; there are no runtime defaul
 - `max_parallel`: batch planning hint. The runtime records it in the spec, but Task calls are foreground and the runtime does not supervise workers.
 - `max_tokens`: optional worker-level cap.
 
+The maximum number of full-width planning rounds is approximately
+`ceil(max_candidates / max_parallel)`. Equal values normally permit only one
+full batch. `requested_k` is a per-call batch request, not a whole-run budget;
+the runtime clamps it by both the remaining total candidates and
+`max_parallel`.
+
 ## Workspace Backends
 
 `SearchSpec.workspace.backend` controls how the runtime materializes candidate

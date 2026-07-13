@@ -52,6 +52,22 @@ def test_opencode_search_skill_keeps_opencode_bind_contract() -> None:
     assert "search_bind_agent_handle" not in skill
 
 
+def test_opencode_search_skill_documents_whole_run_budget_planning() -> None:
+    skill = (ROOT / ".opencode" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(skill.split())
+
+    assert "### Search Run Budget Planning" in skill
+    assert "immutable total candidate-workspace cap" in normalized
+    assert "`ceil(max_candidates / max_parallel)`" in skill
+    assert "recommend 4" in skill
+    assert "`max_candidates = rounds * max_parallel`" in skill
+    assert "set `max_candidates=15`" in skill
+    assert "default value 4 as the whole-run budget" in normalized
+    assert "Do not call `search_select` while" in normalized
+
+
 def test_goal_any_optimize_command_is_goal_plus_alias() -> None:
     command = (ROOT / ".opencode" / "command" / "goal-any-optimize.md").read_text(
         encoding="utf-8"

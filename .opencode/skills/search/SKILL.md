@@ -126,7 +126,45 @@ Minimum shape:
 }
 ```
 
-`max_candidates` is enforced by the runtime. `max_parallel` is a batch planning hint — the runtime does not gate session creation on it and does not supervise Task lifecycle. There are no time-based budgets. Subagents run until their OpenCode step cap hits or the user interrupts. Users can interrupt anytime and query current best via `search_list_history` / `search_status`.
+`max_candidates` is the immutable total candidate-workspace cap across the
+entire run and all planning rounds. `max_parallel` is the maximum width of one
+planned batch — the runtime does not gate session creation on it and does not
+supervise Task lifecycle. The planned round capacity is approximately
+`ceil(max_candidates / max_parallel)`; equal values normally permit only one
+full batch. There are no runtime-owned time budgets. Subagents run until their
+OpenCode step cap hits or the user interrupts. Users can interrupt anytime and
+query current best via `search_list_history` / `search_status`.
+
+### Search Run Budget Planning
+
+Choose the whole-run candidate budget before `search_freeze_spec`; it cannot
+grow after freeze. When the user or an outer harness supplies a wall-clock,
+attempt, or token budget:
+
+1. Reserve time for main-agent final verification, selection, reporting, and
+   promotion.
+2. Choose a batch width `max_parallel` that the host can support. When no better
+   resource signal exists, recommend 4; this is a planning recommendation, not
+   a runtime default.
+3. Estimate one batch duration from the selected OpenCode worker tier, prior
+   observed worker durations, and launch/verifier overhead. If workers actually
+   run concurrently, use the slowest worker duration rather than their sum.
+4. Estimate `rounds = floor((remaining_seconds - final_reserve_seconds) /
+   estimated_batch_seconds)`, subject to explicit attempt/token caps, then set
+   `max_candidates = rounds * max_parallel`. Keep at least one candidate only
+   when enough time remains to produce and verify useful work.
+
+For example, 7200 seconds remaining, 900 seconds reserved, and 1260 seconds per
+batch gives 5 rounds; with `max_parallel=3`, set `max_candidates=15`.
+
+After every completed batch, refresh remaining time and
+`search_list_history` before calling `search_plan_next` again. `requested_k` is
+only the request for that round; use at most `max_parallel` and the remaining
+total candidate budget. Do not treat its default value 4 as the whole-run
+budget. Do not call `search_select` while another useful batch fits the
+remaining budget. Select only when the candidate cap is exhausted, another
+batch no longer fits before the final reserve, an explicit attempt/token cap is
+reached, or a declared early-stop condition holds.
 
 `strategy.worker_mode` must be `agent-session-pool` (the only supported value). Retired values are rejected at parse time — fix the spec instead of relying on normalization.
 

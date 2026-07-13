@@ -46,8 +46,23 @@ class FeedbackPolicy(str, Enum):
 
 
 class Budget(SearchModel):
-    max_candidates: int = Field(gt=0)
-    max_parallel: int = Field(gt=0)
+    max_candidates: int = Field(
+        gt=0,
+        description=(
+            "Hard cap on total distinct candidate workspaces across the entire "
+            "frozen search run and all planning rounds. This is not a per-round "
+            "limit and cannot be increased after freeze. Setting it equal to "
+            "max_parallel normally permits only one full batch."
+        ),
+    )
+    max_parallel: int = Field(
+        gt=0,
+        description=(
+            "Maximum candidates that search_plan_next may place in one planned "
+            "batch. This controls batch width or recommended concurrency, not "
+            "the total candidate count."
+        ),
+    )
     max_tokens: int | None = Field(default=None, gt=0)
 
 
