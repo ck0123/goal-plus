@@ -15,6 +15,9 @@ the only evidence that a real host can complete the user-visible workflow.
 
 Default tests must never launch OpenCode, Codex, Claude Code, or Pi. A host
 behavior claim requires the matching ST; if it cannot run, report that gap.
+With the `dev` extra installed, `pytest -n 2 --dist=load -q` runs the default
+gate with two workers. Keep real-host ST serial so host processes, model calls,
+and machine resources do not interfere with one another.
 
 ## System-Test Markers
 

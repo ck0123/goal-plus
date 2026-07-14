@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0",
+  "pytest-xdist>=3.6,<4.0",
   "tomli>=2.0; python_version < '3.11'",
 ]
 bench = [
