@@ -357,3 +357,28 @@ def test_pi_goal_plus_skill_documents_multiple_search_tasks_and_monitoring() -> 
     assert "search_tasks?: unknown[]" in extension
     assert "search_tasks_total?: number" in extension
     assert "status.search_tasks_total" in extension
+
+
+def test_pi_goal_plus_reassesses_spec_after_real_result() -> None:
+    skill = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    prompt = (ROOT / ".pi" / "prompts" / "goal-plus.md").read_text(
+        encoding="utf-8"
+    )
+    combined = "\n".join([skill, prompt])
+    flattened_skill = " ".join(skill.split())
+
+    assert "After the first meaningful optimization result" in combined
+    assert "large relative improvement" in combined
+    assert "absolute target" in skill
+    assert "acceptance threshold" in skill
+    assert "success criterion" in flattened_skill
+    assert "deeper structural optimization" in skill
+    assert "`upgrade_spec`" in skill
+    assert "`keep_spec_with_justification`" in skill
+    assert "`revise_goal`" in skill
+    assert "goal_plus_update_goal" in skill
+    assert "not new runtime states" in skill
+    assert "not a new runtime phase" in prompt
+    assert "bootstrap" not in combined.lower()

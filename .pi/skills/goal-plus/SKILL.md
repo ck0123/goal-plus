@@ -134,6 +134,36 @@ reached, or a declared early-stop condition holds.
     - address failed findings and prepare a fresh check
     A passing required check atomically marks the record complete.
 
+### Post-result Spec Reassessment
+
+After the first meaningful optimization result becomes available, do not infer
+that the current frozen spec is adequate merely because its score beats the
+baseline or improves by a large relative factor. Relative improvement is useful
+evidence, but it does not prove that the raw goal is close to being satisfied,
+that important failure modes are covered, or that deeper structural optimization
+is unavailable. When an absolute target, acceptance threshold, success
+criterion, or known upper bound is unavailable, state that uncertainty and
+explicitly consider whether the apparent improvement could still be far from
+useful success.
+
+Use the existing raw-goal audit to consider the appropriate response:
+
+- `upgrade_spec`: the current verifier, edit contract, or search directive is
+  too weak or too narrow. Save a stronger draft, freeze a new spec, and create a
+  new Search run. Never modify the prior frozen artifacts in place.
+- `keep_spec_with_justification`: the current spec remains a credible proxy for
+  the raw goal. State the evidence for keeping it and direct subsequent Search
+  toward deeper or structurally different approaches rather than assuming that
+  the current best-so-far neighborhood is sufficient.
+- `revise_goal`: the effective scope, deliverables, or success criteria need to
+  change. Call `goal_plus_update_goal` with the complete revised raw goal and
+  current `expected_revision`, re-triage, then discover and freeze the spec for
+  that revision.
+
+These labels describe a main-agent decision inside the existing raw-goal audit;
+they are not new runtime states, an additional workflow phase, or a user
+approval checkpoint.
+
 One Goal Plus record is the complete user task. `search_tasks` is its
 append-only search-task history; each item is one `run_id` over one frozen
 spec. `linked_search` is only the current-task compatibility view. A search

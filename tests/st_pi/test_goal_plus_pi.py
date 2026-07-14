@@ -47,6 +47,37 @@ MULTI_SEARCH_PROMPT = (
     "结束 Goal Plus，继续创建并链接第二个不同 run_id。只有两个 search task 都完成后，"
     "才把 Goal Plus 状态设为 complete。"
 )
+SPEC_REVISION_PROMPT = (
+    "在同一个 Goal Plus 记录中验证一次真实的两版 frozen spec 流程。工作区是 {workspace}。"
+    "第一轮只使用 .goal-plus-verifiers/simple_score.py，metric_name=score、maximize，"
+    "只允许修改 candidate.txt；使用 random、worker_host=pi-rpc、"
+    "worker_mode=agent-session-pool、max_candidates=1、max_parallel=1，worker budget "
+    "为 max_runtime_seconds=60、max_turns=4、on_exceed=interrupt。完成完整的 freeze、"
+    "create、link、candidate verify、select、report、promote 和 record_search_result。"
+    "拿到第一轮真实 verifier 结果后，不要结束 Goal Plus；在现有 raw-goal audit 中选择 "
+    "revise_goal，调用 goal_plus_update_goal，把完整目标改为使用 "
+    ".goal-plus-verifiers/strict_score.py 在同一 candidate.txt 上最大化 score，"
+    "并说明第一版只能证明相对改进，不能证明已经达到更深目标。随后重新 triage、保存"
+    "新的高置信 spec draft、冻结新的 frozen spec，并以相同的 Pi 单候选预算完成第二个"
+    "完整 Search run。两轮必须使用不同 frozen_spec_id 和 run_id；第二轮完成后才把"
+    " Goal Plus 状态设为 complete。"
+)
+
+
+def _write_spec_revision_workspace(workspace: Path) -> None:
+    verifier_dir = workspace / ".goal-plus-verifiers"
+    verifier_dir.mkdir(parents=True)
+    workspace.joinpath("candidate.txt").write_text("0\n", encoding="utf-8")
+    for name, cap in (("simple_score.py", 10), ("strict_score.py", 100)):
+        verifier_dir.joinpath(name).write_text(
+            "from __future__ import annotations\n"
+            "import json\n"
+            "from pathlib import Path\n"
+            f"CAP = {cap}\n"
+            "value = int(Path('candidate.txt').read_text(encoding='utf-8').strip())\n"
+            "print(json.dumps({'score': min(value, CAP)}))\n",
+            encoding="utf-8",
+        )
 
 
 def _pi_base_command(session_dir: Path, session_id: str) -> list[str]:
@@ -350,6 +381,71 @@ def test_goal_plus_print_supports_two_search_tasks_in_one_goal(
         }
         for warning in snapshot["warnings"]
     )
+    _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
+
+
+@pytest.mark.st_pi
+def test_goal_plus_print_revises_goal_and_frozen_spec_after_first_result(
+    st_pi_run_root: Path,
+) -> None:
+    search_root = st_pi_run_root / ".gp"
+    session_dir = st_pi_run_root / "sessions"
+    workspace = st_pi_run_root / "spec-revision-workspace"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    _write_spec_revision_workspace(workspace)
+    command = [
+        *_pi_base_command(session_dir, "st-pi-goal-plus-spec-revision"),
+        "-p",
+        f"/goal-plus {SPEC_REVISION_PROMPT.format(workspace=workspace)}",
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=_run_env(search_root),
+        text=True,
+        capture_output=True,
+        timeout=int(os.environ.get("ST_PI_SPEC_REVISION_TIMEOUT", "900")),
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr[-3000:] or result.stdout[-3000:]
+    record = _goal_record(search_root)
+    assert record["status"] == "complete"
+    assert record["goal_revision"] == 2
+    assert len(record["goal_revisions"]) == 2
+    search_tasks = record.get("search_tasks") or []
+    assert len(search_tasks) == 2, record
+    assert [task["goal_revision"] for task in search_tasks] == [1, 2]
+    frozen_spec_ids = [task["frozen_spec_id"] for task in search_tasks]
+    run_ids = [task["run_id"] for task in search_tasks]
+    assert len(set(frozen_spec_ids)) == 2
+    assert len(set(run_ids)) == 2
+
+    verifier_names = []
+    for task in search_tasks:
+        run_record = json.loads(
+            (search_root / "runs" / task["run_id"] / "run.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert run_record["state"] == "promoted"
+        frozen_spec = json.loads(
+            (
+                search_root
+                / "specs"
+                / task["frozen_spec_id"]
+                / "frozen_spec.json"
+            ).read_text(encoding="utf-8")
+        )
+        verifier_names.append(
+            Path(frozen_spec["spec"]["process_verifiers"][0]["command"][-1]).name
+        )
+
+    assert verifier_names == ["simple_score.py", "strict_score.py"]
+    events = _goal_events(search_root, record["goal_plus_id"])
+    assert [event["event_type"] for event in events].count("goal_updated") == 1
+    assert [event["event_type"] for event in events].count("triage_recorded") == 2
     _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
 
 

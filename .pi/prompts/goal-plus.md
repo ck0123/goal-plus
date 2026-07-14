@@ -19,3 +19,11 @@ it during Spec Discovery before freezing in a source-owned path such as
 `bash`, `write`, and `edit` for this work. The freeze tool exposes the full
 nested `SearchSpec` schema; do not guess fields from validation errors.
 `expected_outputs` lists artifact paths/globs only.
+
+After the first meaningful optimization result is available, apply the skill's
+existing raw-goal audit before assuming that the frozen spec should continue
+unchanged. A large relative improvement over baseline does not show that the
+result is close to meaningful success, especially when an absolute target or
+acceptance criterion is unavailable. Explicitly consider `upgrade_spec`,
+`keep_spec_with_justification`, or `revise_goal`; this is reasoning within the
+existing flow, not a new runtime phase or approval step.
