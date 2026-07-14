@@ -1252,11 +1252,11 @@ export default function (pi: ExtensionAPI) {
 	}
 	if (!isPrintLikeInvocation) {
 		pi.registerCommand("goal-plus", {
-			description: "Run, edit, or resume native Pi Goal Plus",
+			description: "Run, edit, or resume native Pi Goal Plus (mode=autonomous|probe)",
 			handler: async (args, ctx) => {
 				const request = goalPlusRequestFromSlashInput(`/goal-plus ${args}`);
 				if (!request || (request.action !== "resume" && !request.rawGoal)) {
-					ctx.ui.notify("Usage: /goal-plus <goal>, /goal-plus edit <full revised goal>, or /goal-plus resume", "error");
+					ctx.ui.notify("Usage: /goal-plus [mode=autonomous|probe] <goal>, /goal-plus edit [mode=...] <full revised goal>, or /goal-plus resume", "error");
 					return;
 				}
 				const deliverAsFollowUp = !ctx.isIdle();
@@ -1273,7 +1273,7 @@ export default function (pi: ExtensionAPI) {
 			handler: async (args, ctx) => {
 				const rawGoal = args.trim();
 				if (!rawGoal) {
-					ctx.ui.notify("Usage: /goal-plus-with-final-check <goal>", "error");
+					ctx.ui.notify("Usage: /goal-plus-with-final-check [mode=autonomous|probe] <goal>", "error");
 					return;
 				}
 				const prompt = await createGoalPlusStart(pi, ctx, rawGoal, true);

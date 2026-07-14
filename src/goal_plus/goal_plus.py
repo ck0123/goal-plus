@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import calendar
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,28 @@ from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
 TERMINAL_STATUSES: set[GoalPlusStatus] = {"blocked", "complete", "abandoned"}
+EXPLORATION_MODES = {"autonomous", "probe"}
+EXPLORATION_MODE_LINE_PREFIX = "Goal Plus exploration mode:"
+EXPLORATION_MODE_LINES = {
+    "autonomous": (
+        "Goal Plus exploration mode: autonomous. Give each initial candidate worker "
+        "a meaningful exploration window (about 15 minutes when the host supports "
+        "elapsed-time leases); reinvest longer leases in promising candidates, up to "
+        "about 1 hour when evidence justifies it; a worker lease ending never completes "
+        "or stops the Goal Plus task."
+    ),
+    "probe": (
+        "Goal Plus exploration mode: probe. Use short worker leases or turn budgets only "
+        "to establish feasibility, potential, and key blockers; after each probe the main "
+        "agent must choose whether to deepen the same candidate, try another direction, "
+        "or continue investigation; a probe ending never completes or stops the Goal Plus "
+        "task."
+    ),
+}
+_EXPLORATION_MODE_ARGUMENT_RE = re.compile(
+    r"^mode=(?P<mode>[^\s]+)(?:\s+|$)",
+    re.IGNORECASE,
+)
 SEARCH_TOOL_SUFFIXES = (
     "search_freeze_spec",
     "search_create",
@@ -58,6 +82,66 @@ MUTATING_TOOL_SUFFIXES = (
 
 def utc_timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def exploration_mode_from_raw_goal(raw_goal: str) -> str | None:
+    lines = raw_goal.rstrip().splitlines()
+    if not lines:
+        return None
+    final_line = lines[-1].strip()
+    for mode in EXPLORATION_MODES:
+        if final_line.startswith(f"{EXPLORATION_MODE_LINE_PREFIX} {mode}."):
+            return mode
+    return None
+
+
+def normalize_goal_plus_raw_goal(
+    raw_goal: str,
+    *,
+    inherited_mode: str | None = None,
+) -> str:
+    normalized = raw_goal.strip()
+    argument_match = _EXPLORATION_MODE_ARGUMENT_RE.match(normalized)
+    explicit_mode: str | None = None
+    if argument_match is not None:
+        explicit_mode = argument_match.group("mode").lower()
+        if explicit_mode not in EXPLORATION_MODES:
+            allowed = ", ".join(sorted(EXPLORATION_MODES))
+            raise ValueError(
+                f"unsupported Goal Plus exploration mode {explicit_mode!r}; "
+                f"expected one of: {allowed}"
+            )
+        normalized = normalized[argument_match.end() :].strip()
+
+    embedded_mode = exploration_mode_from_raw_goal(normalized)
+    if embedded_mode is not None:
+        normalized = normalized.rsplit("\n", 1)[0].rstrip()
+
+    if not normalized:
+        raise ValueError("raw_goal must include an objective after the exploration mode")
+
+    mode = explicit_mode or embedded_mode or inherited_mode or "autonomous"
+    if mode not in EXPLORATION_MODES:
+        mode = "autonomous"
+    return f"{normalized}\n\n{EXPLORATION_MODE_LINES[mode]}"
+
+
+def _elapsed_seconds(created_at: str) -> int | None:
+    try:
+        created_epoch = calendar.timegm(
+            time.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+        )
+    except (OverflowError, ValueError):
+        return None
+    return max(0, int(time.time() - created_epoch))
+
+
+def _format_elapsed(seconds: int | None) -> str:
+    if seconds is None:
+        return "unknown"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, remaining_seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {remaining_seconds}s ({seconds} seconds)"
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -160,9 +244,10 @@ class FileGoalPlusRuntime:
         goal_plus_id = self._next_goal_id()
         now = utc_timestamp()
         normalized_policy = self._normalize_policy(policy)
+        normalized_raw_goal = normalize_goal_plus_raw_goal(raw_goal)
         record = GoalPlusRecord(
             goal_plus_id=goal_plus_id,
-            raw_goal=raw_goal.strip(),
+            raw_goal=normalized_raw_goal,
             source_path=source_path,
             status="active",
             phase="intake",
@@ -171,7 +256,7 @@ class FileGoalPlusRuntime:
             goal_revisions=[
                 GoalPlusGoalRevision(
                     revision=1,
-                    raw_goal=raw_goal.strip(),
+                    raw_goal=normalized_raw_goal,
                     reason="goal created",
                     created_at=now,
                 )
@@ -212,9 +297,10 @@ class FileGoalPlusRuntime:
                 f"Goal Plus revision conflict: expected {expected_revision}, "
                 f"current revision is {record.goal_revision}."
             )
-        updated_raw_goal = raw_goal.strip()
-        if not updated_raw_goal:
-            raise ValueError("updated raw_goal must be non-empty")
+        updated_raw_goal = normalize_goal_plus_raw_goal(
+            raw_goal,
+            inherited_mode=exploration_mode_from_raw_goal(record.raw_goal),
+        )
         if updated_raw_goal == record.raw_goal:
             return record
 
@@ -913,7 +999,30 @@ class FileGoalPlusRuntime:
             if subagent_role == "ordinary":
                 return self._record_gate(record, event, "allow")
 
-        if event in {"stop", "subagent_stop"} and record.next_action is not None:
+        if event == "stop":
+            reason = "Audit the complete raw goal before stopping."
+            if record.next_action is not None and record.next_action.required:
+                reason = record.next_action.description
+            elif self._final_check_mode(record) == "required":
+                final_check = self._latest_final_check(record)
+                if (
+                    final_check is None
+                    or final_check.goal_revision != record.goal_revision
+                    or final_check.status != "passed"
+                ):
+                    reason = (
+                        "Run the required independent final check for the current goal "
+                        "revision before stopping."
+                    )
+            return self._record_gate(
+                record,
+                event,
+                "block",
+                reason=reason,
+                continuation_prompt=self._stop_audit_prompt(record),
+            )
+
+        if event == "subagent_stop" and record.next_action is not None:
             if record.next_action.required:
                 return self._record_gate(
                     record,
@@ -925,7 +1034,7 @@ class FileGoalPlusRuntime:
             if self._final_check_mode(record) != "required":
                 return self._record_gate(record, event, "allow")
 
-        if event in {"stop", "subagent_stop"} and self._final_check_mode(record) == "required":
+        if event == "subagent_stop" and self._final_check_mode(record) == "required":
             final_check = self._latest_final_check(record)
             if (
                 final_check is None
@@ -1020,6 +1129,42 @@ class FileGoalPlusRuntime:
             status=record.status,
             reason=reason,
             continuation_prompt=continuation_prompt,
+        )
+
+    def _stop_audit_prompt(self, record: GoalPlusRecord) -> str:
+        checked_at = utc_timestamp()
+        elapsed = _format_elapsed(_elapsed_seconds(record.created_at))
+        action = record.next_action
+        action_text = action.description if action else "No next action is recorded."
+        final_check_text = (
+            "A passing independent final check for this exact goal revision is required; "
+            "call goal_plus_prepare_final_check and complete the returned host reviewer flow."
+            if self._final_check_mode(record) == "required"
+            else "No independent final check is required by policy."
+        )
+        return (
+            "Goal Plus is still active. A top-level agent may stop only after it records "
+            "a truthful terminal status.\n\n"
+            "Full raw goal for this revision:\n"
+            "---\n"
+            f"{record.raw_goal}\n"
+            "---\n\n"
+            "Timing context:\n"
+            f"- created_at_utc: {record.created_at}\n"
+            f"- checked_at_utc: {checked_at}\n"
+            f"- elapsed: {elapsed}\n\n"
+            f"Current phase: {record.phase}\n"
+            f"Current next action: {action_text}\n"
+            f"Final-check policy: {final_check_text}\n\n"
+            "Audit every requirement in the full raw goal against durable evidence. "
+            "If the raw goal contains a time limit, use the timestamps above to judge it: "
+            "continue while useful time remains and the objective is incomplete; when the "
+            "time condition is met or exceeded, preserve the best durable result and finish "
+            "the required audit. If there is no time limit, continue until the objective is "
+            "satisfied or a genuine blocker makes completion impossible. A worker lease or "
+            "probe ending never completes the Goal Plus task. Before stopping, call "
+            "goal_plus_set_status with complete, blocked, or abandoned and include a truthful "
+            "reason and evidence."
         )
 
     def _continuation_prompt(self, record: GoalPlusRecord) -> str:

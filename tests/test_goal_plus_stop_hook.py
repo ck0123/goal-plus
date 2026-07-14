@@ -87,7 +87,7 @@ def test_stop_hook_allows_unbound_active_goal_without_session_match(
     assert events[-1]["payload"]["reason"] == "no_matching_session"
 
 
-def test_stop_hook_allows_goal_mode_without_required_next_action(tmp_path: Path) -> None:
+def test_stop_hook_blocks_active_goal_mode_for_full_goal_audit(tmp_path: Path) -> None:
     search_root = tmp_path / ".search"
     runtime = FileGoalPlusRuntime(search_root)
     record = runtime.create_goal("Tidy docs wording")
@@ -117,8 +117,14 @@ def test_stop_hook_allows_goal_mode_without_required_next_action(tmp_path: Path)
     )
 
     assert result.returncode == 0
-    assert result.stdout == ""
-    assert runtime.list_events(record.goal_plus_id)[-1]["event_type"] == "gate_allowed"
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "Full raw goal for this revision" in payload["reason"]
+    assert "Tidy docs wording" in payload["reason"]
+    assert "created_at_utc" in payload["reason"]
+    assert "checked_at_utc" in payload["reason"]
+    assert "goal_plus_set_status" in payload["reason"]
+    assert runtime.list_events(record.goal_plus_id)[-1]["event_type"] == "gate_blocked"
 
 
 def test_stop_hook_can_target_explicit_goal_id(tmp_path: Path) -> None:

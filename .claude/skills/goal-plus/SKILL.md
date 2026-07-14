@@ -15,7 +15,12 @@ prefix; match by the final logical tool name.
 
 ## Workflow
 
-1. Call `goal_plus_create(raw_goal=...)`.
+1. Call `goal_plus_create(raw_goal=...)`. Prefix the goal with
+   `mode=autonomous` for substantial renewable candidate exploration (the
+   default when omitted), or `mode=probe` for short feasibility, potential,
+   and blocker probes. The runtime replaces the prefix with canonical guidance
+   in the final line of `raw_goal`; this is not a phase, Search strategy, or
+   runtime field.
 2. Inspect enough context to classify the task.
 3. Call `goal_plus_record_triage`.
 4. If triage chooses Goal Mode, work normally in the current workspace.
@@ -111,9 +116,10 @@ This repository ships Claude Code Goal Plus host hooks in `.claude/settings.json
 that run `goal-plus --goal-plus-host-hook`.
 `PostToolUse(goal_plus_create)` binds the created Goal Plus record to the
 current top-level Claude Code `session_id`. The `Stop` hook is a final backstop
-for `goal_plus_gate(event="stop")`: if the session-bound Goal Plus record still
-has a required next action, Claude receives a continuation prompt instead of
-ending.
+for `goal_plus_gate(event="stop")`: every still-active session-bound record
+receives the full raw goal and timing context. Claude must continue or record a
+truthful terminal status before ending; a worker lease ending is not goal
+completion.
 
 The hook does not replace the explicit workflow calls above. It does not wire
 `PreToolUse` or `SubagentStop`, so call `goal_plus_gate(event="pre_tool_use",

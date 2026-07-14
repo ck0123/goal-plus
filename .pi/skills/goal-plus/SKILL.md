@@ -9,6 +9,14 @@ description: Use when Pi receives a /goal-plus, /goal-plus edit, or /goal-plus-w
 
 The native Pi `/goal-plus` command creates the Goal Plus record before the model turn starts. `/goal-plus-with-final-check` creates it with `policy.final_check.mode="required"`. `/goal-plus edit <full revised goal>` calls `goal_plus_update_goal` for the active record and increments `goal_revision`; the latest raw goal supersedes older revisions. `/goal-plus resume` continues the same durable active revision after an interrupted Pi turn. If a compatibility prompt path is used and no active `goal_plus_id` is already present, the first tool call must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists. Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.
 
+`/goal-plus mode=autonomous <goal>` selects substantial initial exploration
+(about 15 minutes when elapsed-time leases are available) and longer
+evidence-driven reinvestment, potentially up to about one hour.
+`/goal-plus mode=probe <goal>` selects short feasibility, potential, and
+blocker probes. Omitted mode defaults to `autonomous`; an edit without a mode
+preserves the current choice. The runtime stores it only as a canonical final
+line in `raw_goal`, not as a phase, Search strategy, or runtime field.
+
 Before resuming an active record, treat the latest user message as authoritative
 for this turn. Keep the current revision when the message only continues or
 steers the existing objective. If it changes the effective scope, deliverables,
@@ -114,6 +122,12 @@ A long worker may need roughly 10-15 meaningful verifier-recorded artifacts to
 explore a direction, while an unpromising direction may stop earlier on
 evidence. Preserve final-verification and closeout reserve in either case.
 
+Follow the exploration line in `raw_goal`. In `probe` mode, return once
+feasibility, potential, and blockers are credible, then decide whether to
+deepen or redirect. In `autonomous` mode, give valuable directions substantial
+renewable leases rather than cutting every worker into equal short attempts.
+No worker lease ending completes the Goal Plus record.
+
 1. `search_freeze_spec`, or reuse an existing `frozen_spec_id` when the later
    cycle keeps the same verifier and edit contract
 2. `search_create`
@@ -162,6 +176,12 @@ evidence. Preserve final-verification and closeout reserve in either case.
       `goal_plus_submit_final_check` itself
     - address failed findings and prepare a fresh check
     A passing required check atomically marks the record complete.
+
+The top-level stop gate blocks every still-active Goal Plus record and returns
+the full current raw goal plus creation/check timestamps and elapsed time. Use
+that prompt to audit all requirements and any time condition already present
+in the goal. Continue if unfinished; otherwise record a truthful terminal
+status before stopping. Do not invent a separate Goal Plus deadline.
 
 ### Post-result Spec Reassessment
 

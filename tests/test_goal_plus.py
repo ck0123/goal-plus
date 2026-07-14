@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.goal_plus import EXPLORATION_MODE_LINES, FileGoalPlusRuntime
 from goal_plus.models import GoalPlusSpecDraft, GoalPlusTriage
 
 
@@ -54,7 +54,10 @@ def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
     )
 
     assert record.goal_plus_id == "gp_0001"
-    assert record.raw_goal == "Improve the README examples"
+    assert record.raw_goal == (
+        "Improve the README examples\n\n"
+        + EXPLORATION_MODE_LINES["autonomous"]
+    )
     assert record.status == "active"
     assert record.phase == "intake"
     assert not hasattr(record, "mode_hint")
@@ -63,6 +66,38 @@ def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
     loaded = runtime.status(record.goal_plus_id)
     assert loaded.goal_plus_id == record.goal_plus_id
     assert runtime.list_events(record.goal_plus_id)[0]["event_type"] == "created"
+
+
+def test_create_goal_normalizes_explicit_exploration_mode(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+
+    record = runtime.create_goal("mode=probe Determine whether approach A is viable")
+
+    assert record.raw_goal == (
+        "Determine whether approach A is viable\n\n"
+        + EXPLORATION_MODE_LINES["probe"]
+    )
+    with pytest.raises(ValueError, match="unsupported Goal Plus exploration mode"):
+        runtime.create_goal("mode=fast Try approach A")
+
+
+def test_update_goal_preserves_or_explicitly_changes_exploration_mode(tmp_path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".search")
+    record = runtime.create_goal("mode=probe Try approach A")
+
+    preserved = runtime.update_goal(
+        record.goal_plus_id,
+        raw_goal="Try approaches A and B",
+        expected_revision=1,
+    )
+    assert preserved.raw_goal.endswith(EXPLORATION_MODE_LINES["probe"])
+
+    changed = runtime.update_goal(
+        record.goal_plus_id,
+        raw_goal="mode=autonomous Try approaches A, B, and C",
+        expected_revision=2,
+    )
+    assert changed.raw_goal.endswith(EXPLORATION_MODE_LINES["autonomous"])
 
 
 def test_update_goal_creates_revision_and_supersedes_pending_check(tmp_path) -> None:
@@ -305,7 +340,7 @@ def test_pi_final_check_launch_is_foreground_stateless_and_revision_bound(tmp_pa
         )
 
 
-def test_goal_like_triage_allows_stop_without_search(tmp_path) -> None:
+def test_goal_like_triage_blocks_stop_until_terminal_status(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Tidy docs wording")
 
@@ -324,8 +359,13 @@ def test_goal_like_triage_allows_stop_without_search(tmp_path) -> None:
     assert updated.next_action.required is False  # type: ignore[union-attr]
 
     gate = runtime.gate(updated.goal_plus_id, event="stop", context={})
-    assert gate.decision == "allow"
-    assert gate.continuation_prompt is None
+    assert gate.decision == "block"
+    assert "Full raw goal for this revision" in gate.continuation_prompt
+    assert "Tidy docs wording" in gate.continuation_prompt
+    assert "created_at_utc" in gate.continuation_prompt
+    assert "checked_at_utc" in gate.continuation_prompt
+    assert "elapsed:" in gate.continuation_prompt
+    assert "goal_plus_set_status" in gate.continuation_prompt
 
 
 def test_spec_discovery_stop_gate_blocks_with_next_action(tmp_path) -> None:
@@ -575,7 +615,7 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
 
     gate = runtime.gate(record.goal_plus_id, event="stop", context={})
     assert gate.decision == "block"
-    assert "audit the original raw goal" in gate.continuation_prompt
+    assert "Audit every requirement in the full raw goal" in gate.continuation_prompt
 
     completed = runtime.set_status(
         record.goal_plus_id,

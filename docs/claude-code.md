@@ -28,7 +28,9 @@ This repository ships Claude Code Goal Plus host hooks through
 `goal-plus --goal-plus-host-hook`. `PostToolUse(goal_plus_create)` binds the
 top-level session and `Stop` is a session-scoped backstop. The project does not wire PreToolUse or SubagentStop hooks;
 those checkpoints remain explicit skill calls. The Stop hook catches missed
-completion gates but does not supervise workers.
+completion gates but does not supervise workers. Every still-active top-level
+record receives the full raw goal and elapsed-time context until the main agent
+records a terminal status.
 
 ## Current Support
 

@@ -79,6 +79,7 @@ def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     text = (ROOT / ".claude" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     assert "name: goal-plus" in text
     assert "goal_plus_create" in text
@@ -100,6 +101,10 @@ def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert "Do not create a SearchSpec in Goal Mode" in text
     assert "search_freeze_spec" in text
     assert "final raw-goal audit" in text
+    assert "mode=autonomous" in text
+    assert "mode=probe" in text
+    assert "canonical guidance" in text
+    assert "worker lease ending is not goal completion" in normalized
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs`" in text
 

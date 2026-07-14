@@ -30,6 +30,8 @@ goal-plus --root .gp
 ```text
 /goal-plus 修复这个 bug 并验证测试套件。
 /goal-plus 在不改变正确性的前提下，用两小时优化 p95 延迟。
+/goal-plus mode=probe 先确认向量化是否可行。
+/goal-plus mode=autonomous 深度优化这个 kernel。
 ```
 
 Codex 和 Pi 还提供：
@@ -41,7 +43,9 @@ Codex 和 Pi 还提供：
 ```
 
 一次请求会启动自主运行。agent 自己判断 Goal Mode 是否足够，或冻结 verifier 后
-并行 Search 是否更有价值；进入 Search 不需要额外确认。
+并行 Search 是否更有价值；进入 Search 不需要额外确认。`mode=autonomous`（默认）
+允许给有价值的 candidate worker 较长且可续的探索 lease；`mode=probe` 先做短时可行性
+探测。该探索模式只会作为规范化说明写入 `raw_goal` 最后一行，不是新的调度状态。
 
 ## 宿主
 

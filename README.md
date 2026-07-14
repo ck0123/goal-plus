@@ -31,6 +31,8 @@ Then start a goal in the host:
 ```text
 /goal-plus Fix this bug and verify the test suite.
 /goal-plus Optimize p95 latency for two hours without changing correctness.
+/goal-plus mode=probe Check whether vectorization is viable.
+/goal-plus mode=autonomous Deeply optimize the kernel.
 ```
 
 Codex and Pi also expose:
@@ -43,7 +45,10 @@ Codex and Pi also expose:
 
 One request starts an autonomous run. The agent decides whether Goal Mode is
 enough or a frozen verifier makes parallel Search useful; entering Search does
-not require an extra approval step.
+not require an extra approval step. `mode=autonomous` (the default) gives
+promising candidate workers substantial, renewable exploration leases;
+`mode=probe` asks for short feasibility probes first. This exploration mode is
+stored as guidance in the final line of `raw_goal`, not as a scheduler state.
 
 ## Hosts
 

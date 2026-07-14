@@ -25,6 +25,12 @@ prefix; match by the final logical tool name.
    updates the same record before the model turn; use the new `goal_revision`
    and do not continue against an older revision. `/goal-plus resume` restores
    the same active revision after a host interruption.
+   `/goal-plus mode=autonomous <goal>` (the default) requests substantial
+   initial candidate leases and evidence-driven longer continuation;
+   `/goal-plus mode=probe <goal>` requests short feasibility, potential, and
+   blocker probes. An edit without a mode preserves the current choice. The
+   runtime stores it only as a canonical final line in `raw_goal`, not as a
+   phase, Search strategy, or runtime field.
    Before resuming an active record, treat the latest user message as
    authoritative for this turn:
    - If it continues or steers the existing objective without changing its
@@ -86,6 +92,13 @@ prefix; match by the final logical tool name.
     A passing required check atomically marks the Goal Plus record complete.
 15. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
+
+The top-level Stop gate blocks every still-active record and returns the full
+current raw goal, creation/check timestamps, elapsed time, phase, next action,
+and final-check policy. Audit all goal requirements and any time condition from
+that prompt. Continue when unfinished; otherwise call `goal_plus_set_status`
+with a truthful terminal status first. A candidate lease ending never completes
+the parent Goal Plus task, and Goal Plus stores no separate task deadline.
 
 One Goal Plus record is the complete task. `search_tasks` is its append-only
 history of Search Mode tasks, one `run_id` over one frozen spec each;
@@ -161,7 +174,8 @@ enforces the search and mutation gates. `PostToolUse(goal_plus_create)` remains
 a compatibility binding fallback. Search candidate subagent PostTool events
 also perform a read-only, one-shot verifier-time advisory check; they never
 bind Goal Plus ownership, and main/final-checker/ordinary-subagent events are
-ignored. Top-level `Stop` enforces the parent-owned Goal Plus next action.
+ignored. Top-level `Stop` enforces the full raw-goal and elapsed-time audit until
+the main agent records a terminal status.
 `SubagentStop` is ownership-aware: a Search candidate is blocked only until its
 own `search_run_verifier(..., agent_session_id=...)` call is durably recorded,
 then it may return while the parent continues selection, reporting, promotion,

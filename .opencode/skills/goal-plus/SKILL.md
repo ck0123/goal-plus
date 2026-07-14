@@ -48,8 +48,13 @@ Call:
 goal-plus_goal_plus_create(raw_goal="<user objective>", source_path="<optional>")
 ```
 
-There is no user-provided mode hint. The model decides from context whether the
-goal should stay goal-like or upgrade into Search Mode.
+The raw goal may begin with `mode=autonomous` (default) for substantial,
+renewable candidate exploration or `mode=probe` for short feasibility,
+potential, and blocker probes. The runtime replaces the prefix with one
+canonical final line in `raw_goal`; this is exploration guidance, not the
+Goal/Spec Discovery/Search phase or a Search strategy mode. The model still
+decides from evidence whether the task stays goal-like or upgrades to Search
+Mode.
 
 ### Step 2: Triage
 
@@ -91,6 +96,10 @@ goal-plus_goal_plus_gate(goal_plus_id="<id>", event="stop", context={})
 ```
 
 If the gate blocks, continue with its `continuation_prompt`.
+
+For a top-level agent, every still-active record blocks Stop and re-presents
+the full raw goal plus timing context. Continue or record a truthful terminal
+status; a candidate worker lease ending never completes the parent goal.
 
 ### Step 4: Spec Discovery Mode
 

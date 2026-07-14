@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.goal_plus import EXPLORATION_MODE_LINES, FileGoalPlusRuntime
 from goal_plus.models import SearchSpec
 from goal_plus.monitor import goal_plus_monitor_snapshot
 from goal_plus.runtime import FileSearchRuntime
@@ -108,7 +108,10 @@ def test_user_prompt_submit_precreates_and_binds_goal(tmp_path: Path) -> None:
     records = list((search_root / "goal-plus").glob("gp_*/goal.json"))
     assert len(records) == 1
     record = runtime.status(records[0].parent.name)
-    assert record.raw_goal == "Optimize model throughput"
+    assert record.raw_goal == (
+        "Optimize model throughput\n\n"
+        + EXPLORATION_MODE_LINES["autonomous"]
+    )
     assert record.active_session is not None
     assert record.active_session.host == "codex"
     assert record.active_session.session_id == "session-codex"
@@ -118,6 +121,27 @@ def test_user_prompt_submit_precreates_and_binds_goal(tmp_path: Path) -> None:
     assert "scope, deliverables, or success criteria" in context
     assert "goal_plus_update_goal" in context
     assert "clarify ambiguous intent before resuming" in context
+
+
+def test_user_prompt_submit_materializes_probe_mode_in_raw_goal(tmp_path: Path) -> None:
+    search_root = tmp_path / ".gp"
+
+    _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-codex",
+            "prompt": "/goal-plus mode=probe Check whether vectorization is viable",
+        },
+    )
+
+    record_path = next((search_root / "goal-plus").glob("gp_*/goal.json"))
+    record = FileGoalPlusRuntime(search_root).status(record_path.parent.name)
+    assert record.raw_goal == (
+        "Check whether vectorization is viable\n\n"
+        + EXPLORATION_MODE_LINES["probe"]
+    )
 
 
 def test_user_prompt_submit_is_idempotent_for_bound_session(tmp_path: Path) -> None:
@@ -196,10 +220,14 @@ def test_interrupted_session_restores_then_edits_same_goal(tmp_path: Path) -> No
     assert len(records) == 1
     record = FileGoalPlusRuntime(search_root).status(goal_id)
     assert record.goal_revision == 2
-    assert record.raw_goal == "Implement requirements A and B"
+    assert record.raw_goal == (
+        "Implement requirements A and B\n\n"
+        + EXPLORATION_MODE_LINES["autonomous"]
+    )
     assert [revision.raw_goal for revision in record.goal_revisions] == [
-        "Implement requirement A",
-        "Implement requirements A and B",
+        "Implement requirement A\n\n" + EXPLORATION_MODE_LINES["autonomous"],
+        "Implement requirements A and B\n\n"
+        + EXPLORATION_MODE_LINES["autonomous"],
     ]
     assert "revision: 2" in edited_context
     assert initial_context != edited_context
@@ -231,7 +259,10 @@ def test_interrupted_session_explicit_resume_keeps_same_revision(tmp_path: Path)
     context = _additional_context(resumed, "UserPromptSubmit")
     record = FileGoalPlusRuntime(search_root).status(goal_id)
     assert record.goal_revision == 1
-    assert record.raw_goal == "Implement requirement A"
+    assert record.raw_goal == (
+        "Implement requirement A\n\n"
+        + EXPLORATION_MODE_LINES["autonomous"]
+    )
     assert goal_id in context
 
 

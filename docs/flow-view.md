@@ -40,6 +40,21 @@ A Goal Plus record may contain multiple search tasks. Each task is one
 `run_id` over one frozen spec. A later task is added only when the full-goal
 audit finds another measurable subproblem; Search tasks are not nested.
 
+## Exploration Guidance
+
+`/goal-plus mode=autonomous <goal>` and `/goal-plus mode=probe <goal>` select
+how the main agent initially spends worker leases. `autonomous` is the default:
+initial workers should receive a meaningful window (about 15 minutes when the
+host supports elapsed-time leases), and promising candidates may receive much
+longer follow-up leases, up to about one hour when evidence justifies it.
+`probe` uses short leases or turn budgets to establish feasibility, potential,
+and blockers before the main agent decides whether to deepen or redirect.
+
+This is prompt guidance, not a Goal/Search phase or runtime scheduler field.
+The runtime removes the command prefix and appends one canonical exploration
+line to `raw_goal`. Editing a goal preserves the current mode unless the edit
+supplies another `mode=...` prefix.
+
 ## Rolling Search Loop
 
 ### 1. Plan and materialize
@@ -125,6 +140,19 @@ There are two distinct operations:
   history, and the structured handoff. This is the portable fallback.
 
 Neither operation changes the frozen spec or creates another candidate.
+
+## Top-level Stop
+
+An active top-level Goal Plus turn never stops merely because its current next
+action is optional or a worker lease ended. The Stop gate re-presents the full
+current `raw_goal`, creation/check timestamps, elapsed time, phase, next action,
+and final-check policy. The main agent audits every requirement, including any
+time condition already written in the goal, then either continues or records a
+truthful terminal status. Goal Plus stores no separate task deadline.
+
+Candidate and ordinary-subagent stop rules are unchanged: a candidate may
+return after its own verifier evidence is durable, while selection, promotion,
+and the complete-goal audit remain parent-owned.
 
 ## Failure Rules
 

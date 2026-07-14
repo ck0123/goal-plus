@@ -34,6 +34,16 @@ submission is durable. Selection and final audit remain parent-owned.
 `PostToolUse(goal_plus_create)` is the fallback ownership-binding path. A
 candidate is blocked until its own verifier submission is durable. Ordinary subagents do not inherit the parent's next action.
 
+Use `/goal-plus mode=autonomous <goal>` for substantial renewable candidate
+exploration (the default), or `/goal-plus mode=probe <goal>` for short
+feasibility/potential/blocker probes. The runtime stores the choice only as the
+canonical final line of `raw_goal`.
+
+Top-level `Stop` blocks every still-active record and re-presents the full raw
+goal, timestamps, elapsed time, phase, next action, and final-check policy. The
+main agent must continue or record a terminal status. Candidate `SubagentStop`
+semantics are unchanged.
+
 Use the `goal-plus` skill as the user entry. The `search` skill is internal.
 
 ## Rolling Worker Flow

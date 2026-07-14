@@ -91,6 +91,12 @@ The core records are:
 8. **Make limits explicit.** `max_candidates` is the whole-run workspace cap;
    `max_parallel` is the live-worker cap; a worker budget controls one host
    dispatch.
+9. **Keep exploration policy in the goal.** `mode=autonomous|probe` is
+   normalized into the final line of `raw_goal`; it is not another runtime
+   phase, lifecycle field, or deadline.
+10. **Stop only from durable state.** A top-level active goal always receives a
+    full-goal and elapsed-time audit prompt. It may stop only after the main
+    agent records a terminal status; worker lease expiry is not goal completion.
 
 ## Host Pool Contract
 

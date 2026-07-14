@@ -20,6 +20,16 @@ runs a native turn-level stop gate. This is no host process Stop hook.
 the same goal revision semantics as Codex. Required checks run through a
 separate read-only Pi RPC reviewer.
 
+Use `/goal-plus mode=autonomous <goal>` for substantial renewable candidate
+exploration (the default), or `/goal-plus mode=probe <goal>` for short
+feasibility/potential/blocker probes. The choice is normalized into the final
+line of `raw_goal`; it is not a Pi pool or Search runtime state.
+
+At the end of a main turn, every still-active record is continued with its full
+raw goal and elapsed-time context. Pi stops only after the agent records a
+terminal status. Worker watchdog expiry remains a dispatch event, not goal
+completion.
+
 At terminal state, Pi writes a visible `Goal Plus stats` custom entry with
 elapsed time, messages, tool calls, token use, and estimated cost. It is not an
 LLM message and does not trigger another assistant turn.

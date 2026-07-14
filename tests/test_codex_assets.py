@@ -127,6 +127,11 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
     assert "final raw-goal audit" in text
     assert "/goal-plus-with-final-check" in text
     assert "/goal-plus edit" in text
+    assert "/goal-plus mode=autonomous" in text
+    assert "/goal-plus mode=probe" in text
+    assert "canonical final line in `raw_goal`" in text
+    assert "A candidate lease ending never completes" in text
+    assert "stores no separate task deadline" in text
     assert "treat the latest user message as" in text
     assert "scope, deliverables, or success criteria" in text
     assert "goal_plus_update_goal" in text

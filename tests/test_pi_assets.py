@@ -111,6 +111,11 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "pi_goal_plus_run_final_check" in text
     assert "goal_plus_submit_final_check" in text
     assert "native Pi `/goal-plus` command creates" in text
+    assert "/goal-plus mode=autonomous" in text
+    assert "/goal-plus mode=probe" in text
+    assert "canonical final line in `raw_goal`" in normalized
+    assert "No worker lease ending completes" in text
+    assert "Do not invent a separate Goal Plus deadline" in text
     assert "queues" in text
     assert "the continuation prompt" in text
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
@@ -203,6 +208,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "pi_search_run_candidate" in text
     assert 'pi.registerCommand("goal-plus"' in text
     assert 'pi.registerCommand("goal-plus-with-final-check"' in text
+    assert "mode=autonomous|probe" in text
     assert "goal-plus-native-state" in text
     assert 'pi.on("session_start"' in text
     assert 'pi.on("before_agent_start"' in text
