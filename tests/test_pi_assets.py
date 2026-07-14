@@ -220,6 +220,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert 'goal_plus_gate' in text
     assert "tool_name" in text
     assert "goal-plus-stop-continuation" in text
+    assert '{ triggerTurn: true, deliverAs: "followUp" }' in text
     assert "goal-plus-stats" in text
     assert "registerEntryRenderer<GoalPlusStatsEntry>" in text
     assert "appendEntry<GoalPlusStatsEntry>" in text

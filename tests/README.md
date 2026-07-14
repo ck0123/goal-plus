@@ -54,6 +54,9 @@ ST_PI_CYCLE_WORKER_SECONDS=120 \
 # Native Pi Goal Plus lifecycle
 pytest -m st_pi -v -s -rs
 
+# Native Pi ends a turn early, then the Stop gate triggers a follow-up turn
+pytest -m st_pi -k stop_gate_intercepts -v -s -rs
+
 # Required independent final checks
 pytest -m "st and st_codex" -k goal_plus_required_final_checker -v -s -rs
 pytest -m st_pi -k with_final_check_runs_pi_reviewer -v -s -rs

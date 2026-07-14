@@ -25,6 +25,14 @@ AUDIT_PROMPT = (
     "before_agent_start 上下文注入、tool_call pre-tool gate、agent_end stop gate、"
     "terminal stats 输出。不要修改文件。最后给出结论，并把 Goal Plus 状态设为 complete。"
 )
+STOP_GATE_INTERCEPTION_PROMPT = (
+    "验证 native Pi Goal Plus 的 Stop gate 会拦截尚未完成的 Goal。不要修改任何文件，"
+    "不要进入 Search Mode，也不要启动 worker。严格分成两个 assistant turn：第一轮只完成"
+    "必要的 triage，然后输出精确标记 FIRST_TURN_ATTEMPTED_STOP；第一轮禁止调用 "
+    "goal_plus_set_status，并在输出标记后正常结束，让 Goal 保持 active。收到 Goal Plus 自动"
+    "发送的 stop continuation 后，第二轮确认 README.md 存在，调用 goal_plus_set_status 将"
+    "状态设为 complete，并输出精确标记 SECOND_TURN_AFTER_HOOK。"
+)
 AUTONOMOUS_OPTIMIZATION_PROMPT = (
     "优化 examples/edgebench-ad-placement/workspace 中的广告矩形布局程序："
     "在保持所有公开案例输出合法的前提下，尽量提高综合得分。"
@@ -198,6 +206,62 @@ def test_goal_plus_print_prompt_jsonl_has_typed_triage(
     assert triage["is_optimization"] is False
     assert triage["recommended_phase"] == "goal"
     _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
+
+
+@pytest.mark.st_pi
+def test_goal_plus_print_stop_gate_intercepts_early_finish_and_continues(
+    st_pi_run_root: Path,
+) -> None:
+    search_root = st_pi_run_root / ".gp"
+    session_dir = st_pi_run_root / "sessions"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        *_pi_base_command(session_dir, "st-pi-goal-plus-stop-gate"),
+        "-p",
+        f"/goal-plus {STOP_GATE_INTERCEPTION_PROMPT}",
+    ]
+
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        env=_run_env(search_root),
+        text=True,
+        capture_output=True,
+        timeout=int(os.environ.get("ST_PI_TIMEOUT", "420")),
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr[-3000:] or result.stdout[-3000:]
+    record = _goal_record(search_root)
+    assert record["status"] == "complete"
+
+    session_path = _session_file(session_dir)
+    _assert_goal_plus_jsonl_is_clean(session_path)
+    entries = _read_jsonl(session_path)
+    continuation_indexes = [
+        index
+        for index, entry in enumerate(entries)
+        if entry.get("customType") == "goal-plus-stop-continuation"
+    ]
+    assert continuation_indexes, "Pi agent_end did not persist a stop continuation"
+    continuation_index = continuation_indexes[0]
+
+    before_continuation = entries[:continuation_index]
+    after_continuation = entries[continuation_index + 1 :]
+    before_text = json.dumps(before_continuation, ensure_ascii=False)
+    after_text = json.dumps(after_continuation, ensure_ascii=False)
+    assert "FIRST_TURN_ATTEMPTED_STOP" in before_text
+    assert "SECOND_TURN_AFTER_HOOK" in after_text
+    assert not _tool_calls(before_continuation, "goal_plus_set_status")
+
+    completion_calls = _tool_calls(after_continuation, "goal_plus_set_status")
+    assert completion_calls
+    assert completion_calls[-1]["arguments"]["status"] == "complete"
+
+    events = _goal_events(search_root, record["goal_plus_id"])
+    event_types = [event["event_type"] for event in events]
+    assert "gate_blocked" in event_types
+    assert event_types.index("gate_blocked") < event_types.index("status_changed")
 
 
 @pytest.mark.st_pi
