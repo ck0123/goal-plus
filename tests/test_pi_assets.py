@@ -31,6 +31,7 @@ def test_pyproject_exposes_pi_console_scripts() -> None:
     assert 'requires-python = ">=3.10"' in text
     assert 'goal-plus-pi-tool = "goal_plus.pi_tool:main"' in text
     assert 'goal-plus-pi-worker = "goal_plus.pi_worker:main"' in text
+    assert 'goal-plus-pi-pool = "goal_plus.pi_pool:main"' in text
 
 
 def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
@@ -115,21 +116,24 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
 
 
-def test_pi_goal_plus_skill_documents_whole_run_budget_planning() -> None:
+def test_pi_goal_plus_skill_documents_rolling_pool_budget_planning() -> None:
     text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split())
 
     assert "### Search Run Budget Planning" in text
-    assert "total number of distinct candidate workspaces across all rounds" in normalized
-    assert "`ceil(max_candidates / max_parallel)`" in text
+    assert "total number of distinct candidate workspaces" in normalized
+    assert "hard cap on live Pi candidate workers" in normalized
+    assert "planning decision epoch, not a barrier" in normalized
     assert "recommend 4" in text
-    assert "`max_candidates = rounds * max_parallel`" in text
-    assert "set `max_candidates=15`" in text
-    assert "default value 4 as the whole-run budget" in normalized
-    assert "Do not call `search_select` while" in normalized
+    assert "conservative whole-run safety cap" in normalized
+    assert "Never wait for unrelated slow workers" in normalized
     assert "main agent owns reinvestment decisions" in normalized
+    assert "pi_search_pool_wait_any" in text
+    assert "pi_search_pool_continue" in text
+    assert "pi_search_pool_submit" in text
+    assert "pi_search_pool_close" in text
     assert "worker_budgets" in text
     assert "research_summary" in text
     assert "not the depth policy" in normalized
@@ -300,7 +304,13 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget))" in text
     assert "redispatch: Type.Optional(Type.Boolean())" in text
     assert "candidate_ids: Type.Array(Type.String())" in text
-    assert "max_parallel: Type.Optional(Type.Number())" in text
+    assert "max_parallel: Type.Optional(PositiveInteger)" in text
+    assert "pi_search_pool_open: Type.Object" in text
+    assert "pi_search_pool_submit: Type.Object" in text
+    assert "pi_search_pool_wait_any: Type.Object" in text
+    assert "pi_search_pool_snapshot: Type.Object" in text
+    assert "pi_search_pool_continue: Type.Object" in text
+    assert "pi_search_pool_close: Type.Object" in text
     candidate_schema = text.split("pi_search_run_candidate: Type.Object", 1)[1].split(
         "pi_search_run_batch: Type.Object", 1
     )[0]
@@ -311,6 +321,8 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert '"search_start_agent_session"' not in main_tools
     assert '"search_bind_agent_handle"' not in main_tools
     assert '"search_continue_agent_session"' not in main_tools
+    assert '"pi_search_pool_wait_any"' in main_tools
+    assert '"pi_search_pool_continue"' in main_tools
     assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
     assert "is_optimization: Type.Boolean()" in text

@@ -197,11 +197,14 @@ Claude Code also exposes `claude agents --json`, `claude logs <id>`, and
 ### Pi RPC
 
 Pi workers are launched by `goal-plus-pi-worker`, not by the MCP
-server. Normal Pi Search Mode uses `pi_search_run_batch`, which starts agent
-sessions, runs foreground Pi RPC worker processes, binds returned handles, and
-can run final verifiers. The low-level `pi_rpc_run_worker` tool is hidden from
-the main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is
-set for manual debugging.
+server. Normal Pi Search Mode uses the durable `pi_search_pool_*` supervisor:
+open/submit launch detached jobs, wait-any returns each candidate-ready event,
+snapshot rediscovers pools by `run_id`, and close drains or terminates them.
+`pi_search_run_batch` remains a synchronous compatibility helper. All paths
+start agent sessions, run foreground Pi RPC worker processes, bind returned
+handles, and can run final verifiers. The low-level `pi_rpc_run_worker` tool is
+hidden from the main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1`
+is set for manual debugging.
 
 The runner starts:
 
@@ -252,7 +255,8 @@ detailed run, strategy, candidate, session, duration/cost/context, file-mtime,
 and stale/timed-out views.
 
 Pi RPC workers use `--no-session` and do not support same-worker continuation.
-Use `search_redispatch_candidate` for state-level redispatch; Search MCP
+Normal Pi main-agent flow uses `pi_search_pool_continue`; the supervisor calls
+`search_redispatch_candidate` for state-level redispatch. Search MCP
 `.gp/runs/...`, verifier iterations, candidate Git commits, and workspace files
 remain authoritative. Runner failures are bound as synthetic failure handles,
 so monitor warnings include `subagent_runner_failed` and bounded failure

@@ -79,38 +79,30 @@ it and create a corrected draft before freezing instead.
 
 Choose the whole-run candidate budget before `search_freeze_spec`; it is frozen
 and cannot grow inside that run. `budget.max_candidates` is the total number of
-distinct candidate workspaces across all rounds. `budget.max_parallel` is only
-the maximum width of one planned batch. Therefore the planned round capacity is
-approximately `ceil(max_candidates / max_parallel)`. If the two values are
-equal, the run normally has only one full batch.
+distinct candidate workspaces. `budget.max_parallel` is the hard cap on live Pi
+candidate workers. A persisted Search round is a planning decision epoch, not a
+barrier: the main agent may plan again as soon as any worker completes and a
+pool slot becomes free.
 
 When the user or outer harness supplies a wall-clock, attempt, or token budget:
 
 1. Reserve time for main-agent final verification, selection, reporting, and
    promotion.
-2. Choose a batch width `max_parallel` that the host can support. When no better
+2. Choose `max_parallel` that the host can support. When no better
    resource signal exists, recommend 4; this is a planning recommendation, not
    a runtime default.
-3. Estimate one batch duration from `worker_budget.max_runtime_seconds`, prior
-   observed worker durations, and Pi launch/verifier overhead. Under actual
-   concurrent `pi_search_run_batch` execution use the slowest worker duration,
-   not the sum of all workers.
-4. Estimate `rounds = floor((remaining_seconds - final_reserve_seconds) /
-   estimated_batch_seconds)`, subject to explicit attempt/token caps, then set
-   `max_candidates = rounds * max_parallel`. Keep at least one candidate only
-   when enough time remains to produce and verify useful work.
+3. Set `max_candidates` as a conservative whole-run safety cap that fits the
+   outer budget. It is not a required round count and need not be exhausted.
+4. Give initial probes enough uninterrupted time to create real artifacts and
+   verifier evidence. Reinvest more time in valuable directions and stop weak
+   directions based on evidence and remaining time.
 
-For example, 7200 seconds remaining, 900 seconds reserved, and 1260 seconds per
-batch gives 5 rounds; with `max_parallel=3`, set `max_candidates=15`.
-
-After every completed batch, refresh remaining time and
-`search_list_history` before calling `search_plan_next` again. `requested_k` is
-only the request for that round; use at most `max_parallel` and the remaining
-total candidate budget. Do not treat its default value 4 as the whole-run
-budget. Do not call `search_select` while another useful batch fits the
-remaining budget. Select only when the candidate cap is exhausted, another
-batch no longer fits before the final reserve, an explicit attempt/token cap is
-reached, or a declared early-stop condition holds.
+After every `candidate_ready`, failed, or interrupted pool event, refresh
+remaining time and `search_list_history`. Decide independently whether each free
+slot should continue a promising candidate, start a new direction, stay idle,
+or begin final selection. `requested_k` is only the number of new candidate
+workspaces desired at that decision point. Never wait for unrelated slow
+workers merely to preserve a batch boundary.
 
 Treat the frozen `strategy.worker_budget` as the normal per-worker budget, not
 as a rule that every direction deserves identical depth. The main agent owns
@@ -126,30 +118,42 @@ evidence. Preserve final-verification and closeout reserve in either case.
    cycle keeps the same verifier and edit contract
 2. `search_create`
 3. `goal_plus_link_search_run`
-4. `search_plan_next`
-5. `search_start_batch`
-6. For a multi-candidate batch, call
-   `pi_search_run_batch(run_id, candidate_ids, directive?, worker_budgets?, final_verify=true, max_parallel=<budget.max_parallel>)`.
-   `worker_budgets` is keyed by `candidate_id` and lets the main agent grant
-   selected proposals a longer uninterrupted initial dispatch. Omitted
-   candidates use the frozen strategy budget.
-   For a single candidate or manual recovery, call
-   `pi_search_run_candidate(run_id, candidate_id, directive?, worker_budget?, final_verify=true)`.
-7. Review the returned `steps`, `handle.metadata.pi_metrics`, and
-   `final_score_report` for each result. Also inspect every
+4. Fill the initial slots with `search_plan_next` and `search_start_batch`.
+5. Call `pi_search_pool_open(run_id, candidate_ids, directive?,
+   worker_budgets?, final_verify=true, max_parallel=<budget.max_parallel>)`.
+   This starts detached managed workers and returns a durable `pool_id`
+   immediately.
+6. Call `pi_search_pool_wait_any(pool_id, timeout_seconds=...)`. Process every
+   returned event. `candidate_ready` means the driver has started/bound the
+   agent session and completed the main-agent final verifier; raw process exit
+   alone is not success.
+7. Review each event's `result.steps`, `handle.metadata.pi_metrics`, and
+   `final_score_report`. Also inspect every
    `handle.metadata.progress_handoff.model_handoff`: carry its `key_results`,
    scenario-specific `pitfalls`, `blockers`, and `next_steps` into the next
-   round's candidate proposals. Do not reduce the next round to only the best
+   decision's candidate proposals. Do not reduce the next decision to only the best
    score or copy raw transcripts.
-8. Call `search_select`, `search_report`, and `search_promote` when promotion is
+8. Refill each free slot immediately with one deliberate action:
+   - `pi_search_pool_continue` for state-level reinvestment in a promising
+     candidate, optionally with a larger one-dispatch budget;
+   - `search_plan_next(requested_k=<new direction count>)`,
+     `search_start_batch`, then one `pi_search_pool_submit` per new candidate;
+   - leave the slot idle; or
+   - begin final drain.
+   `pi_search_pool_snapshot(run_id=...)` rediscovers the pool after an
+   interrupted main Pi turn; use `pool_id` for later exact snapshots. The
+   supervisor never auto-refills because the main agent owns policy.
+9. Call `pi_search_pool_close(mode="drain")` before selection, or
+   `mode="interrupt"` when remaining work should be stopped. Then call
+   `search_select`, `search_report`, and `search_promote` when promotion is
    requested. `search_select` ranks verifier-recorded iterations, checks out the
    best committed candidate `git_head`, and runs a main-agent final verifier on
    that exact commit before recording the selected candidate.
-9. Call `goal_plus_record_search_result`.
-10. Run the raw-goal audit. If another verifier-backed search is needed,
+10. Call `goal_plus_record_search_result`.
+11. Run the raw-goal audit. If another verifier-backed search is needed,
     freeze/create and link a new `run_id`, then repeat the Search Mode flow
     under the same `goal_plus_id`.
-11. Run the final raw-goal audit. For a normal record, finish with
+12. Run the final raw-goal audit. For a normal record, finish with
     `goal_plus_set_status`. If `policy.final_check.mode="required"`, instead:
     - call `goal_plus_prepare_final_check(checker_host="pi")`
     - pass the exact returned `launch` object to
@@ -207,11 +211,10 @@ Never invent `frozen_spec_id`, `run_id`, `plan_id`, `candidate_id`, or
 preceding runtime tool. In particular, call `search_create` before
 `goal_plus_link_search_run` and link the exact returned `run_id`.
 
-`pi_search_run_batch` runs candidate workers concurrently up to
-`max_parallel`, then returns ordered per-candidate results. It is still a
-foreground host driver: it does not add runtime-owned wait, abort, heartbeat,
-or lifecycle supervision. `pi_search_run_candidate` performs the same chain for
-a single candidate:
+The `pi_search_pool_*` tools are a host-owned supervisor, not Search runtime
+lifecycle APIs. Their durable state lives under `.gp/host-pools/pi/`. They
+enforce `max_parallel`, return `wait_any` events, and survive a main Pi turn
+disconnect. Each worker still performs the same chain:
 `search_start_agent_session`, `pi_rpc_run_worker`,
 `search_bind_agent_handle`, and the final `search_run_verifier` without
 `agent_session_id` when `final_verify=true`. Normal Goal Plus/Search flow must
@@ -220,20 +223,23 @@ main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set
 for manual debugging or custom recovery.
 
 Do not call `search_start_agent_session`, `search_bind_agent_handle`, or
-`search_continue_agent_session` from the Pi main agent; the high-level driver
-owns those mechanical steps. For another attempt on an existing candidate,
-call `pi_search_run_candidate(..., redispatch=true)`. The driver then uses
+`search_continue_agent_session` from the Pi main agent; the managed pool owns
+those mechanical steps. For another attempt on an existing candidate, call
+`pi_search_pool_continue`. The supervisor then uses
 `search_redispatch_candidate` internally and records that step before launching
 the fresh stateless worker.
 
-Worker launch is foreground and synchronous. `worker_budget.max_runtime_seconds`
-is required and maps to the Pi RPC process watchdog. `worker_budget.max_turns`
-is only a prompt hint.
+Pool submission is non-blocking; the detached wrapper owns the foreground Pi
+RPC child and its cleanup. `worker_budget.max_runtime_seconds` is required and
+maps to the Pi RPC process watchdog. `worker_budget.max_turns` is only a prompt
+hint. `pi_search_run_batch` and `pi_search_run_candidate` remain compatibility
+and debugging helpers, but the batch helper intentionally waits for the slowest
+worker and must not be used for rolling orchestration.
 
 Pi workers run with `--no-session`, so same-worker continuation is unsupported.
 If a worker times out, fails, or exits before producing useful verifier
 evidence, use state-level resume by calling
-`pi_search_run_candidate(..., redispatch=true)`. The driver uses
+`pi_search_pool_continue`. The driver uses
 `search_redispatch_candidate` internally, creates a new
 `agent_session_id` for the same candidate workspace, and recovers prior work
 from MCP history, verifier iterations, and Git state.

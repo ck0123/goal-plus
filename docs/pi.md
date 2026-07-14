@@ -1,168 +1,49 @@
 # Pi
 
-Pi support is implemented inside this repository without changing Pi core. The
-project ships Pi prompt templates, one user-facing `goal-plus` skill, and an
-extension under `.pi/`, plus two Python console scripts used by that extension.
+Pi support is project-local: one user-facing `goal-plus` skill under
+`.pi/skills/goal-plus/`, one extension, and Python worker/facade commands. It
+does not patch Pi core and does not expose a separate user-facing `search` skill.
 
 ## Setup
 
-Install this package in the Python environment that launches Pi:
-
 ```bash
 python -m pip install -e ".[dev]"
+pi -p "/goal-plus inspect this repository"
 ```
 
-Pi loads project-local `.pi/` resources after project trust. For RPC workers,
-the runner loads the extension explicitly with `-e`, so candidate workspaces do
-not need to contain `.pi/extensions`.
+The extension provides pre-model `/goal-plus` creation in interactive,
+RPC, print, and JSON modes. It persists the active id when the Pi session is
+persistent, injects hidden context, gates selected writes/Search calls, and
+runs a native turn-level stop gate. This is no host process Stop hook.
 
-When Pi is launched from this checkout, the extension runs
-`python -c ... goal_plus.pi_tool` with `src/` inserted into
-`sys.path`. That keeps local development on the same `python` Pi inherited from
-the shell, even before the console scripts are on `PATH`. Installed checkouts
-can still use the console scripts directly.
+`/goal-plus edit`, `/goal-plus resume`, and `/goal-plus-with-final-check` share
+the same goal revision semantics as Codex. Required checks run through a
+separate read-only Pi RPC reviewer.
 
-## Main Agent
-
-Use `/goal-plus ...` from Pi. When the project `.pi/` extension is loaded, this
-is a native Pi command. The command calls:
-
-```text
-goal_plus_create(raw_goal=...)
-```
-
-before the model turn starts, activates that `goal_plus_id`, and sends the
-model a follow-up prompt to continue the Goal Plus flow. Interactive sessions
-also persist the active id in a Pi custom session entry. Print/JSON modes keep
-the active id in extension memory for the process lifetime, so their turn-level
-gate has the same runtime ownership without requiring a persistent Pi session.
-
-Interactive TUI/RPC uses the native command handler. Print/JSON uses the
-extension `input` event to pre-create the record and transform the slash input
-into the first Goal Plus model prompt, including for
-`pi -p "/goal-plus ..."`. This distinction is required because Pi
-command-handler `sendUserMessage` is fire-and-forget while `runPrintMode` only
-awaits its original `session.prompt`. Both paths create the record before the
-model runs. The checked-in `.pi/prompts/goal-plus.md` remains a compatibility
-fallback for environments that do not load the extension; only that fallback
-depends on the model calling `goal_plus_create` first.
-
-Pi also registers `/goal-plus edit <full revised goal>`, `/goal-plus resume`, and
-`/goal-plus-with-final-check <goal>`. Edit preserves the active
-`goal_plus_id`, appends a `goal_revision`, and resets triage while retaining old
-Search tasks as history. With-check creation requires a final independent Pi
-reviewer. The main agent calls `goal_plus_prepare_final_check(checker_host="pi")`
-and passes the exact launch object to `pi_goal_plus_run_final_check`. That tool
-starts a foreground, stateless Pi RPC process with
-`GOAL_PLUS_PI_ROLE=final-checker`; the extension exposes only status and final
-check submission tools and blocks edit/write calls. The reviewer submits its
-own structured verdict. A pass completes atomically; a failure returns an
-actionable repair step. An aborted main turn preserves the active id, and a
-checker exit or timeout is recorded as an interrupted attempt, after which a
-fresh check can be prepared without losing the active Goal Plus revision.
-
-The explicit edit/resume commands are fallbacks. The Pi skill and native start
-prompt require the main agent to interpret the latest user message before
-resuming: steering keeps the current revision, a change to
-scope/deliverables/success criteria updates the complete goal and re-triages,
-and unrelated or ambiguous intent does not silently rewrite or resume it.
-
-The Pi extension runs as `GOAL_PLUS_PI_ROLE=main` by default and
-exposes `goal_plus_*`, `search_*`, `pi_search_run_batch`, and
-`pi_search_run_candidate`. The low-level `pi_rpc_run_worker` tool is hidden in
-normal main-agent flow and is registered only when
-`GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set for manual debugging.
-The extension restores the active Goal Plus state on session start, injects
-hidden Goal Plus context before agent starts, and calls
-`goal_plus_gate(event="pre_tool_use")` before main-role `search_*` tool calls,
-explicitly exposed `pi_rpc_run_worker` debugging calls, and mutating built-ins
-(`bash`, `edit`, `write`).
-
-The hook still checks those built-ins in every phase, but the runtime permits
-them during `spec_discovery`. This lets the main agent inspect public commands
-and materialize an optional custom verifier before freeze while Search tools
-remain blocked until the typed draft is complete. Both Pi
-`search_freeze_spec.spec` and the MCP server expose the full nested
-`SearchSpec` schema instead of an unstructured object.
-
-At turn end, the extension calls `goal_plus_gate(event="stop")`. If the gate
-blocks, it queues the runtime continuation prompt and triggers another Pi turn.
-This gives Pi a native turn-level stop gate. It is not a host process Stop hook
-that can block closing Pi, but it uses the same runtime gate semantics as the
-Codex and Claude Code Stop hooks.
-
-If the last assistant message ends with host/model `error` or `aborted`, the
-extension does not queue another stop-gate continuation. Print mode can then
-surface the host error and exit nonzero instead of repeating the same failed
-model request indefinitely.
-
-When a Goal Plus record reaches a terminal status, the extension prints a
-visible `Goal Plus stats` custom entry with elapsed time, assistant messages,
-tool calls, token totals, and estimated cost calculated from Pi session usage.
-The stats entry is persisted in Pi JSONL but is not injected as an LLM message,
-so it does not trigger another assistant turn after completion.
+At terminal state, Pi writes a visible `Goal Plus stats` custom entry with
+elapsed time, messages, tool calls, token use, and estimated cost. It is not an
+LLM message and does not trigger another assistant turn.
 
 ## How Pi Differs From Other Hosts
 
-Pi support has two surfaces in this project: a main-agent extension surface and
-the `pi-rpc` worker host.
+The main agent uses extension events rather than project hook files. Candidate
+workers are stateless Pi RPC processes supervised by a durable host-local pool.
+Each detached wrapper owns one foreground `pi --mode rpc` child launched by
+`goal-plus-pi-worker` with `--no-session`.
 
-For the main agent, Codex and Claude Code enforce Goal Plus with project hook
-files that wrap host lifecycle events. OpenCode currently relies on
-instruction-driven skill calls. Pi uses extension events instead. The extension
-registers native `/goal-plus` for interactive/RPC sessions and intercepts the
-same slash input before prompt expansion in print/JSON sessions, pre-creates
-the Goal Plus record before the model turn, restores active state
-from Pi custom entries, injects hidden Goal Plus context, gates selected tool
-calls through `tool_call`, and runs the final stop gate through `agent_end`.
-Print/JSON invocations use in-memory active state because those process modes
-do not need a persistent user session.
+Pool state lives under `.gp/host-pools/pi/`; Search records remain host-neutral.
+Pi has no same-worker continuation. `pi_search_pool_continue` performs
+state-level redispatch into the same candidate workspace with a fresh
+`agent_session_id`.
 
-For workers, Pi RPC is a foreground `pi --mode rpc` process started by
-`goal-plus-pi-worker`, not a host-managed background subagent. The
-main agent still receives a normal Search Mode launch payload and binds the
-returned handle with `search_bind_agent_handle`, but the runner owns the
-process watchdog, metadata-only event log, optional raw debug log, and
-`metadata.pi_metrics`. Workers run with `--no-session`; MCP Search state,
-verifier iterations, candidate Git commits, and workspace files are the durable
-recovery surface. At exit, the runner also stores a bounded
-`metadata.progress_handoff` containing an optional model-authored
-`.tmp/handoff.json` note plus deterministic Git and verifier snapshots.
+## Worker Spec
 
-Pi RPC has no same-worker continuation. The Pi main agent uses
-`pi_search_run_candidate(..., redispatch=true)` for state-level redispatch; the
-driver invokes `search_redispatch_candidate` and creates a fresh
-`agent_session_id` in the same candidate workspace. The new worker receives
-prior handoffs and current workspace state through `context.resume`.
-
-For ecosystem compatibility, this implementation is project-local and does not
-patch Pi core. External Pi packages can still register overlapping commands or
-tools, so do not install another Pi goal package alongside this project unless
-its semantics are intentionally compatible. A package that exposes an unrelated
-`goal_complete` flow can confuse the model into ending Goal Plus outside the
-runtime-owned state machine.
-
-## Supported Strategies
-
-Pi currently supports the portable builtin strategies only:
-
-- `agent_guided`, `agent`, or `default`
-- `random` or `random_mode`
-
-OpenCode-specific or high-touch strategies such as `independent_branches`,
-`openevolve`, `evolve`, `mcts`, Python strategy plugins, and external strategy
-drivers remain OpenCode-only until they are adapted and tested for Pi RPC.
-
-## Worker Host
-
-Set the SearchSpec strategy to `worker_host="pi-rpc"`:
+Use `worker_host="pi-rpc"` and a wall-clock budget:
 
 ```json
 {
   "strategy": {
     "name": "random",
-    "driver": "builtin",
-    "worker_mode": "agent-session-pool",
     "worker_host": "pi-rpc",
     "worker_budget": {
       "max_runtime_seconds": 600,
@@ -173,217 +54,92 @@ Set the SearchSpec strategy to `worker_host="pi-rpc"`:
 }
 ```
 
-`worker_budget.max_runtime_seconds` is required. The Pi runner uses it as a hard
-process watchdog. Before that deadline, the adapter derives a short closeout
-window and the runner sends one `steer` request telling an active worker to stop
-new iterations, run a final verifier if needed, and return. The hard abort still
-applies if the worker does not exit. `max_turns` is only included as a prompt
-hint. Monitor snapshots expose `soft_closeout_seconds`, `soft_closeout_sent`,
-and `timed_out` separately.
+`max_runtime_seconds` is required and enforced by the Pi process watchdog.
+Before the hard limit, the runner sends one closeout steer. `max_turns` is only
+a prompt hint. A separate informational advisory may fire after a worker tool
+completion when observed verifier time no longer fits the remaining window.
 
-The runner also listens for worker `tool_execution_end` events. After a Search
-candidate has at least one subagent verifier iteration, each completed tool is
-an opportunity to compare available time with the observed average submission
-time: for each sampled candidate, `(latest subagent verifier - earliest agent
-session) / subagent verifier count`, then a verifier-count-weighted aggregate.
-When the available time is smaller, the runner sends one informational `steer`
-that includes the actual per-candidate timings. It does not stop the worker and
-does not replace the hard watchdog. Main workers and final-check reviewers do
-not enter this path. An EdgeBench or other outer harness can supply an RFC 3339
-or Unix-epoch deadline through `GOAL_PLUS_OUTER_DEADLINE_AT`; otherwise the Pi
-worker deadline is used. Monitor snapshots expose `time_advisory_sent` and the
-advisory evidence.
+## Rolling Pool
 
-## Runtime Flow
+Normal Pi Search follows the shared [Flow](flow-view.md):
 
-Pi does not expose a separate user-facing `search` skill. After `goal-plus`
-opens Search Mode, the Pi main agent uses the same durable Search runtime as
-other hosts:
+1. plan and materialize candidates;
+2. `pi_search_pool_open(..., max_parallel=<frozen limit>)`;
+3. `pi_search_pool_wait_any` for the first candidate-ready event;
+4. inspect evidence and call `pi_search_pool_continue`,
+   `pi_search_pool_submit`, leave idle, or start draining;
+5. recover interrupted main turns with `pi_search_pool_snapshot(run_id=...)`;
+6. `pi_search_pool_close`, then select, report, and promote.
 
-1. `search_plan_next`
-2. `search_start_batch`
-3. `pi_search_run_batch(run_id, candidate_ids, directive?, worker_budgets?, final_verify=true, max_parallel=<budget.max_parallel>)`
-4. inspect the returned per-candidate step evidence, handle metadata, and final score reports
-5. `search_select`, `search_report`, `search_promote`
+The supervisor enforces `max_parallel` and never auto-refills. A terminal event
+is published only after the driver has completed the worker, bound its handle,
+and run final verification.
 
-`pi_search_run_batch` runs the candidate workers concurrently up to the planned
-`max_parallel` window and returns ordered per-candidate results. Its optional
-`worker_budgets` map assigns a one-dispatch budget to selected candidate ids;
-other candidates keep the frozen strategy budget.
-`pi_search_run_candidate` is the single-candidate fallback for manual recovery
-or debugging. Both drivers automatically start the agent session, run the Pi
-RPC worker, bind the handle, and can run the final verifier. The returned
-`steps` arrays record the exact tool chain:
-`search_start_agent_session`, `pi_rpc_run_worker`,
-`search_bind_agent_handle`, and `search_run_verifier` when final verification
-is enabled. The main agent should not call the low-level worker tool in normal
-Search Mode. To expose it for manual debugging, start Pi with
-`GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1`.
+`pi_search_run_candidate` and `pi_search_run_batch` remain synchronous
+compatibility helpers. They automatically start the agent session, run the Pi
+RPC worker, bind the handle, and can run the final verifier. Low-level
+`pi_rpc_run_worker` is hidden unless
+`GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set.
 
-The Pi main agent also does not directly call `search_start_agent_session`,
-`search_bind_agent_handle`, or `search_continue_agent_session`; those mechanical
-tools are omitted from its visible tool set. To retry an existing candidate,
-call `pi_search_run_candidate(..., redispatch=true)`. The driver invokes
-`search_redispatch_candidate` internally, launches the fresh stateless worker,
-and returns that step in its evidence. Provider/model override fields are not
-exposed in the main-agent driver schemas; select the worker model through the
-trusted process environment or direct Python/CLI caller.
+## Worker Boundary
 
-Before each verifier call, the runtime automatically commits changed candidate
-artifact files in the candidate workspace. It records each iteration's real
-`git_head`. Worker verifier results rank committed iterations, but they are not
-the final authority. `search_select` checks out ranked commits and runs the
-main-agent final verifier on each exact commit; the first commit that passes
-that final verifier becomes the recorded selection and its final verifier score
-becomes the selected score. A worker-side historical best may therefore be
-skipped when final verification fails or times out.
-`search_promote` then generates the patch from the selected commit.
+Worker-role extension tools are limited to `search_get_agent_context`,
+`search_run_verifier`, and `search_list_iterations`. The worker operates only
+inside the returned workspace, creates an early real artifact, runs verifier
+iterations, and writes a bounded `.tmp/handoff.json`.
 
-The launch payload uses `tool="pi_rpc_worker"` and contains `root`, `cwd`,
-`agent_session_id`, `candidate_id`, `prompt`, `session_id`, and
-`budget_control`.
-
-## RPC Runner
-
-`goal-plus-pi-worker run` starts Pi in the candidate workspace:
-
-```bash
-pi --mode rpc --approve \
-  --no-session \
-  --session-id <agent_session_id> \
-  -e <repo>/.pi/extensions/goal-plus.ts
-```
-
-The runner sets:
-
-- `GOAL_PLUS_ROOT=<abs .gp>`
-- `GOAL_PLUS_PI_ROLE=worker`
-
-If `--model` is passed to `goal-plus-pi-worker run`, or
-`GOAL_PLUS_PI_MODEL` is set, the runner starts Pi with that model
-pattern.
-
-Worker-role extension tools are restricted to `search_get_agent_context`,
-`search_run_verifier`, and `search_list_iterations`. After
-`search_get_agent_context`, the extension applies a workspace guard to
-`edit`, `write`, and `bash`.
-
-Workers should produce a complete candidate artifact and run an early
-`search_run_verifier` before spending time on local optimization loops. For
-fix/target tasks, the edit comes before the first verifier call so workers do
-not spend the whole budget verifying the unmodified starting point. This keeps
-Search runtime iterations authoritative and prevents long worker-local searches
-from timing out without a candidate artifact. Candidate workspaces are created
-with an isolated git baseline, so worker-local `git status` and `git diff`
-operate on the candidate workspace instead of an enclosing repository.
+The handoff plus candidate Git state and `.gp` verifier history are the recovery
+surface. Pi workers do not need a persisted chat session.
 
 ## Tool Facade
 
-`goal-plus-pi-tool` is a JSON CLI facade for the Pi extension:
-
-```bash
-goal-plus-pi-tool search_get_agent_context \
-  --root .gp \
-  --args-json '{"agent_session_id":"agent_..."}'
-```
-
-It dispatches to the same `SearchTools` and `GoalPlusTools` Python facade used
-by the MCP server. It also exposes `pi_search_run_batch` and
-`pi_search_run_candidate`, Pi-native candidate drivers that wrap the mechanical
-Search Mode worker chain while leaving planning, selection, reporting, and
-promotion as explicit runtime steps.
-
-The same facade exposes the generic read-only monitor tool:
+`goal-plus-pi-tool` exposes the same GoalPlusTools/SearchTools facade plus the
+Pi-local pool tools:
 
 ```bash
 goal-plus-pi-tool goal_plus_monitor_snapshot \
   --root .gp \
-  --args-json '{"run_id":"run_...","stale_after_seconds":600}' \
+  --args-json '{"run_id":"run_..."}' \
   --pretty
 ```
 
-`goal_plus_monitor_snapshot` is also registered on the MCP server, so it is not
-Pi-specific. Pi runs get richer fields because `search_bind_agent_handle`
-persists `metadata.pi_metrics`, including per-worker token, cost, duration, and
-context usage data. The tool is read-only: it never starts, waits for, or stops
-workers.
+`goal_plus_monitor_snapshot` is read-only and also exists on MCP. It never
+starts, waits for, or stops a worker. The complete concise tool index is in
+[API](api.md).
 
 ## State And Logs
 
-Search MCP `.gp/runs/...`, candidate Git commits, and candidate workspace files
-are the authoritative search and recovery state. Pi workers do not persist a
-session transcript by default.
+Search state, candidate commits, and workspaces under `.gp/` are authoritative.
+Worker logs default to a metadata-only event log:
 
-Pi worker logs are written under:
+```text
+.gp/host-logs/pi-rpc-<agent_session_id>.jsonl
+```
 
-- `.gp/host-logs/pi-rpc-<agent_session_id>.jsonl`: metadata-only event log by
-  default. It records event types, tool names/status, usage/counts, and bounded
-  error summaries without prompts, reasoning, tool payloads, or transcripts.
+It stores event/tool status, bounded errors, timing, and usage without prompts
+or reasoning. Set `GOAL_PLUS_PI_RAW_LOG=1` only for focused debugging; raw
+streams can become very large.
 
-Set `GOAL_PLUS_PI_RAW_LOG=1` only for short, targeted debugging. It
-retains streaming updates in the JSONL and also writes the duplicate raw
-`.gp/host-logs/pi-rpc-<agent_session_id>.txt` stream. Raw mode can grow by
-hundreds of MiB per worker because Pi updates may contain cumulative message
-state.
+Bound handles include `metadata.pi_metrics`, timeout/failure evidence, and a
+bounded `metadata.progress_handoff`. A timeout is successful deadline
+enforcement; runner failure is recorded separately with synthetic failure
+metadata so monitoring never mistakes it for a live session.
 
-Each completed `pi_rpc_run_worker` call also returns `metadata.pi_metrics`.
-When the handle is passed to `search_bind_agent_handle`, those metrics are
-persisted in `AgentSessionRecord.host_handle.metadata` with the rest of the Pi
-handle. This is the place to read per-worker cost and timing data for later
-reports, benchmark tables, or strategy analysis.
+## Supported Strategies
 
-`metadata.pi_metrics` includes:
+Pi currently supports the portable builtin strategies only:
 
-| Field | Meaning |
-|---|---|
-| `usage_delta` | Tokens and estimated cost for this runner invocation. Computed from in-memory Pi entries added after the pre-prompt baseline. |
-| `usage_total` | Tokens and estimated cost visible in the worker process at completion. With stateless workers this is normally the current invocation total. |
-| `duration_seconds` | Wall-clock runtime measured by `goal-plus-pi-worker`, including waiting for the Pi RPC worker to finish. |
-| `session_file` | `null` for stateless workers; retained in the schema so older run records remain readable. |
-| `baseline_entry_count`, `final_entry_count` | Entry boundaries used to compute `usage_delta`. |
-| `session_stats` | Pi RPC `get_session_stats` output, kept as host-native context. |
+- `agent_guided`, `agent`, `default`
+- `random`, `random_mode`
 
-The token and cost fields use the same persisted Pi assistant-message usage that
-drives Pi's footer display. Cost is Pi's local estimate from model pricing, not
-an external billing statement. If a worker is interrupted before Pi records
-assistant usage for the request, the delta can be empty while `duration_seconds`
-and timeout metadata still describe the run.
+## Verification
 
-When a worker needs more time or another approach, the Pi main agent calls
-`pi_search_run_candidate(..., redispatch=true)`. The driver calls
-`search_redispatch_candidate`, which creates a new `agent_session_id` for
-state-level redispatch in the same candidate workspace. The new worker starts
-from `search_get_agent_context`, verifier history, and Git state rather than a
-prior Pi transcript.
+```bash
+pytest -m pi -q
+ST_PI_CYCLE_WORKER_SECONDS=120 \
+  pytest -m "st and st_pi_rpc" -k managed_pool_wait_any -v -s -rs
+```
 
-For a promising macro direction, `pi_search_run_candidate` accepts an explicit
-`worker_budget` on either its initial dispatch or a state-level redispatch. The
-override applies only to that launch and leaves the frozen SearchSpec unchanged.
-This lets the main agent give a valuable worker a longer uninterrupted
-autoresearch window based on evidence and outer remaining time. The older
-`runtime_multiplier` shortcut remains available only with `redispatch=true`,
-must be greater than 1 and at most 2, and cannot be combined with
-`worker_budget`.
-
-Worker-authored `.tmp/handoff.json` uses a compact research summary: the most
-important work, verifier-backed key results, at most five scenario-specific
-pitfalls, blockers, and next steps. The latest summary is projected into
-candidate history as `research_summary`, so later rounds can avoid failed
-variants without copying raw transcripts.
-
-A watchdog timeout and a runner failure are distinct. Timeout means the host
-successfully enforced the configured deadline and returned a bindable handle;
-runner failure means the runner could not return normally. If a timed-out
-candidate already has a passing Git-backed iteration, the runtime keeps that
-best iteration in planning and selection history. `search_list_history` exposes
-the recoverable evidence as `score`, `best_iteration`, and `best_git_head`, and
-keeps the final attempt separately as `latest_score` and
-`latest_process_passed`. Redispatch is needed only when no useful passing
-iteration exists or the main agent deliberately wants another exploration
-attempt.
-
-If the runner fails before returning a normal handle, the Pi driver binds a
-synthetic failure handle to the agent session. Its metadata includes
-`runner_failed`, `failure_stage`, `error_type`, and a bounded `error` summary,
-so `goal_plus_monitor_snapshot` and the main agent see an explicit failed
-session instead of a permanently running one.
+The real-host test launches two detached Pi RPC workers, rediscovers the pool
+by `run_id`, observes wait-any completion, and drains cleanly. See
+[Debugging](debugging-runtime.md) for cross-host diagnosis.

@@ -24,6 +24,7 @@ def test_fast_host_markers_are_registered() -> None:
         ("tests/test_pi_assets.py", "pi"),
         ("tests/test_pi_worker.py", "pi"),
         ("tests/test_pi_driver.py", "pi"),
+        ("tests/test_pi_pool.py", "pi"),
         ("tests/test_pi_tool.py", "pi"),
     ],
 )
@@ -59,6 +60,10 @@ def test_codex_and_pi_publish_native_parity_capabilities() -> None:
     assert codex.supports_service_tier is True
     assert codex.supports_usage_metadata is False
     assert codex.supports_process_kill is False
+    assert codex.pool.launch_mode == "async"
+    assert codex.pool.wait_mode == "wait_any"
+    assert codex.pool.continuation_mode == "same_worker"
+    assert codex.pool.recovery_mode == "host_resident"
 
     assert pi.supports_soft_closeout is True
     assert pi.supports_model_override is True
@@ -66,6 +71,10 @@ def test_codex_and_pi_publish_native_parity_capabilities() -> None:
     assert pi.supports_service_tier is False
     assert pi.supports_usage_metadata is True
     assert pi.supports_process_kill is True
+    assert pi.pool.launch_mode == "async"
+    assert pi.pool.wait_mode == "wait_any"
+    assert pi.pool.continuation_mode == "state_redispatch"
+    assert pi.pool.recovery_mode == "supervisor_persisted"
 
 
 @pytest.mark.parametrize(
@@ -110,6 +119,7 @@ def test_test_readme_documents_fast_markers_and_terra_st_model() -> None:
         "tests/st/hosts.py",
         "tests/st/helpers/codex_runner.py",
         "tests/st/prompts/codex_redispatch.md",
+        "tests/st/prompts/codex_rolling_followup.md",
     ],
 )
 def test_codex_terra_path_uses_the_cli_model_slug(relative_path: str) -> None:

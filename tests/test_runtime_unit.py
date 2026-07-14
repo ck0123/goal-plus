@@ -676,8 +676,13 @@ def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> N
     plan = runtime.plan_next(run_id, requested_k=1)
 
     assert plan.worker_policy["host"] == "codex"
-    assert plan.worker_policy["supports_same_worker_continue"] is False
+    assert plan.worker_policy["supports_same_worker_continue"] is True
     assert plan.worker_policy["uses_background_workers"] is False
+    assert plan.worker_policy["pool"]["launch_mode"] == "async"
+    assert plan.worker_policy["pool"]["wait_mode"] == "wait_any"
+    assert plan.worker_policy["pool"]["continuation_mode"] == "same_worker"
+    assert plan.worker_policy["pool"]["wait_tool"] == "wait_agent"
+    assert plan.worker_policy["pool"]["continue_tool"] == "followup_task"
 
 
 @pytest.mark.pi
@@ -707,6 +712,11 @@ def test_worker_policy_uses_pi_rpc_state_redispatch(tmp_path: Path) -> None:
     assert plan.worker_policy["supports_same_worker_continue"] is False
     assert plan.worker_policy["continuation"] == "state_redispatch"
     assert plan.worker_policy["uses_background_workers"] is False
+    assert plan.worker_policy["pool"]["launch_mode"] == "async"
+    assert plan.worker_policy["pool"]["wait_mode"] == "wait_any"
+    assert plan.worker_policy["pool"]["continuation_mode"] == "state_redispatch"
+    assert plan.worker_policy["pool"]["recovery_mode"] == "supervisor_persisted"
+    assert plan.worker_policy["pool"]["wait_tool"] == "pi_search_pool_wait_any"
 
 
 def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path: Path) -> None:
@@ -1375,7 +1385,7 @@ def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
 
 
 @pytest.mark.codex
-def test_codex_continue_agent_session_is_explicitly_unsupported(tmp_path: Path) -> None:
+def test_codex_continue_agent_session_uses_bound_worker_and_budget(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
@@ -1384,9 +1394,20 @@ def test_codex_continue_agent_session_is_explicitly_unsupported(tmp_path: Path) 
     plan = runtime.plan_next(run_id, requested_k=1)
     task = runtime.start_batch(run_id, plan.plan_id)[0]
     session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "codex", "task_name": "search_agent_0001"},
+    )
 
-    with pytest.raises(RuntimeError, match="codex"):
-        runtime.continue_agent_session(session.agent_session_id, {"goal": "continue"})
+    continued = runtime.continue_agent_session(
+        session.agent_session_id,
+        {"goal": "continue"},
+        worker_budget={"max_runtime_seconds": 900, "on_exceed": "interrupt"},
+    )
+
+    assert continued.launch["tool"] == "followup_task"
+    assert continued.launch["target"] == "search_agent_0001"
+    assert continued.launch["budget_control"]["max_runtime_seconds"] == 900
 
 
 def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path) -> None:

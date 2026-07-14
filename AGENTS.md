@@ -6,19 +6,15 @@ overrides it.
 
 ## Read First
 
-Before changing behavior, read the smallest relevant set of docs:
+Read only the page that owns the question:
 
-- [README.md](README.md): project overview, install path, host summary.
-- [docs/design.md](docs/design.md): runtime architecture, data model, state
-  flow, and ownership boundaries.
-- [docs/flow-view.md](docs/flow-view.md): who calls which MCP tool, what each
-  agent sees, and OpenCode-specific platform constraints.
-- [docs/agent-host-adapters.md](docs/agent-host-adapters.md): OpenCode, Codex,
-  and Claude Code adapter contract, capability matrix, budget rules, and
-  current strategy support.
-- [docs/debugging-runtime.md](docs/debugging-runtime.md): `.gp` state,
-  host-native logs, OpenCode SQLite inspection, Codex rollout logs, and Claude
-  Code transcript/debug paths.
+- [README.md](README.md): install, quick start, and document map.
+- [docs/flow-view.md](docs/flow-view.md): canonical end-to-end flow.
+- [docs/design.md](docs/design.md): architecture, data, and invariants.
+- [docs/api.md](docs/api.md): current MCP and Pi-local tool index.
+- [docs/agent-host-adapters.md](docs/agent-host-adapters.md): capability matrix
+  and shared host-pool contract.
+- [docs/debugging-runtime.md](docs/debugging-runtime.md): state and host logs.
 - [docs/opencode.md](docs/opencode.md), [docs/codex.md](docs/codex.md), and
   [docs/claude-code.md](docs/claude-code.md), and [docs/pi.md](docs/pi.md):
   host-specific setup and behavior.
@@ -51,8 +47,9 @@ fixtures, and test assets.
 
 ## Core Boundary
 
-This project is a `/goal-plus` runtime with an internal Search Mode engine, not
-a worker supervisor.
+This project is a `/goal-plus` runtime with an internal Search Mode engine. The
+Search runtime is not a worker supervisor; host integrations may provide a
+supervisor behind the documented host-pool contract.
 
 The runtime owns:
 
@@ -65,15 +62,15 @@ The runtime owns:
 - durable `.gp/` run state
 - report generation and promotion patches
 
-The host code-agent owns:
+The host code-agent or host-local supervisor owns:
 
 - worker launch, lifecycle, stop/interrupt, and return values
 - host step, turn, or time budget enforcement
 - native logs and transcripts
 
-Do not add runtime-owned wait loops, abort APIs, heartbeats, lifecycle status,
-observation buses, or host-sync state unless the runtime contract is explicitly
-redesigned and documented.
+Do not add SearchTools/runtime-owned wait loops, abort APIs, heartbeats,
+lifecycle status, observation buses, or host-sync state. Host-local pool state
+must stay outside Search run records and preserve the ownership boundary.
 
 `AgentSessionRecord` is a context/provenance handle, not a lifecycle record.
 `search_start_agent_session` returns a host-native launch payload. The main
@@ -137,7 +134,8 @@ When building or running such benchmarks:
 - `src/goal_plus/trace_export.py`: OpenCode trace export tooling.
 - `src/goal_plus/pi_tool.py` and
   `src/goal_plus/pi_worker.py`: Pi extension facade and Pi RPC
-  worker runner.
+  worker runner. `src/goal_plus/pi_pool.py` is the durable host-local pool
+  supervisor.
 - `.opencode/`: OpenCode goal-plus/search skills, commands, and worker agents.
 - `.codex/`: Codex goal-plus/search skills and worker agent assets.
 - `.claude/`: Claude Code goal-plus/search skills and worker agents.
@@ -174,6 +172,9 @@ Current host expectations:
   verifier-submission time; this does not stop the worker. Codex 0.144.1+ ships
   `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
   `SubagentStop` hooks with session ownership binding and terminal stats.
+  Candidate orchestration uses targetless `wait_agent` plus `list_agents`,
+  refills free slots without a batch barrier, and continues valuable workers
+  through `search_continue_agent_session` plus `followup_task`.
 - Claude Code supports the portable builtin strategy subset. `worker_budget`
   requires `max_turns` and maps known budgets to `.claude/agents/*.md`
   `maxTurns` definitions. Claude Code ships `PostToolUse(goal_plus_create)`
@@ -189,7 +190,9 @@ Current host expectations:
   continuation; recover with `search_redispatch_candidate`, MCP history,
   verifier evidence, Git state, and bounded progress handoff metadata. Pi has
   extension pre-tool guarding and skill stop gates, but no Codex Stop hook
-  parity.
+  parity. Its main-agent pool is a durable host supervisor under
+  `.gp/host-pools/pi/` with explicit open/submit/wait-any/snapshot/continue/
+  close tools; it never plans or auto-refills candidates.
 
 Portable strategy names for non-OpenCode hosts are currently:
 
@@ -203,9 +206,10 @@ Do not enable additional Codex or Claude Code strategies without adding unit or
 mock coverage for launch payloads and at least one real smoke path when the
 behavior depends on host execution.
 
-Host workers are foreground by design. Do not switch the adapter flow to
-background subagents unless the design docs, host skills, runtime validation,
-and tests are updated together.
+Host worker execution may be synchronous or managed asynchronous according to
+`HostPoolContract`. Do not add untracked background work: every asynchronous
+path needs an explicit wait/snapshot/close contract, budget enforcement,
+matching host skills, and deterministic tests.
 
 Do not describe a host as fully hook-enforced Goal Plus unless the repository
 ships and tests hook wiring at all relevant Stop, SubagentStop, and PreToolUse

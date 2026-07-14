@@ -1,100 +1,39 @@
-# Goal Plus(GP)
+# Goal Plus (GP)
 
 English | [简体中文](README_zh.md)
 
-`goal-plus` is the host-neutral runtime behind `/goal-plus`. MCP is its shared
-control plane; Goal Plus is the product and user-facing workflow.
+Goal Plus is a host-neutral runtime for long-running agent work. `/goal-plus`
+handles ordinary goals directly and upgrades measurable optimization tasks to
+Search Mode: freeze the evaluation contract, explore isolated candidates, and
+promote the best verifier-backed result.
 
-`/goal-plus` is the default user-facing workflow. It behaves like an ordinary
-goal for normal coding, docs, review, and investigation tasks. When the task is
-measurable optimization, it can upgrade into Search Mode: freeze the verifier
-and metric, create isolated candidate workspaces, launch host-native workers,
-score candidates with runtime-owned checks, select the best result, write a
-report, and export a promotion patch.
+Pi is the primary host path; Codex is the primary native multi-agent path.
+Claude Code and OpenCode remain supported compatibility hosts.
 
-Current checked-in host assets target:
+## Quick Start
 
-- Pi
-- Codex
-- Claude Code
-- OpenCode
-
-For new deployments, prefer Pi first and Codex second. They are the primary
-host paths for current development and end-to-end validation; Claude Code and
-OpenCode remain supported compatibility paths.
-
-The MCP runtime stays host-neutral. Host-specific behavior is in the checked-in
-host configs, skills, hooks, and worker-agent prompts.
-
-## Install
-
-Install the Python package so the `goal-plus` command is on
-`PATH`.
-
-From Git:
+Install from Git or an existing checkout:
 
 ```bash
 python -m pip install --user "git+https://github.com/ck0123/goal-plus.git"
-goal-plus --help
-```
-
-From an existing checkout:
-
-```bash
-cd goal-plus
+# or
 python -m pip install -e ".[dev]"
-goal-plus --help
 ```
 
-If the command is not found after a user-level install, add the Python user
-scripts directory to `PATH`:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-macOS framework Python may use:
-
-```bash
-export PATH="$HOME/Library/Python/3.10/bin:$PATH"
-```
-
-This package is not published to PyPI yet, so use the Git or editable install
-path.
-
-## Configure A Host
-
-The runtime is a stdio MCP server. All hosts should launch the same command:
+Every host launches the same stdio MCP server:
 
 ```text
 goal-plus --root .gp
 ```
 
-This repository already includes project-local config for all supported hosts.
+Then start a goal in the host:
 
-| Host | Project config | User entrypoint | Notes |
-|---|---|---|---|
-| Pi | `.pi/prompts/`, `.pi/skills/goal-plus/`, `.pi/extensions/goal-plus.ts` | `/goal-plus` in interactive Pi or `pi -p "/goal-plus ..."` | The extension pre-creates Goal Plus before the model: a native command in TUI/RPC and an input transform in print/JSON. Pi RPC workers run statelessly through `goal-plus-pi-worker`; Search candidate tool completions can produce one verifier-time advisory, while stats remain Pi custom entries. |
-| Codex | `.codex/config.example.toml`, `.codex/hooks.json`, `.codex/skills/` | Copy the example to the ignored local `.codex/config.toml`, then use the `goal-plus` skill / `/goal-plus` prompt | Codex 0.144.1+ ships `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and ownership-aware `SubagentStop` Goal Plus hooks. A candidate is released after its own verifier submission while parent actions remain parent-owned. Search candidate PostTool events can inject one verifier-time advisory. Review/trust project hooks when Codex asks. |
-| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/`, `.claude/agents/` | Use the `goal-plus` skill / `/goal-plus` prompt from Claude Code | Ships `PostToolUse(goal_plus_create)` session binding and a session-scoped `Stop` hook. |
-| OpenCode | `opencode.json`, `.opencode/command/goal-plus.md`, `.opencode/skills/`, `.opencode/agents/` | `/goal-plus` in the TUI, or `opencode run --command goal-plus "<prompt>"` | OpenCode is the compatibility baseline for older Search Mode strategies, but Goal Plus gates are instruction-driven because no OpenCode hook is shipped. |
+```text
+/goal-plus Fix this bug and verify the test suite.
+/goal-plus Optimize p95 latency for two hours without changing correctness.
+```
 
-Host-specific setup and debugging details live in:
-
-- [Pi reference](docs/pi.md)
-- [Codex reference](docs/codex.md)
-- [Claude Code reference](docs/claude-code.md)
-- [OpenCode reference](docs/opencode.md)
-- [Host adapter capability matrix](docs/agent-host-adapters.md)
-- [Runtime and host log debugging](docs/debugging-runtime.md)
-
-## Run `/goal-plus`
-
-Use `/goal-plus` for both ordinary goals and optimization-shaped goals. The
-workflow starts with `goal_plus_create`, records triage, and only enters Search
-Mode after the goal has a verifier-backed spec.
-
-Codex and Pi also support these lifecycle commands:
+Codex and Pi also expose:
 
 ```text
 /goal-plus edit <full revised goal>
@@ -102,152 +41,60 @@ Codex and Pi also support these lifecycle commands:
 /goal-plus-with-final-check <goal>
 ```
 
-An edit keeps the same `goal_plus_id`, appends a new `goal_revision`, resets
-triage for the revised objective, and keeps prior Search tasks as historical
-evidence. A with-check run requires an independent host-native reviewer for the
-current revision; the runtime rejects ordinary completion until that reviewer
-passes. Interrupted turns retain the active record. A checker interruption is
-recorded as its own attempt, and the parent prepares a fresh reviewer attempt.
+One request starts an autonomous run. The agent decides whether Goal Mode is
+enough or a frozen verifier makes parallel Search useful; entering Search does
+not require an extra approval step.
 
-The commands are explicit fallbacks. During an active Goal Plus conversation,
-Codex and Pi treat the latest user message as authoritative: implementation
-steering keeps the current revision, a change to scope/deliverables/success
-criteria calls `goal_plus_update_goal` and re-triages, and unrelated or
-ambiguous messages do not silently rewrite or resume the goal.
+## Hosts
 
-`/goal-plus` has the same interaction contract as a normal `/goal`: one user
-submission starts an autonomous run. The agent decides from repository evidence
-whether Goal Mode is sufficient, whether it must discover a verifier-backed
-spec, and whether parallel Search adds value. User hints may improve that
-decision, but entering Search never requires a follow-up confirmation. Host
-hooks and runtime gates enforce phase completeness; they do not create approval
-checkpoints.
+| Host | Project assets | Entry | Search worker path |
+|---|---|---|---|
+| Pi | `.pi/` | `/goal-plus` or `pi -p "/goal-plus ..."` | durable Pi RPC pool; see [Pi](docs/pi.md) |
+| Codex | `.codex/` | `goal-plus` skill or `/goal-plus` prompt | native rolling `spawn_agent` pool; Codex 0.144.1+ hooks cover `UserPromptSubmit`, `PreToolUse`, and `SubagentStop`; see [Codex](docs/codex.md) |
+| Claude Code | `.mcp.json`, `.claude/` | `goal-plus` skill | foreground Agent compatibility path; see [Claude Code](docs/claude-code.md) |
+| OpenCode | `opencode.json`, `.opencode/` | `/goal-plus` | broadest legacy strategy coverage; see [OpenCode](docs/opencode.md) |
 
-One Goal Plus record is the complete user task. It may contain multiple
-`search task` records when the final audit identifies another verifier-backed
-search that is needed. Each search task is one `run_id` over one frozen spec;
-each task may contain multiple search rounds. The runtime reports planning and
-started round counts separately.
+For Codex, copy `.codex/config.example.toml` to the ignored local
+`.codex/config.toml`. Host differences and strategy coverage are summarized in
+[Agent Host Adapters](docs/agent-host-adapters.md).
 
-Examples:
+## Mental Model
 
-```text
-Use /goal-plus. Fix this bug and verify the test suite.
-```
+- A **Goal Plus record** is the complete user task.
+- A **search task** is one `run_id` over one frozen spec. A goal may link more
+  than one search task.
+- A **round** is a persisted planning decision, not a synchronization barrier.
+- A **candidate** is an isolated workspace with verifier history.
+- A **worker session** is a host context/provenance handle. Worker lifecycle
+  belongs to the host, not the Search runtime.
 
-```text
-Use /goal-plus. Optimize this model-serving path for lower p95 latency. First
-identify the benchmark, correctness gate, editable files, and promotion rule.
-If the verifier is frozen and search-ready, run Search Mode with Pi RPC workers.
-```
+Search uses a rolling pool: fill up to `budget.max_parallel`, react whenever
+any worker finishes, and immediately continue that direction, launch another
+candidate, leave the slot idle, or drain for selection. Slower workers do not
+block completed work from being evaluated. See [Flow](docs/flow-view.md).
 
-OpenCode also keeps `/goal-any-optimize` as a legacy alias, but `/goal-plus` is
-the canonical entrypoint.
+Runtime state lives under `.gp/`. `search_tasks` is append-only; `linked_search`
+is only the compatibility view of the current task.
 
-## Search Mode Flow
+## Documentation
 
-After `/goal-plus` upgrades a task to Search Mode, the main agent drives this
-common MCP flow:
+| Need | Read |
+|---|---|
+| End-to-end ownership and rolling pool flow | [Flow](docs/flow-view.md) |
+| Architecture, state, and invariants | [Design](docs/design.md) |
+| Current MCP and Pi-local tools | [API](docs/api.md) |
+| Host capability comparison | [Agent Host Adapters](docs/agent-host-adapters.md) |
+| Runtime and host logs | [Debugging](docs/debugging-runtime.md) |
+| Specs and runnable examples | [Examples](examples/README.md) |
+| Tests and real-host evidence | [Tests](tests/README.md) |
 
-1. `search_freeze_spec`
-2. `search_create`
-3. `search_plan_next`
-4. `search_start_batch`
-5. `search_start_agent_session`
-6. launch the returned foreground worker in Pi RPC, Codex, Claude Code, or OpenCode
-7. bind the host handle with `search_bind_agent_handle` or
-   `search_bind_opencode_session`
-8. worker calls `search_get_agent_context`
-9. worker self-scores with `search_run_verifier(..., agent_session_id=...)`
-10. main agent confirms the final score, selects, reports, and optionally
-    promotes
-
-`search_freeze_spec` executes each `ranking_signal` once in `source_path`
-before it writes the frozen bundle. The verifier must exit successfully and
-print a JSON object containing a finite numeric `metric_name`, for example
-`{"combined_score": 123.0}`. The command may be inline or call an existing
-repository tool. If a custom verifier file is needed, materialize it during
-Spec Discovery in a source-owned path such as `.goal-plus-verifiers/` before
-freezing; `.gp/` and `.search/` are runtime state and are never candidate
-inputs. `expected_outputs` lists artifact paths or globs and does not configure
-stdout parsing. The MCP freeze tool exposes the complete nested `SearchSpec`
-schema so callers do not need to infer field names from validation errors.
-
-When a later optimization cycle keeps the same verifier and edit contract,
-call `search_create` with the existing `frozen_spec_id` instead of rediscovering
-and refreezing it. Candidate materialization snapshots the current
-`source_path` baseline for the new run; create a new frozen spec only when the
-verifier contract changes.
-
-If the raw-goal audit requires another frozen search, repeat from
-`search_freeze_spec`/`search_create` and link the new `run_id` to the same Goal
-Plus record. `linked_search` remains the current-task compatibility view;
-`search_tasks` is the complete append-only task history.
-
-The runtime owns `.gp/` state, candidate workspaces, verifier scoring,
-history, reports, and promotion artifacts. The host owns worker launch,
-interrupts, step/turn/time limits, foreground returns, and native transcripts.
-There are no MCP wait, abort, submit, observe, or host-sync tools.
-
-## Task Continuation And Resume
-
-There are two different continuation concepts:
-
-| Concept | Portable? | What it does |
-|---|---|---|
-| State-level resume with `search_redispatch_candidate` | yes, all hosts | Creates a fresh `agent_session_id` for the same candidate workspace. The new worker reads `search_get_agent_context`, including explicit prior-session handoffs, current Git state, runtime history, and previous iterations. It can override `worker_agent_type` or `worker_budget` for that dispatch. |
-| Same-worker continuation with `search_continue_agent_session` | host-specific | Reuses a prior host worker/session when the host exposes a reliable handle. OpenCode supports this with `Task(task_id=...)`; Claude Code is conditional through `SendMessage`; Codex and Pi RPC are explicitly unsupported in these adapters. |
-
-Default to state-level resume when a worker hits a step/turn/time cap, returns
-without useful verifier evidence, or needs a larger worker tier. Same-worker
-continuation is an optimization, not the portable recovery model.
-
-Search history is runtime-owned under `.gp/runs/...`; it is not stored in a
-`plan.md` file. See [agent-host-adapters.md](docs/agent-host-adapters.md) for
-the detailed resume and continuation matrix.
-
-## Strategies
-
-The portable strategy subset for Pi RPC, Codex, and Claude Code is:
-
-- `agent_guided`
-- `agent`
-- `default`
-- `random`
-- `random_mode`
-
-OpenCode remains the compatibility baseline for existing OpenCode-tested
-strategies such as `independent_branches`, `evolve`, `openevolve`, `mcts`,
-Python strategy plugins, and trace export. See
-[examples/README.md](examples/README.md),
-[docs/strategy-openevolve.md](docs/strategy-openevolve.md), and
-[docs/strategy-adaptevolve.md](docs/strategy-adaptevolve.md).
-
-## Repository Layout
-
-```text
-.pi/                                  # Pi prompts, skills, and extension
-.codex/config.example.toml            # tracked Codex MCP config template
-.codex/config.toml                    # ignored local Codex MCP config
-.codex/hooks.json                     # Codex Goal Plus host hooks
-.codex/skills/                        # Codex skills
-.codex/agents/                        # Codex worker agent config
-.mcp.json                             # project-local Claude Code MCP config
-.claude/                              # Claude Code settings, skills, worker agents
-opencode.json                         # project-local OpenCode MCP config
-.opencode/                            # OpenCode commands, skills, worker agents
-scripts/hooks/goal_plus_stop.py       # legacy wrapper for local hook testing
-docs/                                 # design, host, debug, and strategy docs
-examples/                             # bundled SearchSpec examples
-src/goal_plus/           # runtime, models, tools, server
-tests/                                # unit, integration, asset, and opt-in ST tests
-```
-
-## Development Checks
+## Development
 
 ```bash
 python -m pytest -q
 git diff --check
 ```
 
-Runtime state is written under `.gp/`, which is ignored by git.
+The portable strategy set for Pi, Codex, and Claude Code is `agent_guided`
+(`agent`/`default`) and `random` (`random_mode`). OpenCode remains the
+compatibility host for the existing higher-touch strategies and trace export.

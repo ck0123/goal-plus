@@ -874,12 +874,14 @@ class FileSearchRuntime:
         self,
         agent_session_id: str,
         directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
     ) -> AgentSessionRecord:
-        """Return an OpenCode Task launch payload that continues a prior session.
+        """Return host launch fields that continue a prior worker session.
 
-        This is not a fork and does not create a new candidate workspace. It
-        reuses the existing runtime agent_session_id, candidate_id, workspace,
-        and the bound OpenCode session id as Task's `task_id`.
+        This does not create a new candidate workspace. Hosts with native
+        continuation reuse the bound worker; state-redispatch hosts return
+        their explicit redispatch payload. ``worker_budget`` applies only to
+        this continuation dispatch and does not mutate the frozen spec.
         """
         session = self._load_agent_session_by_id(agent_session_id)
         if session.host == "opencode" and not (
@@ -912,12 +914,22 @@ class FileSearchRuntime:
             if directive is None
             else self._normalize_main_directive(directive)
         )
+        worker_agent_type = self._candidate_worker_agent_type(
+            frozen,
+            candidate_record,
+        )
+        worker_budget_override = self._normalize_worker_budget_override(
+            worker_host=session.host,
+            worker_agent_type=worker_agent_type,
+            worker_budget=worker_budget,
+        )
         try:
             launch = self._build_continue_launch_payload(
                 frozen=frozen,
                 session=session,
                 directive=normalized_directive,
                 candidate_record=candidate_record,
+                worker_budget_override=worker_budget_override,
             )
         except UnsupportedHostCapability as exc:
             raise RuntimeError(str(exc)) from exc
@@ -1519,6 +1531,7 @@ class FileSearchRuntime:
             "supports_service_tier": adapter.capabilities.supports_service_tier,
             "supports_usage_metadata": adapter.capabilities.supports_usage_metadata,
             "supports_process_kill": adapter.capabilities.supports_process_kill,
+            "pool": adapter.capabilities.pool.as_dict(),
             "directive_rule": (
                 "Worker directives should describe the candidate idea and deliverable, not score "
                 "targets or baseline scores. Workers must treat any score target in a directive as "
@@ -1528,8 +1541,8 @@ class FileSearchRuntime:
             "direct_edit_allowed": False,
             "reason": (
                 f"worker_mode=agent-session-pool requires the main agent to launch "
-                f"{strategy.worker_host} foreground workers using the launch payload "
-                "from search_start_agent_session."
+                f"{strategy.worker_host} workers through the published host-pool "
+                "contract using launch payloads from search_start_agent_session."
             ),
         }
 
@@ -1700,6 +1713,7 @@ class FileSearchRuntime:
         session: AgentSessionRecord,
         directive: dict[str, Any],
         candidate_record: CandidateRecord,
+        worker_budget_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         worker_agent_type = self._candidate_worker_agent_type(frozen, candidate_record)
         if directive.get("goal"):
@@ -1728,7 +1742,11 @@ class FileSearchRuntime:
             root=str(self.root_dir),
             cwd=str(candidate_record.task.workspace),
             worker_prompt=self._worker_prompt_for_host(session.host),
-            worker_budget=self._candidate_worker_budget(frozen, candidate_record),
+            worker_budget=(
+                worker_budget_override
+                if worker_budget_override is not None
+                else self._candidate_worker_budget(frozen, candidate_record)
+            ),
         )
 
     def _worker_prompt_for_host(self, host: str) -> str | None:

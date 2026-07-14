@@ -121,10 +121,12 @@ class SearchTools:
         self,
         agent_session_id: str,
         directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.continue_agent_session(
             agent_session_id=agent_session_id,
             directive=directive,
+            worker_budget=worker_budget,
         ).model_dump(mode="json")
 
     def search_get_agent_context(self, agent_session_id: str) -> dict[str, Any]:

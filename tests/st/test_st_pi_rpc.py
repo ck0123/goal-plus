@@ -8,6 +8,12 @@ import pytest
 
 from goal_plus.models import CandidateProposal, SearchSpec
 from goal_plus.pi_driver import run_pi_search_candidate
+from goal_plus.pi_pool import (
+    close_pi_search_pool,
+    open_pi_search_pool,
+    snapshot_pi_search_pool,
+    wait_any_pi_search_pool,
+)
 from goal_plus.pi_worker import _workspace_progress_handoff, run_pi_rpc_worker
 from goal_plus.runtime import FileSearchRuntime
 
@@ -255,6 +261,82 @@ def test_pi_rpc_edgebench_time_advisory_after_post_tool(
     assert advisory["candidate_id"] == task.candidate_id
     assert advisory["trigger_tool"]
     assert "Observed candidate timings" in advisory["message"]
+
+
+@pytest.mark.st
+@pytest.mark.st_pi_rpc
+def test_pi_rpc_managed_pool_wait_any(st_project_root: Path) -> None:
+    runtime = FileSearchRuntime(st_project_root / ".search")
+    spec_data = _circle_packing_pi_spec(
+        max_runtime_seconds=int(os.environ.get("ST_PI_CYCLE_WORKER_SECONDS", "300"))
+    ).model_dump(mode="json")
+    worker_launch = {
+        key: value
+        for key, value in {
+            "model": os.environ.get("ST_PI_MODEL"),
+            "reasoning_effort": os.environ.get("ST_PI_THINKING"),
+        }.items()
+        if value
+    }
+    if worker_launch:
+        spec_data["strategy"]["worker_launch"] = worker_launch
+    spec = SearchSpec.model_validate(spec_data)
+    frozen = runtime.freeze_spec(spec, [CIRCLE_PACKING / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    opened = open_pi_search_pool(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_ids=[task.candidate_id for task in tasks],
+        directive={
+            "goal": (
+                "Improve the circle packing artifact, run multiple meaningful "
+                "verifier iterations when useful, and return a structured handoff."
+            )
+        },
+        max_parallel=2,
+    )
+    pool_id = opened["pool_id"]
+    rediscovered = snapshot_pi_search_pool(root_dir=runtime.root_dir, run_id=run_id)
+    assert [pool["pool_id"] for pool in rediscovered["pools"]] == [pool_id]
+
+    events: list[dict] = []
+    for _ in range(8):
+        waited = wait_any_pi_search_pool(
+            root_dir=runtime.root_dir,
+            pool_id=pool_id,
+            timeout_seconds=60,
+        )
+        events.extend(waited["events"])
+        if len(events) >= 2:
+            break
+        assert waited["active_count"] > 0
+
+    assert len(events) == 2
+    assert {event["candidate_id"] for event in events} == {
+        task.candidate_id for task in tasks
+    }
+    assert all(event["kind"] == "candidate_ready" for event in events)
+    assert all(
+        [step["tool"] for step in event["result"]["steps"]]
+        == [
+            "search_start_agent_session",
+            "pi_rpc_run_worker",
+            "search_bind_agent_handle",
+            "search_run_verifier",
+        ]
+        for event in events
+    )
+    closed = close_pi_search_pool(
+        root_dir=runtime.root_dir,
+        pool_id=pool_id,
+        mode="drain",
+        timeout_seconds=30,
+    )
+    assert closed["state"] == "closed"
+    assert closed["active_count"] == 0
 
 
 @pytest.mark.st

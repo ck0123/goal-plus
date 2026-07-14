@@ -158,6 +158,66 @@ def test_pi_tool_dispatches_batch_driver(monkeypatch, tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "function_name", "arguments", "expected"),
+    [
+        (
+            "pi_search_pool_open",
+            "open_pi_search_pool",
+            {"run_id": "run_1", "candidate_ids": ["c001"], "max_parallel": 1},
+            {"run_id": "run_1", "candidate_ids": ["c001"], "directive": None, "worker_budgets": None, "final_verify": True, "max_parallel": 1},
+        ),
+        (
+            "pi_search_pool_submit",
+            "submit_pi_search_pool",
+            {"pool_id": "pool_1", "candidate_id": "c002"},
+            {"pool_id": "pool_1", "candidate_id": "c002", "directive": None, "worker_budget": None, "final_verify": True},
+        ),
+        (
+            "pi_search_pool_wait_any",
+            "wait_any_pi_search_pool",
+            {"pool_id": "pool_1", "timeout_seconds": 5},
+            {"pool_id": "pool_1", "timeout_seconds": 5},
+        ),
+        (
+            "pi_search_pool_snapshot",
+            "snapshot_pi_search_pool",
+            {"pool_id": "pool_1"},
+            {"pool_id": "pool_1", "run_id": None},
+        ),
+        (
+            "pi_search_pool_continue",
+            "continue_pi_search_pool",
+            {"pool_id": "pool_1", "candidate_id": "c001", "runtime_multiplier": 1.5},
+            {"pool_id": "pool_1", "candidate_id": "c001", "directive": None, "worker_budget": None, "runtime_multiplier": 1.5, "final_verify": True},
+        ),
+        (
+            "pi_search_pool_close",
+            "close_pi_search_pool",
+            {"pool_id": "pool_1", "mode": "drain", "timeout_seconds": 5},
+            {"pool_id": "pool_1", "mode": "drain", "timeout_seconds": 5},
+        ),
+    ],
+)
+def test_pi_tool_dispatches_managed_pool_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tool_name: str,
+    function_name: str,
+    arguments: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(f"goal_plus.pi_tool.{function_name}", fake)
+    assert call_pi_tool(tmp_path / ".search", tool_name, arguments) == {"ok": True}
+    assert calls == [{"root_dir": tmp_path / ".search", **expected}]
+
+
 def test_pi_tool_rejects_unknown_tool(tmp_path: Path) -> None:
     try:
         call_pi_tool(tmp_path / ".search", "search_abort_agent_session", {})

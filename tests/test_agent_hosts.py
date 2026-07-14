@@ -266,16 +266,38 @@ def test_claude_adapter_builds_turn_budget_payload() -> None:
 
 
 @pytest.mark.codex
-def test_codex_continue_is_explicitly_unsupported() -> None:
+def test_codex_continue_uses_followup_task_with_watchdog() -> None:
     adapter = get_agent_host_adapter("codex")
 
-    with pytest.raises(UnsupportedHostCapability, match="codex"):
+    payload = adapter.build_continue_payload(
+        worker_agent_type="search_candidate_agent",
+        candidate_id="cand_0001",
+        agent_session_id="agent_0001",
+        external_id=None,
+        task_name="search_agent_0001",
+        short_intent="continue",
+        one_paragraph_idea="continue",
+        worker_budget={"max_runtime_seconds": 900, "on_exceed": "interrupt"},
+    )
+
+    assert payload["tool"] == "followup_task"
+    assert payload["target"] == "search_agent_0001"
+    assert "continue_existing_agent_session=true" in payload["message"]
+    assert payload["budget_control"]["max_runtime_seconds"] == 900
+    assert payload["budget_control"]["interrupt_target"] == "search_agent_0001"
+
+
+@pytest.mark.codex
+def test_codex_continue_requires_a_bound_native_handle() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    with pytest.raises(UnsupportedHostCapability, match="bound task name"):
         adapter.build_continue_payload(
             worker_agent_type="search_candidate_agent",
             candidate_id="cand_0001",
             agent_session_id="agent_0001",
             external_id=None,
-            task_name="search_agent_0001",
+            task_name=None,
             short_intent="continue",
             one_paragraph_idea="continue",
         )

@@ -47,48 +47,43 @@ remain responsible for closing out siblings that have not already returned.
 
 Choose the whole-run candidate budget before `search_freeze_spec`; it is frozen
 and cannot grow inside that run. `budget.max_candidates` is the total number of
-distinct candidate workspaces across all rounds. `budget.max_parallel` is only
-the maximum width of one planned batch. Therefore the planned round capacity is
-approximately `ceil(max_candidates / max_parallel)`. If the two values are
-equal, the run normally has only one full batch.
+distinct candidate workspaces. `budget.max_parallel` is the hard cap on live
+candidate workers. A persisted Search round is a planning decision epoch, not a
+worker barrier: the next plan may be created as soon as any worker completes and
+a slot is free.
 
 When the user or outer harness supplies a wall-clock, attempt, or token budget:
 
 1. Reserve time for main-agent final verification, selection, reporting, and
    promotion.
-2. Choose a batch width `max_parallel` that the host can support. When no better
+2. Choose `max_parallel` that the host can support. When no better
    resource signal exists, recommend 4; this is a planning recommendation, not
    a runtime default.
-3. Estimate one batch duration from `worker_budget.max_runtime_seconds`, prior
-   observed worker durations, and launch/verifier overhead. Under real
-   concurrency use the slowest worker duration, not the sum of all workers.
-4. Estimate `rounds = floor((remaining_seconds - final_reserve_seconds) /
-   estimated_batch_seconds)`, subject to explicit attempt/token caps, then set
-   `max_candidates = rounds * max_parallel`. Keep at least one candidate only
-   when enough time remains to produce and verify useful work.
+3. Set `max_candidates` as a conservative whole-run safety cap that fits the
+   outer budget. Do not turn it into a required round count or promise that all
+   candidate slots will be consumed.
+4. Give initial probes enough uninterrupted time to produce real artifacts and
+   verifier evidence. Reinvest more time in valuable directions and stop weak
+   directions based on evidence and remaining time.
 
-For example, 7200 seconds remaining, 900 seconds reserved, and 1260 seconds per
-batch gives 5 rounds; with `max_parallel=3`, set `max_candidates=15`.
-
-After every completed batch, refresh remaining time and history before calling
-`search_plan_next` again. `requested_k` is only the request for that round; use
-at most `max_parallel` and the remaining total candidate budget. Do not treat
-its default value 4 as the whole-run budget. Do not call `search_select` while
-another useful batch fits the remaining budget. Select only when the candidate
-cap is exhausted, another batch no longer fits before the final reserve, an
-explicit attempt/token cap is reached, or a declared early-stop condition holds.
+After every terminal worker event, refresh remaining time and
+`search_list_history`. Decide independently whether each free slot should
+continue a promising worker, start a new direction, remain idle, or begin final
+selection. `requested_k` is only the number of new candidate workspaces desired
+at that decision point. Never wait for unrelated slow workers merely to preserve
+a batch boundary.
 
 ## Main Workflow
 
 1. Call `search_freeze_spec` for the Goal Plus spec draft, or `search_create`
    when a frozen spec already exists.
-2. Call `search_plan_next`.
-3. Call `search_start_batch`.
-4. For each new candidate, call `search_start_agent_session`. Its optional
+2. Fill up to `budget.max_parallel` initial slots with `search_plan_next` and
+   `search_start_batch`.
+3. For each new candidate, call `search_start_agent_session`. Its optional
    `worker_budget` is a one-dispatch override for a direction that deserves a
    longer uninterrupted initial exploration; it does not mutate the frozen
    spec.
-5. Launch a foreground Codex subagent with the returned launch payload:
+4. Launch a Codex subagent with the returned launch payload:
    - Project the payload onto the current `spawn_agent` tool schema. Always pass
      `task_name`, `message`, and `fork_turns` when those fields are exposed.
    - Pass optional `agent_type`, `model`, `reasoning_effort`, or `service_tier`
@@ -96,34 +91,39 @@ explicit attempt/token cap is reached, or a declared early-stop condition holds.
      field. Some Codex configurations intentionally hide this metadata.
    - Do not fail merely because optional launch metadata is hidden. When no
      model override can be passed, the worker inherits the parent Codex model.
-6. If `spawn_agent` returns a task name or nickname, call `search_bind_agent_handle` with:
+5. If `spawn_agent` returns a task name or nickname, call `search_bind_agent_handle` with:
    - `host: "codex"`
    - `task_name`
    - `nickname` when present
-7. If `launch.budget_control.mode == "parent_watchdog"`, enforce the worker
-   deadline from the parent agent:
-   - launch the worker first with `spawn_agent(...)`
-   - wait first with
-     `wait_agent(timeout_ms=launch.budget_control.initial_wait_timeout_ms)`
-   - if that initial wait times out, send exactly one soft closeout using
-     `send_message(target=launch.budget_control.closeout_target,
-     message=launch.budget_control.closeout_message)`
-   - wait again with
-     `wait_agent(timeout_ms=launch.budget_control.final_wait_timeout_ms)`
-   - if the final wait times out and `on_exceed == "interrupt"`, call
-     `interrupt_agent(target=launch.budget_control.interrupt_target)`
-   - after interruption, call `wait_agent` once more to observe the final state
-   - merge `timed_out`, `soft_closeout_sent`, the final assistant summary, and
-     `.tmp/handoff.json` when present by calling `search_bind_agent_handle`
-     again for the same `agent_session_id`
-8. If no `budget_control` is present, wait for candidate workers according to Codex foreground subagent behavior.
-9. If a worker stops before useful verifier evidence, call
+6. Track every live worker and its own absolute watchdog deadline. Call
+   targetless `wait_agent` so the parent wakes when any worker produces a
+   mailbox update; then call `list_agents` and process every worker that is now
+   terminal. A progress-only wakeup is not a completion event, so keep waiting
+   when no worker is terminal.
+7. For each terminal worker, bind its final summary/timeout metadata and run
+   `search_run_verifier` from the main agent. Only after that verifier returns is
+   the pool event `candidate_ready`. Refresh history immediately; do not wait
+   for the other live workers.
+8. For each newly free slot, choose one action:
+   - call `search_continue_agent_session(..., worker_budget?)`, then project its
+     launch payload onto `followup_task`, to give the same Codex worker a deeper
+     turn on the same candidate;
+   - call `search_plan_next(requested_k=<new direction count>)`,
+     `search_start_batch`, and launch a new candidate;
+   - leave the slot idle because no useful work fits the remaining time; or
+   - begin final drain and selection.
+9. If a worker stops before useful verifier evidence and native continuation is
+   no longer available, call
    `search_redispatch_candidate(run_id, candidate_id, directive?,
    worker_agent_type?, worker_budget={"max_runtime_seconds": <larger seconds>, ...})`
-   and launch the returned payload as a new foreground worker for the same
+   and launch the returned payload as a new worker for the same
    candidate.
-10. Run final `search_run_verifier` from the main agent before selecting.
-11. Use `search_select`, `search_report`, and `search_promote` when appropriate.
+10. Before each wait, compare the nearest live-worker deadline with the current
+    time. At soft closeout send exactly one `send_message`; at the hard deadline
+    call `interrupt_agent`, observe the terminal state, and process it like any
+    other completion. Do not apply one worker's timeout to the whole pool.
+11. Drain or interrupt every live worker before `search_select`. Then use
+    `search_select`, `search_report`, and `search_promote` when appropriate.
 
 ## Worker Budget Control
 
@@ -135,7 +135,9 @@ Treat `budget_control.max_turns_hint` as a prompt-level hint only. The hard
 control for Codex is the sum of `budget_control.initial_wait_timeout_ms` and
 `budget_control.final_wait_timeout_ms`, followed by interruption. The
 `soft_closeout_seconds` field records the closeout window; it is not a
-runtime-owned worker timer.
+runtime-owned worker timer. Send the payload's configured `closeout_message`
+exactly once for that worker; completion or continuation resets only that
+worker's dispatch deadline, never the whole pool.
 
 Project `PostToolUse` hooks also provide a separate, advisory-only timing
 signal to Search candidate subagents. After `search_get_agent_context` binds
@@ -173,17 +175,16 @@ history also includes its structured `research_summary`. Use the verifier-backed
 design later candidate proposals; do not carry only the best score or raw
 transcript text.
 
-Codex does not expose an equivalent same-worker continuation in this adapter.
-Use `search_redispatch_candidate` to start a new foreground Codex worker for
-the same candidate, optionally overriding `worker_agent_type` and
-`worker_budget.max_runtime_seconds` for that dispatch. The returned prompt
-tells the worker to treat `search_get_agent_context` as the authoritative
-resume context. Do not ask the worker to infer prior attempts from chat
-transcript.
+Codex supports same-worker continuation through `followup_task`. First call
+`search_continue_agent_session` so the runtime records the directive and
+one-dispatch budget, then invoke the returned follow-up payload. The worker must
+still refresh `search_get_agent_context`; host transcript is useful context but
+is not authoritative Search state. Use `search_redispatch_candidate` only when
+the original worker cannot be continued or a fresh context is intentional.
 
 ## Continuation
 
-Same-worker continuation is not supported for Codex. State-level resume is
-supported through `search_redispatch_candidate`, which creates a new
-`agent_session_id` for the same candidate workspace and relies on MCP
-history/iterations.
+Same-worker continuation uses `search_continue_agent_session` followed by
+Codex `followup_task`. State-level resume remains available through
+`search_redispatch_candidate`, which creates a new `agent_session_id` for the
+same candidate workspace and relies on MCP history/iterations.

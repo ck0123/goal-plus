@@ -394,6 +394,7 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{
 			agent_session_id: Type.String(),
 			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			worker_budget: Type.Optional(WorkerBudget),
 		},
 		{ additionalProperties: false },
 	),
@@ -454,6 +455,60 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
+	pi_search_pool_open: Type.Object(
+		{
+			run_id: Type.String(),
+			candidate_ids: Type.Optional(Type.Array(Type.String())),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget)),
+			final_verify: Type.Optional(Type.Boolean()),
+			max_parallel: Type.Optional(PositiveInteger),
+		},
+		{ additionalProperties: false },
+	),
+	pi_search_pool_submit: Type.Object(
+		{
+			pool_id: Type.String(),
+			candidate_id: Type.String(),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			worker_budget: Type.Optional(WorkerBudget),
+			final_verify: Type.Optional(Type.Boolean()),
+		},
+		{ additionalProperties: false },
+	),
+	pi_search_pool_wait_any: Type.Object(
+		{
+			pool_id: Type.String(),
+			timeout_seconds: Type.Optional(Type.Number({ minimum: 0 })),
+		},
+		{ additionalProperties: false },
+	),
+	pi_search_pool_snapshot: Type.Object(
+		{
+			pool_id: Type.Optional(Type.String()),
+			run_id: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
+	pi_search_pool_continue: Type.Object(
+		{
+			pool_id: Type.String(),
+			candidate_id: Type.String(),
+			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			worker_budget: Type.Optional(WorkerBudget),
+			runtime_multiplier: Type.Optional(Type.Number({ exclusiveMinimum: 1, maximum: 2 })),
+			final_verify: Type.Optional(Type.Boolean()),
+		},
+		{ additionalProperties: false },
+	),
+	pi_search_pool_close: Type.Object(
+		{
+			pool_id: Type.String(),
+			mode: Type.Optional(Type.Union([Type.Literal("drain"), Type.Literal("interrupt")])),
+			timeout_seconds: Type.Optional(Type.Number({ minimum: 0 })),
+		},
+		{ additionalProperties: false },
+	),
 	pi_goal_plus_run_final_check: Type.Object(
 		{ launch: LooseObject },
 		{ additionalProperties: false },
@@ -471,7 +526,19 @@ const RuntimeToolDescriptions: Record<string, string> = {
 	pi_search_run_candidate:
 		"Run one Pi candidate worker. worker_budget optionally overrides only this dispatch, including an initial dispatch or a long state-level redispatch, without mutating the frozen spec.",
 	pi_search_run_batch:
-		"Run Pi candidate workers concurrently. worker_budgets may assign per-candidate one-dispatch budgets keyed by candidate_id; omitted candidates use their frozen strategy budget.",
+		"Compatibility batch runner. It waits for the whole batch; prefer the managed Pi pool tools for rolling wait-any scheduling.",
+	pi_search_pool_open:
+		"Open a durable Pi candidate pool and optionally submit the initial workers. Returns immediately after launch and enforces the frozen max_parallel limit.",
+	pi_search_pool_submit:
+		"Submit one new candidate into a free Pi pool slot. The call returns after launch, not after the worker finishes.",
+	pi_search_pool_wait_any:
+		"Wait until any Pi pool worker reaches candidate_ready after handle binding and final verification. Process every returned event before refilling free slots.",
+	pi_search_pool_snapshot:
+		"Inspect durable Pi pool state, active workers, terminal results, and free slots without waiting. Pass run_id to rediscover a pool after main-session interruption, or pool_id for one exact pool.",
+	pi_search_pool_continue:
+		"Reinvest in a completed Pi candidate through explicit state redispatch, optionally with a larger one-dispatch worker budget.",
+	pi_search_pool_close:
+		"Close a Pi pool by draining active workers or interrupting them. Always close the pool before select/promote.",
 };
 const MAIN_GATED_TOOLS = new Set([
 	"bash",
@@ -480,6 +547,12 @@ const MAIN_GATED_TOOLS = new Set([
 	"pi_rpc_run_worker",
 	"pi_search_run_candidate",
 	"pi_search_run_batch",
+	"pi_search_pool_open",
+	"pi_search_pool_submit",
+	"pi_search_pool_wait_any",
+	"pi_search_pool_snapshot",
+	"pi_search_pool_continue",
+	"pi_search_pool_close",
 	"pi_goal_plus_run_final_check",
 ]);
 
@@ -1235,6 +1308,12 @@ export default function (pi: ExtensionAPI) {
 		"search_promote",
 		"pi_search_run_candidate",
 		"pi_search_run_batch",
+		"pi_search_pool_open",
+		"pi_search_pool_submit",
+		"pi_search_pool_wait_any",
+		"pi_search_pool_snapshot",
+		"pi_search_pool_continue",
+		"pi_search_pool_close",
 	];
 	const workerTools = ["search_get_agent_context", "search_run_verifier", "search_list_iterations"];
 	const finalCheckerTools = ["goal_plus_status", "goal_plus_submit_final_check"];

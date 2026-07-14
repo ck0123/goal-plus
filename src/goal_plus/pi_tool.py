@@ -10,6 +10,14 @@ from typing import Any, Callable
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 from goal_plus.pi_driver import run_pi_search_batch, run_pi_search_candidate
+from goal_plus.pi_pool import (
+    close_pi_search_pool,
+    continue_pi_search_pool,
+    open_pi_search_pool,
+    snapshot_pi_search_pool,
+    submit_pi_search_pool,
+    wait_any_pi_search_pool,
+)
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.tools import GoalPlusTools, SearchTools
 
@@ -124,6 +132,111 @@ def _pi_search_run_batch_tool(
     return call
 
 
+def _pi_search_pool_open_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
+    def call(
+        run_id: str,
+        candidate_ids: list[str] | None = None,
+        directive: dict[str, Any] | str | None = None,
+        worker_budgets: dict[str, dict[str, Any]] | None = None,
+        final_verify: bool = True,
+        max_parallel: int | None = None,
+    ) -> dict[str, Any]:
+        return open_pi_search_pool(
+            root_dir=root_dir,
+            run_id=run_id,
+            candidate_ids=candidate_ids,
+            directive=directive,
+            worker_budgets=worker_budgets,
+            final_verify=final_verify,
+            max_parallel=max_parallel,
+        )
+
+    return call
+
+
+def _pi_search_pool_submit_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
+    def call(
+        pool_id: str,
+        candidate_id: str,
+        directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
+        final_verify: bool = True,
+    ) -> dict[str, Any]:
+        return submit_pi_search_pool(
+            root_dir=root_dir,
+            pool_id=pool_id,
+            candidate_id=candidate_id,
+            directive=directive,
+            worker_budget=worker_budget,
+            final_verify=final_verify,
+        )
+
+    return call
+
+
+def _pi_search_pool_wait_any_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
+    def call(pool_id: str, timeout_seconds: float = 30) -> dict[str, Any]:
+        return wait_any_pi_search_pool(
+            root_dir=root_dir,
+            pool_id=pool_id,
+            timeout_seconds=timeout_seconds,
+        )
+
+    return call
+
+
+def _pi_search_pool_snapshot_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
+    def call(
+        pool_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        return snapshot_pi_search_pool(
+            root_dir=root_dir,
+            pool_id=pool_id,
+            run_id=run_id,
+        )
+
+    return call
+
+
+def _pi_search_pool_continue_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
+    def call(
+        pool_id: str,
+        candidate_id: str,
+        directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
+        runtime_multiplier: float | None = None,
+        final_verify: bool = True,
+    ) -> dict[str, Any]:
+        return continue_pi_search_pool(
+            root_dir=root_dir,
+            pool_id=pool_id,
+            candidate_id=candidate_id,
+            directive=directive,
+            worker_budget=worker_budget,
+            runtime_multiplier=runtime_multiplier,
+            final_verify=final_verify,
+        )
+
+    return call
+
+
+def _pi_search_pool_close_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
+    def call(
+        pool_id: str,
+        mode: str = "drain",
+        timeout_seconds: float = 30,
+    ) -> dict[str, Any]:
+        return close_pi_search_pool(
+            root_dir=root_dir,
+            pool_id=pool_id,
+            mode=mode,  # type: ignore[arg-type]
+            timeout_seconds=timeout_seconds,
+        )
+
+    return call
+
+
 def _registry(root_dir: Path | str) -> dict[str, Callable[..., Any]]:
     search_tools = SearchTools(FileSearchRuntime(root_dir))
     goal_tools = GoalPlusTools(FileGoalPlusRuntime(root_dir))
@@ -134,6 +247,12 @@ def _registry(root_dir: Path | str) -> dict[str, Callable[..., Any]]:
         tools[name] = getattr(goal_tools, name)
     tools["pi_search_run_candidate"] = _pi_search_run_candidate_tool(root_dir)
     tools["pi_search_run_batch"] = _pi_search_run_batch_tool(root_dir)
+    tools["pi_search_pool_open"] = _pi_search_pool_open_tool(root_dir)
+    tools["pi_search_pool_submit"] = _pi_search_pool_submit_tool(root_dir)
+    tools["pi_search_pool_wait_any"] = _pi_search_pool_wait_any_tool(root_dir)
+    tools["pi_search_pool_snapshot"] = _pi_search_pool_snapshot_tool(root_dir)
+    tools["pi_search_pool_continue"] = _pi_search_pool_continue_tool(root_dir)
+    tools["pi_search_pool_close"] = _pi_search_pool_close_tool(root_dir)
     tools["goal_plus_monitor_snapshot"] = search_tools.goal_plus_monitor_snapshot
     return tools
 

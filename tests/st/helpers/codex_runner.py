@@ -58,8 +58,8 @@ class CodexRunner:
             "Do not ask for or wait for user confirmation. "
             "You are already inside the ST harness: do not run pytest, codex, "
             "opencode, claude, or any tests/st command. Drive the goal-plus "
-            "MCP tools directly, and only launch foreground workers from runtime "
-            "launch payloads.\n\n"
+            "MCP tools directly, and only launch workers through the project "
+            "host-pool contract from runtime launch payloads.\n\n"
             + prompt
         )
         return cmd

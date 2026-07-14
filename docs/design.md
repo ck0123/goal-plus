@@ -1,408 +1,147 @@
 # Design
 
-## Objective
-
-This project provides `/goal-plus`: a generic goal entrypoint that can upgrade
-measurable coding tasks into one or more Search MCP tasks. The runtime owns durable state,
-candidate workspaces, budgets, verifier execution, scoring history,
-best-candidate selection, reports, and promotion artifacts. The host code-agent
-client owns the subagent process lifecycle. The main agent owns policy decisions
-through MCP tool calls.
-
-`goal_plus_gate` records deterministic phase decisions, but those decisions are
-enforced only when a host actually calls the gate. Codex 0.144.1+ wires
-`UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
-`SubagentStop` through `goal-plus --goal-plus-host-hook`. Claude
-Code ships PostToolUse ownership binding plus a session-scoped Stop backstop.
-OpenCode has no shipped hook; Claude PreToolUse/SubagentStop checkpoints remain
-instruction-driven.
-
-Codex stop gates follow role ownership rather than treating every pending goal
-action as subagent work. The top-level Stop gate owns the global next action. A
-Search candidate SubagentStop is blocked only until that candidate session has
-recorded a verifier call; parent-only selection, reporting, promotion, and
-final audit do not keep the completed worker alive. Ordinary subagents are
-released, while final-check reviewers keep their independent gate.
-
-The current design is **not** a supervisor loop. The runtime is a scoring and artifact runtime; it does not supervise subagent lifecycle state:
-
-- freeze a `SearchSpec` and verifier artifacts
-- create isolated candidate workspaces
-- plan the next candidate batch
-- create a context handle (AgentSessionRecord) and return a host-native launch payload
-- the main agent uses the launch payload to spawn a foreground worker in the selected host
-- the subagent self-scores via verifier calls
-- the host worker returns to the main agent
-- the main agent final-confirms the score, then selects, reports, and optionally promotes
-
-The MCP runtime does not wait, abort, finalize, submit, observe, or host-sync subagent state. Those responsibilities belong to the host client (lifecycle) or to the main agent (selection).
+Goal Plus is a durable goal state machine with a verifier-backed Search engine.
+It is deliberately not a general agent scheduler: the runtime owns evidence and
+artifacts; hosts own live workers; the main agent owns policy.
 
 ## Architecture
 
 ```text
-User
-  |
-  | "/goal-plus: improve this measurable task"
-  v
-OpenCode / Codex / Claude Code / Pi host agent
-  |
-  | reads host-local goal-plus skill
-  | calls goal_plus_* MCP tools manually
-  v
-Search MCP server
-  |
-  | delegates JSON tool calls
-  v
-GoalPlusTools facade
-  |
-  | records goal state, triage, spec readiness, gates
-  v
-FileGoalPlusRuntime
-  |
-  | appends a search task whenever a verifier-backed spec is ready
-  v
-SearchTools facade
-  |
-  | validates API payloads
-  v
-FileSearchRuntime
-  |
-  | writes durable state
-  v
+host agent
+  -> GoalPlusTools -> FileGoalPlusRuntime
+  -> SearchTools   -> FileSearchRuntime
+                         |
+                         +-> frozen specs and verifier artifacts
+                         +-> candidate workspaces and Git commits
+                         +-> plans, iterations, selection, reports, patches
+
+host adapter / supervisor
+  -> launches and waits for native workers
+  -> enforces worker deadlines
+  -> stores host-local lifecycle state outside Search records
+```
+
+Codex 0.144.1+ connects Goal Plus gates to `UserPromptSubmit`, `SessionStart`,
+`PreToolUse`, `PostToolUse`, `Stop`, and `SubagentStop`. Pi implements the same
+product flow with extension events and a durable local worker supervisor.
+
+## Ownership Boundary
+
+| Runtime owns | Host owns | Main agent owns |
+|---|---|---|
+| goal records and revisions | worker launch and termination | triage and spec discovery |
+| frozen specs and hashes | wait-any and live status | candidate/continuation policy |
+| workspace materialization | time, turn, or step enforcement | final verification and drain |
+| verifier execution and history | native logs/transcripts | selection, report, promotion |
+| selection/report/patch artifacts | host handles | full-goal audit |
+
+Host pool state must not be copied into Search lifecycle fields. The Pi pool is
+therefore stored under `.gp/host-pools/pi/`, separate from run records.
+
+## Durable Model
+
+```text
 .gp/
   goal-plus/<goal_plus_id>/
     goal.json
     events.jsonl
   specs/<frozen_spec_id>/
+    frozen_spec.json
+    verifier-artifacts/
   runs/<run_id>/
     run.json
     plans/<plan_id>.json
-    candidates/<candidate_id>/candidate.json
-    candidates/<candidate_id>/task.json
-    workspace/<candidate_id>/
+    candidates/<candidate_id>/
     agent_sessions/<agent_session_id>.json
+    workspace/<candidate_id>/
     report.md
     promotion/<candidate_id>.patch
+  host-pools/pi/
 ```
 
-## Core Data Model
+The core records are:
 
-`SearchSpec` describes one search job: objective, metric, source path, edit
-surface, verifier commands, promotion verifiers, budget, workspace backend,
-root hypotheses, and strategy. `workspace.backend` is `git_worktree` by default
-for a shared-object Git layout and may be set to `copy` for a fully independent
-source snapshot per candidate.
+- `GoalPlusRecord`: one complete user goal and its revision history.
+  `search_tasks` is append-only; `linked_search` is a compatibility view.
+- `SearchSpec`: immutable evaluation contract, edit surface, workspace policy,
+  budget, strategy, and verifier commands.
+- `SearchPlan`: one planning decision/round.
+- `CandidateTask`: one isolated candidate workspace and its work order.
+- `AgentSessionRecord`: context/provenance plus a host launch payload; never a
+  process lifecycle record.
+- `IterationRecord`: verifier result, failure, metrics, changed files, session
+  provenance, and exact candidate Git commit.
 
-`GoalPlusRecord` describes the complete user task. Its canonical
-`search_tasks` list is append-only and may contain multiple Search Mode runs.
-Each item is identified by `run_id`, references one `frozen_spec_id`, and
-stores the recorded selection/report/promotion result. `linked_search` is kept
-as a backward-compatible view of the current or most recently linked task.
-Legacy records that only contain `linked_search` remain readable, and older
-multi-run histories are reconstructed from `search_linked` and
-`search_result_recorded` events.
+## Invariants
 
-A `search task` is one complete run over one frozen spec. A `search round` is
-one persisted `SearchPlan` within that run. Monitoring distinguishes all
-planning rounds from rounds whose plan reached `status="started"`.
+1. **Freeze before search.** Ranking verifiers must pass preflight in a
+   disposable workspace before a bundle is written.
+2. **Freeze the evaluation contract.** Verifier artifacts are hash-pinned;
+   candidate code cannot edit them.
+3. **Isolate verifier side effects.** Every verifier invocation receives a
+   unique temporary directory. Writes to the candidate workspace outside the
+   declared outputs are infrastructure failures.
+4. **Keep candidates isolated.** `git_worktree` is the default backend; `copy`
+   remains available for fully independent snapshots.
+5. **Commit verifier-backed states.** Candidate edits are committed before an
+   iteration is recorded, so selection can restore the exact best state.
+6. **Final verification outranks worker claims.** The main agent re-verifies
+   ranked commits before selecting one.
+7. **Do not silently mutate source.** Promotion exports a patch.
+8. **Make limits explicit.** `max_candidates` is the whole-run workspace cap;
+   `max_parallel` is the live-worker cap; a worker budget controls one host
+   dispatch.
 
-`StrategySpec` controls planning and execution:
+## Host Pool Contract
 
-- `name`: strategy mode, default `agent_guided`; alternatives `independent_branches`, `evolve`, `openevolve`, `mcts`, `random`, or Python plugins such as `adaptevolve`
-- `driver`: `builtin`, `python`, or `external_mcp`
-- `worker_mode`: must be `agent-session-pool` (the only supported value)
-- `worker_host`: `opencode`, `codex`, `claude-code`, or `pi-rpc`; default `opencode`
-- `worker_agent_type`: optional default host hint such as OpenCode `SearchCandidateAgent`; a strategy plan may override it through `worker_policy`
-- `worker_budget`: optional per-worker runtime budget. Codex requires
-  `max_runtime_seconds` and enforces it through a parent watchdog. Claude Code
-  requires `max_turns` and enforces it through the selected agent definition.
-  Pi RPC requires `max_runtime_seconds`, sends a closeout steer before the
-  deadline, and retains a hard process watchdog.
-- `history_policy`, `parent_policy`, and `config`: strategy-specific controls
+`HostPoolContract` describes mechanics without implementing policy:
 
-Retired `worker_mode` values (`main-agent-search-direct`, `auto`, `sub-agent-search-dispatch`) and string-form `strategy` are rejected at parse time. Fix the spec instead of relying on normalization.
+| Field | Meaning |
+|---|---|
+| `launch_mode` | synchronous or asynchronous launch |
+| `wait_mode` | how the parent receives completion, currently wait-any for Codex/Pi |
+| `continuation_mode` | same-worker continuation or state redispatch |
+| `deadline_mode` | which host component enforces the dispatch budget |
+| `recovery_mode` | where live-pool discovery survives interruption |
+| `completion_stage` | point at which a candidate-ready event is valid |
 
-`SearchPlan` is produced by `search_plan_next`. It contains worker policy, requested/planned batch size, official history, derivation policy, optional proposal contract, fixed work orders, and strategy trace.
+The main agent interprets events and chooses the next action. A host supervisor
+may persist jobs, but it must not plan candidates or auto-refill slots.
 
-`CandidateTask` is produced by `search_start_batch`. It contains the candidate
-workspace path, workspace backend, optional branch/base revision, allowed and
-denied files, candidate lineage, plan metadata, and local instructions.
+## Strategy And Budget
 
-`AgentSessionRecord` is produced by `search_start_agent_session` or `search_redispatch_candidate`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, host, host_handle, optional legacy opencode_session_id, workspace, directive, host-native launch payload, and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to the host client.
+`agent_guided`/`agent`/`default` consume main-agent proposals.
+`random`/`random_mode` consume runtime work orders. These are the portable
+strategies for Pi, Codex, and Claude Code. Existing advanced strategies and
+trace export remain OpenCode compatibility paths.
 
-Both initial dispatch and state-level redispatch may apply a one-dispatch
-`worker_budget` override. It is validated for the selected host and projected
-into the host launch payload without changing the frozen spec, candidate task,
-or later dispatches. Pi's batch driver can provide these overrides per
-candidate. A bound worker's latest structured research handoff is also exposed
-in later candidate history as `research_summary`.
-
-`IterationRecord` is produced by every `search_run_verifier` call. It records
-the iteration number, agent_session_id (or None for main final verify), score,
-failure_class, changed files, metrics, and the candidate workspace's real
-`git_head` when available. Before running the verifier, the runtime
-automatically commits changed candidate artifact files in the candidate
-workspace after edit-surface and frozen-hash prechecks pass, so it can later
-checkout the best committed iteration. Disallowed files are never committed by
-the runtime.
-There is no separate submit step.
-
-`ScoreReport` is produced by `search_run_verifier`. It records pass/fail state,
-aggregate score, raw metrics, changed-file violations, frozen verifier
-violations, and failure class. `VerifierWorkspaceSideEffect` is an
-infrastructure failure, not a candidate-repair signal; its metrics include
-`infrastructure_failure=true`, `candidate_action=stop_and_report`, the changed
-paths, and any cleanup failures.
-
-## State Flow
-
-During `spec_discovery`, Search tools remain gated until a complete,
-high-confidence draft exists, but host inspection and editing tools are
-available so the main agent can inspect public tooling and, when necessary,
-materialize a verifier before freezing it. Partial drafts use the same typed
-nested fields as `SearchSpec`; `search_freeze_spec` exposes the complete schema.
-Custom verifier files are optional because a verifier command may instead be
-inline or call an existing repository tool.
+`search_plan_next` persists a round and plans:
 
 ```text
-draft SearchSpec
-  |
-  v
-search_freeze_spec
-  |
-  v
-search_create
-  |
-  v
-goal_plus_link_search_run  (append this run as one search task)
-  |
-  v
-search_plan_next
-  |
-  v
-search_start_batch
-  |
-  v
-search_start_agent_session  (returns launch payload)
-  |
-  v
-Host foreground worker runs using launch payload
-  |
-  v
-search_bind_opencode_session or search_bind_agent_handle  (records host handle)
-  |
-  v
-subagent calls search_get_agent_context
-  |
-  v
-subagent calls search_run_verifier during its iteration loop
-  |
-  v
-Host worker returns to Main
-  |
-  v
-Main calls search_run_verifier (final confirm, no agent_session_id)
-  |
-  v
-search_continue_agent_session  (optional, host capability dependent)
-  |
-  v
-Host worker continues if the adapter supports same-worker continuation
-  |
-  v
-search_redispatch_candidate  (optional state-level resume with fresh session)
-  |
-  v
-Host foreground worker runs the same candidate workspace with optional tier/budget override
-  |
-  v
-search_plan_next  (optional follow-up batch)
-  |
-  v
-search_select  (ranks verifier iterations, checks out selected git_head, final-verifies)
-  |
-  v
-search_report
-  |
-  v
-search_promote
+min(requested_k, remaining max_candidates, max_parallel)
 ```
 
-After `goal_plus_record_search_result` and the raw-goal audit, the main agent
-may finish the Goal Plus task or create and link another search task. Starting
-another task does not overwrite earlier task evidence.
+Rolling execution means this planned set is not a completion barrier. A newly
+free slot can be used as soon as policy and remaining budget justify it.
 
-### Goal Revisions And Required Final Check
+## Scope Boundary
 
-`GoalPlusRecord.raw_goal` is the compatibility view of the latest entry in the
-append-only `goal_revisions` history. `goal_plus_update_goal` uses optimistic
-`expected_revision` concurrency, keeps the same `goal_plus_id`, returns the
-record to intake/triage, and preserves older Search tasks with their original
-`goal_revision`. Late results from an older revision remain evidence but cannot
-move the new revision into final audit.
+Goal Plus does not own nested search graphs, hardware scheduling, or domain
+concepts such as GPU topology. Scenario-local harnesses may allocate resources
+and record opaque evidence. Search verifiers rank candidates; the final Goal
+Plus audit proves the original user goal after integration.
 
-`policy.final_check.mode="required"` adds a final-check gate after Goal Mode or
-the final raw-goal audit. `goal_plus_prepare_final_check` creates an idempotent
-pending check and returns a host-native foreground launch payload. The host,
-not the runtime, launches the Codex or Pi reviewer. The reviewer works from a
-fresh context, stays read-only, and calls `goal_plus_submit_final_check` for the
-exact `check_id` and `goal_revision`. A failed verdict returns the parent to a
-required repair action; a passing verdict atomically marks the Goal Plus record
-complete. Updating the objective supersedes pending checks, so an older review
-can never complete a newer revision. If the host reviewer stops or times out
-before submitting, the attempt is recorded as interrupted and the parent must
-prepare a fresh check.
+## Modules
 
-There is no batch-shortcut compatibility helper. For fixed-work-order strategies, call `search_plan_next` followed by `search_start_batch`. For proposal-based strategies, do the same and pass proposals to `start_batch`.
+| Path | Responsibility |
+|---|---|
+| `src/goal_plus/goal_plus.py` | goal state machine and gates |
+| `src/goal_plus/runtime.py` | Search state, verification, selection, promotion |
+| `src/goal_plus/workspaces.py` | candidate materialization |
+| `src/goal_plus/agent_hosts.py` | host launch/continue/pool capabilities |
+| `src/goal_plus/agent_pool.py` | shared pool contract and events |
+| `src/goal_plus/pi_pool.py` | durable Pi host supervisor |
+| `src/goal_plus/server.py` | MCP surface |
 
-## Agent Host Adapters
-
-Host-specific worker lifecycle details live behind `agent_hosts.py`. The
-runtime continues to own specs, plans, workspaces, verifier execution, reports,
-and promotion. Adapters only describe how a main agent should launch, bind, and
-optionally continue a worker in a specific code-agent client.
-
-OpenCode is the default compatibility baseline. Codex and Claude Code use the
-same runtime state machine, but narrower host-native launch and continuation
-semantics. See [agent-host-adapters.md](agent-host-adapters.md) for the current
-OpenCode/Codex/Claude Code capability matrix and adapter contract.
-
-## Budget Model
-
-`budget.max_candidates` limits total candidate workspaces and is enforced by planning/start APIs.
-
-`budget.max_parallel` caps how many candidates `search_plan_next` places in one
-planned batch. The runtime does not supervise host worker lifecycle after the
-host launches those workers.
-
-The maximum number of full-width planning rounds is approximately
-`ceil(max_candidates / max_parallel)`. Equal values normally permit only one
-full batch. `requested_k` belongs to one `search_plan_next` call; the runtime
-computes `planned_k = min(requested_k, remaining max_candidates,
-max_parallel)`. Its default value 4 is not a default whole-run budget.
-
-When an outer host supplies a wall-clock budget, the main agent—not the
-runtime—should reserve final-verification/reporting time, estimate a batch
-duration from the worker budget or observed durations, choose a supported batch
-width, and derive `max_candidates` from the number of batches that fit. It
-should refresh the remaining time after each batch and select only when no
-further useful batch fits or another declared stop condition holds.
-
-There are no runtime-owned time-based deadlines. Host workers run until their
-host-local budget, step cap, or user interruption stops them. OpenCode worker
-tiers use `SearchCandidateAgent` (default, 50 steps), `SearchCandidateAgentFlash` (15),
-`SearchCandidateAgentDeep` (100), or `SearchCandidateAgentExtraDeep` (150). Codex and
-Claude Code use their own foreground agent limits. Users can interrupt anytime
-and query current best via `search_list_history` / `search_status`. There is no
-MCP abort tool; stopping a running subagent is a host/user concern.
-
-Codex and Pi can emit a host-owned, advisory-only timing message at Search
-candidate PostTool boundaries. It uses existing `AgentSessionRecord.created_at`
-and subagent `IterationRecord.created_at` evidence to estimate
-`sum(last verifier - first session) / sum(subagent verifier count)`. The host
-compares that estimate with its worker deadline and, when supplied by an outer
-harness, `GOAL_PLUS_OUTER_DEADLINE_AT`. This read-only calculation does not add
-a runtime deadline, wait loop, or stop action.
-
-## Main Agent Responsibilities
-
-In `agent-session-pool` mode the main agent should:
-
-1. Call `search_start_agent_session` for each candidate it wants to dispatch.
-2. Project the launch payload onto the current host tool schema and spawn host
-   workers as foreground calls. This matters for Codex configurations that hide
-   optional `spawn_agent` metadata.
-3. Wait for the host worker to return. There is no MCP wait loop.
-4. Verify completed candidates with `search_run_verifier(run_id, candidate_id, "process")` (without `agent_session_id`) to confirm the final score.
-5. Start more sessions when candidate budget remains.
-6. Select, report, and promote only through runtime APIs.
-
-The MCP runtime does not perform process supervision. Stopping a running subagent is a host/user concern, not an MCP call.
-
-## Verification And Isolation
-
-Verifier commands run from each candidate workspace. The runtime adds the
-workspace to `PYTHONPATH`, injects a unique per-invocation temporary directory
-through `GOAL_PLUS_VERIFIER_TMPDIR`, `TMPDIR`, `TMP`, and `TEMP`, and parses the
-last JSON object printed to stdout as metrics. A `ranking_signal` is valid only
-when that object contains a finite
-numeric value under `spec.metric_name` or a supported fallback score key.
-Successful process exit without such a value is
-`failure_class="MissingNumericMetric"`, not a passing verifier.
-
-Before writing a frozen bundle, `search_freeze_spec` copies `source_path` into
-a disposable preflight workspace, executes every `ranking_signal` once, and
-requires a zero exit status, a finite numeric metric, and no non-ignored
-workspace changes. This catches verifier compilation products and temporary
-outputs before candidate budget is allocated without mutating the source
-workspace. Verifiers must use the injected unique temporary directory or
-Python `tempfile`; a fixed `/tmp` path is unsafe when candidates verify in
-parallel. Freeze also rejects verifier artifacts under ignored
-workspace paths, including the runtime roots `.gp/` and `.search/`, because
-those paths cannot be materialized into candidate workspaces. A verifier may
-be inline or call an existing repository tool. Custom verifier files are
-needed only when neither is suitable; materialize them during Spec Discovery
-in a source-owned path such as `.goal-plus-verifiers/` before freezing.
-`VerifierCommand.expected_outputs` contains expected artifact path/glob strings;
-it is not a stdout metric parser.
-
-Hard gates such as edit-surface violations and frozen verifier hash failures
-force the score to `0.0`.
-
-Runtime verification snapshots the candidate workspace immediately before and
-after each external verifier command. Any verifier-created change is reported
-in the same call as `VerifierWorkspaceSideEffect`; tracked changes are restored
-to the pre-command candidate commit and new files are removed. The candidate
-worker must stop and report rather than clean or retry. The parent repairs the
-source-owned verifier, freezes a new spec, and creates a new run. Host lifecycle
-controls remain responsible for closing out already-running siblings in a
-concurrent batch.
-
-The `copy` backend creates an independent source snapshot for each candidate:
-
-```text
-.gp/runs/<run_id>/workspace/c001/
-.gp/runs/<run_id>/workspace/c002/
-```
-
-The default `git_worktree` backend snapshots `source_path` once into a normal
-run-local repository, then creates each candidate with `git worktree`:
-
-```text
-.gp/runs/<run_id>/workspace-repository/       # shared objects + baseline branch
-.gp/runs/<run_id>/workspace/c001/             # gp/<run_id>/c001
-.gp/runs/<run_id>/workspace/c002/             # gp/<run_id>/c002
-```
-
-The runtime accepts either Git or non-Git input because the run-local baseline
-is always its own snapshot. A first-generation candidate starts from
-`gp/<run_id>/baseline`. A follow-up candidate starts from the chosen parent's
-best verifier-recorded commit, preserving explicit branch lineage and avoiding
-uncommitted parent state. Worktrees share Git object storage, but each still
-materializes its checked-out files; this reduces repository-history duplication
-rather than eliminating all per-candidate disk use.
-
-Each candidate workspace contains `.tmp/` for notes and non-scoring static drafts. Runtime tree hashing ignores `.tmp/`.
-
-Workers must not modify denied files, frozen verifier artifacts, or the main source workspace. Workers may run static checks such as `py_compile`; actual scoring belongs to the runtime verifier.
-
-## Implemented Modules
-
-- `models.py`: strict Pydantic models for specs, candidates, iterations, score reports, run records, host handles, and the simplified AgentSessionRecord context handle
-- `agent_hosts.py`: OpenCode, Codex, and Claude Code launch/bind/continue capability adapters
-- `runtime.py`: file-backed state machine, workspace copy, adapter-backed launch payload generation, verifier execution, selection, report, patch export
-- `tools.py`: JSON-friendly facade used by tests and MCP
-- `server.py`: FastMCP stdio server for host clients
-- `.opencode/skills/search/SKILL.md`: host-agent workflow guide
-- `.opencode/agents/SearchCandidateAgent*.md`: managed subagent prompts
-- `.codex/skills/search/SKILL.md`, `.codex/agents/search_candidate_agent.toml`: Codex host assets
-- `.claude/skills/search/SKILL.md`, `.claude/agents/search-candidate-agent.md`: Claude Code host assets
-- `.pi/skills/goal-plus/SKILL.md`, `.pi/prompts/search-candidate-worker.md`, `.pi/extensions/goal-plus.ts`: Pi host assets; Pi folds Search Mode guidance into the single user-facing `goal-plus` skill
-
-## Current Boundary
-
-The runtime owns specs, plans, workspaces, verifier execution, scoring history, reports, and promotion. The selected host client owns subagent lifecycle (start, run, enforce local budgets, stop/interrupt, return/inject completion). The runtime records `verifier_runs` counters and iteration provenance per `agent_session_id` for audit; it does not model session status, phase, terminal state, or process cancellation. There is no MCP wait loop, no MCP abort, and no MCP finalize.
-
-## Information Flow Reference
-
-This doc covers the data model and state machine. For **which agent does which step, what each agent actually sees, and which OpenCode platform constraints gate the flow**, see [flow-view.md](flow-view.md). Consult it before designing strategy changes (evolve, mcts, hybrid) to avoid building on APIs the platform does not actually expose.
+For the operational sequence, read [Flow](flow-view.md). For exact tools, read
+[API](api.md).

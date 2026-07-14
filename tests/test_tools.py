@@ -280,6 +280,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.continue_agent_session.assert_called_once_with(
         agent_session_id="agent_001",
         directive={"goal": "continue same node"},
+        worker_budget=None,
     )
 
 

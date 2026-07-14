@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from goal_plus.agent_pool import HostPoolContract
 from goal_plus.models import AgentHostKind
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
@@ -35,6 +36,7 @@ class HostCapabilities:
     supports_service_tier: bool = False
     supports_usage_metadata: bool = False
     supports_process_kill: bool = False
+    pool: HostPoolContract = field(default_factory=HostPoolContract)
 
 
 class AgentHostAdapter(Protocol):
@@ -119,6 +121,39 @@ CODEX_WORKER_BOUNDARY = (
 )
 
 
+def _codex_budget_control(
+    target: str,
+    worker_budget: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not worker_budget:
+        return None
+    max_runtime_seconds = worker_budget.get("max_runtime_seconds")
+    budget_control: dict[str, Any] = {
+        "mode": "parent_watchdog",
+        "max_runtime_seconds": max_runtime_seconds,
+        "on_exceed": worker_budget.get("on_exceed", "interrupt"),
+        "interrupt_tool": "interrupt_agent",
+        "interrupt_target": target,
+    }
+    max_runtime_ms = _budget_max_runtime_ms(worker_budget)
+    if max_runtime_seconds is not None and max_runtime_ms is not None:
+        soft_closeout_seconds = _soft_closeout_seconds(int(max_runtime_seconds))
+        final_wait_timeout_ms = soft_closeout_seconds * 1000
+        budget_control.update(
+            {
+                "initial_wait_timeout_ms": max_runtime_ms - final_wait_timeout_ms,
+                "soft_closeout_seconds": soft_closeout_seconds,
+                "closeout_tool": "send_message",
+                "closeout_target": target,
+                "closeout_message": CODEX_CLOSEOUT_MESSAGE,
+                "final_wait_timeout_ms": final_wait_timeout_ms,
+            }
+        )
+    if worker_budget.get("max_turns") is not None:
+        budget_control["max_turns_hint"] = worker_budget["max_turns"]
+    return budget_control
+
+
 class OpenCodeAdapter:
     name: AgentHostKind = "opencode"
     capabilities = HostCapabilities(
@@ -190,12 +225,26 @@ class CodexAdapter:
     name: AgentHostKind = "codex"
     capabilities = HostCapabilities(
         supports_bind_handle=True,
-        supports_same_worker_continue=False,
+        supports_same_worker_continue=True,
         supports_trace_export=False,
         supports_soft_closeout=True,
         supports_model_override=True,
         supports_reasoning_effort=True,
         supports_service_tier=True,
+        pool=HostPoolContract(
+            launch_mode="async",
+            wait_mode="wait_any",
+            continuation_mode="same_worker",
+            deadline_mode="parent_watchdog",
+            recovery_mode="host_resident",
+            completion_stage="candidate_ready",
+            submit_tool="spawn_agent",
+            wait_tool="wait_agent",
+            snapshot_tool="list_agents",
+            continue_tool="followup_task",
+            closeout_tool="send_message",
+            interrupt_tool="interrupt_agent",
+        ),
     )
 
     def build_launch_payload(
@@ -235,38 +284,49 @@ class CodexAdapter:
                     and value is not None
                 }
             )
-        if worker_budget:
-            max_runtime_seconds = worker_budget.get("max_runtime_seconds")
-            budget_control: dict[str, Any] = {
-                "mode": "parent_watchdog",
-                "max_runtime_seconds": max_runtime_seconds,
-                "on_exceed": worker_budget.get("on_exceed", "interrupt"),
-                "interrupt_tool": "interrupt_agent",
-                "interrupt_target": task_name,
-            }
-            max_runtime_ms = _budget_max_runtime_ms(worker_budget)
-            if max_runtime_seconds is not None and max_runtime_ms is not None:
-                soft_closeout_seconds = _soft_closeout_seconds(int(max_runtime_seconds))
-                final_wait_timeout_ms = soft_closeout_seconds * 1000
-                budget_control.update(
-                    {
-                        "initial_wait_timeout_ms": max_runtime_ms - final_wait_timeout_ms,
-                        "soft_closeout_seconds": soft_closeout_seconds,
-                        "closeout_tool": "send_message",
-                        "closeout_target": task_name,
-                        "closeout_message": CODEX_CLOSEOUT_MESSAGE,
-                        "final_wait_timeout_ms": final_wait_timeout_ms,
-                    }
-                )
-            if worker_budget.get("max_turns") is not None:
-                budget_control["max_turns_hint"] = worker_budget["max_turns"]
+        budget_control = _codex_budget_control(task_name, worker_budget)
+        if budget_control:
             payload["budget_control"] = budget_control
         return payload
 
-    def build_continue_payload(self, **_: Any) -> dict[str, Any]:
-        raise UnsupportedHostCapability(
-            "codex does not expose an equivalent same-worker continuation in this adapter"
-        )
+    def build_continue_payload(
+        self,
+        *,
+        worker_agent_type: str | None,
+        candidate_id: str,
+        agent_session_id: str,
+        external_id: str | None,
+        task_name: str | None,
+        short_intent: str,
+        one_paragraph_idea: str,
+        root: str | None = None,
+        cwd: str | None = None,
+        worker_prompt: str | None = None,
+        worker_budget: dict[str, Any] | None = None,
+        worker_launch: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        target = task_name or external_id
+        if not target:
+            raise UnsupportedHostCapability(
+                "codex continuation requires a bound task name or agent id"
+            )
+        payload: dict[str, Any] = {
+            "tool": "followup_task",
+            "target": target,
+            "message": (
+                f"{CODEX_WORKER_BOUNDARY}\n\n"
+                "continue_existing_agent_session=true; "
+                f"agent_session_id={agent_session_id}; "
+                f"candidate_id={candidate_id}; "
+                "refresh authoritative runtime context with "
+                "search_get_agent_context before editing; continue the same "
+                f"candidate and workspace; directive: {one_paragraph_idea}"
+            ),
+        }
+        budget_control = _codex_budget_control(target, worker_budget)
+        if budget_control:
+            payload["budget_control"] = budget_control
+        return payload
 
 
 class ClaudeCodeAdapter:
@@ -357,6 +417,21 @@ class PiRpcAdapter:
         supports_reasoning_effort=True,
         supports_usage_metadata=True,
         supports_process_kill=True,
+        pool=HostPoolContract(
+            launch_mode="async",
+            wait_mode="wait_any",
+            continuation_mode="state_redispatch",
+            deadline_mode="worker_watchdog",
+            recovery_mode="supervisor_persisted",
+            completion_stage="candidate_ready",
+            open_tool="pi_search_pool_open",
+            submit_tool="pi_search_pool_submit",
+            wait_tool="pi_search_pool_wait_any",
+            snapshot_tool="pi_search_pool_snapshot",
+            continue_tool="pi_search_pool_continue",
+            closeout_tool="pi_search_pool_close",
+            interrupt_tool="pi_search_pool_close",
+        ),
     )
 
     def _budget_control(

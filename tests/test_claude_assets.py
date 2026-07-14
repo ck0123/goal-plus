@@ -166,17 +166,15 @@ def test_claude_docs_record_log_inspection_paths() -> None:
     assert "subagents/" in combined
 
 
-def test_claude_docs_separate_current_support_from_host_capability() -> None:
+def test_claude_docs_state_current_host_boundary_concisely() -> None:
     text = (ROOT / "docs" / "claude-code.md").read_text(encoding="utf-8")
 
-    assert "## Claude Code Parity Assessment" in text
-    assert "**Implemented**" in text
-    assert "**Host-capable**" in text
-    assert "**Conditional**" in text
-    assert "No checked-in `PreToolUse` hook or tests" in text
-    assert "No checked-in `SubagentStop` hook or tests" in text
-    assert "No Claude-native equivalent of `pi_search_run_batch`" in text
-    assert "## Claude Code-Native Completion Plan" in text
+    assert "## Current Support" in text
+    assert "Foreground Agent launch" in text
+    assert "State-level redispatch" in text
+    assert "Same-worker messaging" in text
+    assert "instruction-driven" in text
+    assert "no host-specific API copy is maintained here" in text
 
 
 def test_claude_goal_plus_skill_documents_multiple_search_tasks() -> None:

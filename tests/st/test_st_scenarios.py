@@ -51,6 +51,11 @@ SCENARIO_CASES = [
         id="codex_circle_packing_cycle",
     ),
     pytest.param(
+        "codex_rolling_followup",
+        marks=(pytest.mark.st, pytest.mark.st_codex),
+        id="codex_rolling_followup",
+    ),
+    pytest.param(
         "codex_time_advisory",
         marks=(pytest.mark.st, pytest.mark.st_codex),
         id="codex_time_advisory",
@@ -225,6 +230,31 @@ def _assert_codex_circle_packing_cycle(report: StReport) -> None:
     assert len(set(session_ids)) == 4, "cycle agent_session_id values must be distinct"
 
 
+def _assert_codex_rolling_followup(report: StReport) -> None:
+    assert [candidate.get("candidate_id") for candidate in report.candidates] == [
+        "c001",
+        "c002",
+    ]
+    assert all(
+        candidate.get("status") == "evaluated"
+        and int(candidate.get("iterations") or 0) >= 1
+        for candidate in report.candidates
+    )
+    extra = report.extra
+    assert extra.get("host") == "codex"
+    assert extra.get("model") == "gpt-5.6-terra"
+    assert extra.get("wait_mode") == "wait_any"
+    session_ids = extra.get("initial_agent_session_ids") or []
+    assert len(session_ids) == 2 and len(set(session_ids)) == 2
+    assert len(extra.get("task_names") or []) == 2
+    assert extra.get("continued_candidate_id") == extra.get(
+        "first_completed_candidate_id"
+    )
+    assert extra.get("continued_agent_session_id") in session_ids
+    assert extra.get("continue_tool") == "followup_task"
+    assert extra.get("same_worker_continuation") is True
+
+
 def _assert_codex_time_advisory(report: StReport) -> None:
     assert len(report.candidates) == 1
     assert report.candidates[0].get("status") == "evaluated"
@@ -251,6 +281,7 @@ SCENARIO_ASSERTIONS = {
     "swe_bench_20212": _assert_swe_bench_20212,
     "codex_redispatch": _assert_codex_redispatch,
     "codex_circle_packing_cycle": _assert_codex_circle_packing_cycle,
+    "codex_rolling_followup": _assert_codex_rolling_followup,
     "codex_time_advisory": _assert_codex_time_advisory,
     "claude_k_module_smoke": _assert_claude_k_module_smoke,
 }

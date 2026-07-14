@@ -193,7 +193,7 @@ def create_mcp(
         """Bind a runtime agent session to a non-OpenCode host worker handle.
 
         Used by Codex and Claude Code adapters to record task names, nicknames,
-        or agent ids returned by their native foreground worker launch tools.
+        or agent ids returned by their native worker launch tools.
         OpenCode callers may keep using `search_bind_opencode_session`.
         """
         return tools.search_bind_agent_handle(agent_session_id, handle)
@@ -202,15 +202,20 @@ def create_mcp(
     def search_continue_agent_session(
         agent_session_id: str,
         directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return launch fields for continuing the same OpenCode subagent session.
+        """Return host launch fields for continuing a bound worker session.
 
-        Requires a prior `search_bind_opencode_session`. The returned
-        `launch.task_id` must be passed to OpenCode Task as `task_id`, so the
-        worker continues the same session, candidate, and workspace instead of
-        creating or forking a new one.
+        Hosts with native continuation reuse the same worker handle. The
+        optional worker budget overrides only this continuation dispatch,
+        allowing the orchestrator to reinvest in a promising direction without
+        mutating the frozen spec.
         """
-        return tools.search_continue_agent_session(agent_session_id, directive)
+        return tools.search_continue_agent_session(
+            agent_session_id,
+            directive,
+            worker_budget,
+        )
 
     @mcp.tool()
     def search_get_agent_context(agent_session_id: str) -> dict[str, Any]:
