@@ -222,6 +222,7 @@ class CodexAdapter:
                 f"{CODEX_WORKER_BOUNDARY}\n\n"
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "
+                f"assigned_worker_budget={worker_budget or 'host default'}; "
                 f"idea: {one_paragraph_idea}"
             ),
         }
@@ -386,12 +387,14 @@ class PiRpcAdapter:
         agent_session_id: str,
         candidate_id: str,
         one_paragraph_idea: str,
+        worker_budget: dict[str, Any] | None = None,
         resume: bool = False,
     ) -> str:
         header = (worker_prompt or "First call search_get_agent_context.").strip()
         labels = (
             f"agent_session_id={agent_session_id}; "
             f"candidate_id={candidate_id}; "
+            f"assigned_worker_budget={worker_budget or 'host default'}; "
             f"idea: {one_paragraph_idea}"
         )
         if resume:
@@ -426,6 +429,7 @@ class PiRpcAdapter:
                 agent_session_id=agent_session_id,
                 candidate_id=candidate_id,
                 one_paragraph_idea=one_paragraph_idea,
+                worker_budget=worker_budget,
             ),
         }
         if worker_agent_type:

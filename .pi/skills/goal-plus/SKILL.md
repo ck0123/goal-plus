@@ -112,6 +112,16 @@ remaining budget. Select only when the candidate cap is exhausted, another
 batch no longer fits before the final reserve, an explicit attempt/token cap is
 reached, or a declared early-stop condition holds.
 
+Treat the frozen `strategy.worker_budget` as the normal per-worker budget, not
+as a rule that every direction deserves identical depth. The main agent owns
+reinvestment decisions. When a proposal is unusually promising or represents
+a structurally distinct macro direction, assign a larger one-dispatch
+`worker_budget` that still fits the outer remaining time. Do not encode a fixed
+number of worker iterations or Search rounds as a substitute for this judgment.
+A long worker may need roughly 10-15 meaningful verifier-recorded artifacts to
+explore a direction, while an unpromising direction may stop earlier on
+evidence. Preserve final-verification and closeout reserve in either case.
+
 1. `search_freeze_spec`, or reuse an existing `frozen_spec_id` when the later
    cycle keeps the same verifier and edit contract
 2. `search_create`
@@ -119,11 +129,18 @@ reached, or a declared early-stop condition holds.
 4. `search_plan_next`
 5. `search_start_batch`
 6. For a multi-candidate batch, call
-   `pi_search_run_batch(run_id, candidate_ids, directive?, final_verify=true, max_parallel=<budget.max_parallel>)`.
+   `pi_search_run_batch(run_id, candidate_ids, directive?, worker_budgets?, final_verify=true, max_parallel=<budget.max_parallel>)`.
+   `worker_budgets` is keyed by `candidate_id` and lets the main agent grant
+   selected proposals a longer uninterrupted initial dispatch. Omitted
+   candidates use the frozen strategy budget.
    For a single candidate or manual recovery, call
-   `pi_search_run_candidate(run_id, candidate_id, directive?, final_verify=true)`.
+   `pi_search_run_candidate(run_id, candidate_id, directive?, worker_budget?, final_verify=true)`.
 7. Review the returned `steps`, `handle.metadata.pi_metrics`, and
-   `final_score_report` for each result.
+   `final_score_report` for each result. Also inspect every
+   `handle.metadata.progress_handoff.model_handoff`: carry its `key_results`,
+   scenario-specific `pitfalls`, `blockers`, and `next_steps` into the next
+   round's candidate proposals. Do not reduce the next round to only the best
+   score or copy raw transcripts.
 8. Call `search_select`, `search_report`, and `search_promote` when promotion is
    requested. `search_select` ranks verifier-recorded iterations, checks out the
    best committed candidate `git_head`, and runs a main-agent final verifier on
@@ -235,10 +252,15 @@ and verifier snapshot. `search_get_agent_context` exposes it under
 `context.resume`; use this explicit resume object instead of relying on a Pi
 transcript or on whether the candidate appears in top-N history.
 
-When the previous attempt has no useful verifier evidence but its handoff shows
-real progress, the main agent may redispatch once with `runtime_multiplier`
-greater than 1 and at most 2. This scales only the frozen Pi
-`max_runtime_seconds` for that fresh launch; it does not mutate the spec.
+When a candidate remains valuable after its first attempt, the main agent may
+redispatch it with an explicit larger `worker_budget`, for example
+`pi_search_run_candidate(..., redispatch=true,
+worker_budget={"max_runtime_seconds": <larger seconds>, ...})`. This creates a
+fresh Pi process in the same candidate workspace with an uninterrupted budget
+chosen from evidence and outer remaining time; it does not mutate the frozen
+spec. `runtime_multiplier` remains a compatibility shortcut for a redispatch
+between 1x and 2x, but it is not the depth policy and must not cap a justified
+long exploration.
 
 Do not redispatch only because the worker handle has `timed_out=true`. When the
 candidate already has a `process_passed=true` Git-backed iteration, that best
@@ -249,7 +271,9 @@ later timeout or regression for diagnosis.
 
 History is runtime-owned, not a local plan file. Workers must call
 `search_get_agent_context` first and use `context.resume`, `context.history`,
-and `context.iterations` as the resume source.
+and `context.iterations` as the resume source. Later-round history includes the
+latest structured `research_summary` when a worker supplied a handoff, so use
+its task-specific results and pitfalls rather than repeating failed variants.
 
 For optimization tasks, require workers to create a complete candidate artifact
 and run an early `search_run_verifier` before any long local optimization loop.

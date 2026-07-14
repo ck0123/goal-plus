@@ -130,6 +130,13 @@ denied files, candidate lineage, plan metadata, and local instructions.
 
 `AgentSessionRecord` is produced by `search_start_agent_session` or `search_redispatch_candidate`. It is a **context/provenance handle**, not a lifecycle record. It carries the agent_session_id, run_id, candidate_id, host, host_handle, optional legacy opencode_session_id, workspace, directive, host-native launch payload, and counters (verifier_runs). There is no status, phase, heartbeat, or terminal state on this record — those belong to the host client.
 
+Both initial dispatch and state-level redispatch may apply a one-dispatch
+`worker_budget` override. It is validated for the selected host and projected
+into the host launch payload without changing the frozen spec, candidate task,
+or later dispatches. Pi's batch driver can provide these overrides per
+candidate. A bound worker's latest structured research handoff is also exposed
+in later candidate history as `research_summary`.
+
 `IterationRecord` is produced by every `search_run_verifier` call. It records
 the iteration number, agent_session_id (or None for main final verify), score,
 failure_class, changed files, metrics, and the candidate workspace's real

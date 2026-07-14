@@ -130,16 +130,21 @@ def create_mcp(
         run_id: str,
         candidate_id: str,
         directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Creates a context/provenance handle and returns OpenCode Task launch fields.
+        """Create a context/provenance handle and host-native launch payload.
 
-        It does not start a worker and does not track lifecycle. The main
-        agent must immediately use the returned `launch` payload to spawn an
-        OpenCode Task. The prompt-supplied `candidate_id` is a label only;
-        the subagent must derive authoritative ids/workspace from
+        It does not start a worker or track lifecycle. The optional
+        `worker_budget` overrides only this dispatch, so the main agent can
+        give a valuable direction a longer uninterrupted exploration window
+        without mutating the frozen spec. Use the returned `launch` payload
+        with the selected host. The prompt-supplied `candidate_id` is a label
+        only; the worker must derive authoritative context from
         `search_get_agent_context`.
         """
-        return tools.search_start_agent_session(run_id, candidate_id, directive)
+        return tools.search_start_agent_session(
+            run_id, candidate_id, directive, worker_budget
+        )
 
     @mcp.tool()
     def search_redispatch_candidate(

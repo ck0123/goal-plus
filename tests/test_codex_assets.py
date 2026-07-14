@@ -166,7 +166,12 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
 
     assert ".tmp/handoff.json" in text
     assert "summary" in text
-    assert "next_action" in text
+    assert "key_results" in text
+    assert "pitfalls" in text
+    assert "condition" in text
+    assert "failed_approach" in text
+    assert "10-15 distinct verifier-recorded artifacts" in text
+    assert "verifier is an evaluator, not an analysis service" in text
     assert "PostTool time advisory is informational" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
@@ -186,6 +191,9 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
     assert "context.iterations" in text
     assert "worker_budget.max_runtime_seconds" in text
     assert "search_redispatch_candidate" in text
+    assert "one-dispatch override on initial launch or redispatch" in text
+    assert "research_summary" in text
+    assert "scenario-specific `pitfalls`" in text
     assert "do not rely on chat transcript" in agent
 
 

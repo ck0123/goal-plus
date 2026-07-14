@@ -93,7 +93,7 @@ Each step lists **who acts** and **what they see**.
       instructions[], proposal, strategy_metadata
     Note: workspace is materialized but no worker is running yet.
 
-[5] Main: search_start_agent_session(run_id, candidate_id, directive)
+[5] Main: search_start_agent_session(run_id, candidate_id, directive, worker_budget?)
     Runtime writes AgentSessionRecord (context handle + launch payload).
     Main sees (the full record, including launch):
       agent_session_id, candidate_id, workspace, directive,

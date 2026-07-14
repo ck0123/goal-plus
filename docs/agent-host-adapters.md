@@ -303,9 +303,11 @@ Host-specific validation prevents unsupported budget shapes:
 - Codex `worker_budget` requires `max_runtime_seconds`.
 - Claude Code `worker_budget` requires `max_turns`.
 - Pi RPC `worker_budget` requires `max_runtime_seconds`.
-- Pi `pi_search_run_candidate` may scale that limit for a fresh state-level
-  redispatch with `runtime_multiplier` in `(1, 2]`; arbitrary budget overrides
-  remain outside the high-level Pi tool.
+- Pi `pi_search_run_candidate` accepts a one-dispatch `worker_budget` for an
+  initial launch or state-level redispatch, while `pi_search_run_batch` accepts
+  per-candidate `worker_budgets`. These overrides do not mutate the frozen
+  spec. `runtime_multiplier` in `(1, 2]` remains a redispatch-only compatibility
+  shortcut.
 - Known Claude Code agent types must match their configured `maxTurns`; custom
   Claude agent types are allowed when specified explicitly.
 

@@ -72,11 +72,13 @@ class SearchTools:
         run_id: str,
         candidate_id: str,
         directive: dict[str, Any] | str | None = None,
+        worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.start_agent_session(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
+            worker_budget=worker_budget,
         ).model_dump(mode="json")
 
     def search_redispatch_candidate(

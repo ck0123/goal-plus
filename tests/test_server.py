@@ -62,6 +62,7 @@ def test_start_agent_session_returns_launch_payload(tmp_path: Path) -> None:
     properties = schema["properties"]
     assert "candidate_id" in properties
     assert "directive" in properties
+    assert "worker_budget" in properties
     # The legacy admission parameters (budget, visibility_mode) are gone.
     assert "budget" not in properties
     assert "visibility_mode" not in properties

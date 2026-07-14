@@ -652,16 +652,20 @@ class FileSearchRuntime:
         run_id: str,
         candidate_id: str,
         directive: dict[str, Any] | str | None = None,
+        *,
+        worker_budget: dict[str, Any] | None = None,
     ) -> AgentSessionRecord:
-        """Create a context/provenance handle for a candidate and return the
-        OpenCode Task launch fields. Does not start a worker and does not track
-        lifecycle state. The main agent must launch the worker via OpenCode Task
-        using the returned ``launch`` payload.
+        """Create a context/provenance handle and host-native launch payload.
+
+        Does not start a worker or track lifecycle state. ``worker_budget`` is
+        an optional one-dispatch override; it does not mutate the frozen spec or
+        the candidate policy.
         """
         return self._create_agent_session(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
+            worker_budget_override=worker_budget,
         )
 
     def redispatch_candidate(
@@ -746,6 +750,17 @@ class FileSearchRuntime:
 
             candidate_record = self._load_candidate_record(run_id, candidate_id)
             workspace = candidate_record.task.workspace
+
+            if worker_budget_override is not None:
+                selected_worker_agent_type = (
+                    worker_agent_type_override
+                    or self._candidate_worker_agent_type(frozen, candidate_record)
+                )
+                worker_budget_override = self._normalize_worker_budget_override(
+                    worker_host=frozen.spec.strategy.worker_host,
+                    worker_agent_type=selected_worker_agent_type,
+                    worker_budget=worker_budget_override,
+                )
 
             agent_session_id = self._make_agent_session_id(run_id, run.next_agent_session_index)
             run.next_agent_session_index += 1
@@ -1635,21 +1650,30 @@ class FileSearchRuntime:
             or self._candidate_worker_agent_type(frozen, candidate_record)
         )
         proposal = candidate_record.task.proposal
-        if directive.get("goal"):
-            short_intent = str(directive["goal"])
-        elif proposal is not None and proposal.intent:
+        if proposal is not None and proposal.intent:
             short_intent = proposal.intent
+        elif directive.get("goal"):
+            short_intent = str(directive["goal"])
         else:
             short_intent = candidate_record.task.hypothesis
 
-        if directive:
-            idea_lines = [f"{key}: {value}" for key, value in directive.items()]
-        elif proposal is not None and proposal.intent:
-            idea_lines = [proposal.intent]
+        idea_lines: list[str] = []
+        if proposal is not None and proposal.intent:
+            idea_lines.append(f"candidate_intent: {proposal.intent}")
+            if proposal.hypothesis:
+                idea_lines.append(f"candidate_hypothesis: {proposal.hypothesis}")
             if proposal.expected_tradeoff:
                 idea_lines.append(f"expected_tradeoff: {proposal.expected_tradeoff}")
+            if proposal.instructions:
+                idea_lines.append(
+                    "candidate_instructions: " + " | ".join(proposal.instructions)
+                )
         else:
-            idea_lines = [candidate_record.task.hypothesis]
+            idea_lines.append(f"candidate_hypothesis: {candidate_record.task.hypothesis}")
+        if directive:
+            idea_lines.extend(
+                f"main_directive.{key}: {value}" for key, value in directive.items()
+            )
         one_paragraph_idea = "; ".join(idea_lines)
 
         adapter = get_agent_host_adapter(frozen.spec.strategy.worker_host)
@@ -3093,6 +3117,59 @@ class FileSearchRuntime:
                 )
         return options
 
+    def _candidate_research_summary(
+        self,
+        run_id: str,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        """Return the latest bounded worker-authored research handoff.
+
+        This is deliberately a compact cross-round summary, not a transcript
+        or a generalized experience-memory layer. Older handoff keys remain
+        readable so existing runs still contribute useful evidence.
+        """
+
+        def items(value: Any) -> list[Any]:
+            if value is None or value == "":
+                return []
+            if isinstance(value, list):
+                return value[:5]
+            return [value]
+
+        for session in reversed(self._load_agent_sessions(run_id)):
+            if session.candidate_id != candidate_id:
+                continue
+            metadata = session.host_handle.metadata or {}
+            progress = metadata.get("progress_handoff")
+            if not isinstance(progress, dict):
+                continue
+            model_handoff = progress.get("model_handoff")
+            if not isinstance(model_handoff, dict):
+                continue
+            summary = model_handoff.get("summary")
+            if not isinstance(summary, str):
+                summary = progress.get("summary")
+            return {
+                "summary": summary if isinstance(summary, str) else "",
+                "key_results": items(
+                    model_handoff.get("key_results", model_handoff.get("what_was_tried"))
+                ),
+                "pitfalls": items(model_handoff.get("pitfalls")),
+                "blockers": items(model_handoff.get("blockers")),
+                "next_steps": items(
+                    model_handoff.get("next_steps", model_handoff.get("next_action"))
+                ),
+                "source_agent_session_id": session.agent_session_id,
+            }
+        return {
+            "summary": "",
+            "key_results": [],
+            "pitfalls": [],
+            "blockers": [],
+            "next_steps": [],
+            "source_agent_session_id": None,
+        }
+
     def _history_candidate_payload(
         self,
         record: CandidateRecord,
@@ -3170,6 +3247,29 @@ class FileSearchRuntime:
             and isinstance(value, int | float | bool | str)
         }
 
+        agent_sessions = self._agent_session_payloads_for_candidate(
+            record.task.run_id,
+            record.candidate_id,
+        )
+        research_summary = self._candidate_research_summary(
+            record.task.run_id,
+            record.candidate_id,
+        )
+        risk_notes = [
+            (
+                "Condition: {condition}; failed approach: {failed_approach}; "
+                "reason: {reason}; recommendation: {recommendation}".format(
+                    condition=pitfall.get("condition", "the recorded condition"),
+                    failed_approach=pitfall.get("failed_approach", "the approach"),
+                    reason=pitfall.get("reason", "the recorded reason"),
+                    recommendation=pitfall.get("recommendation", "avoid repeating it"),
+                )
+                if isinstance(pitfall, dict)
+                else str(pitfall)
+            )
+            for pitfall in research_summary["pitfalls"]
+        ]
+
         return {
             "candidate_id": record.candidate_id,
             "parent_id": record.task.parent_id,
@@ -3185,13 +3285,13 @@ class FileSearchRuntime:
             "history_refs": record.task.proposal.history_refs if record.task.proposal else [],
             "strategy_metadata": record.task.strategy_metadata,
             "workspace": str(record.task.workspace),
-            "agent_sessions": self._agent_session_payloads_for_candidate(
-                record.task.run_id,
-                record.candidate_id,
-            ),
-            "summary": "",
-            "next_ideas": [],
-            "risk_notes": [],
+            "agent_sessions": agent_sessions,
+            "summary": research_summary["summary"],
+            "key_results": research_summary["key_results"],
+            "next_ideas": research_summary["next_steps"],
+            "risk_notes": risk_notes,
+            "blockers": research_summary["blockers"],
+            "research_summary": research_summary,
             "artifact_status": None,
             "changed_files": record.detected_changed_files,
             "touched_denied_files": record.touched_denied_files,

@@ -260,6 +260,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         run_id="run_1",
         candidate_id="c001",
         directive={"goal": "try one"},
+        worker_budget=None,
     )
     runtime.redispatch_candidate.assert_called_once_with(
         run_id="run_1",

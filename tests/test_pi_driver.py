@@ -256,6 +256,40 @@ def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
     assert len(runtime._load_agent_sessions(run_id)) == 2
 
 
+def test_run_pi_search_candidate_accepts_explicit_long_worker_budget(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    def fake_worker(launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "host": "pi-rpc",
+            "external_id": launch["session_id"],
+            "metadata": {},
+        }
+
+    result = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=candidate.candidate_id,
+        worker_budget={
+            "max_runtime_seconds": 3600,
+            "max_turns": 80,
+            "on_exceed": "interrupt",
+        },
+        final_verify=False,
+        worker_runner=fake_worker,
+    )
+
+    assert result["launch"]["budget_control"]["max_runtime_seconds"] == 3600
+    assert result["steps"][0]["worker_budget_override"]["max_runtime_seconds"] == 3600
+
+
 def test_run_pi_search_candidate_rejects_unsafe_runtime_multiplier(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -279,6 +313,16 @@ def test_run_pi_search_candidate_rejects_unsafe_runtime_multiplier(tmp_path: Pat
             candidate_id=candidate.candidate_id,
             redispatch=True,
             runtime_multiplier=3,
+            final_verify=False,
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        run_pi_search_candidate(
+            root_dir=runtime.root_dir,
+            run_id=run_id,
+            candidate_id=candidate.candidate_id,
+            redispatch=True,
+            runtime_multiplier=1.5,
+            worker_budget={"max_runtime_seconds": 1200},
             final_verify=False,
         )
 
@@ -396,9 +440,13 @@ def test_run_pi_search_batch_runs_worker_processes_in_parallel(tmp_path: Path) -
     plan = runtime.plan_next(run_id, requested_k=2)
     candidates = runtime.start_batch(run_id, plan.plan_id)
     events: list[tuple[str, str, float]] = []
+    observed_budgets: dict[str, int] = {}
 
     def fake_worker(launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         candidate_id = str(launch["candidate_id"])
+        observed_budgets[candidate_id] = int(
+            launch["budget_control"]["max_runtime_seconds"]
+        )
         events.append((candidate_id, "start", time.monotonic()))
         time.sleep(0.2)
         events.append((candidate_id, "end", time.monotonic()))
@@ -413,6 +461,7 @@ def test_run_pi_search_batch_runs_worker_processes_in_parallel(tmp_path: Path) -
         root_dir=runtime.root_dir,
         run_id=run_id,
         candidate_ids=[candidate.candidate_id for candidate in candidates],
+        worker_budgets={"c002": {"max_runtime_seconds": 1800}},
         final_verify=False,
         max_parallel=2,
         worker_runner=fake_worker,
@@ -424,5 +473,6 @@ def test_run_pi_search_batch_runs_worker_processes_in_parallel(tmp_path: Path) -
     assert result["ok"] is True
     assert result["candidate_ids"] == ["c001", "c002"]
     assert [item["ok"] for item in result["results"]] == [True, True]
+    assert observed_budgets == {"c001": 600, "c002": 1800}
     assert starts["c002"] < ends["c001"]
     assert starts["c001"] < ends["c002"]

@@ -202,12 +202,14 @@ other hosts:
 
 1. `search_plan_next`
 2. `search_start_batch`
-3. `pi_search_run_batch(run_id, candidate_ids, directive?, final_verify=true, max_parallel=<budget.max_parallel>)`
+3. `pi_search_run_batch(run_id, candidate_ids, directive?, worker_budgets?, final_verify=true, max_parallel=<budget.max_parallel>)`
 4. inspect the returned per-candidate step evidence, handle metadata, and final score reports
 5. `search_select`, `search_report`, `search_promote`
 
 `pi_search_run_batch` runs the candidate workers concurrently up to the planned
-`max_parallel` window and returns ordered per-candidate results.
+`max_parallel` window and returns ordered per-candidate results. Its optional
+`worker_budgets` map assigns a one-dispatch budget to selected candidate ids;
+other candidates keep the frozen strategy budget.
 `pi_search_run_candidate` is the single-candidate fallback for manual recovery
 or debugging. Both drivers automatically start the agent session, run the Pi
 RPC worker, bind the handle, and can run the final verifier. The returned
@@ -354,10 +356,20 @@ state-level redispatch in the same candidate workspace. The new worker starts
 from `search_get_agent_context`, verifier history, and Git state rather than a
 prior Pi transcript.
 
-For a promising attempt that has no usable verifier evidence, the high-level
-driver accepts `runtime_multiplier` only together with `redispatch=true`. The
-value must be greater than 1 and at most 2, and scales only that launch's
-`max_runtime_seconds`; the frozen SearchSpec remains unchanged.
+For a promising macro direction, `pi_search_run_candidate` accepts an explicit
+`worker_budget` on either its initial dispatch or a state-level redispatch. The
+override applies only to that launch and leaves the frozen SearchSpec unchanged.
+This lets the main agent give a valuable worker a longer uninterrupted
+autoresearch window based on evidence and outer remaining time. The older
+`runtime_multiplier` shortcut remains available only with `redispatch=true`,
+must be greater than 1 and at most 2, and cannot be combined with
+`worker_budget`.
+
+Worker-authored `.tmp/handoff.json` uses a compact research summary: the most
+important work, verifier-backed key results, at most five scenario-specific
+pitfalls, blockers, and next steps. The latest summary is projected into
+candidate history as `research_summary`, so later rounds can avoid failed
+variants without copying raw transcripts.
 
 A watchdog timeout and a runner failure are distinct. Timeout means the host
 successfully enforced the configured deadline and returned a bindable handle;

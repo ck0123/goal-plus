@@ -64,6 +64,7 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     assert payload["fork_turns"] == "none"
     assert payload["task_name"] == "search_agent_0001"
     assert "agent_session_id=agent-0001" in payload["message"]
+    assert "assigned_worker_budget=host default" in payload["message"]
 
 
 @pytest.mark.codex
@@ -177,6 +178,7 @@ def test_pi_rpc_adapter_builds_worker_payload() -> None:
     assert payload["continuation"] == "state_redispatch"
     assert "search_get_agent_context" in payload["prompt"]
     assert "agent_session_id=agent_0001" in payload["prompt"]
+    assert "assigned_worker_budget={'max_runtime_seconds': 600" in payload["prompt"]
     assert payload["budget_control"] == {
         "mode": "pi_rpc_process_watchdog",
         "continuation": "state_redispatch",

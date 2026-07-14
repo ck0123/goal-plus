@@ -435,6 +435,7 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			candidate_id: Type.String(),
 			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
 			redispatch: Type.Optional(Type.Boolean()),
+			worker_budget: Type.Optional(WorkerBudget),
 			runtime_multiplier: Type.Optional(
 				Type.Number({ exclusiveMinimum: 1, maximum: 2 }),
 			),
@@ -447,6 +448,7 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			run_id: Type.String(),
 			candidate_ids: Type.Array(Type.String()),
 			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
+			worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget)),
 			final_verify: Type.Optional(Type.Boolean()),
 			max_parallel: Type.Optional(Type.Number()),
 		},
@@ -466,6 +468,10 @@ const RuntimeToolDescriptions: Record<string, string> = {
 		"Score one candidate. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
 	search_plan_next:
 		"Plan one candidate batch/round. requested_k applies only to this call; planned_k is min(requested_k, remaining max_candidates, max_parallel). The default request of 4 is not a whole-run budget.",
+	pi_search_run_candidate:
+		"Run one Pi candidate worker. worker_budget optionally overrides only this dispatch, including an initial dispatch or a long state-level redispatch, without mutating the frozen spec.",
+	pi_search_run_batch:
+		"Run Pi candidate workers concurrently. worker_budgets may assign per-candidate one-dispatch budgets keyed by candidate_id; omitted candidates use their frozen strategy budget.",
 };
 const MAIN_GATED_TOOLS = new Set([
 	"bash",

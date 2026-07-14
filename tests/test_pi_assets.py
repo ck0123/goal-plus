@@ -129,6 +129,10 @@ def test_pi_goal_plus_skill_documents_whole_run_budget_planning() -> None:
     assert "set `max_candidates=15`" in text
     assert "default value 4 as the whole-run budget" in normalized
     assert "Do not call `search_select` while" in normalized
+    assert "main agent owns reinvestment decisions" in normalized
+    assert "worker_budgets" in text
+    assert "research_summary" in text
+    assert "not the depth policy" in normalized
 
 
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
@@ -141,7 +145,12 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "complete candidate artifact early" in text
     assert "before any long optimization loop" in text
     assert ".tmp/handoff.json" in text
-    assert "what_was_tried" in text
+    assert "key_results" in text
+    assert "pitfalls" in text
+    assert "condition" in text
+    assert "failed_approach" in text
+    assert "10-15 distinct verifier-recorded artifacts" in text
+    assert "verifier is an evaluator, not an analysis service" in text
     assert "next_steps" in text
     assert "edit the allowed candidate artifact first" in text
     assert "verifying the unmodified starting point" in text
@@ -286,7 +295,9 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "pi_goal_plus_run_final_check: Type.Object" in text
     assert "pi_search_run_candidate: Type.Object" in text
     assert "runtime_multiplier" in text
+    assert "worker_budget: Type.Optional(WorkerBudget)" in text
     assert "pi_search_run_batch: Type.Object" in text
+    assert "worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget))" in text
     assert "redispatch: Type.Optional(Type.Boolean())" in text
     assert "candidate_ids: Type.Array(Type.String())" in text
     assert "max_parallel: Type.Optional(Type.Number())" in text

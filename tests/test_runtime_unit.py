@@ -906,6 +906,90 @@ def test_start_agent_session_returns_pi_rpc_launch_payload(tmp_path: Path) -> No
     assert str(task.workspace) not in session.launch["prompt"]
 
 
+@pytest.mark.pi
+def test_start_agent_session_accepts_one_dispatch_worker_budget(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {
+                "max_runtime_seconds": 600,
+                "max_turns": 8,
+                "on_exceed": "interrupt",
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    long_session = runtime.start_agent_session(
+        run_id,
+        task.candidate_id,
+        worker_budget={
+            "max_runtime_seconds": 1800,
+            "max_turns": 40,
+            "on_exceed": "interrupt",
+        },
+    )
+    default_session = runtime.start_agent_session(run_id, task.candidate_id)
+
+    assert long_session.launch["budget_control"]["max_runtime_seconds"] == 1800
+    assert "assigned_worker_budget={'max_runtime_seconds': 1800" in long_session.launch[
+        "prompt"
+    ]
+    assert default_session.launch["budget_control"]["max_runtime_seconds"] == 600
+    reloaded = runtime._load_frozen_spec(frozen.frozen_spec_id)
+    assert reloaded.spec.strategy.worker_budget is not None
+    assert reloaded.spec.strategy.worker_budget.max_runtime_seconds == 600
+
+
+@pytest.mark.codex
+def test_launch_keeps_candidate_proposal_when_main_directive_is_shared(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(
+        project,
+        "codex",
+        strategy_name="agent_guided",
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(
+        run_id,
+        plan.plan_id,
+        [
+            CandidateProposal(
+                intent="explore scratch-resident batching",
+                hypothesis="reuse scratch slots across dependent operations",
+                instructions=["measure one complete batch before interleaving"],
+            )
+        ],
+    )[0]
+
+    session = runtime.start_agent_session(
+        run_id,
+        task.candidate_id,
+        {"goal": "perform deep optimization"},
+    )
+
+    assert "candidate_intent: explore scratch-resident batching" in session.launch[
+        "message"
+    ]
+    assert "candidate_hypothesis: reuse scratch slots" in session.launch["message"]
+    assert "main_directive.goal: perform deep optimization" in session.launch["message"]
+
+
 @pytest.mark.codex
 def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> None:
     project = make_project(tmp_path)
@@ -3324,6 +3408,77 @@ def test_history_and_report_include_agent_sessions(tmp_path: Path) -> None:
     report = report_path.read_text(encoding="utf-8")
     assert "## Agent Sessions" in report
     assert session.agent_session_id in report
+
+
+@pytest.mark.pi
+def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 600},
+        },
+        max_candidates=1,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        session.agent_session_id,
+        {
+            "host": "pi-rpc",
+            "external_id": "pi-session-1",
+            "metadata": {
+                "progress_handoff": {
+                    "summary": "reworked scratch residency",
+                    "model_handoff": {
+                        "summary": "reworked scratch residency",
+                        "key_results": [
+                            {
+                                "artifact": "iteration 3",
+                                "verifier": "score 7.0",
+                                "conclusion": "batch reuse is promising",
+                            }
+                        ],
+                        "pitfalls": [
+                            {
+                                "condition": "when the gather spans six lanes",
+                                "failed_approach": "fully interleave all loads",
+                                "reason": "scratch pressure causes spills",
+                                "recommendation": "keep two lanes staged",
+                            }
+                        ],
+                        "blockers": ["no cheap slot-occupancy probe"],
+                        "next_steps": ["test four-way interleave"],
+                    },
+                }
+            },
+        },
+    )
+
+    history = runtime.list_history(run_id)
+    candidate = history["candidates"][0]
+
+    assert candidate["summary"] == "reworked scratch residency"
+    assert candidate["key_results"][0]["artifact"] == "iteration 3"
+    assert candidate["risk_notes"][0].startswith(
+        "Condition: when the gather spans six lanes; "
+        "failed approach: fully interleave all loads"
+    )
+    assert candidate["research_summary"]["pitfalls"][0]["condition"] == (
+        "when the gather spans six lanes"
+    )
+    assert candidate["blockers"] == ["no cheap slot-occupancy probe"]
+    assert candidate["next_ideas"] == ["test four-way interleave"]
+    assert candidate["research_summary"]["source_agent_session_id"] == (
+        session.agent_session_id
+    )
 
 
 def test_runtime_does_not_create_event_or_observation_dirs(tmp_path: Path) -> None:

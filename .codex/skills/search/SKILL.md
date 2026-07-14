@@ -84,7 +84,10 @@ explicit attempt/token cap is reached, or a declared early-stop condition holds.
    when a frozen spec already exists.
 2. Call `search_plan_next`.
 3. Call `search_start_batch`.
-4. For each new candidate, call `search_start_agent_session`.
+4. For each new candidate, call `search_start_agent_session`. Its optional
+   `worker_budget` is a one-dispatch override for a direction that deserves a
+   longer uninterrupted initial exploration; it does not mutate the frozen
+   spec.
 5. Launch a foreground Codex subagent with the returned launch payload:
    - Project the payload onto the current `spawn_agent` tool schema. Always pass
      `task_name`, `message`, and `fork_turns` when those fields are exposed.
@@ -147,7 +150,13 @@ or Unix epoch; otherwise the worker budget is used when available.
 Choose the worker budget before freezing the spec. Codex does not expose a
 hard per-subagent step tier like OpenCode, so the enforceable escalation is a
 larger `worker_budget.max_runtime_seconds` for the next search run or a
-redispatch. You may also override `worker_agent_type` when local Codex agent
+one-dispatch override on initial launch or redispatch. Treat the frozen budget
+as a baseline, not a requirement to give every direction equal depth. When a
+macro direction is promising, allocate a larger budget that fits the outer
+remaining time and let the worker continue hypothesis -> artifact -> verifier
+cycles; roughly 10-15 meaningful verifier-recorded artifacts may be reasonable
+for a long worker, but this is not a quota. You may also override
+`worker_agent_type` when local Codex agent
 variants exist, but that is prompt/agent selection, not a hard step cap. If a
 watchdog stops a worker before it records any verifier iteration or usable
 final score, do not repeat the same underpowered budget unless the user
@@ -158,7 +167,11 @@ explicitly wants a cheap probe.
 History is runtime-owned, not a `plan.md` file. The main agent reads prior
 candidate results through `search_list_history`; workers recover state through
 `search_get_agent_context`, which returns `context.history` and
-`context.iterations`.
+`context.iterations`. When a bound worker provides `.tmp/handoff.json`, later
+history also includes its structured `research_summary`. Use the verifier-backed
+`key_results`, scenario-specific `pitfalls`, `blockers`, and `next_steps` to
+design later candidate proposals; do not carry only the best score or raw
+transcript text.
 
 Codex does not expose an equivalent same-worker continuation in this adapter.
 Use `search_redispatch_candidate` to start a new foreground Codex worker for

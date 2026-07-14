@@ -111,6 +111,7 @@ def run_pi_search_candidate(
     directive: dict[str, Any] | str | None = None,
     redispatch: bool = False,
     runtime_multiplier: float | None = None,
+    worker_budget: dict[str, Any] | None = None,
     final_verify: bool = True,
     worker_runner: Callable[..., dict[str, Any]] | None = None,
     pi_binary: str = "pi",
@@ -122,13 +123,15 @@ def run_pi_search_candidate(
 ) -> dict[str, Any]:
     tools = _search_tools_for_pi_rpc_run(root_dir, run_id)
     steps: list[dict[str, Any]] = []
+    if runtime_multiplier is not None and worker_budget is not None:
+        raise ValueError("runtime_multiplier and worker_budget are mutually exclusive")
     if runtime_multiplier is not None:
         if not redispatch:
             raise ValueError("runtime_multiplier requires redispatch=true")
         if runtime_multiplier <= 1 or runtime_multiplier > 2:
             raise ValueError("runtime_multiplier must be greater than 1 and at most 2")
 
-    worker_budget_override: dict[str, Any] | None = None
+    worker_budget_override = dict(worker_budget) if worker_budget is not None else None
     if runtime_multiplier is not None:
         run = tools.runtime._load_run(run_id)
         frozen = tools.runtime._load_frozen_spec(run.frozen_spec_id)
@@ -155,6 +158,7 @@ def run_pi_search_candidate(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
+            worker_budget=worker_budget_override,
         )
     )
     agent_session_id = str(session["agent_session_id"])
@@ -169,6 +173,7 @@ def run_pi_search_candidate(
             "agent_session_id": agent_session_id,
             "candidate_id": candidate_id,
             "runtime_multiplier": runtime_multiplier,
+            "worker_budget_override": worker_budget_override,
         }
     )
 
@@ -374,6 +379,7 @@ def run_pi_search_batch(
     run_id: str,
     candidate_ids: list[str],
     directive: dict[str, Any] | str | None = None,
+    worker_budgets: dict[str, dict[str, Any]] | None = None,
     final_verify: bool = True,
     max_parallel: int | None = None,
     worker_runner: Callable[..., dict[str, Any]] | None = None,
@@ -386,6 +392,12 @@ def run_pi_search_batch(
 ) -> dict[str, Any]:
     if not candidate_ids:
         raise ValueError("candidate_ids must not be empty")
+    unknown_budget_ids = sorted(set(worker_budgets or {}) - set(candidate_ids))
+    if unknown_budget_ids:
+        raise ValueError(
+            "worker_budgets contains unknown candidate ids: "
+            + ", ".join(unknown_budget_ids)
+        )
     _search_tools_for_pi_rpc_run(root_dir, run_id)
     worker_count = max_parallel or len(candidate_ids)
     if worker_count <= 0:
@@ -398,6 +410,7 @@ def run_pi_search_batch(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
+            worker_budget=(worker_budgets or {}).get(candidate_id),
             final_verify=final_verify,
             worker_runner=worker_runner,
             pi_binary=pi_binary,

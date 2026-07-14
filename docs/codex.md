@@ -254,6 +254,10 @@ call `search_redispatch_candidate` for the same candidate with a larger
 `worker_budget.max_runtime_seconds`. You may also override `worker_agent_type`
 when local Codex agent variants exist, but the enforceable control remains the
 parent watchdog because Codex does not expose a hard per-subagent step tier.
+The same one-dispatch `worker_budget` override is available on
+`search_start_agent_session` when the main agent already has evidence that a
+new macro direction deserves a longer uninterrupted first attempt. Neither
+form changes the frozen spec.
 
 Codex does not expose an equivalent same-worker continuation in this adapter.
 When continuation is needed, call `search_redispatch_candidate` to start a new
@@ -265,7 +269,8 @@ for the same candidate workspace and may override `worker_agent_type` or
 for Search Mode.
 
 Before either a normal return or a deadline closeout, the worker writes a
-bounded `.tmp/handoff.json`. A fresh redispatched worker recovers from the same
+bounded `.tmp/handoff.json` with key results, at most five scenario-specific
+pitfalls, blockers, and next steps. A fresh redispatched worker recovers from the same
 candidate workspace plus runtime-owned `context.history`,
 `context.iterations`, Git state, and verifier evidence; it does not depend on
 the previous chat transcript.
