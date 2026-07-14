@@ -96,6 +96,7 @@ are `scenario`, `run_id`, candidate summaries, `selected_candidate_id`,
 ```text
 tests/
   test_*.py                 # default unit/integration/asset tests
+  test_ascendc_goal_driven_example.py # AscendC generated-contract and knowledge tests
   fixtures/                 # shared source workspaces
   st/
     conftest.py             # host preflight and prompt loading

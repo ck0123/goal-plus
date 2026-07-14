@@ -129,6 +129,26 @@ freeze tool exposes the complete nested `SearchSpec` schema.
 `expected_outputs` lists artifact paths/globs and is not a stdout parser.
 `search_freeze_spec` repeats this preflight before candidate workers can start.
 
+For an AscendC Direct Invoke operator goal described by semantics, approximate
+shapes/dtypes, and reference hints, record
+`scenario="ascendc_direct_invoke"` and read
+`examples/ascendc-direct-search/SPEC_DISCOVERY.md` completely. Follow its
+request schema and source template. Run its `materialize_knowledge.py` with
+`knowledge.sources.json` against exact pinned Git commits to generate the
+task-local `_skills/`; never copy a live Skill directory. Treat the curated AKG
+AscendC tree as primary knowledge and use only the declared CANNBot supplements
+for uncovered operator families. The main agent generates the Golden, cases,
+verifier, baseline, and SearchSpec. Before `search_freeze_spec`, use a JSON
+Schema validator to validate the generated `_task/operator_request.json`
+against `examples/ascendc-direct-search/request.schema.json`; JSON parsing or a
+manual field checklist is insufficient, and validation failure blocks
+freezing. Never require the user to run a task preparer, supply a task
+directory, or write a verifier. Support Direct Invoke only; the generated
+knowledge is read-only and cannot launch source Agent or Plugin workflows.
+
+This scenario is self-contained. Do not invoke an external AscendC Agent,
+plugin, or orchestration workflow.
+
 Call `goal-plus_goal_plus_save_spec_draft`. Continue to Search Mode only
 when `confidence="high"` and `open_questions=[]`. Otherwise ask for the missing
 piece or continue in Goal Mode.

@@ -81,6 +81,7 @@ const VerifierCommand = Type.Object(
 		timeout_seconds: Type.Optional(PositiveInteger),
 		feedback_policy: Type.Optional(FeedbackPolicy),
 		expected_outputs: Type.Optional(Type.Array(Type.String())),
+		resource_lock: Type.Optional(Type.String({ minLength: 1 })),
 	},
 	{ additionalProperties: false },
 );

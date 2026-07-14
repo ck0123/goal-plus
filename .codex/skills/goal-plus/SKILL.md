@@ -56,6 +56,26 @@ prefix; match by the final logical tool name.
    temporary outputs; fixed `/tmp` paths are unsafe under parallel Search.
    Freeze rejects workspace side effects before candidate budget is spent.
    Save the complete contract with `goal_plus_save_spec_draft`.
+   For an AscendC Direct Invoke operator goal described by semantics,
+   approximate shapes/dtypes, and reference hints, record
+   `scenario="ascendc_direct_invoke"` and read
+   `examples/ascendc-direct-search/SPEC_DISCOVERY.md` completely. Follow its
+   request schema and source template. Run its `materialize_knowledge.py` with
+   `knowledge.sources.json` against exact pinned Git commits to generate the
+   task-local `_skills/`; never copy a live Skill directory. Treat the curated
+   AKG AscendC tree as primary knowledge and use only the declared CANNBot
+   supplements for uncovered operator families. The main agent must generate
+   the Golden, cases, verifier, baseline, and SearchSpec during Spec Discovery.
+   Before `search_freeze_spec`, use a JSON Schema validator to validate the
+   generated `_task/operator_request.json` against
+   `examples/ascendc-direct-search/request.schema.json`; JSON parsing or a
+   manual field checklist is insufficient, and validation failure blocks
+   freezing.
+   Never require the user to run a task preparer, supply a task directory, or
+   write a verifier. Support Direct Invoke only; the generated knowledge is
+   read-only and cannot launch source Agent or Plugin workflows. This scenario
+   is self-contained; do not invoke an external AscendC Agent, plugin, or
+   orchestration workflow.
 6. Enter Search Mode only when the saved draft has `confidence="high"` and no
    open questions.
 7. Search is an autonomous upgrade. Once the draft is high-confidence with no

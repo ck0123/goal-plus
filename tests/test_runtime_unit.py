@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -15,11 +17,14 @@ from goal_plus.models import (
 )
 from goal_plus.runtime import (
     FileSearchRuntime,
+    VERIFIER_OUTPUT_LIMIT_BYTES,
     canonical_json,
     copy_source_tree,
+    initialize_workspace_git_baseline,
     list_files,
     load_json,
     path_matches,
+    safe_verifier_name,
     sha256_file,
     write_json,
 )
@@ -135,6 +140,19 @@ def git_commit_all(workspace: Path, message: str) -> str:
     ).strip()
 
 
+def process_is_running(pid: int) -> bool:
+    stat_path = Path(f"/proc/{pid}/stat")
+    if stat_path.exists():
+        fields = stat_path.read_text(encoding="utf-8").split()
+        if len(fields) > 2 and fields[2] == "Z":
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def test_hash_json_and_path_helpers(tmp_path: Path) -> None:
     file_path = tmp_path / "a.txt"
     file_path.write_text("hello\n", encoding="utf-8")
@@ -144,6 +162,11 @@ def test_hash_json_and_path_helpers(tmp_path: Path) -> None:
     assert path_matches("src/app.py", ["src/"])
     assert path_matches("initial_program.py", ["*.py"])
     assert not path_matches("evaluator.py", ["initial_program.py"])
+    safe_name = safe_verifier_name("../../promotion gate")
+    assert "/" not in safe_name
+    assert ".." not in safe_name
+    assert safe_name.startswith("promotion_gate-")
+    assert len(safe_name.rsplit("-", 1)[1]) == 8
 
 
 def test_copy_source_tree_and_list_files_ignore_runtime_noise(tmp_path: Path) -> None:
@@ -164,6 +187,77 @@ def test_copy_source_tree_and_list_files_ignore_runtime_noise(tmp_path: Path) ->
 
     listed = [path.relative_to(destination).as_posix() for path in list_files(destination)]
     assert listed == ["keep.py"]
+
+
+def test_source_snapshot_excludes_untracked_gitignored_build_artifacts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    (source / ".gitignore").write_text(
+        "build/\ndist/\n*.so\n",
+        encoding="utf-8",
+    )
+    (source / "operator.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "vendor").mkdir()
+    (source / "vendor" / "tracked.so").write_text("pinned\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", ".gitignore", "operator.py"],
+        cwd=source,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "-f", "vendor/tracked.so"],
+        cwd=source,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "source",
+        ],
+        cwd=source,
+        check=True,
+    )
+    (source / "build").mkdir()
+    (source / "build" / "object.o").write_text("generated\n", encoding="utf-8")
+    (source / "dist").mkdir()
+    (source / "dist" / "operator.whl").write_text("generated\n", encoding="utf-8")
+    (source / "extension.so").write_text("generated\n", encoding="utf-8")
+
+    destination = tmp_path / "destination"
+    copy_source_tree(source, destination)
+    baseline = initialize_workspace_git_baseline(destination)
+
+    assert baseline is not None
+    assert (destination / "operator.py").is_file()
+    assert (destination / "vendor" / "tracked.so").is_file()
+    assert not (destination / "build").exists()
+    assert not (destination / "dist").exists()
+    assert not (destination / "extension.so").exists()
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=destination,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert "vendor/tracked.so" in tracked
+    assert not any(path.startswith(("build/", "dist/")) for path in tracked)
+
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    assert runtime._detect_changed_files(source, destination) == []
+    (destination / "build").mkdir()
+    (destination / "build" / "object.o").write_text("side effect\n", encoding="utf-8")
+    assert runtime._detect_changed_files(source, destination) == ["build/object.o"]
 
 
 def test_file_search_runtime_defaults_to_gp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,6 +359,48 @@ def test_freeze_spec_rejects_verifier_outputs_in_workspace_tmp(
 
     assert ".tmp/verifier-output.txt" in str(exc_info.value)
     assert not (project / ".tmp").exists()
+
+
+def test_freeze_preflight_overrides_verifier_phase_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "import os\n"
+        "phase = os.environ.get('GOAL_PLUS_VERIFIER_PHASE')\n"
+        "assert phase == 'freeze_preflight', phase\n"
+        "print(json.dumps({'combined_score': 1.0, 'phase': phase}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOAL_PLUS_VERIFIER_PHASE", "caller_value")
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    assert frozen.frozen_spec_id
+
+
+def test_freeze_preflight_failure_includes_bounded_output_tails(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "print(json.dumps({'status': 'error', 'error': 'baseline missing'}))\n"
+        "print('device unavailable', file=sys.stderr)\n"
+        "raise SystemExit(20)\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="failed during freeze preflight") as exc_info:
+        runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    message = str(exc_info.value)
+    assert "Stdout tail:" in message
+    assert '"error": "baseline missing"' in message
+    assert "Stderr tail: device unavailable" in message
 
 
 def test_freeze_spec_rejects_plain_text_ranking_score(tmp_path: Path) -> None:
@@ -533,6 +669,29 @@ def test_select_chooses_highest_json_ranking_metric(tmp_path: Path) -> None:
     assert selection["selected_score"] == 30.0
 
 
+def test_select_records_recoverable_selection_blocked_state(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    first_plan = runtime.plan_next(run_id, requested_k=1)
+    runtime.start_batch(run_id, first_plan.plan_id)
+
+    with pytest.raises(RuntimeError, match="no verified candidates"):
+        runtime.select(run_id)
+
+    blocked = runtime._load_run(run_id)
+    assert blocked.state == "selection_blocked"
+    assert blocked.budget_used["selection_blocked_reason"] == (
+        "no verifier-backed candidate iteration is eligible for selection"
+    )
+    recovery_plan = runtime.plan_next(run_id, requested_k=1)
+    assert recovery_plan.planned_k == 1
+
+
 def test_load_legacy_frozen_spec_without_workspace_uses_copy_backend(
     tmp_path: Path,
 ) -> None:
@@ -734,6 +893,436 @@ def test_promote_requires_search_runtime_selection(tmp_path: Path) -> None:
     selected = runtime.select(run_id)
     assert selected["selected_candidate_id"] == candidate_id
     assert runtime.promote(run_id, candidate_id).exists()
+
+
+def test_promotion_verifier_is_selected_parent_only(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "promotion",
+            "role": "promotion_gate",
+            "command": ["python", "evaluator.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.run_verifier(run_id, task.candidate_id)
+
+    with pytest.raises(RuntimeError, match="selected by search_select"):
+        runtime.run_verifier(run_id, task.candidate_id, scope="promotion")
+
+    runtime.select(run_id)
+    with pytest.raises(PermissionError, match="parent-owned"):
+        runtime.run_verifier(
+            run_id,
+            task.candidate_id,
+            scope="promotion",
+            agent_session_id=session.agent_session_id,
+        )
+
+    report = runtime.run_verifier(run_id, task.candidate_id, scope="promotion")
+    assert report.promotion_passed is True
+
+
+def test_promote_patch_round_trips_file_without_trailing_newline(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    workspace.joinpath("initial_program.py").write_bytes(b"VALUE = 1")
+    assert runtime.run_verifier(run_id, candidate_id).process_passed is True
+    runtime.select(run_id)
+
+    patch_path = runtime.promote(run_id, candidate_id)
+    apply_target = tmp_path / "apply-target"
+    copy_source_tree(project, apply_target)
+    subprocess.run(
+        ["git", "apply", "--check", str(patch_path)],
+        cwd=apply_target,
+        check=True,
+    )
+    subprocess.run(["git", "apply", str(patch_path)], cwd=apply_target, check=True)
+
+    assert apply_target.joinpath("initial_program.py").read_bytes() == b"VALUE = 1"
+
+
+def test_promote_runs_promotion_verifiers_and_keeps_failed_run_ready(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "promotion.py").write_text(
+        "import json\n"
+        "import os\n"
+        "assert os.environ.get('GOAL_PLUS_VERIFIER_PHASE') == 'promotion'\n"
+        "print(json.dumps({'accepted': False}))\n"
+        "raise SystemExit(3)\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "full_acceptance",
+            "role": "promotion_gate",
+            "command": ["python", "promotion.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py", project / "promotion.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, task.candidate_id)
+    runtime.select(run_id)
+    before = runtime._load_candidate_record(run_id, task.candidate_id)
+    process_score = before.score_report.aggregate_score  # type: ignore[union-attr]
+    process_iterations = len(before.iterations)
+
+    with pytest.raises(RuntimeError, match="fresh passing promotion evidence"):
+        runtime.promote(run_id, task.candidate_id)
+
+    run = runtime._load_run(run_id)
+    record = runtime._load_candidate_record(run_id, task.candidate_id)
+    assert run.state == "ready_to_promote"
+    assert record.score_report is not None
+    assert record.score_report.aggregate_score == process_score
+    assert len(record.iterations) == process_iterations
+    assert record.promotion_report is not None
+    assert record.promotion_report.promotion_passed is False
+    assert record.promotion_evidence is not None
+    assert record.promotion_evidence.passed is False
+    assert not runtime._run_dir(run_id).joinpath(
+        "promotion", f"{task.candidate_id}.patch"
+    ).exists()
+
+
+def test_promote_reruns_and_binds_fresh_promotion_evidence(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    counter_path = tmp_path / "promotion-count.txt"
+    (project / "promotion.py").write_text(
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "assert os.environ.get('GOAL_PLUS_VERIFIER_PHASE') == 'promotion'\n"
+        f"counter = Path({str(counter_path)!r})\n"
+        "count = int(counter.read_text()) if counter.exists() else 0\n"
+        "counter.write_text(str(count + 1))\n"
+        "print(json.dumps({'accepted': True}))\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "full_acceptance",
+            "role": "promotion_gate",
+            "command": ["python", "promotion.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py", project / "promotion.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, task.candidate_id)
+    runtime.select(run_id)
+    run_path = runtime._run_dir(run_id) / "run.json"
+    legacy_run = load_json(run_path)
+    legacy_run.pop("selected_artifact_hash")
+    write_json(run_path, legacy_run)
+    candidate_path = (
+        runtime._run_dir(run_id)
+        / "candidates"
+        / task.candidate_id
+        / "candidate.json"
+    )
+    legacy_candidate = load_json(candidate_path)
+    legacy_candidate.pop("promotion_report")
+    legacy_candidate.pop("promotion_evidence")
+    write_json(candidate_path, legacy_candidate)
+    before = runtime._load_candidate_record(run_id, task.candidate_id)
+    process_score = before.score_report.aggregate_score  # type: ignore[union-attr]
+    process_iterations = len(before.iterations)
+
+    cached_report = runtime.run_verifier(
+        run_id, task.candidate_id, scope="promotion"
+    )
+    assert cached_report.promotion_passed is True
+    assert counter_path.read_text(encoding="utf-8") == "1"
+
+    patch_path = runtime.promote(run_id, task.candidate_id)
+
+    assert patch_path.exists()
+    assert counter_path.read_text(encoding="utf-8") == "2"
+    run = runtime._load_run(run_id)
+    record = runtime._load_candidate_record(run_id, task.candidate_id)
+    assert run.state == "promoted"
+    assert record.score_report is not None
+    assert record.score_report.aggregate_score == process_score
+    assert len(record.iterations) == process_iterations
+    assert record.promotion_report is not None
+    assert record.promotion_evidence is not None
+    assert record.promotion_evidence.passed is True
+    assert record.promotion_evidence.selected_git_head == run.selected_git_head
+    assert record.promotion_evidence.git_head == run.selected_git_head
+    assert record.promotion_evidence.artifact_hash == run.selected_artifact_hash
+    process_log = record.score_report.verifier_results[0].log_path
+    promotion_log = record.promotion_report.verifier_results[0].log_path
+    assert process_log is not None and "logs/process" in process_log.as_posix()
+    assert promotion_log is not None and "logs/promotion" in promotion_log.as_posix()
+
+
+def test_promote_rejects_changed_selected_artifact_before_acceptance(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    counter_path = tmp_path / "promotion-count.txt"
+    (project / "promotion.py").write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        f"counter = Path({str(counter_path)!r})\n"
+        "counter.write_text('ran')\n"
+        "print(json.dumps({'accepted': True}))\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "full_acceptance",
+            "role": "promotion_gate",
+            "command": ["python", "promotion.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py", project / "promotion.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, task.candidate_id)
+    runtime.select(run_id)
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 999\n", encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="selected artifact changed"):
+        runtime.promote(run_id, task.candidate_id)
+
+    assert not counter_path.exists()
+    assert runtime._load_run(run_id).state == "ready_to_promote"
+    record = runtime._load_candidate_record(run_id, task.candidate_id)
+    assert record.promotion_report is None
+    assert record.promotion_evidence is None
+
+
+def test_promote_rejects_concurrent_allowed_file_change_during_acceptance(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    started_path = tmp_path / "promotion-started"
+    release_path = tmp_path / "promotion-release"
+    (project / "promotion.py").write_text(
+        "import json\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        f"started = Path({str(started_path)!r})\n"
+        f"release = Path({str(release_path)!r})\n"
+        "started.write_text('started')\n"
+        "while not release.exists():\n"
+        "    time.sleep(0.01)\n"
+        "print(json.dumps({'accepted': True}))\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "full_acceptance",
+            "role": "promotion_gate",
+            "command": ["python", "promotion.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py", project / "promotion.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, task.candidate_id)
+    runtime.select(run_id)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(runtime.promote, run_id, task.candidate_id)
+        deadline = time.time() + 10
+        while not started_path.exists() and time.time() < deadline:
+            time.sleep(0.01)
+        try:
+            assert started_path.exists(), "promotion verifier did not start"
+            task.workspace.joinpath("initial_program.py").write_text(
+                "VALUE = 999\n", encoding="utf-8"
+            )
+        finally:
+            release_path.write_text("release", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="fresh passing promotion evidence"):
+            future.result(timeout=10)
+
+    patch_path = runtime._run_dir(run_id) / "promotion" / f"{task.candidate_id}.patch"
+    assert not patch_path.exists()
+    assert runtime._load_run(run_id).state == "ready_to_promote"
+
+
+@pytest.mark.parametrize("workspace_backend", ["copy", "git_worktree"])
+def test_promote_patch_uses_selected_commit_after_evidence_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    workspace_backend: str,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "promotion.py").write_text(
+        "import json\n"
+        "print(json.dumps({'accepted': True}))\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["workspace"] = {"backend": workspace_backend}
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "full_acceptance",
+            "role": "promotion_gate",
+            "command": ["python", "promotion.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py", project / "promotion.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    runtime.run_verifier(run_id, task.candidate_id)
+    runtime.select(run_id)
+
+    real_write_patch = runtime._write_patch
+
+    def mutate_live_workspace_then_export(*args, **kwargs) -> None:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            mutation = executor.submit(
+                task.workspace.joinpath("initial_program.py").write_text,
+                "VALUE = 999\n",
+                encoding="utf-8",
+            )
+            mutation.result(timeout=5)
+        real_write_patch(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_write_patch", mutate_live_workspace_then_export)
+
+    patch_path = runtime.promote(run_id, task.candidate_id)
+    apply_target = tmp_path / "apply-target"
+    copy_source_tree(project, apply_target)
+    subprocess.run(["git", "apply", str(patch_path)], cwd=apply_target, check=True)
+
+    assert task.workspace.joinpath("initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 999\n"
+    assert apply_target.joinpath("initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 1\n"
+
+
+def test_copy_backend_child_promotion_patch_includes_parent_changes(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        "namespace = {}\n"
+        "exec(Path('initial_program.py').read_text(), namespace)\n"
+        "print(json.dumps({'combined_score': namespace['VALUE']}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_with_strategy(
+            project,
+            {
+                "name": "evolve",
+                "worker_mode": "agent-session-pool",
+            },
+            max_candidates=2,
+        ),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    first_plan = runtime.plan_next(run_id, requested_k=1)
+    parent = runtime.start_batch(run_id, first_plan.plan_id)[0]
+    parent.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    assert runtime.run_verifier(run_id, parent.candidate_id).aggregate_score == 1
+
+    second_plan = runtime.plan_next(run_id, requested_k=1)
+    child = runtime.start_batch(run_id, second_plan.plan_id)[0]
+    assert child.workspace_backend == "copy"
+    assert child.base_candidate_id == parent.candidate_id
+    child.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 2\n", encoding="utf-8"
+    )
+    assert runtime.run_verifier(run_id, child.candidate_id).aggregate_score == 2
+
+    selection = runtime.select(run_id)
+    assert selection["selected_candidate_id"] == child.candidate_id
+    patch_path = runtime.promote(run_id, child.candidate_id)
+    apply_target = tmp_path / "apply-child-target"
+    copy_source_tree(project, apply_target)
+    subprocess.run(
+        ["git", "apply", "--check", str(patch_path)],
+        cwd=apply_target,
+        check=True,
+    )
+    subprocess.run(["git", "apply", str(patch_path)], cwd=apply_target, check=True)
+    assert apply_target.joinpath("initial_program.py").read_text(
+        encoding="utf-8"
+    ) == "VALUE = 2\n"
 
 
 @pytest.mark.codex
@@ -1896,7 +2485,7 @@ def test_evolve_strategy_derives_followup_from_best_candidate(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -2121,7 +2710,7 @@ def test_evolve_planning_keeps_candidate_with_valid_iteration_after_latest_failu
             stderr="verifier failed" if score == 0 else "",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     runtime.run_verifier(run_id, first_tasks[0].candidate_id)
     runtime.run_verifier(run_id, first_tasks[0].candidate_id)
@@ -2200,7 +2789,7 @@ def test_openevolve_strategy_samples_exploration_parent_and_inspirations(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -2269,7 +2858,7 @@ def test_random_strategy_gen2_picks_scored_parent_with_seed(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -2313,7 +2902,7 @@ def test_random_strategy_gen2_without_seed_picks_scored_parent(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -2634,7 +3223,7 @@ def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(
         run_id,
         first_tasks[0].candidate_id,
@@ -2685,7 +3274,7 @@ def test_run_verifier_records_edit_surface_violation_in_iteration(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     record = runtime._load_candidate_record(run_id, candidate_id)
@@ -2772,7 +3361,7 @@ def test_run_verifier_records_failure_class_on_timeout(
     def fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     report = runtime.run_verifier(
         run_id, candidate_id, agent_session_id=session.agent_session_id
     )
@@ -2833,7 +3422,7 @@ def test_run_verifier_records_iteration_with_agent_session_id(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     record = runtime._load_candidate_record(run_id, candidate_id)
@@ -2873,7 +3462,7 @@ def test_run_verifier_without_agent_session_id_is_main_final_verify(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     # Main final verify call - no agent_session_id, no auto-attribution.
     report = runtime.run_verifier(run_id, candidate_id)
     assert report.aggregate_score == 0.6
@@ -2936,7 +3525,7 @@ def test_run_verifier_parses_subprocess_metrics_with_mock(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     report = runtime.run_verifier(run_id, candidate_id)
 
@@ -2944,6 +3533,133 @@ def test_run_verifier_parses_subprocess_metrics_with_mock(
     assert report.aggregate_score == 0.75
     assert calls[0][1]["cwd"] == workspace.resolve()
     assert "PYTHONPATH" in calls[0][1]["env"]
+
+
+def test_process_verifier_overrides_verifier_phase_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, _workspace = create_candidate(runtime, project)
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.75}\n',
+            stderr="",
+        )
+
+    monkeypatch.setenv("GOAL_PLUS_VERIFIER_PHASE", "caller_value")
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
+
+    report = runtime.run_verifier(run_id, candidate_id, scope="process")
+
+    assert report.process_passed is True
+    assert calls[0][1]["env"]["GOAL_PLUS_VERIFIER_PHASE"] == "candidate"
+
+
+def test_verifier_resource_lock_serializes_candidates_and_persists_diagnostics(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    marker = tmp_path / "npu-active"
+    resource = f"test-npu:{tmp_path.name}"
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import time\n"
+        f"marker = Path({str(marker)!r})\n"
+        f"assert os.environ.get('GOAL_PLUS_VERIFIER_RESOURCE') == {resource!r}\n"
+        "if marker.exists():\n"
+        "    raise SystemExit('concurrent verifier reached exclusive resource')\n"
+        "marker.write_text('active')\n"
+        "try:\n"
+        "    time.sleep(0.15)\n"
+        "    diagnostics = Path(os.environ['GOAL_PLUS_VERIFIER_DIAGNOSTICS_DIR'])\n"
+        "    diagnostics.joinpath('official-result.json').write_text('{}\\n')\n"
+        "    print(json.dumps({'combined_score': 1.0}))\n"
+        "finally:\n"
+        "    marker.unlink(missing_ok=True)\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=2).model_dump(mode="json")
+    spec_data["process_verifiers"][0]["resource_lock"] = resource
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reports = list(
+            executor.map(
+                lambda task: runtime.run_verifier(run_id, task.candidate_id),
+                tasks,
+            )
+        )
+
+    assert all(report.process_passed for report in reports)
+    for report in reports:
+        metrics = report.verifier_results[0].metrics
+        diagnostics = Path(metrics["diagnostics_dir"])
+        assert metrics["diagnostic_files"] == ["official-result.json"]
+        assert diagnostics.joinpath("official-result.json").is_file()
+
+
+def test_promotion_verifier_overrides_verifier_phase_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    spec_data = spec_for(project).model_dump(mode="json")
+    spec_data["promotion_verifiers"] = [
+        {
+            "name": "promotion",
+            "role": "promotion_gate",
+            "command": ["python", "evaluator.py"],
+            "timeout_seconds": 30,
+        }
+    ]
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    runtime.run_verifier(run_id, task.candidate_id)
+    runtime.select(run_id)
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout='{"combined_score": 0.75}\n',
+            stderr="",
+        )
+
+    monkeypatch.setenv("GOAL_PLUS_VERIFIER_PHASE", "caller_value")
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
+
+    report = runtime.run_verifier(
+        run_id,
+        task.candidate_id,
+        scope="promotion",
+    )
+
+    assert report.promotion_passed is True
+    assert calls[0][1]["env"]["GOAL_PLUS_VERIFIER_PHASE"] == "promotion"
 
 
 def test_run_verifier_handles_subprocess_timeout_with_mock(
@@ -2957,13 +3673,95 @@ def test_run_verifier_handles_subprocess_timeout_with_mock(
     def fake_run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     report = runtime.run_verifier(run_id, candidate_id)
 
     assert report.process_passed is False
     assert report.aggregate_score == 0.0
     assert report.verifier_results[0].failure_class == "Timeout"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_verifier_timeout_terminates_entire_process_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    child_pid_path = tmp_path / "grandchild.pid"
+    monkeypatch.setenv("GOAL_PLUS_TEST_CHILD_PID_PATH", str(child_pid_path))
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import signal\n"
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        "if os.environ.get('GOAL_PLUS_VERIFIER_PHASE') == 'freeze_preflight':\n"
+        "    print(json.dumps({'combined_score': 0.0}))\n"
+        "    raise SystemExit(0)\n"
+        "child_code = (\n"
+        "    \"import os, signal, time; from pathlib import Path; \"\n"
+        "    \"signal.signal(signal.SIGTERM, signal.SIG_IGN); \"\n"
+        "    \"Path(os.environ['GOAL_PLUS_TEST_CHILD_PID_PATH']).write_text(str(os.getpid())); \"\n"
+        "    \"time.sleep(60)\"\n"
+        ")\n"
+        "subprocess.Popen([sys.executable, '-c', child_code])\n"
+        "deadline = time.time() + 5\n"
+        "pid_path = Path(os.environ['GOAL_PLUS_TEST_CHILD_PID_PATH'])\n"
+        "while not pid_path.exists() and time.time() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["process_verifiers"][0]["timeout_seconds"] = 1
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    report = runtime.run_verifier(run_id, task.candidate_id)
+
+    assert report.verifier_results[0].failure_class == "Timeout"
+    child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 3
+    while process_is_running(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not process_is_running(child_pid)
+
+
+def test_verifier_logs_keep_bounded_output_tails(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "import os\n"
+        "import sys\n"
+        "if os.environ.get('GOAL_PLUS_VERIFIER_PHASE') == 'freeze_preflight':\n"
+        "    print(json.dumps({'combined_score': 0.0}))\n"
+        "else:\n"
+        f"    print('x' * {VERIFIER_OUTPUT_LIMIT_BYTES * 3})\n"
+        f"    print('y' * {VERIFIER_OUTPUT_LIMIT_BYTES * 3}, file=sys.stderr)\n"
+        "    print(json.dumps({'combined_score': 0.5}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, _workspace = create_candidate(runtime, project)
+
+    report = runtime.run_verifier(run_id, candidate_id)
+
+    assert report.process_passed is True
+    log_path = report.verifier_results[0].log_path
+    assert log_path is not None
+    log_text = log_path.read_text(encoding="utf-8")
+    assert log_text.count("[... output truncated ...]") == 2
+    assert log_path.stat().st_size < VERIFIER_OUTPUT_LIMIT_BYTES * 2 + 4096
 
 
 def test_select_uses_metric_direction_for_minimize(
@@ -2991,7 +3789,7 @@ def test_select_uses_metric_direction_for_minimize(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c002")
 
@@ -2999,6 +3797,48 @@ def test_select_uses_metric_direction_for_minimize(
 
     assert selection["selected_candidate_id"] == "c002"
     assert selection["selected_score"] == 0.1
+
+
+def test_select_does_not_reverify_duplicate_latest_artifact_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=2),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    runtime.start_batch(run_id, plan.plan_id)
+    calls = {"c001": 0, "c002": 0}
+
+    def fake_run(*args, **kwargs):
+        candidate_id = Path(kwargs["cwd"]).name
+        calls[candidate_id] += 1
+        if candidate_id == "c001" and calls[candidate_id] > 1:
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=20,
+                stdout='{"outcome": "infrastructure_failure"}\n',
+                stderr="",
+            )
+        score = 0.9 if candidate_id == "c001" else 0.8
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f'{{"combined_score": {score}}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
+    runtime.run_verifier(run_id, "c001")
+    runtime.run_verifier(run_id, "c002")
+
+    selection = runtime.select(run_id)
+
+    assert selection["selected_candidate_id"] == "c002"
+    assert calls == {"c001": 2, "c002": 2}
 
 
 def test_select_uses_best_iteration_when_artifact_is_current(
@@ -3037,7 +3877,7 @@ def test_select_uses_best_iteration_when_artifact_is_current(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     runtime.run_verifier(run_id, "c001")
     runtime.run_verifier(run_id, "c001")
@@ -3082,7 +3922,7 @@ def test_select_can_recover_best_iteration_after_artifact_changed(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     c001_workspace = tasks[0].workspace
     c001_workspace.joinpath("initial_program.py").write_text(
@@ -3142,7 +3982,7 @@ def test_select_ignores_old_artifact_without_git_commit(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     c001_workspace = tasks[0].workspace
     c001_workspace.joinpath("initial_program.py").write_text(
@@ -3188,7 +4028,7 @@ def test_run_verifier_records_real_git_commit_for_iteration(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     runtime.run_verifier(run_id, candidate_id)
 
@@ -3232,7 +4072,7 @@ def test_select_checks_out_best_git_commit_before_final_verify(
             )
         return real_run(*args, **kwargs)
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     c001_workspace.joinpath("initial_program.py").write_text(
         "VALUE = 'fast'\n", encoding="utf-8"
@@ -3341,7 +4181,7 @@ def test_concurrent_run_verifiers_preserve_best_score(
         except BaseException as exc:  # pragma: no cover - surfaced after join
             errors.append(exc)
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     high = threading.Thread(target=verify, args=(tasks[0].candidate_id,))
     low = threading.Thread(target=verify, args=(tasks[1].candidate_id,))
@@ -3392,7 +4232,7 @@ def test_run_verifier_works_without_session_and_records_iterations(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
 
     for expected_score in [0.4, 0.7, 0.9]:
         report = runtime.run_verifier(
@@ -3435,7 +4275,7 @@ def test_list_iterations_returns_all_records(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
@@ -3474,7 +4314,7 @@ def test_get_agent_context_returns_iterations(
             stderr="",
         )
 
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
     runtime.run_verifier(run_id, candidate_id, agent_session_id=session.agent_session_id)
 
     context = runtime.get_agent_context(session.agent_session_id)

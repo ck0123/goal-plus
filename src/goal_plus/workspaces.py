@@ -19,6 +19,13 @@ IGNORED_NAMES = {
     "__pycache__",
 }
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
+GENERATED_SOURCE_DIRECTORIES = {"build", "dist", "CMakeFiles"}
+GENERATED_SOURCE_SUFFIXES = {".o", ".obj", ".so", ".whl"}
+GENERATED_SOURCE_FILES = {
+    "CMakeCache.txt",
+    "cmake_install.cmake",
+    "compile_commands.json",
+}
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,64 @@ def list_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
+def list_source_files(root: Path) -> list[Path]:
+    """List source inputs without carrying untracked build products forward.
+
+    Ordinary ignored files remain valid source inputs. Generated-looking files
+    are retained only when the source repository deliberately tracks them.
+    """
+    if root.is_file():
+        return [root]
+
+    try:
+        tracked = _git_list_paths(
+            root,
+            ["git", "ls-files", "--cached", "-z", "--", "."],
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        tracked = set()
+
+    paths: list[Path] = []
+    for path in list_files(root):
+        rel_path = path.relative_to(root)
+        rel_value = rel_path.as_posix()
+        if (
+            rel_value in tracked
+            or not _looks_like_generated_source_artifact(rel_path)
+        ):
+            paths.append(path)
+    return sorted(paths)
+
+
+def _looks_like_generated_source_artifact(path: Path) -> bool:
+    if any(
+        part in GENERATED_SOURCE_DIRECTORIES or part.endswith(".egg-info")
+        for part in path.parts[:-1]
+    ):
+        return True
+    return (
+        path.name in GENERATED_SOURCE_FILES
+        or path.suffix in GENERATED_SOURCE_SUFFIXES
+    )
+
+
+def _git_list_paths(
+    cwd: Path,
+    command: list[str],
+) -> set[str]:
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+    return {
+        value.decode("utf-8", errors="surrogateescape")
+        for value in result.stdout.split(b"\0")
+        if value
+    }
+
+
 def copy_source_tree(source: Path, destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
@@ -55,10 +120,35 @@ def copy_source_tree(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination / source.name)
         return
 
-    def ignore(_dir: str, names: list[str]) -> set[str]:
+    included_files = {
+        path.relative_to(source).as_posix() for path in list_source_files(source)
+    }
+    included_directories = {
+        parent.as_posix()
+        for rel_path in included_files
+        for parent in Path(rel_path).parents
+        if parent != Path(".")
+    }
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
         ignored: set[str] = set()
+        rel_directory = Path(directory).relative_to(source)
         for name in names:
-            if name in IGNORED_NAMES or Path(name).suffix in IGNORED_SUFFIXES:
+            rel_path = (rel_directory / name).as_posix()
+            path = Path(directory) / name
+            if (
+                name in IGNORED_NAMES
+                or Path(name).suffix in IGNORED_SUFFIXES
+                or (
+                    path.is_dir()
+                    and not path.is_symlink()
+                    and rel_path not in included_directories
+                )
+                or (
+                    (not path.is_dir() or path.is_symlink())
+                    and rel_path not in included_files
+                )
+            ):
                 ignored.add(name)
         return ignored
 

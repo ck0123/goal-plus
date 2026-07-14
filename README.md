@@ -81,6 +81,13 @@ block completed work from being evaluated. See [Flow](docs/flow-view.md).
 Runtime state lives under `.gp/`. `search_tasks` is append-only; `linked_search`
 is only the compatibility view of the current task.
 
+When `promotion_verifiers` are configured, promotion is an independent check,
+not a cached pass-through. The runtime checks out the selected verifier-backed
+revision, reruns each promotion gate with
+`GOAL_PLUS_VERIFIER_PHASE=promotion`, binds the evidence to the selected Git
+head and artifact hash, and only then emits a Git-applyable patch. A failed
+promotion stays retryable in `ready_to_promote` and emits no patch.
+
 ## Documentation
 
 | Need | Read |

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import difflib
 import calendar
 import hashlib
 import importlib
@@ -9,9 +8,11 @@ import json
 import math
 import os
 import random
+import signal
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from fnmatch import fnmatch
@@ -38,6 +39,7 @@ from goal_plus.models import (
     FrozenSpec,
     HistoryPolicy,
     ProposalContract,
+    PromotionEvidence,
     RunRecord,
     RunState,
     RunSummary,
@@ -58,6 +60,7 @@ from goal_plus.workspaces import (
     copy_source_tree,
     initialize_workspace_git_baseline,
     list_files,
+    list_source_files,
     materialize_candidate_workspace,
 )
 
@@ -71,6 +74,59 @@ CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET = {
     turns: agent_type
     for agent_type, turns in CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS.items()
 }
+VERIFIER_PHASE_ENV = "GOAL_PLUS_VERIFIER_PHASE"
+VERIFIER_DIAGNOSTICS_ENV = "GOAL_PLUS_VERIFIER_DIAGNOSTICS_DIR"
+VERIFIER_RESOURCE_ENV = "GOAL_PLUS_VERIFIER_RESOURCE"
+VERIFIER_RESOURCE_LOCK_DIR_ENV = "GOAL_PLUS_VERIFIER_RESOURCE_LOCK_DIR"
+VERIFIER_OUTPUT_LIMIT_BYTES = 64 * 1024
+VERIFIER_LOG_LIMIT_BYTES = VERIFIER_OUTPUT_LIMIT_BYTES * 2 + 8192
+VERIFIER_TERM_GRACE_SECONDS = 0.5
+
+
+class _BoundedOutput:
+    def __init__(self, limit: int = VERIFIER_OUTPUT_LIMIT_BYTES) -> None:
+        self.limit = limit
+        self.data = bytearray()
+        self.truncated = False
+
+    def append(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        if len(chunk) >= self.limit:
+            self.data[:] = chunk[-self.limit :]
+            self.truncated = True
+            return
+        overflow = len(self.data) + len(chunk) - self.limit
+        if overflow > 0:
+            del self.data[:overflow]
+            self.truncated = True
+        self.data.extend(chunk)
+
+    def text(self) -> str:
+        value = self.data.decode("utf-8", errors="replace")
+        if self.truncated:
+            return "[... output truncated ...]\n" + value
+        return value
+
+
+def _bounded_log(value: str) -> str:
+    encoded = value.encode("utf-8", errors="replace")
+    if len(encoded) <= VERIFIER_LOG_LIMIT_BYTES:
+        return value
+    marker = b"[... log truncated ...]\n"
+    tail = encoded[-(VERIFIER_LOG_LIMIT_BYTES - len(marker)) :]
+    return (marker + tail).decode("utf-8", errors="replace")
+
+
+def _verifier_output_tail_detail(stdout: str, stderr: str) -> str:
+    details = []
+    stdout_tail = stdout.strip()[-2000:]
+    stderr_tail = stderr.strip()[-2000:]
+    if stdout_tail:
+        details.append(f"Stdout tail: {stdout_tail}")
+    if stderr_tail:
+        details.append(f"Stderr tail: {stderr_tail}")
+    return " " + " ".join(details) if details else ""
 
 
 def utc_timestamp() -> str:
@@ -140,6 +196,22 @@ def exclusive_file_lock(lock_path: Path):
         lock_dir.rmdir()
 
 
+@contextmanager
+def verifier_resource_lock(resource: str | None):
+    if resource is None:
+        yield
+        return
+    lock_root = Path(
+        os.environ.get(
+            VERIFIER_RESOURCE_LOCK_DIR_ENV,
+            str(Path(tempfile.gettempdir()) / "goal-plus-verifier-locks"),
+        )
+    ).resolve()
+    lock_name = f"{sha256_text(resource)}.lock"
+    with exclusive_file_lock(lock_root / lock_name):
+        yield
+
+
 def path_matches(path: str, patterns: list[str]) -> bool:
     normalized = path.replace(os.sep, "/")
     for pattern in patterns:
@@ -151,6 +223,14 @@ def path_matches(path: str, patterns: list[str]) -> bool:
         if normalized.startswith(pat.rstrip("/") + "/"):
             return True
     return False
+
+
+def safe_verifier_name(value: str) -> str:
+    readable = "".join(
+        character if character.isalnum() or character in {".", "_", "-"} else "_"
+        for character in value
+    ).strip("._-")
+    return f"{readable or 'verifier'}-{sha256_text(value)[:8]}"
 
 
 def relative_artifact_path(source_root: Path, artifact_path: Path) -> str:
@@ -193,6 +273,145 @@ class FileSearchRuntime:
         self.runs_dir = self.root_dir / "runs"
         self.specs_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
+
+    def _execute_verifier_process(
+        self,
+        command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        text: bool,
+        capture_output: bool,
+        timeout: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if not text or not capture_output:
+            raise ValueError("verifier processes require text capture")
+
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        stdout_capture = _BoundedOutput()
+        stderr_capture = _BoundedOutput()
+
+        def drain(stream: Any, capture: _BoundedOutput) -> None:
+            try:
+                while True:
+                    chunk = stream.read(8192)
+                    if not chunk:
+                        break
+                    capture.append(chunk)
+            except (OSError, ValueError):
+                pass
+
+        readers = [
+            threading.Thread(
+                target=drain,
+                args=(process.stdout, stdout_capture),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=drain,
+                args=(process.stderr, stderr_capture),
+                daemon=True,
+            ),
+        ]
+        for reader in readers:
+            reader.start()
+
+        timed_out = False
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            self._terminate_verifier_process_group(process)
+            returncode = process.returncode if process.returncode is not None else -signal.SIGKILL
+
+        for reader in readers:
+            reader.join(timeout=VERIFIER_TERM_GRACE_SECONDS)
+        if any(reader.is_alive() for reader in readers):
+            # A verifier that exits while leaving descendants with inherited
+            # output pipes would otherwise leak both processes and reader threads.
+            self._terminate_verifier_process_group(process)
+            for reader in readers:
+                reader.join(timeout=VERIFIER_TERM_GRACE_SECONDS)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+        stdout = stdout_capture.text()
+        stderr = stderr_capture.text()
+        if timed_out:
+            raise subprocess.TimeoutExpired(
+                command,
+                timeout,
+                output=stdout,
+                stderr=stderr,
+            )
+        completed = subprocess.CompletedProcess(
+            args=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        if check and returncode:
+            raise subprocess.CalledProcessError(
+                returncode,
+                command,
+                output=stdout,
+                stderr=stderr,
+            )
+        return completed
+
+    def _terminate_verifier_process_group(
+        self,
+        process: subprocess.Popen[bytes],
+    ) -> None:
+        if os.name != "posix":  # pragma: no cover - Windows fallback
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=VERIFIER_TERM_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            return
+
+        process_group = process.pid
+
+        def group_exists() -> bool:
+            try:
+                os.killpg(process_group, 0)
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True
+            return True
+
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+        deadline = time.monotonic() + VERIFIER_TERM_GRACE_SECONDS
+        while group_exists() and time.monotonic() < deadline:
+            process.poll()
+            time.sleep(0.02)
+        if group_exists():
+            try:
+                os.killpg(process_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            process.wait(timeout=VERIFIER_TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
     def freeze_spec(self, spec: SearchSpec, verifier_artifacts: list[Path]) -> FrozenSpec:
         spec = _normalize_verifier_cwds_for_candidate_workspace(spec)
@@ -298,26 +517,35 @@ class FileSearchRuntime:
 
                 workspace_before = self._hash_verifier_workspace(workspace)
                 try:
-                    with tempfile.TemporaryDirectory(
-                        prefix="goal-plus-verifier-command-"
-                    ) as verifier_tmp:
-                        completed = subprocess.run(
-                            command.command,
-                            cwd=cwd,
-                            env=self._verifier_environment(
-                                cwd,
-                                Path(verifier_tmp),
-                                phase="freeze_preflight",
-                            ),
-                            text=True,
-                            capture_output=True,
-                            timeout=command.timeout_seconds,
-                            check=False,
-                        )
+                    with verifier_resource_lock(command.resource_lock):
+                        with tempfile.TemporaryDirectory(
+                            prefix="goal-plus-verifier-command-"
+                        ) as verifier_tmp:
+                            verifier_tmp_path = Path(verifier_tmp)
+                            diagnostics_dir = verifier_tmp_path / "diagnostics"
+                            diagnostics_dir.mkdir()
+                            completed = self._execute_verifier_process(
+                                command.command,
+                                cwd=cwd,
+                                env=self._verifier_environment(
+                                    cwd,
+                                    verifier_tmp_path,
+                                    phase="freeze_preflight",
+                                    diagnostics_dir=diagnostics_dir,
+                                    resource=command.resource_lock,
+                                ),
+                                text=True,
+                                capture_output=True,
+                                timeout=command.timeout_seconds,
+                                check=False,
+                            )
                 except subprocess.TimeoutExpired as exc:
+                    stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+                    stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+                    detail = _verifier_output_tail_detail(stdout, stderr)
                     raise ValueError(
                         f"Ranking verifier '{command.name}' timed out during freeze "
-                        f"preflight after {command.timeout_seconds} seconds."
+                        f"preflight after {command.timeout_seconds} seconds.{detail}"
                     ) from exc
                 except OSError as exc:
                     raise ValueError(
@@ -342,8 +570,10 @@ class FileSearchRuntime:
                     )
 
                 if completed.returncode != 0:
-                    stderr_tail = completed.stderr.strip()[-2000:]
-                    detail = f" Stderr tail: {stderr_tail}" if stderr_tail else ""
+                    detail = _verifier_output_tail_detail(
+                        completed.stdout,
+                        completed.stderr,
+                    )
                     raise ValueError(
                         f"Ranking verifier '{command.name}' failed during freeze "
                         f"preflight with exit code {completed.returncode}.{detail}"
@@ -372,13 +602,23 @@ class FileSearchRuntime:
         cwd: Path,
         temp_dir: Path,
         *,
-        phase: Literal["freeze_preflight", "candidate"],
+        phase: Literal["freeze_preflight", "candidate", "promotion"],
+        diagnostics_dir: Path | None = None,
+        resource: str | None = None,
     ) -> dict[str, str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
         for name in ("TMPDIR", "TMP", "TEMP", "GOAL_PLUS_VERIFIER_TMPDIR"):
             env[name] = str(temp_dir)
-        env["GOAL_PLUS_VERIFIER_PHASE"] = phase
+        env[VERIFIER_PHASE_ENV] = phase
+        if diagnostics_dir is not None:
+            env[VERIFIER_DIAGNOSTICS_ENV] = str(diagnostics_dir)
+        else:
+            env.pop(VERIFIER_DIAGNOSTICS_ENV, None)
+        if resource is not None:
+            env[VERIFIER_RESOURCE_ENV] = resource
+        else:
+            env.pop(VERIFIER_RESOURCE_ENV, None)
         return env
 
     def _hash_changes(
@@ -507,7 +747,12 @@ class FileSearchRuntime:
             raise ValueError("requested_k must be > 0")
 
         run = self._load_run(run_id)
-        if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
+        if run.state not in {
+            RunState.RUNNING,
+            RunState.WAITING_FOR_WORKERS,
+            RunState.SELECTING,
+            RunState.SELECTION_BLOCKED,
+        }:
             raise RuntimeError(f"cannot plan next batch from state {run.state}")
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
@@ -558,7 +803,12 @@ class FileSearchRuntime:
         proposals: list[CandidateProposal] | None,
     ) -> list[CandidateTask]:
         run = self._load_run(run_id)
-        if run.state not in {RunState.RUNNING, RunState.WAITING_FOR_WORKERS, RunState.SELECTING}:
+        if run.state not in {
+            RunState.RUNNING,
+            RunState.WAITING_FOR_WORKERS,
+            RunState.SELECTING,
+            RunState.SELECTION_BLOCKED,
+        }:
             raise RuntimeError(f"cannot create candidates from state {run.state}")
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
@@ -750,6 +1000,7 @@ class FileSearchRuntime:
                 RunState.RUNNING,
                 RunState.WAITING_FOR_WORKERS,
                 RunState.SELECTING,
+                RunState.SELECTION_BLOCKED,
             }:
                 raise RuntimeError(f"cannot start agent session from state {run.state}")
             frozen = self._load_frozen_spec(run.frozen_spec_id)
@@ -903,6 +1154,7 @@ class FileSearchRuntime:
             RunState.RUNNING,
             RunState.WAITING_FOR_WORKERS,
             RunState.SELECTING,
+            RunState.SELECTION_BLOCKED,
         }:
             raise RuntimeError(f"cannot continue agent session from state {run.state}")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
@@ -1032,7 +1284,8 @@ class FileSearchRuntime:
         agent_session_id: str | None = None,
     ) -> ScoreReport:
         """Subagent self-score with ``agent_session_id``; main final verify
-        without it. Records an IterationReport for each call.
+        without it. Process calls record ranking iterations; promotion calls
+        retain separate acceptance evidence.
         """
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
@@ -1041,6 +1294,21 @@ class FileSearchRuntime:
             raise RuntimeError(
                 f"cannot verify candidate in status {record.status}"
             )
+        if scope == "promotion":
+            if agent_session_id is not None:
+                raise PermissionError(
+                    "promotion verification is parent-owned and cannot be "
+                    "called from a candidate agent session"
+                )
+            if (
+                run.state != RunState.READY_TO_PROMOTE
+                or run.selected_candidate_id != candidate_id
+                or not run.selected_git_head
+            ):
+                raise RuntimeError(
+                    "promotion verification requires the candidate and immutable "
+                    "Git revision selected by search_select"
+                )
 
         session: AgentSessionRecord | None = None
         if agent_session_id:
@@ -1091,7 +1359,17 @@ class FileSearchRuntime:
                     commands = frozen.spec.process_verifiers
                 report = self._run_commands(run, frozen, record, commands, scope)
 
-            artifact_hash = self._artifact_hash(record.task.workspace, detected_changed)
+            if scope == "promotion" and report.promotion_passed is None:
+                report = report.model_copy(
+                    update={"promotion_passed": report.process_passed}
+                )
+
+            detected_changed = self._detect_changed_files(
+                Path(run.source_path), record.task.workspace
+            )
+            artifact_hash = self._artifact_hash(
+                record.task.workspace, detected_changed
+            )
             git_head = self._git_head(record.task.workspace)
             git_status = self._git_status(record.task.workspace)
             git_artifact_clean = self._git_artifact_clean(
@@ -1099,6 +1377,20 @@ class FileSearchRuntime:
                 detected_changed,
                 git_head,
             )
+            touched_denied = any(
+                path_matches(path, frozen.spec.edit_surface.deny)
+                for path in detected_changed
+            )
+            outside_allowed = any(
+                not path_matches(path, frozen.spec.edit_surface.allow)
+                for path in detected_changed
+            )
+            if (
+                frozen.spec.edit_surface.max_file_changes is not None
+                and len(detected_changed)
+                > frozen.spec.edit_surface.max_file_changes
+            ):
+                outside_allowed = True
 
             with self._run_transaction(run_id):
                 run = self._load_run(run_id)
@@ -1106,45 +1398,66 @@ class FileSearchRuntime:
                 record.detected_changed_files = detected_changed
                 record.touched_denied_files = touched_denied
                 record.changed_outside_allowed = outside_allowed
-                record.status = "evaluated"
-                record.score_report = report
-                record.iterations.append(
-                    IterationRecord(
-                        iteration=len(record.iterations) + 1,
-                        agent_session_id=agent_session_id,
-                        score=report.aggregate_score,
-                        process_passed=report.process_passed,
+                if scope == "process":
+                    record.status = "evaluated"
+                    record.score_report = report
+                    if record.promotion_evidence and (
+                        record.promotion_evidence.git_head != git_head
+                        or record.promotion_evidence.artifact_hash != artifact_hash
+                    ):
+                        record.promotion_report = None
+                        record.promotion_evidence = None
+                    record.iterations.append(
+                        IterationRecord(
+                            iteration=len(record.iterations) + 1,
+                            agent_session_id=agent_session_id,
+                            score=report.aggregate_score,
+                            process_passed=report.process_passed,
+                            git_head=git_head,
+                            git_artifact_clean=git_artifact_clean,
+                            git_status=git_status,
+                            failure_class=(
+                                next(
+                                    (
+                                        r.failure_class
+                                        for r in report.verifier_results
+                                        if r.failure_class
+                                    ),
+                                    None,
+                                )
+                            ),
+                            summary="",
+                            changed_files=list(detected_changed),
+                            touched_denied_files=touched_denied,
+                            changed_outside_allowed=outside_allowed,
+                            artifact_hash=artifact_hash,
+                            metrics={
+                                r.name: r.metrics
+                                for r in report.verifier_results
+                            },
+                            created_at=utc_timestamp(),
+                        )
+                    )
+                else:
+                    record.promotion_report = report
+                    record.promotion_evidence = PromotionEvidence(
+                        candidate_id=candidate_id,
+                        selected_git_head=run.selected_git_head,
                         git_head=git_head,
-                        git_artifact_clean=git_artifact_clean,
-                        git_status=git_status,
-                        failure_class=(
-                            next(
-                                (
-                                    r.failure_class
-                                    for r in report.verifier_results
-                                    if r.failure_class
-                                ),
-                                None,
-                            )
-                        ),
-                        summary="",
-                        changed_files=list(detected_changed),
-                        touched_denied_files=touched_denied,
-                        changed_outside_allowed=outside_allowed,
                         artifact_hash=artifact_hash,
-                        metrics={r.name: r.metrics for r in report.verifier_results},
+                        passed=bool(report.promotion_passed),
                         created_at=utc_timestamp(),
                     )
-                )
                 self._write_candidate_record(run_id, record)
-                self._update_best_seen(run, frozen.spec, report)
-                run.candidates_evaluated = len(
-                    [
-                        r
-                        for r in self._load_candidate_records(run_id)
-                        if r.status == "evaluated"
-                    ]
-                )
+                if scope == "process":
+                    self._update_best_seen(run, frozen.spec, report)
+                    run.candidates_evaluated = len(
+                        [
+                            r
+                            for r in self._load_candidate_records(run_id)
+                            if r.status == "evaluated"
+                        ]
+                    )
                 self._write_run(run)
 
                 if session is not None and agent_session_id is not None:
@@ -1163,18 +1476,34 @@ class FileSearchRuntime:
 
             return report
         except Exception:
-            with self._run_transaction(run_id):
-                run = self._load_run(run_id)
-                run.state = RunState.FAILED
-                self._write_run(run)
+            if scope == "process":
+                with self._run_transaction(run_id):
+                    run = self._load_run(run_id)
+                    run.state = RunState.FAILED
+                    self._write_run(run)
             raise
 
     def select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
         run = self._load_run(run_id)
+        if run.state not in {
+            RunState.RUNNING,
+            RunState.WAITING_FOR_WORKERS,
+            RunState.SELECTING,
+            RunState.SELECTION_BLOCKED,
+            RunState.READY_TO_PROMOTE,
+        }:
+            raise RuntimeError(f"cannot select candidate from state {run.state}")
+        run.state = RunState.SELECTING
+        run.budget_used.pop("selection_blocked_reason", None)
+        self._write_run(run)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
         options = self._selection_options(run, records, frozen.spec.metric_direction)
         if not options:
+            self._mark_selection_blocked(
+                run_id,
+                "no verifier-backed candidate iteration is eligible for selection",
+            )
             raise RuntimeError("no verified candidates available for selection")
 
         reverse = frozen.spec.metric_direction == "maximize"
@@ -1197,8 +1526,19 @@ class FileSearchRuntime:
                 break
 
         if selected_record is None or selected_score is None:
+            self._mark_selection_blocked(
+                run_id,
+                "all eligible candidate revisions failed final verification",
+            )
             raise RuntimeError("no selected candidate passed final verification")
 
+        selected_changed_files = self._detect_changed_files(
+            Path(run.source_path), selected_record.task.workspace
+        )
+        selected_artifact_hash = self._artifact_hash(
+            selected_record.task.workspace,
+            selected_changed_files,
+        )
         run = self._load_run(run_id)
         run.state = RunState.READY_TO_PROMOTE
         run.selected_candidate_id = selected_record.candidate_id
@@ -1207,13 +1547,22 @@ class FileSearchRuntime:
         run.selected_score = selected_score
         run.selected_iteration = selected_iteration
         run.selected_git_head = selected_git_head
+        run.selected_artifact_hash = selected_artifact_hash
+        run.budget_used.pop("selection_blocked_reason", None)
         self._write_run(run)
+        selected_record = self._load_candidate_record(
+            run_id, selected_record.candidate_id
+        )
+        selected_record.promotion_report = None
+        selected_record.promotion_evidence = None
+        self._write_candidate_record(run_id, selected_record)
         return {
             "strategy": strategy,
             "selected_candidate_id": selected_record.candidate_id,
             "selected_score": selected_score,
             "selected_iteration": selected_iteration,
             "selected_git_head": selected_git_head,
+            "selected_artifact_hash": selected_artifact_hash,
             "selection_basis_score": (
                 next(
                     (
@@ -1230,6 +1579,12 @@ class FileSearchRuntime:
             "best_candidate_id": run.best_candidate_id,
             "best_score": run.best_score,
         }
+
+    def _mark_selection_blocked(self, run_id: str, reason: str) -> None:
+        run = self._load_run(run_id)
+        run.state = RunState.SELECTION_BLOCKED
+        run.budget_used["selection_blocked_reason"] = reason
+        self._write_run(run)
 
     def report(self, run_id: str) -> Path:
         run = self._load_run(run_id)
@@ -1374,23 +1729,103 @@ class FileSearchRuntime:
             raise RuntimeError(
                 "cannot promote candidate before search_select selects it"
             )
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+
+        def reject_promotion(message: str) -> None:
+            latest_run = self._load_run(run_id)
+            latest_run.state = RunState.READY_TO_PROMOTE
+            self._write_run(latest_run)
+            raise RuntimeError(message)
+
         record = self._load_candidate_record(run_id, candidate_id)
-        if run.selected_git_head:
-            self._checkout_git_revision(record.task.workspace, run.selected_git_head)
+        if not run.selected_git_head:
+            reject_promotion(
+                "cannot promote candidate without an immutable selected Git revision"
+            )
+        self._checkout_git_revision(record.task.workspace, run.selected_git_head)
+        detected_changed = self._detect_changed_files(
+            Path(run.source_path), record.task.workspace
+        )
+        artifact_hash = self._artifact_hash(
+            record.task.workspace, detected_changed
+        )
+        git_head = self._git_head(record.task.workspace)
+        record.detected_changed_files = detected_changed
+        record.touched_denied_files = any(
+            path_matches(path, frozen.spec.edit_surface.deny)
+            for path in detected_changed
+        )
+        record.changed_outside_allowed = any(
+            not path_matches(path, frozen.spec.edit_surface.allow)
+            for path in detected_changed
+        )
+        if (
+            frozen.spec.edit_surface.max_file_changes is not None
+            and len(detected_changed) > frozen.spec.edit_surface.max_file_changes
+        ):
+            record.changed_outside_allowed = True
+        self._write_candidate_record(run_id, record)
+
+        if run.selected_git_head and git_head != run.selected_git_head:
+            reject_promotion(
+                "cannot promote candidate because the selected Git revision is stale"
+            )
+        if run.selected_artifact_hash is None:
+            run.selected_artifact_hash = artifact_hash
+            self._write_run(run)
+        elif artifact_hash != run.selected_artifact_hash:
+            reject_promotion(
+                "cannot promote candidate because the selected artifact changed"
+            )
+        if not record.score_report or not record.score_report.process_passed:
+            reject_promotion(
+                "cannot promote candidate without a passing score report"
+            )
+        if record.touched_denied_files or record.changed_outside_allowed:
+            reject_promotion(
+                "cannot promote candidate that changed denied/out-of-surface files"
+            )
+
+        if frozen.spec.promotion_verifiers:
+            promotion_report = self.run_verifier(
+                run_id,
+                candidate_id,
+                scope="promotion",
+            )
+            run = self._load_run(run_id)
+            record = self._load_candidate_record(run_id, candidate_id)
             detected_changed = self._detect_changed_files(
                 Path(run.source_path), record.task.workspace
             )
-            record.detected_changed_files = detected_changed
-            self._write_candidate_record(run_id, record)
-        if not record.score_report or not record.score_report.process_passed:
-            raise RuntimeError("cannot promote candidate without a passing score report")
-        if record.touched_denied_files or record.changed_outside_allowed:
-            raise RuntimeError("cannot promote candidate that changed denied/out-of-surface files")
+            artifact_hash = self._artifact_hash(
+                record.task.workspace, detected_changed
+            )
+            git_head = self._git_head(record.task.workspace)
+            evidence = record.promotion_evidence
+            evidence_is_current = bool(
+                evidence
+                and evidence.candidate_id == candidate_id
+                and evidence.selected_git_head == run.selected_git_head
+                and evidence.git_head == git_head
+                and evidence.artifact_hash == artifact_hash
+                and evidence.artifact_hash == run.selected_artifact_hash
+                and evidence.passed
+            )
+            if not promotion_report.promotion_passed or not evidence_is_current:
+                reject_promotion(
+                    "cannot promote candidate without fresh passing promotion evidence"
+                )
 
         promotion_dir = self._run_dir(run_id) / "promotion"
         promotion_dir.mkdir(parents=True, exist_ok=True)
         patch_path = promotion_dir / f"{candidate_id}.patch"
-        self._write_patch(Path(run.source_path), record.task.workspace, record.detected_changed_files, patch_path)
+        self._write_patch(
+            Path(run.source_path),
+            record.task.workspace,
+            run.selected_git_head,
+            detected_changed,
+            patch_path,
+        )
         run.state = RunState.PROMOTED
         run.selected_candidate_id = candidate_id
         self._write_run(run)
@@ -2706,9 +3141,18 @@ class FileSearchRuntime:
         commands: list[VerifierCommand],
         scope: str,
     ) -> ScoreReport:
+        verifier_phase: Literal["candidate", "promotion"] = (
+            "candidate" if scope == "process" else "promotion"
+        )
         results: list[VerifierResult] = []
         for command in commands:
-            result = self._run_command(run, frozen, record, command)
+            result = self._run_command(
+                run,
+                frozen,
+                record,
+                command,
+                verifier_phase,
+            )
             results.append(result)
             if result.failure_class == "VerifierWorkspaceSideEffect":
                 break
@@ -2750,38 +3194,57 @@ class FileSearchRuntime:
         frozen: FrozenSpec,
         record: CandidateRecord,
         command: VerifierCommand,
+        verifier_phase: Literal["candidate", "promotion"],
     ) -> VerifierResult:
         if command.command[0] == "goal-plus-internal":
             return self._run_internal_command(frozen, record, command)
 
-        logs_dir = self._run_dir(run.run_id) / "candidates" / record.candidate_id / "logs"
+        log_scope = "process" if verifier_phase == "candidate" else "promotion"
+        logs_dir = (
+            self._run_dir(run.run_id)
+            / "candidates"
+            / record.candidate_id
+            / "logs"
+            / log_scope
+        )
         logs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = logs_dir / f"{command.name}.log"
+        command_log_name = safe_verifier_name(command.name)
+        log_path = logs_dir / f"{command_log_name}.log"
+        diagnostics_dir = (
+            logs_dir
+            / "diagnostics"
+            / f"{command_log_name}-{uuid.uuid4().hex[:12]}"
+        )
+        diagnostics_dir.mkdir(parents=True, exist_ok=False)
         cwd = (record.task.workspace / command.cwd).resolve()
         workspace_before = self._hash_verifier_workspace(record.task.workspace)
         git_head_before = self._git_head(record.task.workspace)
         start = time.perf_counter()
         try:
-            with tempfile.TemporaryDirectory(
-                prefix="goal-plus-verifier-command-"
-            ) as verifier_tmp:
-                completed = subprocess.run(
-                    command.command,
-                    cwd=cwd,
-                    env=self._verifier_environment(
-                        cwd,
-                        Path(verifier_tmp),
-                        phase="candidate",
-                    ),
-                    text=True,
-                    capture_output=True,
-                    timeout=command.timeout_seconds,
-                    check=False,
-                )
+            with verifier_resource_lock(command.resource_lock):
+                with tempfile.TemporaryDirectory(
+                    prefix="goal-plus-verifier-command-"
+                ) as verifier_tmp:
+                    completed = self._execute_verifier_process(
+                        command.command,
+                        cwd=cwd,
+                        env=self._verifier_environment(
+                            cwd,
+                            Path(verifier_tmp),
+                            phase=verifier_phase,
+                            diagnostics_dir=diagnostics_dir,
+                            resource=command.resource_lock,
+                        ),
+                        text=True,
+                        capture_output=True,
+                        timeout=command.timeout_seconds,
+                        check=False,
+                    )
             elapsed = time.perf_counter() - start
             metrics = self._parse_metrics(completed.stdout)
             metrics.setdefault("returncode", completed.returncode)
             metrics.setdefault("elapsed_seconds", elapsed)
+            metrics.update(self._verifier_diagnostics(diagnostics_dir))
             side_effects = self._hash_changes(
                 workspace_before,
                 self._hash_verifier_workspace(record.task.workspace),
@@ -2802,19 +3265,21 @@ class FileSearchRuntime:
                     }
                 )
                 log_path.write_text(
-                    "\n".join(
-                        [
-                            f"$ {' '.join(command.command)}",
-                            f"cwd: {cwd}",
-                            f"returncode: {completed.returncode}",
-                            f"verifier_workspace_side_effects: {side_effects}",
-                            f"cleanup_failures: {cleanup_failures}",
-                            "",
-                            "## stdout",
-                            completed.stdout,
-                            "## stderr",
-                            completed.stderr,
-                        ]
+                    _bounded_log(
+                        "\n".join(
+                            [
+                                f"$ {' '.join(command.command)}",
+                                f"cwd: {cwd}",
+                                f"returncode: {completed.returncode}",
+                                f"verifier_workspace_side_effects: {side_effects}",
+                                f"cleanup_failures: {cleanup_failures}",
+                                "",
+                                "## stdout",
+                                completed.stdout,
+                                "## stderr",
+                                completed.stderr,
+                            ]
+                        )
                     ),
                     encoding="utf-8",
                 )
@@ -2844,17 +3309,19 @@ class FileSearchRuntime:
                 and not missing_numeric_metric
             )
             log_path.write_text(
-                "\n".join(
-                    [
-                        f"$ {' '.join(command.command)}",
-                        f"cwd: {cwd}",
-                        f"returncode: {completed.returncode}",
-                        "",
-                        "## stdout",
-                        completed.stdout,
-                        "## stderr",
-                        completed.stderr,
-                    ]
+                _bounded_log(
+                    "\n".join(
+                        [
+                            f"$ {' '.join(command.command)}",
+                            f"cwd: {cwd}",
+                            f"returncode: {completed.returncode}",
+                            "",
+                            "## stdout",
+                            completed.stdout,
+                            "## stderr",
+                            completed.stderr,
+                        ]
+                    )
                 ),
                 encoding="utf-8",
             )
@@ -2886,26 +3353,73 @@ class FileSearchRuntime:
                 side_effects,
                 git_head_before,
             ) if side_effects else []
-            log_path.write_text(str(exc), encoding="utf-8")
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            log_path.write_text(
+                _bounded_log(
+                    "\n".join(
+                        [
+                            f"$ {' '.join(command.command)}",
+                            f"cwd: {cwd}",
+                            f"timeout_seconds: {command.timeout_seconds}",
+                            "",
+                            "## stdout",
+                            stdout,
+                            "## stderr",
+                            stderr,
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+            metrics: dict[str, Any] = {
+                "timeout_seconds": command.timeout_seconds,
+                "verifier_workspace_side_effects": side_effects,
+                "cleanup_failures": cleanup_failures,
+                "infrastructure_failure": bool(side_effects),
+                "candidate_action": (
+                    "stop_and_report" if side_effects else "inspect_timeout"
+                ),
+            }
+            metrics.update(self._verifier_diagnostics(diagnostics_dir))
             return VerifierResult(
                 name=command.name,
                 role=command.role,
                 passed=False,
                 score=0.0,
-                metrics={
-                    "timeout_seconds": command.timeout_seconds,
-                    "verifier_workspace_side_effects": side_effects,
-                    "cleanup_failures": cleanup_failures,
-                    "infrastructure_failure": bool(side_effects),
-                    "candidate_action": (
-                        "stop_and_report" if side_effects else "inspect_timeout"
-                    ),
-                },
+                metrics=metrics,
                 log_path=log_path,
                 failure_class=(
                     "VerifierWorkspaceSideEffect" if side_effects else "Timeout"
                 ),
             )
+        except OSError as exc:
+            log_path.write_text(_bounded_log(str(exc)), encoding="utf-8")
+            metrics: dict[str, Any] = {"error": str(exc)}
+            metrics.update(self._verifier_diagnostics(diagnostics_dir))
+            return VerifierResult(
+                name=command.name,
+                role=command.role,
+                passed=False,
+                score=0.0,
+                metrics=metrics,
+                log_path=log_path,
+                failure_class="VerifierStartFailed",
+            )
+
+    def _verifier_diagnostics(self, diagnostics_dir: Path) -> dict[str, Any]:
+        files = sorted(
+            path.relative_to(diagnostics_dir).as_posix()
+            for path in diagnostics_dir.rglob("*")
+            if path.is_file()
+        )
+        if not files:
+            shutil.rmtree(diagnostics_dir, ignore_errors=True)
+            return {}
+        return {
+            "diagnostics_dir": str(diagnostics_dir),
+            "diagnostic_files": files,
+        }
 
     def _restore_verifier_workspace(
         self,
@@ -3114,6 +3628,7 @@ class FileSearchRuntime:
             current_artifact_hash = self._artifact_hash(
                 record.task.workspace, current_changed
             )
+            report_is_represented = False
             for iteration in record.iterations:
                 if (
                     iteration.process_passed is not True
@@ -3133,6 +3648,13 @@ class FileSearchRuntime:
                     )
                 elif iteration.artifact_hash == current_artifact_hash:
                     options.append((iteration.score, record, iteration.iteration, None))
+                if (
+                    record.score_report
+                    and iteration.artifact_hash == current_artifact_hash
+                    and iteration.process_passed == record.score_report.process_passed
+                    and iteration.score == record.score_report.aggregate_score
+                ):
+                    report_is_represented = True
 
             if (
                 record.score_report
@@ -3140,6 +3662,7 @@ class FileSearchRuntime:
                 and record.score_report.aggregate_score is not None
                 and not record.touched_denied_files
                 and not record.changed_outside_allowed
+                and not report_is_represented
             ):
                 options.append(
                     (record.score_report.aggregate_score, record, None, None)
@@ -3374,7 +3897,7 @@ class FileSearchRuntime:
         return failures
 
     def _detect_changed_files(self, source: Path, workspace: Path) -> list[str]:
-        source_hashes = self._hash_tree(source)
+        source_hashes = self._hash_tree(source, source_view=True)
         workspace_hashes = self._hash_tree(workspace)
         changed: list[str] = []
         for rel_path in sorted(set(source_hashes) | set(workspace_hashes)):
@@ -3513,9 +4036,15 @@ class FileSearchRuntime:
                 f"failed to checkout candidate revision {revision}"
             ) from exc
 
-    def _hash_tree(self, root: Path) -> dict[str, str]:
+    def _hash_tree(
+        self,
+        root: Path,
+        *,
+        source_view: bool = False,
+    ) -> dict[str, str]:
         hashes: dict[str, str] = {}
-        for path in list_files(root):
+        paths = list_source_files(root) if source_view else list_files(root)
+        for path in paths:
             rel_path = path.relative_to(root).as_posix()
             hashes[rel_path] = sha256_file(path)
         return hashes
@@ -3524,24 +4053,151 @@ class FileSearchRuntime:
         self,
         source: Path,
         workspace: Path,
+        selected_revision: str,
         changed_files: list[str],
         patch_path: Path,
     ) -> None:
-        chunks: list[str] = []
-        for rel_path in changed_files:
-            src = source / rel_path
-            dst = workspace / rel_path
-            src_lines = src.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True) if src.exists() else []
-            dst_lines = dst.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True) if dst.exists() else []
-            chunks.extend(
-                difflib.unified_diff(
-                    src_lines,
-                    dst_lines,
-                    fromfile=f"a/{rel_path}",
-                    tofile=f"b/{rel_path}",
+        if not changed_files:
+            patch_path.write_text("", encoding="utf-8")
+            return
+
+        with tempfile.TemporaryDirectory(prefix="goal-plus-patch-") as temporary:
+            repository = Path(temporary) / "repository"
+            copy_source_tree(source, repository)
+            baseline = initialize_workspace_git_baseline(repository)
+            if baseline is None:
+                raise RuntimeError("cannot initialize temporary promotion repository")
+            for rel_path in changed_files:
+                staged = repository / rel_path
+                if staged.exists() or staged.is_symlink():
+                    if staged.is_dir() and not staged.is_symlink():
+                        shutil.rmtree(staged)
+                    else:
+                        staged.unlink()
+                entry = self._git_tree_entry(
+                    workspace,
+                    selected_revision,
+                    rel_path,
                 )
+                if entry is None:
+                    continue
+                mode, object_type, object_id = entry
+                if object_type == "tree":
+                    staged.mkdir(parents=True, exist_ok=True)
+                    continue
+                if object_type != "blob":
+                    raise RuntimeError(
+                        "selected promotion revision contains unsupported Git "
+                        f"object type {object_type!r} at {rel_path}"
+                    )
+                content = self._git_blob(workspace, object_id)
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                if mode == "120000":
+                    staged.symlink_to(os.fsdecode(content))
+                else:
+                    staged.write_bytes(content)
+                    staged.chmod(int(mode, 8) & 0o777)
+            self._git_output(
+                repository,
+                ["git", "add", "-A", "--", *changed_files],
             )
-        patch_path.write_text("".join(chunks), encoding="utf-8")
+            patch = self._git_diff(
+                repository,
+                baseline,
+                changed_files,
+                cached=True,
+            )
+        patch_path.write_text(patch, encoding="utf-8")
+
+    def _git_tree_entry(
+        self,
+        repository: Path,
+        revision: str,
+        rel_path: str,
+    ) -> tuple[str, str, str] | None:
+        command = [
+            "git",
+            "--no-replace-objects",
+            "ls-tree",
+            "-z",
+            revision,
+            "--",
+            f":(literal){rel_path}",
+        ]
+        try:
+            process = subprocess.run(
+                command,
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", b"")
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                "failed to read immutable promotion revision: "
+                f"{str(detail).strip()}"
+            ) from exc
+        if not process.stdout:
+            return None
+        entries = [entry for entry in process.stdout.split(b"\0") if entry]
+        if len(entries) != 1:
+            raise RuntimeError(
+                f"selected promotion revision has ambiguous path {rel_path!r}"
+            )
+        metadata, _path = entries[0].split(b"\t", 1)
+        mode, object_type, object_id = metadata.decode("ascii").split()
+        return mode, object_type, object_id
+
+    def _git_blob(self, repository: Path, object_id: str) -> bytes:
+        command = ["git", "--no-replace-objects", "cat-file", "blob", object_id]
+        try:
+            return subprocess.run(
+                command,
+                cwd=repository,
+                check=True,
+                capture_output=True,
+            ).stdout
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", b"")
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"failed to read immutable promotion blob: {str(detail).strip()}"
+            ) from exc
+
+    def _git_diff(
+        self,
+        repository: Path,
+        baseline: str,
+        changed_files: list[str],
+        *,
+        cached: bool,
+    ) -> str:
+        command = [
+            "git",
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+        ]
+        if cached:
+            command.append("--cached")
+        command.extend([baseline, "--", *changed_files])
+        try:
+            return subprocess.run(
+                command,
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", "") or str(exc)
+            raise RuntimeError(
+                f"failed to generate promotion patch: {detail.strip()}"
+            ) from exc
 
     def _spec_dir(self, frozen_spec_id: str) -> Path:
         return self.specs_dir / frozen_spec_id
