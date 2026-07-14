@@ -19,6 +19,11 @@ it during Spec Discovery before freezing in a source-owned path such as
 `bash`, `write`, and `edit` for this work. The freeze tool exposes the full
 nested `SearchSpec` schema; do not guess fields from validation errors.
 `expected_outputs` lists artifact paths/globs only.
+The verifier must keep the candidate workspace read-only and use the unique
+`GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or Python `tempfile` for compiler and
+temporary outputs. Never use one fixed `/tmp` path because
+`pi_search_run_batch` may verify candidates concurrently. Freeze rejects any
+workspace side effect before candidate budget is spent.
 
 After the first meaningful optimization result is available, apply the skill's
 existing raw-goal audit before assuming that the frozen spec should continue

@@ -195,6 +195,78 @@ def test_freeze_spec_is_stable_and_copies_verifier(tmp_path: Path) -> None:
     assert Path(first.frozen_verifier_paths["evaluator.py"]).exists()
 
 
+def test_freeze_spec_rejects_verifier_workspace_side_effect_without_mutating_source(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        "output = Path('.goal-plus-verifiers/generated.bin')\n"
+        "output.parent.mkdir(parents=True, exist_ok=True)\n"
+        "output.write_text('compiled', encoding='utf-8')\n"
+        "print(json.dumps({'combined_score': 1.0}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="VerifierWorkspaceSideEffect") as exc_info:
+        runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    assert ".goal-plus-verifiers/generated.bin" in str(exc_info.value)
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in str(exc_info.value)
+    assert "concurrently" in str(exc_info.value)
+    assert not (project / ".goal-plus-verifiers").exists()
+    assert list(runtime.specs_dir.iterdir()) == []
+
+
+def test_freeze_spec_provides_per_invocation_verifier_temp_directory(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "names = ('TMPDIR', 'TMP', 'TEMP', 'GOAL_PLUS_VERIFIER_TMPDIR')\n"
+        "paths = {os.environ[name] for name in names}\n"
+        "assert len(paths) == 1\n"
+        "tmp = Path(paths.pop())\n"
+        "assert tmp.is_dir()\n"
+        "assert os.environ['GOAL_PLUS_VERIFIER_PHASE'] == 'freeze_preflight'\n"
+        "tmp.joinpath('compiled.bin').write_text('ok', encoding='utf-8')\n"
+        "print(json.dumps({'combined_score': 1.0}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    assert frozen.frozen_spec_id.startswith("spec_")
+    assert not (project / "compiled.bin").exists()
+
+
+def test_freeze_spec_rejects_verifier_outputs_in_workspace_tmp(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        "output = Path('.tmp/verifier-output.txt')\n"
+        "output.parent.mkdir(parents=True, exist_ok=True)\n"
+        "output.write_text('not worker scratch', encoding='utf-8')\n"
+        "print(json.dumps({'combined_score': 1.0}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="VerifierWorkspaceSideEffect") as exc_info:
+        runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    assert ".tmp/verifier-output.txt" in str(exc_info.value)
+    assert not (project / ".tmp").exists()
+
+
 def test_freeze_spec_rejects_plain_text_ranking_score(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     (project / "evaluator.py").write_text(
@@ -2433,6 +2505,61 @@ def test_run_verifier_records_edit_surface_violation_in_iteration(
     it = record.iterations[-1]
     assert it.touched_denied_files is True
     assert "config.yaml" in it.changed_files
+
+
+def test_run_verifier_reports_and_cleans_verifier_workspace_side_effect(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "if os.environ['GOAL_PLUS_VERIFIER_PHASE'] == 'candidate':\n"
+        "    output = Path('.goal-plus-verifiers/generated.bin')\n"
+        "    output.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    output.write_text('compiled', encoding='utf-8')\n"
+        "print(json.dumps({'combined_score': 1.0}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    report = runtime.run_verifier(run_id, candidate_id)
+
+    result = report.verifier_results[0]
+    assert report.process_passed is False
+    assert result.failure_class == "VerifierWorkspaceSideEffect"
+    assert result.metrics["verifier_workspace_side_effects"] == [
+        ".goal-plus-verifiers/generated.bin"
+    ]
+    assert result.metrics["cleanup_failures"] == []
+    assert result.metrics["infrastructure_failure"] is True
+    assert result.metrics["candidate_action"] == "stop_and_report"
+    assert not (workspace / ".goal-plus-verifiers/generated.bin").exists()
+    assert (workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_run_verifier_classifies_legacy_generated_verifier_file_as_infrastructure(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    generated = workspace / ".goal-plus-verifiers/generated.bin"
+    generated.parent.mkdir(parents=True)
+    generated.write_text("legacy side effect", encoding="utf-8")
+
+    report = runtime.run_verifier(run_id, candidate_id)
+
+    result = report.verifier_results[0]
+    assert report.process_passed is False
+    assert result.failure_class == "VerifierWorkspaceSideEffect"
+    assert result.metrics["infrastructure_failure"] is True
+    assert result.metrics["candidate_action"] == "stop_and_report"
+    assert runtime._git_status(workspace) == [
+        "?? .goal-plus-verifiers/generated.bin"
+    ]
 
 
 def test_run_verifier_records_failure_class_on_timeout(

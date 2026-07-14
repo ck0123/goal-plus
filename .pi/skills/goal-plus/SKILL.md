@@ -43,6 +43,14 @@ schema; fill it directly rather than guessing fields from validation errors.
 `search_freeze_spec` repeats verifier preflight and rejects the spec before
 candidate workers start when the contract is invalid.
 
+The freeze preflight runs in a disposable source copy and requires the verifier
+to keep that workspace read-only. Put compiler products and temporary outputs
+in the unique `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or a Python
+`tempfile.TemporaryDirectory()`. Never use one fixed `/tmp` pathname because
+`pi_search_run_batch` may verify several candidates concurrently. A
+`VerifierWorkspaceSideEffect` must be repaired and refrozen before any Search
+run uses candidate budget.
+
 ## Search Mode
 
 When the goal is search-ready:
@@ -212,6 +220,14 @@ evidence, use state-level resume by calling
 `search_redispatch_candidate` internally, creates a new
 `agent_session_id` for the same candidate workspace, and recovers prior work
 from MCP history, verifier iterations, and Git state.
+
+Exception: never redispatch after `failure_class=VerifierWorkspaceSideEffect`,
+`metrics.infrastructure_failure=true`, or
+`metrics.candidate_action=stop_and_report`. The worker must stop without
+cleaning or retrying, and the main agent must not spend another batch on the
+same `frozen_spec_id`. Repair the source-owned verifier, freeze a new spec, and
+create a new run. The host driver, not the MCP runtime, owns closing out any
+siblings that are still executing in a concurrent batch.
 
 Each worker also leaves a bounded `progress_handoff` in its bound handle. It
 combines the optional `.tmp/handoff.json` recovery note with a runner-owned Git

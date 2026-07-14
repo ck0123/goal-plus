@@ -25,8 +25,12 @@ prefix; match by the final logical tool name.
    rule. A ranking verifier must emit a final JSON object with a finite numeric
    `spec.metric_name`; keep its files in a source-owned path such as
    `.goal-plus-verifiers/`, never `.gp/` or `.search/`. `expected_outputs`
-   lists artifact paths/globs and is not a stdout parser. Save the complete
-   contract with `goal_plus_save_spec_draft`.
+   lists artifact paths/globs and is not a stdout parser. Require the verifier
+   to keep the candidate workspace read-only and use the unique
+   `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` (or Python `tempfile`) for compiler and
+   temporary outputs; fixed `/tmp` paths are unsafe under parallel Search.
+   Freeze rejects workspace side effects before candidate budget is spent.
+   Save the complete contract with `goal_plus_save_spec_draft`.
 6. Enter Search Mode only when the saved draft has `confidence="high"` and no
    open questions.
 7. Search is an autonomous upgrade. Once the draft is high-confidence with no

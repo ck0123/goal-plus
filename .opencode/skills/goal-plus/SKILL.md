@@ -110,6 +110,11 @@ The ranking verifier must emit a final JSON object with a finite numeric
 be inline or call an existing repository tool. Create a custom verifier file
 only when needed; materialize it during Spec Discovery before freezing, in a
 source-owned path such as `.goal-plus-verifiers/`, never `.gp/` or `.search/`.
+It must keep the candidate workspace read-only and put compiler products and
+temporary outputs in the unique `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` (or a
+Python `tempfile.TemporaryDirectory()`); fixed `/tmp` paths are unsafe when
+Search candidates verify concurrently. Freeze rejects workspace side effects
+before candidate budget is spent.
 Spec Discovery may use host inspection and write tools for this work. The
 freeze tool exposes the complete nested `SearchSpec` schema.
 `expected_outputs` lists artifact paths/globs and is not a stdout parser.

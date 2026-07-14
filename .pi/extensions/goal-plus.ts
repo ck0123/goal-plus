@@ -461,7 +461,9 @@ const RuntimeToolDescriptions: Record<string, string> = {
 	goal_plus_save_spec_draft:
 		"Save the discovered SearchSpec draft. Its budget uses whole-run max_candidates and per-batch max_parallel semantics; do not invent per-round budget fields.",
 	search_freeze_spec:
-		"Freeze an immutable SearchSpec and verifier bundle. budget.max_candidates is the total cap across the whole run and all rounds; budget.max_parallel is the per-batch cap. Equal values normally permit only one full batch.",
+		"Freeze an immutable SearchSpec and verifier bundle. Preflight uses a disposable source copy and rejects verifier workspace side effects; verifier temp files belong in the unique GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, never a fixed /tmp path under concurrent Search. budget.max_candidates is the total cap across the whole run and all rounds; budget.max_parallel is the per-batch cap. Equal values normally permit only one full batch.",
+	search_run_verifier:
+		"Score one candidate. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
 	search_plan_next:
 		"Plan one candidate batch/round. requested_k applies only to this call; planned_k is min(requested_k, remaining max_candidates, max_parallel). The default request of 4 is not a whole-run budget.",
 };

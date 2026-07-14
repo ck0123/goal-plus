@@ -153,6 +153,66 @@ def test_run_pi_search_candidate_binds_worker_handle_and_final_verifies(
     assert record.iterations[-1].score == 7.0
 
 
+def test_run_pi_search_candidate_skips_duplicate_final_verify_for_infrastructure_failure(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "if os.environ['GOAL_PLUS_VERIFIER_PHASE'] == 'candidate':\n"
+        "    output = Path('.goal-plus-verifiers/generated.bin')\n"
+        "    output.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    output.write_text('compiled', encoding='utf-8')\n"
+        "print(json.dumps({'combined_score': 1.0}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    candidate = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    def fake_worker(launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        Path(launch["cwd"], "initial_program.py").write_text(
+            "VALUE = 7\n",
+            encoding="utf-8",
+        )
+        worker_runtime = FileSearchRuntime(runtime.root_dir)
+        report = worker_runtime.run_verifier(
+            run_id,
+            candidate.candidate_id,
+            agent_session_id=launch["agent_session_id"],
+        )
+        assert report.verifier_results[0].failure_class == (
+            "VerifierWorkspaceSideEffect"
+        )
+        return {
+            "host": "pi-rpc",
+            "external_id": launch["session_id"],
+            "metadata": {"assistant_text": "stopped on verifier infrastructure"},
+        }
+
+    result = run_pi_search_candidate(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_id=candidate.candidate_id,
+        final_verify=True,
+        worker_runner=fake_worker,
+    )
+
+    assert result["ok"] is False
+    assert result["infrastructure_failure"] is True
+    assert result["candidate_action"] == "stop_and_report"
+    assert result["failure"]["error_type"] == "VerifierWorkspaceSideEffect"
+    assert result["steps"][-1]["status"] == (
+        "skipped_duplicate_infrastructure_failure"
+    )
+    record = runtime._load_candidate_record(run_id, candidate.candidate_id)
+    assert len(record.iterations) == 1
+    assert record.iterations[0].agent_session_id == result["agent_session_id"]
+
+
 def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
     tmp_path: Path,
 ) -> None:

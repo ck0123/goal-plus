@@ -42,6 +42,8 @@ def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
     assert 'numeric `spec.metric_name`' in text
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs` lists artifact paths/globs only" in text
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
+    assert "fixed `/tmp`" in text
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs` lists" in text
@@ -152,6 +154,9 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "workspace only" in text
     assert "runtime history" in text
     assert "do not rely on transcript" in text
+    assert "VerifierWorkspaceSideEffect" in text
+    assert "candidate_action=stop_and_report" in text
+    assert "return immediately" in text
 
 
 def test_pi_skill_documents_post_tool_time_advisory() -> None:
@@ -178,6 +183,8 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "goal_plus_create" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "VerifierWorkspaceSideEffect" in text
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
     assert "pi_rpc_run_worker" in text
     assert "pi_search_run_batch" in text
     assert "pi_search_run_candidate" in text

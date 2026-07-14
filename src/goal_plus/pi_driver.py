@@ -84,6 +84,25 @@ def _failed_candidate_result(
     return result
 
 
+def _verifier_infrastructure_report(
+    tools: SearchTools,
+    run_id: str,
+    candidate_id: str,
+) -> dict[str, Any] | None:
+    record = tools.runtime._load_candidate_record(run_id, candidate_id)
+    report = record.score_report
+    if report is None:
+        return None
+    for result in report.verifier_results:
+        if (
+            result.failure_class == "VerifierWorkspaceSideEffect"
+            or result.metrics.get("infrastructure_failure") is True
+            or result.metrics.get("candidate_action") == "stop_and_report"
+        ):
+            return report.model_dump(mode="json")
+    return None
+
+
 def run_pi_search_candidate(
     *,
     root_dir: Path | str,
@@ -272,8 +291,23 @@ def run_pi_search_candidate(
         }
     )
 
-    final_score_report: dict[str, Any] | None = None
-    if final_verify:
+    final_score_report = _verifier_infrastructure_report(
+        tools,
+        run_id,
+        candidate_id,
+    )
+    infrastructure_failure = final_score_report is not None
+    if final_verify and infrastructure_failure:
+        steps.append(
+            {
+                "tool": "search_run_verifier",
+                "candidate_id": candidate_id,
+                "status": "skipped_duplicate_infrastructure_failure",
+                "failure_class": "VerifierWorkspaceSideEffect",
+                "candidate_action": "stop_and_report",
+            }
+        )
+    elif final_verify:
         try:
             final_score_report = tools.search_run_verifier(
                 run_id=run_id,
@@ -301,8 +335,8 @@ def run_pi_search_candidate(
             }
         )
 
-    return {
-        "ok": True,
+    result = {
+        "ok": not infrastructure_failure,
         "run_id": run_id,
         "candidate_id": candidate_id,
         "agent_session_id": agent_session_id,
@@ -312,6 +346,26 @@ def run_pi_search_candidate(
         "final_score_report": final_score_report,
         "steps": steps,
     }
+    if infrastructure_failure:
+        result.update(
+            {
+                "infrastructure_failure": True,
+                "candidate_action": "stop_and_report",
+                "failure": {
+                    "stage": "worker_verifier",
+                    "error_type": "VerifierWorkspaceSideEffect",
+                    "message": (
+                        "worker verifier changed the candidate workspace; "
+                        "repair and refreeze instead of retrying"
+                    ),
+                },
+                "error": (
+                    "worker verifier changed the candidate workspace; "
+                    "repair and refreeze instead of retrying"
+                ),
+            }
+        )
+    return result
 
 
 def run_pi_search_batch(

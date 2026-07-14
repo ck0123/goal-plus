@@ -135,6 +135,15 @@ def test_freeze_spec_exposes_complete_nested_search_spec_schema(tmp_path: Path) 
     freeze_description = " ".join(tools["search_freeze_spec"].description.split())
     assert "immutable total candidate cap" in freeze_description
     assert "per-batch planning cap" in freeze_description
+    assert "disposable source copy" in freeze_description
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in freeze_description
+    assert "fixed `/tmp` paths are unsafe" in freeze_description
+
+    verifier_description = " ".join(
+        tools["search_run_verifier"].description.split()
+    )
+    assert "VerifierWorkspaceSideEffect" in verifier_description
+    assert 'candidate_action="stop_and_report"' in verifier_description
 
 
 def test_plan_next_exposes_per_round_budget_semantics(tmp_path: Path) -> None:

@@ -36,9 +36,13 @@ def create_mcp(
         score to 0.0. Freeze preflights every `ranking_signal`: it must exit 0
         and print a final JSON object containing a finite numeric
         `spec.metric_name`, for example `{"score": 123.0}`. The verifier
-        command may be inline or call an existing repository tool. Optional
-        custom verifier files must be materialized during Spec Discovery in a
-        source-owned path, never `.gp` or `.search`. `expected_outputs`
+        command runs in a disposable source copy and must not change that
+        workspace. Use the unique per-invocation directory exposed as
+        `GOAL_PLUS_VERIFIER_TMPDIR`, `TMPDIR`, `TMP`, and `TEMP` for compiler
+        products and temporary outputs; fixed `/tmp` paths are unsafe when
+        candidates verify concurrently. Optional custom verifier files must be
+        materialized during Spec Discovery in a source-owned path, never `.gp`
+        or `.search`. `expected_outputs`
         contains artifact path/glob strings only; it is not a stdout parser
         configuration. `spec.budget.max_candidates` is the immutable total
         candidate cap across the whole run and all rounds;
@@ -225,7 +229,10 @@ def create_mcp(
 
         Subagents pass their own `agent_session_id` to record iteration
         provenance. The main agent calls this without `agent_session_id`
-        after OpenCode Task completion to confirm the final score.
+        after OpenCode Task completion to confirm the final score. A
+        `VerifierWorkspaceSideEffect` with
+        `candidate_action="stop_and_report"` is a frozen-verifier infrastructure
+        failure: workers must not clean verifier outputs or retry it.
         """
         return tools.search_run_verifier(run_id, candidate_id, scope, agent_session_id)
 

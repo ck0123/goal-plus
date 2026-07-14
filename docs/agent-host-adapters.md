@@ -242,6 +242,13 @@ receives an `agent_session_id`, calls `search_get_agent_context`, works inside
 the assigned candidate workspace, runs `search_run_verifier`, and returns a
 summary for the main agent to select from.
 
+All worker assets treat `VerifierWorkspaceSideEffect`,
+`metrics.infrastructure_failure=true`, and
+`metrics.candidate_action=stop_and_report` as terminal for that worker. The
+worker must not clean generated verifier files or retry. The parent repairs and
+refreezes; under concurrent execution, the host remains responsible for
+closing out siblings because the MCP runtime does not supervise processes.
+
 Runtime length control is not currently equivalent across hosts:
 
 | Host | Single-worker autoresearch | Runtime cap exposed by current assets | What the cap controls |

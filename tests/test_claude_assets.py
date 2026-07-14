@@ -54,6 +54,9 @@ def test_claude_skill_uses_foreground_agent_and_generic_bind() -> None:
     assert 'numeric `spec.metric_name`' in text
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs` accepts" in text
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
+    assert "VerifierWorkspaceSideEffect" in text
+    assert "fixed `/tmp`" in text
 
 
 def test_claude_search_skill_documents_whole_run_budget_planning() -> None:
@@ -111,6 +114,8 @@ def test_claude_worker_agent_calls_context_and_verifier() -> None:
     assert "mcp__goal-plus__*" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "candidate_action=stop_and_report" in text
+    assert "return immediately" in text
 
 
 def test_claude_worker_agent_turn_budget_variants_exist() -> None:
@@ -125,6 +130,8 @@ def test_claude_worker_agent_turn_budget_variants_exist() -> None:
     assert "maxTurns: 4" in flash
     assert "name: search-candidate-agent-deep" in deep
     assert "maxTurns: 16" in deep
+    assert "candidate_action=stop_and_report" in flash
+    assert "candidate_action=stop_and_report" in deep
 
 
 def test_claude_search_skill_documents_tier_escalation_and_resume() -> None:

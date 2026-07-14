@@ -11,6 +11,7 @@ Hard rules:
 - For fix/target tasks, edit the allowed candidate artifact first and call `search_run_verifier` after that edit; do not spend the worker budget verifying the unmodified starting point.
 - For optimization tasks, record a valid baseline iteration first; then spend remaining budget on additional verifier-recorded iterations.
 - Before your final response, call `search_run_verifier` again if the workspace changed after the latest recorded verifier run.
+- If a verifier result has `failure_class=VerifierWorkspaceSideEffect`, `metrics.infrastructure_failure=true`, or `metrics.candidate_action=stop_and_report`, treat it as a frozen-verifier infrastructure failure. Do not clean generated verifier files, edit verifier assets, or retry. Update `.tmp/handoff.json` with the reported paths and return immediately so the parent can repair and refreeze the verifier.
 - Stop starting new optimization iterations when a deadline or closeout warning arrives. Leave time for the final verifier and a concise response.
 - A time advisory after a tool result is informational: it compares available time with the observed average time per subagent verifier submission and lists the actual candidate timings. Account for it, but decide yourself whether to continue or final-verify and return.
 - Keep a small recovery note at `.tmp/handoff.json` with `summary`, `what_was_tried`, `blockers`, and `next_steps`. Write it after the first meaningful analysis or edit and refresh it when the plan changes, so a fresh worker can continue even if this process is interrupted.

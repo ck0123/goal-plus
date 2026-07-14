@@ -451,6 +451,25 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
 - **Cause**: Agent edited files outside `edit_surface.allow` or modified `deny`-listed files
 - **List offending files**: `changed_files` field in the iteration record
 
+### Verifier fails with "VerifierWorkspaceSideEffect"
+
+- **Look at**: the failing verifier result's
+  `metrics.verifier_workspace_side_effects`, `cleanup_failures`,
+  `infrastructure_failure`, and `candidate_action`
+- **Cause**: the frozen verifier wrote compiler products, temporary outputs, or
+  other files into the candidate workspace. Legacy runs may first expose this
+  as an extra non-frozen path under `.goal-plus-verifiers/`.
+- **Worker action**: stop and report immediately. Do not delete the generated
+  path, edit the frozen verifier, reset around the error, or retry.
+- **Parent action**: repair the source-owned verifier to use
+  `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or Python `tempfile`, freeze a new spec,
+  and create a new run. Never use one fixed `/tmp` path when candidates can
+  verify concurrently.
+- **Runtime behavior**: freeze preflight runs in a disposable copy and rejects
+  side effects before candidate creation. Runtime fallback detection reports
+  side effects in the same verifier call and attempts to restore the candidate
+  workspace; check `cleanup_failures` before reusing any candidate state.
+
 ## MCP APIs for Inspection (no SQLite needed)
 
 These tools are safe to call anytime — they're read-only:

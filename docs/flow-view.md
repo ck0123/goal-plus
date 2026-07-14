@@ -134,6 +134,8 @@ Each step lists **who acts** and **what they see**.
       → search_run_verifier(..., agent_session_id=self)
         (runtime auto-commits changed artifact files, appends an
          IterationRecord with git_head, returns ScoreReport)
+      → if VerifierWorkspaceSideEffect / candidate_action=stop_and_report:
+        stop immediately; do not clean or retry the frozen verifier
       → keep exploring from the current or intentionally checked-out state
     finish:
       summarize the best verifier-recorded iteration in text.
@@ -149,6 +151,8 @@ Each step lists **who acts** and **what they see**.
         best-so-far workspace state)
      Main sees: ScoreReport (aggregate_score, failure_class,
      key_metrics, verifier_results)
+     If the failure is VerifierWorkspaceSideEffect, Main does not redispatch or
+     spend another batch on that frozen_spec_id; it repairs and refreezes.
 
 [11] Loop back to [3]: if budget remains and Main wants to evolve,
      call plan_next again. In evolve mode the runtime reads all

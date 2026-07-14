@@ -66,6 +66,9 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
     assert 'numeric `spec.metric_name`' in text
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs` accepts" in text
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
+    assert "VerifierWorkspaceSideEffect" in text
+    assert "fixed `/tmp`" in text
 
 
 def test_codex_search_skill_projects_launch_metadata_to_current_tool_schema() -> None:
@@ -165,6 +168,8 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert "summary" in text
     assert "next_action" in text
     assert "PostTool time advisory is informational" in text
+    assert "candidate_action=stop_and_report" in text
+    assert "return immediately" in text
 
 
 def test_codex_search_skill_documents_state_level_resume() -> None:

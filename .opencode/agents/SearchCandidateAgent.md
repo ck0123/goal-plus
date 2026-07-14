@@ -67,6 +67,7 @@ All scoring goes through MCP. Each call scores the current workspace state and a
 3. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `goal-plus_search_list_iterations(run_id, candidate_id)`.
 4. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
 5. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
+6. If a verifier result has `failure_class=VerifierWorkspaceSideEffect`, `metrics.infrastructure_failure=true`, or `metrics.candidate_action=stop_and_report`, the frozen verifier is invalid for candidate execution. Do not clean generated verifier files, edit verifier assets, reset around the failure, or retry. Record the reported paths in `.tmp/results.tsv` or the final summary and return immediately so the parent can repair and refreeze the verifier.
 
 ## Iteration Loop
 
@@ -89,6 +90,9 @@ while steps_remaining and verifier_runs_remaining:
     commit_hash = git rev-parse --short HEAD                    # 7-char short hash, captured before verify
     report = search_run_verifier(..., agent_session_id=self)
     score = report.aggregate_score
+    if report contains VerifierWorkspaceSideEffect or candidate_action=stop_and_report:
+        append row: commit_hash \t 0.0 \t infrastructure-stop \t <reported verifier paths>
+        return immediately; parent must repair and refreeze the verifier
     if report.process_passed is False or score is None:         # verifier crash/timeout -> discard
         append row: commit_hash \t 0.0 \t discard \t <hypothesis>
         git reset --hard HEAD~1

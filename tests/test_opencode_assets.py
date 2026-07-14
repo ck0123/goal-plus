@@ -40,6 +40,9 @@ def test_search_skill_is_internal_search_mode_engine() -> None:
     assert ".goal-plus-verifiers/" in skill
     assert "`expected_outputs` accepts" in skill
     assert "existing `frozen_spec_id`" in skill
+    assert "GOAL_PLUS_VERIFIER_TMPDIR" in skill
+    assert "VerifierWorkspaceSideEffect" in skill
+    assert "fixed `/tmp`" in skill
 
 
 def test_opencode_search_skill_keeps_opencode_bind_contract() -> None:
@@ -257,6 +260,8 @@ def test_search_candidate_agent_tier_has_expected_step_cap(
     text = (ROOT / ".opencode" / "agents" / agent_file).read_text(encoding="utf-8")
     assert f"steps: {expected_steps}" in text
     assert "mode: subagent" in text
+    assert "candidate_action=stop_and_report" in text
+    assert "return immediately" in text
 
 
 @pytest.mark.parametrize(

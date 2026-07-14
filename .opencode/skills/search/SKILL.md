@@ -30,6 +30,23 @@ or `.search/`. The freeze tool exposes the complete nested `SearchSpec` schema.
 stdout. The runtime repeats this preflight and rejects an invalid freeze before
 any candidate starts.
 
+The freeze preflight runs in a disposable source copy and treats the candidate
+workspace as read-only. Verifiers must put compiler products and temporary
+outputs in `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or a
+`tempfile.TemporaryDirectory()`. Never use one fixed `/tmp` pathname: a Search
+batch may verify several isolated candidates concurrently. Any workspace change
+raises `VerifierWorkspaceSideEffect`; repair the verifier and freeze a new spec
+before starting candidates.
+
+If runtime verification still returns `VerifierWorkspaceSideEffect`,
+`metrics.infrastructure_failure=true`, or
+`metrics.candidate_action=stop_and_report`, the worker must stop immediately.
+It must not delete generated verifier files, edit frozen assets, reset around the
+failure, or retry. The parent must not redispatch that candidate or spend another
+batch on the same `frozen_spec_id`; repair the source-owned verifier, freeze a
+new spec, and create a new run. In a concurrent batch, host lifecycle controls
+remain responsible for closing out siblings that have not already returned.
+
 ## OpenCode Host Notes
 
 Run OpenCode normally through `/goal-plus`:

@@ -11,6 +11,7 @@ import os
 import random
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from fnmatch import fnmatch
@@ -267,69 +268,137 @@ class FileSearchRuntime:
 
     def _preflight_ranking_verifiers(self, spec: SearchSpec) -> None:
         source_root = Path(spec.source_path).resolve()
-        workspace = source_root if source_root.is_dir() else source_root.parent
+        source_workspace = source_root if source_root.is_dir() else source_root.parent
         ranking_verifiers = [
             command
             for command in [*spec.process_verifiers, *spec.promotion_verifiers]
             if command.role == VerifierRole.RANKING_SIGNAL
         ]
 
-        for command in ranking_verifiers:
-            cwd = (workspace / command.cwd).resolve()
-            if not cwd.is_dir():
-                raise ValueError(
-                    f"Ranking verifier '{command.name}' has a missing working "
-                    f"directory: {cwd}"
-                )
-            if command.command[0] == "goal-plus-internal":
-                raise ValueError(
-                    f"Ranking verifier '{command.name}' cannot use a "
-                    "goal-plus-internal command; use a process verifier that "
-                    "prints the numeric metric as JSON."
-                )
+        with tempfile.TemporaryDirectory(
+            prefix="goal-plus-verifier-preflight-"
+        ) as preflight_root:
+            workspace = Path(preflight_root) / "workspace"
+            copy_source_tree(source_workspace, workspace)
+            initialize_workspace_git_baseline(workspace)
 
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
-            try:
-                completed = subprocess.run(
-                    command.command,
-                    cwd=cwd,
-                    env=env,
-                    text=True,
-                    capture_output=True,
-                    timeout=command.timeout_seconds,
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise ValueError(
-                    f"Ranking verifier '{command.name}' timed out during freeze "
-                    f"preflight after {command.timeout_seconds} seconds."
-                ) from exc
-            except OSError as exc:
-                raise ValueError(
-                    f"Ranking verifier '{command.name}' could not start during "
-                    f"freeze preflight: {exc}"
-                ) from exc
+            for command in ranking_verifiers:
+                cwd = (workspace / command.cwd).resolve()
+                if not cwd.is_dir():
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' has a missing working "
+                        f"directory: {cwd}"
+                    )
+                if command.command[0] == "goal-plus-internal":
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' cannot use a "
+                        "goal-plus-internal command; use a process verifier that "
+                        "prints the numeric metric as JSON."
+                    )
 
-            if completed.returncode != 0:
-                stderr_tail = completed.stderr.strip()[-2000:]
-                detail = f" Stderr tail: {stderr_tail}" if stderr_tail else ""
-                raise ValueError(
-                    f"Ranking verifier '{command.name}' failed during freeze "
-                    f"preflight with exit code {completed.returncode}.{detail}"
-                )
+                workspace_before = self._hash_verifier_workspace(workspace)
+                try:
+                    with tempfile.TemporaryDirectory(
+                        prefix="goal-plus-verifier-command-"
+                    ) as verifier_tmp:
+                        completed = subprocess.run(
+                            command.command,
+                            cwd=cwd,
+                            env=self._verifier_environment(
+                                cwd,
+                                Path(verifier_tmp),
+                                phase="freeze_preflight",
+                            ),
+                            text=True,
+                            capture_output=True,
+                            timeout=command.timeout_seconds,
+                            check=False,
+                        )
+                except subprocess.TimeoutExpired as exc:
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' timed out during freeze "
+                        f"preflight after {command.timeout_seconds} seconds."
+                    ) from exc
+                except OSError as exc:
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' could not start during "
+                        f"freeze preflight: {exc}"
+                    ) from exc
 
-            metrics = self._parse_metrics(completed.stdout)
-            score = self._score_from_metrics(spec.metric_name, metrics)
-            if score is None:
-                example = canonical_json({spec.metric_name: 123.0})
-                raise ValueError(
-                    f"Ranking verifier '{command.name}' exited successfully but "
-                    "emitted no finite numeric metric. The final non-empty stdout "
-                    f"line must be a JSON object such as: {example}. "
-                    "VerifierCommand.expected_outputs lists artifact paths only; "
-                    "it does not parse stdout."
+                side_effects = self._hash_changes(
+                    workspace_before,
+                    self._hash_verifier_workspace(workspace),
                 )
+                if side_effects:
+                    raise ValueError(
+                        f"VerifierWorkspaceSideEffect: ranking verifier "
+                        f"'{command.name}' changed the disposable preflight "
+                        f"workspace: {side_effects}. Verifiers must keep the "
+                        "candidate workspace read-only. Put compiler products and "
+                        "temporary outputs in the per-invocation directory exposed "
+                        "through GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, or use Python "
+                        "tempfile.TemporaryDirectory(). Never use one fixed /tmp "
+                        "path because candidates may verify concurrently."
+                    )
+
+                if completed.returncode != 0:
+                    stderr_tail = completed.stderr.strip()[-2000:]
+                    detail = f" Stderr tail: {stderr_tail}" if stderr_tail else ""
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' failed during freeze "
+                        f"preflight with exit code {completed.returncode}.{detail}"
+                    )
+
+                metrics = self._parse_metrics(completed.stdout)
+                score = self._score_from_metrics(spec.metric_name, metrics)
+                if score is None:
+                    example = canonical_json({spec.metric_name: 123.0})
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' exited successfully but "
+                        "emitted no finite numeric metric. The final non-empty stdout "
+                        f"line must be a JSON object such as: {example}. "
+                        "VerifierCommand.expected_outputs lists artifact paths only; "
+                        "it does not parse stdout."
+                    )
+
+    def _verifier_environment(
+        self,
+        cwd: Path,
+        temp_dir: Path,
+        *,
+        phase: Literal["freeze_preflight", "candidate"],
+    ) -> dict[str, str]:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
+        for name in ("TMPDIR", "TMP", "TEMP", "GOAL_PLUS_VERIFIER_TMPDIR"):
+            env[name] = str(temp_dir)
+        env["GOAL_PLUS_VERIFIER_PHASE"] = phase
+        return env
+
+    def _hash_changes(
+        self,
+        before: dict[str, str],
+        after: dict[str, str],
+    ) -> list[str]:
+        return [
+            path
+            for path in sorted(set(before) | set(after))
+            if before.get(path) != after.get(path)
+        ]
+
+    def _hash_verifier_workspace(self, root: Path) -> dict[str, str]:
+        hashes: dict[str, str] = {}
+        ignored_names = IGNORED_NAMES - {".tmp"}
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel_path = path.relative_to(root)
+            if any(part in ignored_names for part in rel_path.parts):
+                continue
+            if path.suffix in IGNORED_SUFFIXES:
+                continue
+            hashes[rel_path.as_posix()] = sha256_file(path)
+        return hashes
 
     def create_run(self, frozen_spec_id: str) -> str:
         frozen = self._load_frozen_spec(frozen_spec_id)
@@ -951,19 +1020,6 @@ class FileSearchRuntime:
         detected_changed = self._detect_changed_files(
             Path(run.source_path), record.task.workspace
         )
-        self._commit_workspace_iteration(
-            record.task.workspace,
-            detected_changed,
-            f"search verifier iteration {candidate_id}:{len(record.iterations) + 1}",
-        )
-        artifact_hash = self._artifact_hash(record.task.workspace, detected_changed)
-        git_head = self._git_head(record.task.workspace)
-        git_status = self._git_status(record.task.workspace)
-        git_artifact_clean = self._git_artifact_clean(
-            record.task.workspace,
-            detected_changed,
-            git_head,
-        )
         touched_denied = any(
             path_matches(path, frozen.spec.edit_surface.deny) for path in detected_changed
         )
@@ -985,6 +1041,14 @@ class FileSearchRuntime:
             if precheck is not None:
                 report = precheck
             else:
+                self._commit_workspace_iteration(
+                    record.task.workspace,
+                    detected_changed,
+                    (
+                        f"search verifier iteration "
+                        f"{candidate_id}:{len(record.iterations) + 1}"
+                    ),
+                )
                 commands = (
                     frozen.spec.process_verifiers
                     if scope == "process"
@@ -993,6 +1057,15 @@ class FileSearchRuntime:
                 if not commands:
                     commands = frozen.spec.process_verifiers
                 report = self._run_commands(run, frozen, record, commands, scope)
+
+            artifact_hash = self._artifact_hash(record.task.workspace, detected_changed)
+            git_head = self._git_head(record.task.workspace)
+            git_status = self._git_status(record.task.workspace)
+            git_artifact_clean = self._git_artifact_clean(
+                record.task.workspace,
+                detected_changed,
+                git_head,
+            )
 
             with self._run_transaction(run_id):
                 run = self._load_run(run_id)
@@ -1643,7 +1716,9 @@ class FileSearchRuntime:
         return (
             "First call search_get_agent_context. Work in the candidate workspace only. "
             "Before final response call search_run_verifier. Use runtime history; "
-            "do not rely on transcript."
+            "do not rely on transcript. If the verifier reports "
+            "VerifierWorkspaceSideEffect or candidate_action=stop_and_report, "
+            "report the infrastructure blocker and return without retrying."
         )
 
     def _next_plan_id(self, run: RunRecord) -> str:
@@ -2504,6 +2579,22 @@ class FileSearchRuntime:
         results: list[VerifierResult] = []
 
         if record.touched_denied_files or record.changed_outside_allowed:
+            outside_allowed = [
+                path
+                for path in record.detected_changed_files
+                if not path_matches(path, frozen.spec.edit_surface.allow)
+            ]
+            frozen_paths = set(frozen.verifier_hashes)
+            verifier_workspace_side_effects = bool(outside_allowed) and all(
+                path.startswith(".goal-plus-verifiers/")
+                and path not in frozen_paths
+                for path in outside_allowed
+            )
+            failure_class = (
+                "VerifierWorkspaceSideEffect"
+                if verifier_workspace_side_effects
+                else "EditSurfaceViolation"
+            )
             results.append(
                 VerifierResult(
                     name="edit_surface_check",
@@ -2514,8 +2605,14 @@ class FileSearchRuntime:
                         "detected_changed_files": record.detected_changed_files,
                         "touched_denied_files": record.touched_denied_files,
                         "changed_outside_allowed": record.changed_outside_allowed,
+                        "infrastructure_failure": verifier_workspace_side_effects,
+                        "candidate_action": (
+                            "stop_and_report"
+                            if verifier_workspace_side_effects
+                            else "repair_candidate_edit_surface"
+                        ),
                     },
-                    failure_class="EditSurfaceViolation",
+                    failure_class=failure_class,
                 )
             )
 
@@ -2546,7 +2643,11 @@ class FileSearchRuntime:
             verifier_results=results,
             touched_denied_files=record.touched_denied_files,
             changed_outside_allowed=record.changed_outside_allowed,
-            hardcoding_suspected=True,
+            hardcoding_suspected=any(
+                result.failure_class
+                in {"EditSurfaceViolation", "FrozenVerifierModified"}
+                for result in results
+            ),
         )
 
     def _run_commands(
@@ -2557,7 +2658,12 @@ class FileSearchRuntime:
         commands: list[VerifierCommand],
         scope: str,
     ) -> ScoreReport:
-        results = [self._run_command(run, frozen, record, command) for command in commands]
+        results: list[VerifierResult] = []
+        for command in commands:
+            result = self._run_command(run, frozen, record, command)
+            results.append(result)
+            if result.failure_class == "VerifierWorkspaceSideEffect":
+                break
         hard_failed = any(
             not result.passed
             and result.role
@@ -2604,23 +2710,75 @@ class FileSearchRuntime:
         logs_dir.mkdir(parents=True, exist_ok=True)
         log_path = logs_dir / f"{command.name}.log"
         cwd = (record.task.workspace / command.cwd).resolve()
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
+        workspace_before = self._hash_verifier_workspace(record.task.workspace)
+        git_head_before = self._git_head(record.task.workspace)
         start = time.perf_counter()
         try:
-            completed = subprocess.run(
-                command.command,
-                cwd=cwd,
-                env=env,
-                text=True,
-                capture_output=True,
-                timeout=command.timeout_seconds,
-                check=False,
-            )
+            with tempfile.TemporaryDirectory(
+                prefix="goal-plus-verifier-command-"
+            ) as verifier_tmp:
+                completed = subprocess.run(
+                    command.command,
+                    cwd=cwd,
+                    env=self._verifier_environment(
+                        cwd,
+                        Path(verifier_tmp),
+                        phase="candidate",
+                    ),
+                    text=True,
+                    capture_output=True,
+                    timeout=command.timeout_seconds,
+                    check=False,
+                )
             elapsed = time.perf_counter() - start
             metrics = self._parse_metrics(completed.stdout)
             metrics.setdefault("returncode", completed.returncode)
             metrics.setdefault("elapsed_seconds", elapsed)
+            side_effects = self._hash_changes(
+                workspace_before,
+                self._hash_verifier_workspace(record.task.workspace),
+            )
+            if side_effects:
+                cleanup_failures = self._restore_verifier_workspace(
+                    record.task.workspace,
+                    workspace_before,
+                    side_effects,
+                    git_head_before,
+                )
+                metrics.update(
+                    {
+                        "verifier_workspace_side_effects": side_effects,
+                        "cleanup_failures": cleanup_failures,
+                        "infrastructure_failure": True,
+                        "candidate_action": "stop_and_report",
+                    }
+                )
+                log_path.write_text(
+                    "\n".join(
+                        [
+                            f"$ {' '.join(command.command)}",
+                            f"cwd: {cwd}",
+                            f"returncode: {completed.returncode}",
+                            f"verifier_workspace_side_effects: {side_effects}",
+                            f"cleanup_failures: {cleanup_failures}",
+                            "",
+                            "## stdout",
+                            completed.stdout,
+                            "## stderr",
+                            completed.stderr,
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+                return VerifierResult(
+                    name=command.name,
+                    role=command.role,
+                    passed=False,
+                    score=0.0,
+                    metrics=metrics,
+                    log_path=log_path,
+                    failure_class="VerifierWorkspaceSideEffect",
+                )
             score = self._score_from_metrics(frozen.spec.metric_name, metrics)
             missing_numeric_metric = (
                 completed.returncode == 0
@@ -2669,16 +2827,83 @@ class FileSearchRuntime:
                 ),
             )
         except subprocess.TimeoutExpired as exc:
+            side_effects = self._hash_changes(
+                workspace_before,
+                self._hash_verifier_workspace(record.task.workspace),
+            )
+            cleanup_failures = self._restore_verifier_workspace(
+                record.task.workspace,
+                workspace_before,
+                side_effects,
+                git_head_before,
+            ) if side_effects else []
             log_path.write_text(str(exc), encoding="utf-8")
             return VerifierResult(
                 name=command.name,
                 role=command.role,
                 passed=False,
                 score=0.0,
-                metrics={"timeout_seconds": command.timeout_seconds},
+                metrics={
+                    "timeout_seconds": command.timeout_seconds,
+                    "verifier_workspace_side_effects": side_effects,
+                    "cleanup_failures": cleanup_failures,
+                    "infrastructure_failure": bool(side_effects),
+                    "candidate_action": (
+                        "stop_and_report" if side_effects else "inspect_timeout"
+                    ),
+                },
                 log_path=log_path,
-                failure_class="Timeout",
+                failure_class=(
+                    "VerifierWorkspaceSideEffect" if side_effects else "Timeout"
+                ),
             )
+
+    def _restore_verifier_workspace(
+        self,
+        workspace: Path,
+        before: dict[str, str],
+        side_effects: list[str],
+        git_head_before: str | None,
+    ) -> list[str]:
+        cleanup_failures: list[str] = []
+        if git_head_before is not None:
+            try:
+                self._git_output(
+                    workspace,
+                    ["git", "reset", "--hard", git_head_before],
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                cleanup_failures.extend(
+                    path for path in side_effects if path in before
+                )
+        else:
+            cleanup_failures.extend(path for path in side_effects if path in before)
+
+        for rel_path in side_effects:
+            if rel_path in before:
+                continue
+            target = workspace / rel_path
+            try:
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
+                parent = target.parent
+                while parent != workspace:
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    parent = parent.parent
+            except OSError:
+                cleanup_failures.append(rel_path)
+
+        remaining = self._hash_changes(
+            before,
+            self._hash_verifier_workspace(workspace),
+        )
+        cleanup_failures.extend(
+            path for path in remaining if path not in cleanup_failures
+        )
+        return cleanup_failures
 
     def _run_internal_command(
         self,

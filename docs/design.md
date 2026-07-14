@@ -135,10 +135,17 @@ the iteration number, agent_session_id (or None for main final verify), score,
 failure_class, changed files, metrics, and the candidate workspace's real
 `git_head` when available. Before running the verifier, the runtime
 automatically commits changed candidate artifact files in the candidate
-workspace so it can later checkout the best committed iteration.
+workspace after edit-surface and frozen-hash prechecks pass, so it can later
+checkout the best committed iteration. Disallowed files are never committed by
+the runtime.
 There is no separate submit step.
 
-`ScoreReport` is produced by `search_run_verifier`. It records pass/fail state, aggregate score, raw metrics, changed-file violations, frozen verifier violations, and failure class.
+`ScoreReport` is produced by `search_run_verifier`. It records pass/fail state,
+aggregate score, raw metrics, changed-file violations, frozen verifier
+violations, and failure class. `VerifierWorkspaceSideEffect` is an
+infrastructure failure, not a candidate-repair signal; its metrics include
+`infrastructure_failure=true`, `candidate_action=stop_and_report`, the changed
+paths, and any cleanup failures.
 
 ## State Flow
 
@@ -308,15 +315,22 @@ The MCP runtime does not perform process supervision. Stopping a running subagen
 ## Verification And Isolation
 
 Verifier commands run from each candidate workspace. The runtime adds the
-workspace to `PYTHONPATH` and parses the last JSON object printed to stdout as
-metrics. A `ranking_signal` is valid only when that object contains a finite
+workspace to `PYTHONPATH`, injects a unique per-invocation temporary directory
+through `GOAL_PLUS_VERIFIER_TMPDIR`, `TMPDIR`, `TMP`, and `TEMP`, and parses the
+last JSON object printed to stdout as metrics. A `ranking_signal` is valid only
+when that object contains a finite
 numeric value under `spec.metric_name` or a supported fallback score key.
 Successful process exit without such a value is
 `failure_class="MissingNumericMetric"`, not a passing verifier.
 
-Before writing a frozen bundle, `search_freeze_spec` executes every
-`ranking_signal` once in `source_path` and requires both a zero exit status and
-a finite numeric metric. It also rejects verifier artifacts under ignored
+Before writing a frozen bundle, `search_freeze_spec` copies `source_path` into
+a disposable preflight workspace, executes every `ranking_signal` once, and
+requires a zero exit status, a finite numeric metric, and no non-ignored
+workspace changes. This catches verifier compilation products and temporary
+outputs before candidate budget is allocated without mutating the source
+workspace. Verifiers must use the injected unique temporary directory or
+Python `tempfile`; a fixed `/tmp` path is unsafe when candidates verify in
+parallel. Freeze also rejects verifier artifacts under ignored
 workspace paths, including the runtime roots `.gp/` and `.search/`, because
 those paths cannot be materialized into candidate workspaces. A verifier may
 be inline or call an existing repository tool. Custom verifier files are
@@ -327,6 +341,15 @@ it is not a stdout metric parser.
 
 Hard gates such as edit-surface violations and frozen verifier hash failures
 force the score to `0.0`.
+
+Runtime verification snapshots the candidate workspace immediately before and
+after each external verifier command. Any verifier-created change is reported
+in the same call as `VerifierWorkspaceSideEffect`; tracked changes are restored
+to the pre-command candidate commit and new files are removed. The candidate
+worker must stop and report rather than clean or retry. The parent repairs the
+source-owned verifier, freezes a new spec, and creates a new run. Host lifecycle
+controls remain responsible for closing out already-running siblings in a
+concurrent batch.
 
 The `copy` backend creates an independent source snapshot for each candidate:
 

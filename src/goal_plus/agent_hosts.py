@@ -112,7 +112,10 @@ CODEX_WORKER_BOUNDARY = (
     "that agent session before returning. Do not call search_plan_next, "
     "search_start_batch, search_select, search_report, or search_promote. "
     "Do not call any `goal_plus_*` tool. Parent-run planning, selection, "
-    "reporting, promotion, and final audit are outside your role."
+    "reporting, promotion, and final audit are outside your role. If a verifier "
+    "returns failure_class=VerifierWorkspaceSideEffect or "
+    "candidate_action=stop_and_report, do not clean verifier outputs or retry; "
+    "record the infrastructure blocker and return immediately."
 )
 
 
