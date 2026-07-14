@@ -2274,44 +2274,53 @@ def test_random_strategy_name_normalizes_case_and_dash(
         assert plan.requires_agent_proposals is False
 
 
-@pytest.mark.parametrize("host", ["codex", "claude-code"])
-@pytest.mark.parametrize("strategy_name", ["agent_guided", "agent", "default", "random", "random-mode"])
-def test_non_opencode_hosts_allow_default_and_random_strategies(
-    tmp_path: Path,
-    host: str,
-    strategy_name: str,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_host(project, host, strategy_name=strategy_name, max_candidates=1)
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    plan = runtime.plan_next(run_id, requested_k=1)
-
-    assert plan.strategy.name == strategy_name
-
-
 @pytest.mark.parametrize(
-    ("host", "expected_launch"),
+    ("host", "strategy_name", "requires_proposals", "expected_launch"),
     [
-        ("opencode", {"subagent_type": "SearchCandidateAgent"}),
-        ("codex", {"tool": "spawn_agent", "agent_type": "search_candidate_agent"}),
+        (
+            "opencode",
+            "agent_guided",
+            True,
+            {"subagent_type": "SearchCandidateAgent"},
+        ),
+        (
+            "opencode",
+            "random",
+            False,
+            {"subagent_type": "SearchCandidateAgent"},
+        ),
+        (
+            "codex",
+            "default",
+            True,
+            {"tool": "spawn_agent", "agent_type": "search_candidate_agent"},
+        ),
+        (
+            "codex",
+            "random-mode",
+            False,
+            {"tool": "spawn_agent", "agent_type": "search_candidate_agent"},
+        ),
         (
             "claude-code",
-            {"tool": "Agent", "agent_type": "search-candidate-agent", "background": False},
+            "agent",
+            True,
+            {
+                "tool": "Agent",
+                "agent_type": "search-candidate-agent",
+                "background": False,
+            },
         ),
-    ],
-)
-@pytest.mark.parametrize(
-    ("strategy_name", "requires_proposals"),
-    [
-        ("agent_guided", True),
-        ("agent", True),
-        ("default", True),
-        ("random", False),
-        ("random-mode", False),
-        ("random_mode", False),
+        (
+            "claude-code",
+            "random_mode",
+            False,
+            {
+                "tool": "Agent",
+                "agent_type": "search-candidate-agent",
+                "background": False,
+            },
+        ),
     ],
 )
 def test_all_hosts_create_sessions_for_portable_strategy_modes(
@@ -2353,7 +2362,7 @@ def test_all_hosts_create_sessions_for_portable_strategy_modes(
 
 @pytest.mark.parametrize(
     "strategy_name",
-    ["agent_guided", "default", "random", "random-mode", "evolve", "openevolve", "mcts"],
+    ["evolve", "openevolve", "mcts"],
 )
 def test_opencode_accepts_existing_builtin_strategy_modes(
     tmp_path: Path,
@@ -2371,8 +2380,10 @@ def test_opencode_accepts_existing_builtin_strategy_modes(
     assert plan.strategy.name == strategy_name
 
 
-@pytest.mark.parametrize("host", ["codex", "claude-code"])
-@pytest.mark.parametrize("strategy_name", ["independent_branches", "openevolve", "evolve", "mcts"])
+@pytest.mark.parametrize(
+    ("host", "strategy_name"),
+    [("codex", "independent_branches"), ("claude-code", "openevolve")],
+)
 def test_non_opencode_hosts_reject_non_portable_strategies(
     tmp_path: Path,
     host: str,

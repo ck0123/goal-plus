@@ -48,6 +48,14 @@ EXAMPLE_SPECS = [
     ),
 ]
 
+# EdgeBench's C++ compile/public-score contract has dedicated coverage in
+# test_edgebench_ad_placement_example.py. Re-running it across two generic
+# rounds compiles the same solution several more times without adding runtime
+# state-machine coverage beyond the Python fixtures below.
+RUNTIME_EXAMPLE_SPECS = [
+    case for case in EXAMPLE_SPECS if case[0] != "edgebench_ad_placement_search_spec.json"
+]
+
 SEARCH_MODE_SPECS = [
     (
         "search-mode/k_module_adaptevolve_search_spec.json",
@@ -126,7 +134,10 @@ def test_two_round_example_specs_are_valid(
     assert all((ROOT / verifier_path).exists() for verifier_path in verifier_paths)
 
 
-@pytest.mark.parametrize(("spec_name", "verifier_paths", "metric_name", "expected"), EXAMPLE_SPECS)
+@pytest.mark.parametrize(
+    ("spec_name", "verifier_paths", "metric_name", "expected"),
+    RUNTIME_EXAMPLE_SPECS,
+)
 def test_two_round_examples_create_batches_and_verify_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

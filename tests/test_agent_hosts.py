@@ -16,13 +16,19 @@ def test_get_agent_host_adapter_returns_all_supported_hosts() -> None:
     assert get_agent_host_adapter("pi-rpc").name == "pi-rpc"
 
 
-def test_portable_strategy_mode_accepts_default_and_random_aliases() -> None:
-    assert portable_strategy_mode("agent_guided") is True
-    assert portable_strategy_mode("agent") is True
-    assert portable_strategy_mode("default") is True
-    assert portable_strategy_mode("random") is True
-    assert portable_strategy_mode("random-mode") is True
-    assert portable_strategy_mode("openevolve") is False
+def test_portable_strategy_mode_classifies_all_builtin_aliases() -> None:
+    portable = (
+        "agent_guided",
+        "agent",
+        "default",
+        "random",
+        "random-mode",
+        "random_mode",
+    )
+    for name in portable:
+        assert portable_strategy_mode(name) is True
+    for name in ("independent_branches", "evolve", "openevolve", "mcts"):
+        assert portable_strategy_mode(name) is False
 
 
 def test_opencode_adapter_builds_existing_task_payload() -> None:

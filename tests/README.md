@@ -40,6 +40,9 @@ pytest -m "st and st_codex" -k codex_rolling_followup -v -s -rs
 # Codex portable 2 x 2 Search cycle
 pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s -rs
 
+# Codex revises one goal after result 1, refreezes, and completes result 2
+pytest -m "st and st_codex" -k goal_plus_spec_revision -v -s -rs
+
 # Pi worker and durable wait-any pool
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s -rs
 ST_PI_CYCLE_WORKER_SECONDS=120 \

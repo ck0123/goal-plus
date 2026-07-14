@@ -14,7 +14,24 @@ EXAMPLE_DIR = ROOT / "examples" / "model-optimize"
 TARGET = EXAMPLE_DIR / "torch-cpu-target"
 
 
-def _run_json(script: Path) -> dict:
+def _run_json_suite(scripts: list[Path]) -> dict[str, dict]:
+    parents = {script.parent for script in scripts}
+    assert len(parents) == 1
+    driver = """
+import contextlib
+import io
+import json
+import runpy
+import sys
+
+results = {}
+for script in sys.argv[1:]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        runpy.run_path(script, run_name="__main__")
+    results[script] = json.loads(output.getvalue().strip().splitlines()[-1])
+print(json.dumps(results, sort_keys=True))
+"""
     env = {
         **os.environ,
         "OMP_NUM_THREADS": "1",
@@ -24,8 +41,8 @@ def _run_json(script: Path) -> dict:
         "MAX_JOBS": "1",
     }
     completed = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=script.parent,
+        [sys.executable, "-c", driver, *[script.name for script in scripts]],
+        cwd=parents.pop(),
         env=env,
         check=True,
         capture_output=True,
@@ -42,9 +59,12 @@ def test_model_optimize_no_longer_uses_static_templates() -> None:
 
 
 def test_torch_cpu_target_runs_on_one_cpu_thread() -> None:
-    verify = _run_json(TARGET / "verify.py")
-    benchmark = _run_json(TARGET / "benchmark.py")
-    profile = _run_json(TARGET / "profile.py")
+    results = _run_json_suite(
+        [TARGET / "verify.py", TARGET / "benchmark.py", TARGET / "profile.py"]
+    )
+    verify = results["verify.py"]
+    benchmark = results["benchmark.py"]
+    profile = results["profile.py"]
 
     assert verify["valid"] is True
     assert verify["torch_num_threads"] == 1
