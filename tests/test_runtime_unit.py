@@ -303,6 +303,77 @@ def test_freeze_spec_rejects_non_numeric_or_non_finite_ranking_score(
         runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
 
 
+def test_null_verifier_error_is_accepted_by_preflight_and_runtime(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "print(json.dumps({'combined_score': 7.0, 'error': None}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    report = runtime.run_verifier(run_id, task.candidate_id)
+
+    assert report.process_passed is True
+    assert report.aggregate_score == 7.0
+    assert report.verifier_results[0].metrics["error"] is None
+
+
+def test_freeze_spec_rejects_non_null_verifier_error(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "print(json.dumps({'combined_score': 7.0, 'error': 'broken evaluator'}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+
+    with pytest.raises(ValueError, match="reported an error.*broken evaluator"):
+        runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
+
+    assert list(runtime.specs_dir.iterdir()) == []
+
+
+def test_runtime_rejects_non_null_verifier_error_after_clean_preflight(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from initial_program import VALUE\n"
+        "error = None if VALUE == 0 else 'candidate evaluation failed'\n"
+        "print(json.dumps({'combined_score': 7.0, 'error': error}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+    report = runtime.run_verifier(run_id, task.candidate_id)
+
+    assert report.process_passed is False
+    assert report.aggregate_score == 0.0
+    assert report.verifier_results[0].failure_class == "VerifierCommandFailed"
+    assert report.verifier_results[0].metrics["error"] == "candidate evaluation failed"
+
+
 @pytest.mark.parametrize("runtime_dir", [".gp", ".search"])
 def test_freeze_spec_rejects_verifier_artifact_under_runtime_root(
     tmp_path: Path,

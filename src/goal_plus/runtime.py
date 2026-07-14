@@ -350,6 +350,12 @@ class FileSearchRuntime:
                     )
 
                 metrics = self._parse_metrics(completed.stdout)
+                if self._has_verifier_error(metrics):
+                    error_detail = str(metrics["error"])[-2000:]
+                    raise ValueError(
+                        f"Ranking verifier '{command.name}' reported an error "
+                        f"during freeze preflight: {error_detail}"
+                    )
                 score = self._score_from_metrics(spec.metric_name, metrics)
                 if score is None:
                     example = canonical_json({spec.metric_name: 123.0})
@@ -2822,9 +2828,10 @@ class FileSearchRuntime:
                     failure_class="VerifierWorkspaceSideEffect",
                 )
             score = self._score_from_metrics(frozen.spec.metric_name, metrics)
+            has_verifier_error = self._has_verifier_error(metrics)
             missing_numeric_metric = (
                 completed.returncode == 0
-                and "error" not in metrics
+                and not has_verifier_error
                 and command.role == VerifierRole.RANKING_SIGNAL
                 and score is None
             )
@@ -2833,7 +2840,7 @@ class FileSearchRuntime:
                 metrics["stdout_tail"] = completed.stdout.strip()[-2000:]
             passed = (
                 completed.returncode == 0
-                and "error" not in metrics
+                and not has_verifier_error
                 and not missing_numeric_metric
             )
             log_path.write_text(
@@ -2984,6 +2991,10 @@ class FileSearchRuntime:
             if isinstance(parsed, dict):
                 return parsed
         return {}
+
+    def _has_verifier_error(self, metrics: dict[str, Any]) -> bool:
+        """Treat a non-null top-level error value as verifier failure."""
+        return metrics.get("error") is not None
 
     def _score_from_metrics(self, metric_name: str, metrics: dict[str, Any]) -> float | None:
         for key in (metric_name, "combined_score", "score", "overall_score"):
