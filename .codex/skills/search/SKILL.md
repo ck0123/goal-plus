@@ -131,9 +131,14 @@ launch more work.
    mailbox update; then call `list_agents` and process every worker that is now
    terminal. A progress-only wakeup is not a completion event, so keep waiting
    when no worker is terminal.
-7. For each terminal worker, bind its final summary/timeout metadata and run
+7. For each terminal worker, call `search_bind_agent_handle` again with its
+   final summary/timeout metadata, then run
    `search_run_verifier(hypothesis="main final verification")` from the main
-   agent. Every returned report appends exactly one validated row to the
+   agent. The terminal bind automatically harvests a bounded
+   `.tmp/handoff.json` from that candidate workspace into durable runtime
+   history; a missing or malformed handoff does not make handle binding fail
+   and is exposed as metadata for diagnosis. Every returned report appends
+   exactly one validated row to the
    runtime-owned inherited workspace-root `results.tsv` and commits it. Only
    after that verifier returns is
    the pool event `candidate_ready`. Refresh history immediately; do not wait
@@ -227,8 +232,9 @@ explicitly wants a cheap probe.
 History is runtime-owned, not a `plan.md` file. The main agent reads prior
 candidate results through `search_list_history`; workers recover state through
 `search_get_agent_context`, which returns `context.history` and
-`context.iterations`. When a bound worker provides `.tmp/handoff.json`, later
-history also includes its structured `research_summary`. Use the verifier-backed
+`context.iterations`. When a worker provides `.tmp/handoff.json`, the terminal
+handle bind harvests it automatically and later history includes its structured
+`research_summary`. Use the verifier-backed
 feature ledger in `key_results`, scoped conditional `pitfalls`, `blockers`,
 `next_steps`, and `verifier_assessment` to design later candidate proposals; do
 not carry only the best score or raw transcript text. Each feature records its

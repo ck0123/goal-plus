@@ -121,6 +121,14 @@ CODEX_WORKER_BOUNDARY = (
 )
 
 
+def _codex_worker_contract(worker_prompt: str | None) -> str:
+    """Keep the portable worker boundary even when agent metadata is hidden."""
+    prompt = (worker_prompt or "").strip()
+    if not prompt or prompt == CODEX_WORKER_BOUNDARY:
+        return CODEX_WORKER_BOUNDARY
+    return f"{CODEX_WORKER_BOUNDARY}\n\n{prompt}"
+
+
 def _codex_budget_control(
     target: str,
     worker_budget: dict[str, Any] | None,
@@ -262,13 +270,14 @@ class CodexAdapter:
         worker_prompt: str | None = None,
     ) -> dict[str, Any]:
         task_name = _codex_task_name(agent_session_id)
+        worker_contract = _codex_worker_contract(worker_prompt)
         payload = {
             "tool": "spawn_agent",
             "task_name": task_name,
             "agent_type": worker_agent_type or "search_candidate_agent",
             "fork_turns": "none",
             "message": (
-                f"{CODEX_WORKER_BOUNDARY}\n\n"
+                f"{worker_contract}\n\n"
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "
                 f"assigned_worker_budget={worker_budget or 'host default'}; "
@@ -310,11 +319,12 @@ class CodexAdapter:
             raise UnsupportedHostCapability(
                 "codex continuation requires a bound task name or agent id"
             )
+        worker_contract = _codex_worker_contract(worker_prompt)
         payload: dict[str, Any] = {
             "tool": "followup_task",
             "target": target,
             "message": (
-                f"{CODEX_WORKER_BOUNDARY}\n\n"
+                f"{worker_contract}\n\n"
                 "continue_existing_agent_session=true; "
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "

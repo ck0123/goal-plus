@@ -940,6 +940,9 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
 
     session = runtime.start_agent_session(run_id, task.candidate_id)
 
+    assert "theoretical or structural limits" in session.launch["message"]
+    assert "Before returning, create `.tmp/handoff.json`" in session.launch["message"]
+
     assert session.host == "codex"
     assert session.host_handle.host == "codex"
     assert session.host_handle.task_name == session.launch["task_name"]
@@ -1458,6 +1461,60 @@ def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
 
 
 @pytest.mark.codex
+def test_bind_agent_handle_harvests_workspace_handoff_into_history(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    handoff_path = task.workspace / ".tmp" / "handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(
+        handoff_path,
+        {
+            "summary": "tested a distinct allocation strategy",
+            "key_results": ["iteration 2 improved the score"],
+            "pitfalls": [],
+            "blockers": [],
+            "next_steps": ["test the portable subset"],
+            "verifier_assessment": {
+                "status": "adequate",
+                "evidence": ["deterministic score"],
+                "impact": "safe to continue",
+                "recommended_action": "keep_spec",
+            },
+        },
+    )
+
+    updated = runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "codex", "task_name": "search_agent_0001"},
+    )
+
+    progress = updated.host_handle.metadata["progress_handoff"]
+    assert progress["source_path"] == ".tmp/handoff.json"
+    assert progress["model_handoff"]["summary"] == "tested a distinct allocation strategy"
+    history = runtime.list_history(run_id)
+    assert history["candidates"][0]["summary"] == "tested a distinct allocation strategy"
+    report = runtime.report(run_id).read_text(encoding="utf-8")
+    assert "tested a distinct allocation strategy" in report
+
+    handoff_path.write_text("{not-json", encoding="utf-8")
+    rebound = runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "codex", "task_name": "search_agent_0001"},
+    )
+    assert "JSONDecodeError" in rebound.host_handle.metadata["progress_handoff_error"]
+    assert (
+        rebound.host_handle.metadata["progress_handoff"]["model_handoff"]["summary"]
+        == "tested a distinct allocation strategy"
+    )
+
+
+@pytest.mark.codex
 def test_codex_continue_agent_session_uses_bound_worker_and_budget(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -1481,6 +1538,8 @@ def test_codex_continue_agent_session_uses_bound_worker_and_budget(tmp_path: Pat
     assert continued.launch["tool"] == "followup_task"
     assert continued.launch["target"] == "search_agent_0001"
     assert continued.launch["budget_control"]["max_runtime_seconds"] == 900
+    assert "theoretical or structural limits" in continued.launch["message"]
+    assert "Before returning, create `.tmp/handoff.json`" in continued.launch["message"]
 
 
 def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path) -> None:
@@ -3249,6 +3308,13 @@ def test_results_tsv_is_committed_and_runtime_enforces_one_row_per_report(
     context = runtime.get_agent_context(redispatched.agent_session_id)
     assert context["results_tsv"] == str(results_path)
     assert len(context["results"]) == 2
+
+    report = runtime.report(run_id).read_text(encoding="utf-8")
+    relative_results = f"workspace/{candidate_id}/results.tsv"
+    assert "## Results Ledgers" in report
+    assert f"[results.tsv]({relative_results}) (2 rows)" in report
+    assert f"[results.tsv]({relative_results})" in report
+    assert "probe denied configuration change" in report
 
     results_path.write_text(
         second_text.replace("measure inherited baseline", "rewritten baseline"),

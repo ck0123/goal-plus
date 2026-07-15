@@ -60,6 +60,7 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
     assert "search_redispatch_candidate" in text
     assert "spawn_agent" in text
     assert "search_bind_agent_handle" in text
+    assert "terminal bind automatically harvests" in text
     assert "search_bind_opencode_session" not in text
     assert "background" not in text.lower()
     assert "## Verifier Freeze Contract" in text

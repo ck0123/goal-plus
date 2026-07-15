@@ -17,7 +17,12 @@ from goal_plus.models import (
     SearchPlan,
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
-from goal_plus.runtime import load_json, utc_timestamp, utc_timestamp_from_epoch
+from goal_plus.runtime import (
+    RESULTS_TSV_RELATIVE_PATH,
+    load_json,
+    utc_timestamp,
+    utc_timestamp_from_epoch,
+)
 
 
 def _path_mtime(path: str | None) -> float | None:
@@ -556,6 +561,9 @@ def goal_plus_monitor_snapshot(
             candidate_sessions = sessions_by_candidate.get(candidate.candidate_id, [])
             last_iteration = candidate.iterations[-1] if candidate.iterations else None
             best_iteration = _best_iteration(candidate, frozen.spec.metric_direction)
+            results_path = candidate.task.workspace / RESULTS_TSV_RELATIVE_PATH
+            results_tsv = _path_info(str(results_path))
+            results_tsv["row_count"] = len(candidate.results_ledger)
             candidates_payload[candidate.candidate_id] = {
                 "candidate_id": candidate.candidate_id,
                 "status": candidate.status,
@@ -571,6 +579,7 @@ def goal_plus_monitor_snapshot(
                 "changed_files": candidate.detected_changed_files,
                 "touched_denied_files": candidate.touched_denied_files,
                 "changed_outside_allowed": candidate.changed_outside_allowed,
+                "results_tsv": results_tsv,
             }
             if not candidate_sessions and candidate.status == "created":
                 warnings.append(

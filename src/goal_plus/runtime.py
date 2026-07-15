@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
 import uuid
 from fnmatch import fnmatch
 from pathlib import Path
@@ -75,6 +76,8 @@ CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET = {
 }
 RESULTS_TSV_RELATIVE_PATH = "results.tsv"
 LEGACY_RESULTS_TSV_RELATIVE_PATH = ".tmp/results.tsv"
+MODEL_HANDOFF_RELATIVE_PATH = ".tmp/handoff.json"
+MAX_MODEL_HANDOFF_BYTES = 64 * 1024
 
 
 def utc_timestamp() -> str:
@@ -964,6 +967,37 @@ class FileSearchRuntime:
             **session.host_handle.metadata,
             **dict(handle.get("metadata") or {}),
         }
+        progress = metadata.get("progress_handoff")
+        if isinstance(progress, dict) and not isinstance(progress.get("model_handoff"), dict):
+            model_keys = {
+                "key_results",
+                "what_was_tried",
+                "pitfalls",
+                "blockers",
+                "next_steps",
+                "verifier_assessment",
+            }
+            if model_keys.intersection(progress):
+                progress = {
+                    "model_handoff": dict(progress),
+                    "source": "bound_metadata",
+                }
+
+        model_handoff, handoff_error = self._workspace_model_handoff(session.workspace)
+        if model_handoff is not None:
+            progress_payload = dict(progress) if isinstance(progress, dict) else {}
+            progress_payload.update(
+                {
+                    "model_handoff": model_handoff,
+                    "source_path": MODEL_HANDOFF_RELATIVE_PATH,
+                }
+            )
+            metadata["progress_handoff"] = progress_payload
+            metadata.pop("progress_handoff_error", None)
+        elif isinstance(progress, dict):
+            metadata["progress_handoff"] = progress
+        if handoff_error:
+            metadata["progress_handoff_error"] = handoff_error
         updated_handle = session.host_handle.model_copy(
             update={
                 "host": session.host,
@@ -982,6 +1016,26 @@ class FileSearchRuntime:
         updated = session.model_copy(update=update)
         self._write_agent_session(updated)
         return updated
+
+    @staticmethod
+    def _workspace_model_handoff(workspace: Path) -> tuple[dict[str, Any] | None, str | None]:
+        """Read a bounded candidate-authored handoff without failing handle binding."""
+        workspace = workspace.resolve()
+        handoff_path = workspace / MODEL_HANDOFF_RELATIVE_PATH
+        if not handoff_path.exists():
+            return None, None
+        try:
+            resolved = handoff_path.resolve(strict=True)
+            if not resolved.is_relative_to(workspace):
+                return None, "handoff path resolves outside the candidate workspace"
+            if resolved.stat().st_size > MAX_MODEL_HANDOFF_BYTES:
+                return None, f"handoff exceeds {MAX_MODEL_HANDOFF_BYTES} bytes"
+            payload = json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return None, f"could not read handoff: {type(exc).__name__}: {exc}"
+        if not isinstance(payload, dict):
+            return None, "handoff must be a JSON object"
+        return payload, None
 
     def continue_agent_session(
         self,
@@ -1443,10 +1497,11 @@ class FileSearchRuntime:
                 "",
                 "## Candidates",
                 "",
-                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Git Head | Best Iteration | Best Score | Best Git Head | Process | Summary | Key Metrics | Changed Files |",
-                "|---|---|---|---|---|---:|---|---:|---:|---|---|---|---|---|",
+                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Git Head | Best Iteration | Best Score | Best Git Head | Process | Summary | Key Metrics | Changed Files | Results Ledger |",
+                "|---|---|---|---|---|---:|---|---:|---:|---|---|---|---|---|---|",
             ]
         )
+        ledger_summaries: list[tuple[CandidateRecord, Path, list[ResultLedgerEntry]]] = []
         for record in records:
             score = ""
             passed = ""
@@ -1481,6 +1536,18 @@ class FileSearchRuntime:
                 ]
                 if part
             )
+            results_path = self._results_tsv_path(record.task.workspace)
+            results_entries = self._read_results_tsv(record)
+            ledger_summaries.append((record, results_path, results_entries))
+            try:
+                ledger_link = results_path.relative_to(report_path.parent).as_posix()
+            except ValueError:
+                ledger_link = results_path.as_posix()
+            ledger_display = (
+                f"[results.tsv]({ledger_link}) ({len(results_entries)} rows)"
+                if results_path.is_file()
+                else "missing"
+            )
             lines.append(
                 f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
                 f"{self._markdown_cell(agent_sessions)} | "
@@ -1489,7 +1556,36 @@ class FileSearchRuntime:
                 f"{best_iteration_value} | {best_score_value} | "
                 f"{self._markdown_cell(best_git_head)} | {passed} | "
                 f"{self._markdown_cell(payload['summary'])} | "
-                f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} |"
+                f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} | "
+                f"{self._markdown_cell(ledger_display)} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Results Ledgers",
+                "",
+                "Each candidate workspace owns the complete inherited verifier ledger.",
+                "",
+                "| Candidate | Ledger | Rows | Latest Commit | Latest Score | Latest Status | Latest Hypothesis |",
+                "|---|---|---:|---|---:|---|---|",
+            ]
+        )
+        for record, results_path, results_entries in ledger_summaries:
+            latest = results_entries[-1] if results_entries else None
+            try:
+                ledger_link = results_path.relative_to(report_path.parent).as_posix()
+            except ValueError:
+                ledger_link = results_path.as_posix()
+            ledger_display = (
+                f"[results.tsv]({ledger_link})" if results_path.is_file() else "missing"
+            )
+            lines.append(
+                f"| `{record.candidate_id}` | {self._markdown_cell(ledger_display)} | "
+                f"{len(results_entries)} | "
+                f"{self._markdown_cell(latest.git_head if latest else '')} | "
+                f"{'' if latest is None or latest.score is None else latest.score} | "
+                f"{self._markdown_cell(latest.status if latest else '')} | "
+                f"{self._markdown_cell(latest.hypothesis if latest else '')} |"
             )
         agent_sessions = self._load_agent_sessions(run_id)
         if agent_sessions:
@@ -1943,9 +2039,18 @@ class FileSearchRuntime:
         )
 
     def _worker_prompt_for_host(self, host: str) -> str | None:
+        repository_root = Path(__file__).resolve().parents[2]
+        if host == "codex":
+            agent_path = repository_root / ".codex" / "agents" / "search_candidate_agent.toml"
+            try:
+                payload = tomllib.loads(agent_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                return None
+            prompt = payload.get("developer_instructions")
+            return prompt if isinstance(prompt, str) and prompt.strip() else None
         if host != "pi-rpc":
             return None
-        prompt_path = Path(__file__).resolve().parents[2] / ".pi" / "prompts" / "search-candidate-worker.md"
+        prompt_path = repository_root / ".pi" / "prompts" / "search-candidate-worker.md"
         if prompt_path.exists():
             return prompt_path.read_text(encoding="utf-8")
         return (
@@ -3733,7 +3838,19 @@ class FileSearchRuntime:
                 continue
             model_handoff = progress.get("model_handoff")
             if not isinstance(model_handoff, dict):
-                continue
+                legacy_keys = {
+                    "key_results",
+                    "what_was_tried",
+                    "pitfalls",
+                    "blockers",
+                    "next_steps",
+                    "next_action",
+                    "verifier_assessment",
+                }
+                if legacy_keys.intersection(progress):
+                    model_handoff = progress
+                else:
+                    continue
             summary = model_handoff.get("summary")
             if not isinstance(summary, str):
                 summary = progress.get("summary")

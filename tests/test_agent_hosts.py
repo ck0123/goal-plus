@@ -98,6 +98,36 @@ def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> 
 
 
 @pytest.mark.codex
+def test_codex_launch_and_continue_embed_full_worker_prompt() -> None:
+    adapter = get_agent_host_adapter("codex")
+    worker_prompt = "FULL WORKER CONTRACT: write .tmp/handoff.json before returning."
+
+    launch = adapter.build_launch_payload(
+        worker_agent_type="search_candidate_agent",
+        candidate_id="c001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_prompt=worker_prompt,
+    )
+    continued = adapter.build_continue_payload(
+        worker_agent_type="search_candidate_agent",
+        candidate_id="c001",
+        agent_session_id="agent-0001",
+        external_id=None,
+        task_name=launch["task_name"],
+        short_intent="continue",
+        one_paragraph_idea="continue",
+        worker_prompt=worker_prompt,
+    )
+
+    assert worker_prompt in launch["message"]
+    assert worker_prompt in continued["message"]
+    assert "candidate worker, not the search orchestrator" in launch["message"]
+    assert "candidate worker, not the search orchestrator" in continued["message"]
+
+
+@pytest.mark.codex
 def test_codex_adapter_maps_native_worker_launch_options() -> None:
     adapter = get_agent_host_adapter("codex")
 

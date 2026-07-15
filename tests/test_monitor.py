@@ -136,6 +136,10 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert snapshot["main_agent"]["subagent_count"] == 1
     assert snapshot["main_agent"]["verifier_count"] == 1
     assert snapshot["main_agent"]["estimated_cost_total"] == 0.18
+    results_tsv = snapshot["candidates"][first.candidate_id]["results_tsv"]
+    assert results_tsv["path"].endswith(f"/{first.candidate_id}/results.tsv")
+    assert results_tsv["exists"] is True
+    assert results_tsv["row_count"] == 1
 
     [subagent] = snapshot["subagents"]
     assert subagent["agent_session_id"] == session.agent_session_id
@@ -156,6 +160,7 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
 
     assert snapshot["candidates"][second.candidate_id]["status"] == "created"
     assert snapshot["candidates"][second.candidate_id]["agent_session_count"] == 0
+    assert snapshot["candidates"][second.candidate_id]["results_tsv"]["row_count"] == 0
     assert any(warning["kind"] == "candidate_without_agent_session" for warning in snapshot["warnings"])
 
 
