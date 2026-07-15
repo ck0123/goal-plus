@@ -358,7 +358,11 @@ later timeout or regression for diagnosis.
 
 History is runtime-owned, not a local plan file. Workers must call
 `search_get_agent_context` first and use `context.resume`, `context.history`,
-and `context.iterations` as the resume source. Later-round history includes the
+`context.iterations`, `context.results`, and the inherited
+`context.results_tsv` as the resume source. Every verifier call supplies a
+concise `hypothesis`; the runtime validates the inherited workspace-root
+`results.tsv`, appends exactly one row for every returned report, and commits
+the ledger. Workers never edit it directly. Later-round history includes the
 latest structured `research_summary` when a worker supplied a handoff, so use
 its task-specific results and pitfalls rather than repeating failed variants.
 

@@ -162,12 +162,14 @@ class SearchTools:
         candidate_id: str,
         scope: str = "process",
         agent_session_id: str | None = None,
+        hypothesis: str | None = None,
     ) -> dict[str, Any]:
         report = self.runtime.run_verifier(
             run_id,
             candidate_id,
             scope=scope,  # type: ignore[arg-type]
             agent_session_id=agent_session_id,
+            hypothesis=hypothesis,
         )
         return report.model_dump(mode="json")
 

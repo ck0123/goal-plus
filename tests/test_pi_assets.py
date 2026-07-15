@@ -163,6 +163,9 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
 
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "workspace/results.tsv" in text
+    assert "exactly one validated" in text
+    assert "hypothesis=" in text
     assert "complete candidate artifact early" in text
     assert "before any long optimization loop" in text
     assert ".tmp/handoff.json" in text
@@ -223,6 +226,8 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "goal_plus_create" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "workspace/results.tsv" in text
+    assert "exactly one validated row" in text
     assert "VerifierWorkspaceSideEffect" in text
     assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
     assert "pi_rpc_run_worker" in text

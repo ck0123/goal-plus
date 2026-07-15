@@ -513,16 +513,32 @@ class IterationRecord(SearchModel):
     score: float | None = None
     process_passed: bool | None = None
     git_head: str | None = None
+    ledger_git_head: str | None = None
     git_artifact_clean: bool | None = None
     git_status: list[str] = Field(default_factory=list)
     failure_class: str | None = None
     summary: str = ""
+    hypothesis: str = ""
     changed_files: list[str] = Field(default_factory=list)
     touched_denied_files: bool = False
     changed_outside_allowed: bool = False
     artifact_hash: str | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     created_at: str
+
+
+class ResultLedgerEntry(SearchModel):
+    source_run_id: str
+    source_candidate_id: str
+    iteration: int | None = Field(default=None, ge=1)
+    git_head: str | None = None
+    ledger_git_head: str | None = None
+    metric_name: str = Field(min_length=1)
+    score: float | None = None
+    status: str = Field(min_length=1)
+    hypothesis: str = ""
+    failure_class: str | None = None
+    created_at: str | None = None
 
 
 class RunSummary(SearchModel):
@@ -576,6 +592,8 @@ class CandidateRecord(SearchModel):
     changed_outside_allowed: bool = False
     score_report: ScoreReport | None = None
     iterations: list[IterationRecord] = Field(default_factory=list)
+    results_ledger: list[ResultLedgerEntry] = Field(default_factory=list)
+    results_ledger_git_head: str | None = None
 
 
 class AgentSessionRecord(SearchModel):

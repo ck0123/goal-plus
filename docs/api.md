@@ -106,7 +106,7 @@ and `confidence`. Missing scope defaults to candidate-local. A worker's
 
 | Tool | Purpose |
 |---|---|
-| `search_run_verifier` | record a worker iteration when `agent_session_id` is present; perform parent final verification when absent |
+| `search_run_verifier` | record a worker iteration, validate the existing inherited `workspace/results.tsv`, append exactly one row, and commit the ledger; workers pass `agent_session_id` plus a concise `hypothesis`, while parent final verification omits the session id |
 | `search_select` | restore ranked commits and select the first final-verifier passing state |
 | `search_report` | generate the run report |
 | `search_promote` | export the selected commit as a patch |

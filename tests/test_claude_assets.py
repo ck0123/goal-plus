@@ -119,6 +119,9 @@ def test_claude_worker_agent_calls_context_and_verifier() -> None:
     assert "mcp__goal-plus__*" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "workspace root" in text
+    assert "exactly one validated row" in text
+    assert "hypothesis=" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
 

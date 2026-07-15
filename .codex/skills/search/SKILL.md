@@ -110,7 +110,10 @@ slow workers merely to preserve a batch boundary.
    terminal. A progress-only wakeup is not a completion event, so keep waiting
    when no worker is terminal.
 7. For each terminal worker, bind its final summary/timeout metadata and run
-   `search_run_verifier` from the main agent. Only after that verifier returns is
+   `search_run_verifier(hypothesis="main final verification")` from the main
+   agent. Every returned report appends exactly one validated row to the
+   runtime-owned inherited workspace-root `results.tsv` and commits it. Only
+   after that verifier returns is
    the pool event `candidate_ready`. Refresh history immediately; do not wait
    for the other live workers. `candidate_ready` is a decision event, not run
    completion. Inspect its `verifier_assessment`: sparse diagnostics, a low

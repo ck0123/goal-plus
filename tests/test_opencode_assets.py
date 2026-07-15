@@ -226,7 +226,9 @@ def test_search_candidate_agent_documents_autoresearch_loop() -> None:
     assert "## Iteration Loop" in agent
     assert "git init" in agent
     assert "search_run_verifier" in agent
-    assert "results.tsv" in agent
+    assert "context.workspace/results.tsv" in agent
+    assert "exactly one validated `results.tsv` row" in agent
+    assert "hypothesis=" in agent
     assert "agent_session_id" in agent
 
 

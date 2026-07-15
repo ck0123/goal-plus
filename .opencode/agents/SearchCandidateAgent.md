@@ -41,7 +41,7 @@ Rely on the OpenCode step cap (15/50/100/150 depending on the variant you were l
 ## Workspace Rules
 
 1. Work only in `context.workspace`.
-2. Use `context.workspace/.tmp/` for notes, scratch drafts, and your local iteration log (e.g., `results.tsv`).
+2. Use `context.workspace/.tmp/` for notes and scratch drafts. Inspect the inherited, runtime-owned `context.workspace/results.tsv` before planning, but never rewrite, truncate, delete, or manually append it.
 3. Do not use `/tmp`, home directories, or paths outside the candidate workspace for candidate work.
 4. Modify only files listed in `context.candidate_task.allowed_files`.
 5. Do not modify files listed in `context.candidate_task.denied_files` or any frozen verifier artifact.
@@ -62,44 +62,35 @@ Git operations must never leave the workspace directory.
 
 All scoring goes through MCP. Each call scores the current workspace state and appends an iteration record to the candidate's history.
 
-1. Call `goal-plus_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id)`.
-2. The runtime detects changed files, runs the verifier command, appends an `IterationRecord` to the candidate, and returns the `ScoreReport`. No prior submit call is needed; there is no submit tool.
-3. Your previous iterations are visible in `context.iterations` (returned by `search_get_agent_context`) and via `goal-plus_search_list_iterations(run_id, candidate_id)`.
+1. Call `goal-plus_search_run_verifier(run_id=context.run_id, candidate_id=context.candidate_id, scope="process", agent_session_id=context.agent_session_id, hypothesis="<concise design tested>")`.
+2. The runtime detects changed files, runs the verifier command, appends an `IterationRecord` and exactly one validated `results.tsv` row, commits the ledger, and returns the `ScoreReport`. No prior submit call is needed; there is no submit tool.
+3. Your previous iterations and inherited design ledger are visible in `context.iterations`, `context.results`, and `context.results_tsv` (returned by `search_get_agent_context`) and via `goal-plus_search_list_iterations(run_id, candidate_id)`.
 4. Never run the verifier command directly via bash. Never write your own scorer, evaluator, or benchmark harness. The MCP verifier is the single source of truth for scores.
 5. Static non-scoring checks (`python -m py_compile`, syntax checks) are always allowed.
-6. If a verifier result has `failure_class=VerifierWorkspaceSideEffect`, `metrics.infrastructure_failure=true`, or `metrics.candidate_action=stop_and_report`, the frozen verifier is invalid for candidate execution. Do not clean generated verifier files, edit verifier assets, reset around the failure, or retry. Record the reported paths in `.tmp/results.tsv` or the final summary and return immediately so the parent can repair and refreeze the verifier.
+6. If a verifier result has `failure_class=VerifierWorkspaceSideEffect`, `metrics.infrastructure_failure=true`, or `metrics.candidate_action=stop_and_report`, the frozen verifier is invalid for candidate execution. Do not clean generated verifier files, edit verifier assets, reset around the failure, or retry. Record the reported paths in `.tmp/handoff.json` or the final summary and return immediately so the parent can repair and refreeze the verifier.
 
 ## Iteration Loop
 
 Run an autoresearch-style loop inside your session:
 
 ```text
-read context -> objective, metric_name, metric_direction, allowed_files, history, iterations
+read context -> objective, metric_name, metric_direction, allowed_files, history, iterations, results
 git init baseline in workspace
-write .tmp/results.tsv with header: commit \t <context.metric_name> \t status \t hypothesis
-  (use the literal value of context.metric_name as the column-2 header;
-   e.g. if metric_name is "combined_score", write "commit \t combined_score \t status \t hypothesis".
-   never write the literal string "metric_name" or "score".)
+inspect context.results_tsv and continue from its inherited design history
 
 while steps_remaining and verifier_runs_remaining:
     decide next hypothesis based on:
       - your previous iterations in context.iterations (score trajectory)
       - context.history (top scored candidates across the run)
     edit allowed_files to implement the hypothesis
-    git add -A && git commit -m "iter N: <hypothesis>"          # commit FIRST so every row has a real hash
-    commit_hash = git rev-parse --short HEAD                    # 7-char short hash, captured before verify
-    report = search_run_verifier(..., agent_session_id=self)
+    report = search_run_verifier(..., agent_session_id=self, hypothesis=hypothesis)
+    # runtime commits the artifact and atomically appends commit/score/status/hypothesis
     score = report.aggregate_score
     if report contains VerifierWorkspaceSideEffect or candidate_action=stop_and_report:
-        append row: commit_hash \t 0.0 \t infrastructure-stop \t <reported verifier paths>
         return immediately; parent must repair and refreeze the verifier
     if report.process_passed is False or score is None:         # verifier crash/timeout -> discard
-        append row: commit_hash \t 0.0 \t discard \t <hypothesis>
         git reset --hard HEAD~1
-    elif score improved over previous best (per context.metric_direction):
-        append row: commit_hash \t score \t keep \t <hypothesis>
-    else:
-        append row: commit_hash \t score \t discard \t <hypothesis>
+    elif score did not improve over previous best (per context.metric_direction):
         git reset --hard HEAD~1
 
 before step cap:

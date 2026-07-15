@@ -254,13 +254,17 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_run_verifier(
-        "run_1", "c001", agent_session_id="agent_001"
+        "run_1",
+        "c001",
+        agent_session_id="agent_001",
+        hypothesis="try a fused path",
     )["aggregate_score"] == 1.0
     runtime.run_verifier.assert_called_with(
         "run_1",
         "c001",
         scope="process",
         agent_session_id="agent_001",
+        hypothesis="try a fused path",
     )
     iterations = tools.search_list_iterations("run_1", "c001")
     assert len(iterations) == 2

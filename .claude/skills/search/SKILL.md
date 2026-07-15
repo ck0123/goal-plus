@@ -101,7 +101,10 @@ explicit attempt/token cap is reached, or a declared early-stop condition holds.
    worker_agent_type="search-candidate-agent-deep",
    worker_budget={"max_turns": 16, "on_exceed": "interrupt"})` and launch the
    returned foreground Agent payload for the same candidate workspace.
-9. Run final `search_run_verifier` from the main agent before selecting.
+9. Run final `search_run_verifier(hypothesis="main final verification")` from
+   the main agent before selecting. Every returned report appends exactly one
+   validated row to the runtime-owned inherited workspace-root `results.tsv`
+   and commits it.
 10. Use `search_select`, `search_report`, and `search_promote` when appropriate.
 
 ## Worker Budget Control

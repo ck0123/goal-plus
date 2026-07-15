@@ -266,17 +266,27 @@ def create_mcp(
         candidate_id: str,
         scope: str = "process",
         agent_session_id: str | None = None,
+        hypothesis: str | None = None,
     ) -> dict[str, Any]:
         """Subagent self-score with `agent_session_id`; main final verify without it.
 
-        Subagents pass their own `agent_session_id` to record iteration
-        provenance. The main agent calls this without `agent_session_id`
+        Subagents pass their own `agent_session_id` and a concise `hypothesis`
+        describing the tested design. The runtime records iteration provenance
+        and appends exactly one validated row to the inherited
+        `workspace/results.tsv`, then commits that runtime-owned ledger.
+        The main agent calls this without `agent_session_id`
         after OpenCode Task completion to confirm the final score. A
         `VerifierWorkspaceSideEffect` with
         `candidate_action="stop_and_report"` is a frozen-verifier infrastructure
         failure: workers must not clean verifier outputs or retry it.
         """
-        return tools.search_run_verifier(run_id, candidate_id, scope, agent_session_id)
+        return tools.search_run_verifier(
+            run_id,
+            candidate_id,
+            scope,
+            agent_session_id,
+            hypothesis,
+        )
 
     @mcp.tool()
     def search_list_iterations(

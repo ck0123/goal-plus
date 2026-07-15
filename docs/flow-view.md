@@ -88,8 +88,21 @@ while returned context is authoritative.
 The worker edits only its assigned workspace and records real iterations with:
 
 ```text
-search_run_verifier(..., agent_session_id=<its session>)
+search_run_verifier(
+  ...,
+  agent_session_id=<its session>,
+  hypothesis=<concise design tested>,
+)
 ```
+
+Every returned verifier report appends exactly one durable result-ledger entry
+to `workspace/results.tsv` and commits that file. Before appending, the runtime
+checks that the existing file is byte-for-byte equal to its durable ledger and
+Git-clean; worker edits raise `ResultsLedgerMutation`. Child candidates inherit
+the base candidate's ledger; successor runs inherit the selected/best source
+candidate's ledger. A call that raises before producing a report adds no row.
+The file is runtime metadata and is excluded from edit-surface and promotion
+diffs. Workers inspect this continuous design history but never edit it.
 
 Each worker returns a compact `.tmp/handoff.json`. The runtime projects it into
 candidate history and also builds a bounded, current-run rollup across all

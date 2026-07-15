@@ -231,6 +231,9 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert 'name = "search_candidate_agent"' in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "workspace root" in text
+    assert "exactly one validated row" in text
+    assert "hypothesis=" in text
     assert "not the search orchestrator" in text
     assert "search_select" in text
     assert "search_report" in text

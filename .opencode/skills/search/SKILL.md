@@ -351,9 +351,9 @@ while budget_remaining:
 
 The subagent receives only `agent_session_id` and a candidate idea (from `launch.prompt`). It then:
 
-1. Calls `goal-plus_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, and `iterations` (its own previous attempts). The only required MCP calls are `search_get_agent_context` and `search_run_verifier`. Treat these fields as the resume context if this is a restarted worker; do not rely on the launch prompt or prior chat transcript for history.
-2. Runs an autoresearch loop inside `workspace`: edit allowed files → `goal-plus_search_run_verifier(..., agent_session_id=...)` → read ScoreReport → `git commit` (improvement) or `git reset --hard HEAD~1` (regression). Each verifier call appends to the candidate's iteration history; no separate submit step exists.
-3. Maintains `workspace/.tmp/results.tsv` as its private iteration log. Header is `commit \t <metric_name> \t status \t hypothesis`, where `<metric_name>` is the literal value of `context.metric_name` (set by the main agent at freeze time). Commit-first: each iteration is `git commit`-ed before `search_run_verifier` so every row carries a real 7-char short hash; `discard` rows are rolled back with `git reset --hard HEAD~1`, but the hash stays recoverable via git reflog (`git checkout <hash>` still works).
+1. Calls `goal-plus_search_get_agent_context(agent_session_id)` to read authoritative `run_id`, `candidate_id`, `workspace`, `allowed_files`, `denied_files`, `budget`, `history`, `iterations`, `results`, and `results_tsv`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`. Treat these fields and the inherited ledger as the resume context if this is a restarted worker; do not rely on the launch prompt or prior chat transcript for history.
+2. Runs an autoresearch loop inside `workspace`: edit allowed files → `goal-plus_search_run_verifier(..., agent_session_id=..., hypothesis="<concise design tested>")` → read ScoreReport → keep the improvement or restore a prior commit after a regression. Each returned verifier report appends to the candidate's iteration history and runtime-owned results ledger; no separate submit step exists.
+3. Inspects `workspace/results.tsv` before choosing another variant. The runtime owns this continuous `commit \t <metric_name> \t status \t hypothesis` ledger, commits it in the candidate Git history, inherits it across child/successor workspaces, validates the existing prefix, and appends exactly one row for each returned verifier report. Workers must never create, rewrite, truncate, delete, or manually append it.
 4. Ends with the best workspace state checked out and a concise text summary that includes `agent_session_id`, `candidate_id`, best score/metric, best commit hash, changed files, and a short description. This final answer is for OpenCode/main-agent mapping only; no MCP finalize call exists.
 
 You do not pass numeric score targets, baseline scores, or local-verification requests in the worker prompt. The worker reads its own verifier output and decides next steps.
@@ -363,7 +363,12 @@ You do not pass numeric score targets, baseline scores, or local-verification re
 For every candidate Task that returned:
 
 ```text
-goal-plus_search_run_verifier(run_id, candidate_id, "process")
+goal-plus_search_run_verifier(
+  run_id,
+  candidate_id,
+  "process",
+  hypothesis="main final verification",
+)
 ```
 
 Then:

@@ -45,7 +45,8 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
     )
     run_id = runtime.create_run(frozen.frozen_spec_id)
     initial = _planned_candidates(runtime, run_id, 2)
-    completion_delays = iter((0.05, 0.45, 0.05))
+    completion_delays = iter((0.05, None, 0.05))
+    release_slowest = threading.Event()
     threads: list[threading.Thread] = []
 
     def fake_launcher(*, root_dir: Path | str, pool_id: str, job_id: str) -> int:
@@ -53,7 +54,10 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
 
         def complete() -> None:
             request = load_json(pi_pool._job_dir(root_dir, pool_id, job_id) / "request.json")
-            time.sleep(delay)
+            if delay is None:
+                release_slowest.wait(timeout=5)
+            else:
+                time.sleep(delay)
             result = {
                 "ok": True,
                 "run_id": request["run_id"],
@@ -120,6 +124,7 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
         for job in after_refill["jobs"]
     )
 
+    release_slowest.set()
     observed = []
     while len(observed) < 2:
         update = wait_any_pi_search_pool(

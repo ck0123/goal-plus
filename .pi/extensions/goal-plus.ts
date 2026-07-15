@@ -426,6 +426,7 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			candidate_id: Type.String(),
 			scope: Type.Optional(Type.Union([Type.Literal("process"), Type.Literal("promotion")])),
 			agent_session_id: Type.Optional(Type.String()),
+			hypothesis: Type.Optional(Type.String()),
 		},
 		{ additionalProperties: false },
 	),
@@ -541,7 +542,7 @@ const RuntimeToolDescriptions: Record<string, string> = {
 	search_freeze_spec:
 		"Freeze an immutable SearchSpec and verifier bundle. Preflight uses a disposable source copy and rejects verifier workspace side effects; verifier temp files belong in the unique GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, never a fixed /tmp path under concurrent Search. budget.max_candidates is the total cap across the whole run and all rounds; budget.max_parallel is the per-batch cap. Equal values normally permit only one full batch.",
 	search_run_verifier:
-		"Score one candidate. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
+		"Score one candidate and pass a concise hypothesis for the tested design. Every returned verifier report appends exactly one validated row to the runtime-owned, inherited workspace/results.tsv and commits it. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
 	search_invalidate_run:
 		"Atomically fence a run after the main agent confirms verifier contract, coverage, determinism, target-alignment, or infrastructure failure. Then interrupt every host worker, wait for zero active workers, repair/freeze, and create a successor with source_run_id.",
 	search_plan_next:

@@ -123,6 +123,7 @@ def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
     schema = tools["search_run_verifier"].parameters
 
     assert "agent_session_id" in schema["properties"]
+    assert "hypothesis" in schema["properties"]
 
 
 def test_freeze_spec_exposes_complete_nested_search_spec_schema(tmp_path: Path) -> None:

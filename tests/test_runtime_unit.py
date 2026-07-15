@@ -1975,9 +1975,15 @@ def test_git_worktree_runtime_branches_followup_from_best_parent_commit(
     assert child.workspace_backend == "git_worktree"
     assert child.workspace_branch == f"gp/{run_id}/c003"
     assert child.workspace_base_revision == best_parent_iteration.git_head
-    assert subprocess.check_output(
+    child_record = runtime._load_candidate_record(run_id, child.candidate_id)
+    child_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=child.workspace, text=True
-    ).strip() == best_parent_iteration.git_head
+    ).strip()
+    assert child_head == child_record.results_ledger_git_head
+    assert child_head != best_parent_iteration.git_head
+    assert child.workspace.joinpath("results.tsv").read_text(encoding="utf-8") == (
+        parent.task.workspace.joinpath("results.tsv").read_text(encoding="utf-8")
+    )
     assert (child.workspace / "initial_program.py").read_text(
         encoding="utf-8"
     ) == "VALUE = 2\n"
@@ -3115,60 +3121,27 @@ def test_select_can_recover_best_iteration_after_artifact_changed(
     ) == "VALUE = 'fast'\n"
 
 
-def test_select_ignores_old_artifact_without_git_commit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_run_verifier_rejects_missing_results_ledger_git_history(
+    tmp_path: Path,
 ) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(
-        spec_for(project, max_candidates=2),
-        [project / "evaluator.py"],
-    )
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=2)
+    plan = runtime.plan_next(run_id, requested_k=1)
     tasks = runtime.start_batch(run_id, plan.plan_id)
+    results_before = tasks[0].workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    )
     shutil.rmtree(tasks[0].workspace / ".git")
 
-    scores_by_candidate = {
-        "c001": [0.9, 0.4],
-        "c002": [0.7, 0.7],
-    }
-    real_run = subprocess.run
+    with pytest.raises(RuntimeError, match="ResultsLedgerMutation"):
+        runtime.run_verifier(run_id, tasks[0].candidate_id)
 
-    def fake_run(*args, **kwargs):
-        command = args[0]
-        if command and command[0] != "python":
-            return real_run(*args, **kwargs)
-        candidate_id = Path(kwargs["cwd"]).name
-        score = scores_by_candidate[candidate_id].pop(0)
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr("goal_plus.runtime.subprocess.run", fake_run)
-
-    c001_workspace = tasks[0].workspace
-    c001_workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 'fast'\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c001")
-    c001_workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 'slow'\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c001")
-
-    tasks[1].workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 'middle'\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c002")
-
-    selection = runtime.select(run_id)
-
-    assert selection["selected_candidate_id"] == "c002"
-    assert selection["selected_score"] == 0.7
+    assert tasks[0].workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ) == results_before
+    assert runtime.list_iterations(run_id, tasks[0].candidate_id) == []
 
 
 def test_run_verifier_records_real_git_commit_for_iteration(
@@ -3202,8 +3175,184 @@ def test_run_verifier_records_real_git_commit_for_iteration(
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
     ).strip()
-    assert iteration["git_head"] == head
+    assert iteration["ledger_git_head"] == head
+    assert iteration["git_head"] != head
     assert iteration["git_artifact_clean"] is True
+
+
+def test_results_tsv_is_committed_and_runtime_enforces_one_row_per_report(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    results_path = workspace / "results.tsv"
+
+    assert results_path.read_text(encoding="utf-8") == (
+        "commit\tcombined_score\tstatus\thypothesis\n"
+    )
+    assert not (workspace / ".tmp" / "results.tsv").exists()
+    assert subprocess.check_output(
+        ["git", "ls-files", "--", "results.tsv"],
+        cwd=workspace,
+        text=True,
+    ).strip() == "results.tsv"
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--", "results.tsv"],
+        cwd=workspace,
+        text=True,
+    ).strip() == ""
+
+    session = runtime.start_agent_session(run_id, candidate_id)
+    first = runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session.agent_session_id,
+        hypothesis="measure inherited baseline",
+    )
+    assert first.process_passed is True
+    first_text = results_path.read_text(encoding="utf-8")
+    assert len(first_text.splitlines()) == 2
+    assert first_text.splitlines()[1].endswith(
+        "\tpass\tmeasure inherited baseline"
+    )
+
+    (workspace / "config.yaml").write_text("name: denied edit\n", encoding="utf-8")
+    second = runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session.agent_session_id,
+        hypothesis="probe denied configuration change",
+    )
+    assert second.process_passed is False
+    second_text = results_path.read_text(encoding="utf-8")
+    assert second_text.startswith(first_text)
+    assert len(second_text.splitlines()) == 3
+    assert second_text.splitlines()[2].endswith(
+        "\tfail\tprobe denied configuration change"
+    )
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    assert len(record.iterations) == 2
+    assert len(record.results_ledger) == 2
+    assert record.iterations[-1].ledger_git_head == record.results_ledger_git_head
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
+    ).strip() == record.results_ledger_git_head
+
+    redispatched = runtime.redispatch_candidate(run_id, candidate_id)
+    context = runtime.get_agent_context(redispatched.agent_session_id)
+    assert context["results_tsv"] == str(results_path)
+    assert len(context["results"]) == 2
+
+    results_path.write_text(
+        second_text.replace("measure inherited baseline", "rewritten baseline"),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="ResultsLedgerMutation"):
+        runtime.run_verifier(run_id, candidate_id, hypothesis="must not run")
+    assert len(runtime._load_candidate_record(run_id, candidate_id).results_ledger) == 2
+
+
+def test_results_tsv_inherits_across_derived_candidate_and_successor_run(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(project, {"name": "evolve"}, max_candidates=3)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    first_run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    first_plan = runtime.plan_next(first_run_id, requested_k=1)
+    parent = runtime.start_batch(first_run_id, first_plan.plan_id)[0]
+    runtime.run_verifier(
+        first_run_id,
+        parent.candidate_id,
+        hypothesis="parent design",
+    )
+    parent_results = parent.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    )
+
+    second_plan = runtime.plan_next(first_run_id, requested_k=1)
+    child = runtime.start_batch(first_run_id, second_plan.plan_id)[0]
+    assert child.base_candidate_id == parent.candidate_id
+    assert child.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ) == parent_results
+    runtime.run_verifier(
+        first_run_id,
+        child.candidate_id,
+        hypothesis="child design",
+    )
+    child_results = child.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    )
+    assert child_results.startswith(parent_results)
+    assert len(child_results.splitlines()) == len(parent_results.splitlines()) + 1
+
+    successor_run_id = runtime.create_run(
+        frozen.frozen_spec_id,
+        source_run_id=first_run_id,
+    )
+    successor_plan = runtime.plan_next(successor_run_id, requested_k=1)
+    successor = runtime.start_batch(successor_run_id, successor_plan.plan_id)[0]
+    assert successor.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ) == parent_results
+    successor_record = runtime._load_candidate_record(
+        successor_run_id,
+        successor.candidate_id,
+    )
+    assert [entry.source_run_id for entry in successor_record.results_ledger] == [
+        first_run_id
+    ]
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--", "results.tsv"],
+        cwd=successor.workspace,
+        text=True,
+    ).strip() == ""
+
+
+def test_legacy_tmp_results_tsv_migrates_and_backfills_missing_iterations(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    runtime.run_verifier(run_id, candidate_id, hypothesis="legacy row kept")
+    runtime.run_verifier(run_id, candidate_id, hypothesis="missing legacy row")
+
+    current_lines = workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    legacy_path = workspace / ".tmp" / "results.tsv"
+    legacy_path.write_text("\n".join(current_lines[:2]) + "\n", encoding="utf-8")
+    workspace.joinpath("results.tsv").unlink()
+
+    candidate_path = runtime._candidate_dir(run_id, candidate_id) / "candidate.json"
+    legacy_record = load_json(candidate_path)
+    legacy_record.pop("results_ledger", None)
+    legacy_record.pop("results_ledger_git_head", None)
+    for iteration in legacy_record["iterations"]:
+        iteration.pop("ledger_git_head", None)
+        iteration.pop("hypothesis", None)
+        iteration["summary"] = ""
+    write_json(candidate_path, legacy_record)
+
+    session = runtime.start_agent_session(run_id, candidate_id)
+    context = runtime.get_agent_context(session.agent_session_id)
+    migrated_lines = workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+    assert len(migrated_lines) == 3
+    assert migrated_lines[1] == current_lines[1]
+    assert migrated_lines[2].endswith("\tpass\trecovered iteration 2")
+    assert len(context["results"]) == 2
+    migrated_record = runtime._load_candidate_record(run_id, candidate_id)
+    assert migrated_record.results_ledger_git_head is not None
+    assert len(migrated_record.results_ledger) == 2
 
 
 def test_select_checks_out_best_git_commit_before_final_verify(
@@ -3267,9 +3416,12 @@ def test_select_checks_out_best_git_commit_before_final_verify(
     assert c001_workspace.joinpath("initial_program.py").read_text(
         encoding="utf-8"
     ) == "VALUE = 'fast'\n"
-    assert subprocess.check_output(
+    final_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=c001_workspace, text=True
-    ).strip() == fast_commit
+    ).strip()
+    selected_record = runtime._load_candidate_record(run_id, "c001")
+    assert final_head == selected_record.results_ledger_git_head
+    assert final_head != fast_commit
 
 
 def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:

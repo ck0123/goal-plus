@@ -42,6 +42,7 @@ from goal_plus.models import (
     RunState,
     RunSummary,
     IterationRecord,
+    ResultLedgerEntry,
     ScoreReport,
     SearchPlan,
     SearchSpec,
@@ -72,6 +73,8 @@ CLAUDE_CODE_AGENT_TYPE_BY_TURN_BUDGET = {
     turns: agent_type
     for agent_type, turns in CLAUDE_CODE_KNOWN_AGENT_TURN_BUDGETS.items()
 }
+RESULTS_TSV_RELATIVE_PATH = "results.tsv"
+LEGACY_RESULTS_TSV_RELATIVE_PATH = ".tmp/results.tsv"
 
 
 def utc_timestamp() -> str:
@@ -113,6 +116,13 @@ def write_json(path: Path, data: Any) -> None:
     with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True, ensure_ascii=True)
         handle.write("\n")
+    tmp_path.replace(path)
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
     tmp_path.replace(path)
 
 
@@ -654,6 +664,7 @@ class FileSearchRuntime:
             key=lambda record: record.candidate_id,
         )
         for record in plan_records:
+            self._ensure_results_tsv(record, frozen.spec.metric_name)
             self._write_candidate_record(run_id, record)
         if all_records:
             highest_index = max(
@@ -721,7 +732,13 @@ class FileSearchRuntime:
                 proposal=proposal,
                 slot=index,
             )
-            record = CandidateRecord(candidate_id=candidate_id, status="created", task=task)
+            record = CandidateRecord(
+                candidate_id=candidate_id,
+                status="created",
+                task=task,
+                results_ledger=self._inherited_results_ledger(run, task),
+            )
+            self._ensure_results_tsv(record, frozen.spec.metric_name)
             self._write_candidate_record(run_id, record)
             tasks.append(task)
             run.next_candidate_index += 1
@@ -1078,6 +1095,13 @@ class FileSearchRuntime:
                     ),
                 }
             )
+        results_were_initialized = candidate_record.results_ledger_git_head is not None
+        results_tsv = self._ensure_results_tsv(
+            candidate_record,
+            frozen.spec.metric_name,
+        )
+        if not results_were_initialized:
+            self._write_candidate_record(session.run_id, candidate_record)
         workspace_status = self._git_status(candidate_record.task.workspace)
         return {
             "agent_session_id": session.agent_session_id,
@@ -1092,6 +1116,11 @@ class FileSearchRuntime:
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
             "candidate_task": candidate_record.task.model_dump(mode="json"),
+            "results_tsv": str(results_tsv),
+            "results": [
+                entry.model_dump(mode="json")
+                for entry in candidate_record.results_ledger
+            ],
             "resume": {
                 "is_redispatch": bool(session.directive.get("state_level_resume")),
                 "previous_sessions": previous_sessions,
@@ -1115,6 +1144,7 @@ class FileSearchRuntime:
         candidate_id: str,
         scope: Literal["process", "promotion"] = "process",
         agent_session_id: str | None = None,
+        hypothesis: str | None = None,
     ) -> ScoreReport:
         """Subagent self-score with ``agent_session_id``; main final verify
         without it. Records an IterationReport for each call.
@@ -1136,6 +1166,10 @@ class FileSearchRuntime:
                     "agent_session_id does not belong to this candidate"
                 )
 
+        results_were_initialized = record.results_ledger_git_head is not None
+        self._ensure_results_tsv(record, frozen.spec.metric_name)
+        if not results_were_initialized:
+            self._write_candidate_record(run_id, record)
         detected_changed = self._detect_changed_files(
             Path(run.source_path), record.task.workspace
         )
@@ -1195,34 +1229,60 @@ class FileSearchRuntime:
                 record.changed_outside_allowed = outside_allowed
                 record.status = "evaluated"
                 record.score_report = report
-                record.iterations.append(
-                    IterationRecord(
-                        iteration=len(record.iterations) + 1,
-                        agent_session_id=agent_session_id,
-                        score=report.aggregate_score,
-                        process_passed=report.process_passed,
-                        git_head=git_head,
-                        git_artifact_clean=git_artifact_clean,
-                        git_status=git_status,
-                        failure_class=(
-                            next(
-                                (
-                                    r.failure_class
-                                    for r in report.verifier_results
-                                    if r.failure_class
-                                ),
-                                None,
-                            )
-                        ),
-                        summary="",
-                        changed_files=list(detected_changed),
-                        touched_denied_files=touched_denied,
-                        changed_outside_allowed=outside_allowed,
-                        artifact_hash=artifact_hash,
-                        metrics={r.name: r.metrics for r in report.verifier_results},
-                        created_at=utc_timestamp(),
-                    )
+                iteration_number = len(record.iterations) + 1
+                failure_class = next(
+                    (
+                        result.failure_class
+                        for result in report.verifier_results
+                        if result.failure_class
+                    ),
+                    None,
                 )
+                iteration_hypothesis = self._iteration_hypothesis(
+                    hypothesis,
+                    record,
+                    iteration_number,
+                    scope=scope,
+                    agent_session_id=agent_session_id,
+                )
+                created_at = utc_timestamp()
+                iteration_record = IterationRecord(
+                    iteration=iteration_number,
+                    agent_session_id=agent_session_id,
+                    score=report.aggregate_score,
+                    process_passed=report.process_passed,
+                    git_head=git_head,
+                    git_artifact_clean=git_artifact_clean,
+                    git_status=git_status,
+                    failure_class=failure_class,
+                    summary=iteration_hypothesis,
+                    hypothesis=iteration_hypothesis,
+                    changed_files=list(detected_changed),
+                    touched_denied_files=touched_denied,
+                    changed_outside_allowed=outside_allowed,
+                    artifact_hash=artifact_hash,
+                    metrics={r.name: r.metrics for r in report.verifier_results},
+                    created_at=created_at,
+                )
+                ledger_entry = ResultLedgerEntry(
+                    source_run_id=run_id,
+                    source_candidate_id=candidate_id,
+                    iteration=iteration_number,
+                    git_head=git_head,
+                    metric_name=frozen.spec.metric_name,
+                    score=report.aggregate_score,
+                    status="pass" if report.process_passed else "fail",
+                    hypothesis=iteration_hypothesis,
+                    failure_class=failure_class,
+                    created_at=created_at,
+                )
+                ledger_git_head = self._append_results_tsv(
+                    record,
+                    ledger_entry,
+                    frozen.spec.metric_name,
+                )
+                iteration_record.ledger_git_head = ledger_git_head
+                record.iterations.append(iteration_record)
                 self._write_candidate_record(run_id, record)
                 self._update_best_seen(run, frozen.spec, report)
                 run.candidates_evaluated = len(
@@ -1276,6 +1336,12 @@ class FileSearchRuntime:
         for option_score, option_record, option_iteration, option_git_head in ranked:
             if option_git_head:
                 self._checkout_git_revision(option_record.task.workspace, option_git_head)
+                self._ensure_results_tsv(
+                    option_record,
+                    frozen.spec.metric_name,
+                    force_after_checkout=True,
+                )
+                self._write_candidate_record(run_id, option_record)
             report = self.run_verifier(run_id, option_record.candidate_id)
             if report.process_passed and report.aggregate_score is not None:
                 selected_score = report.aggregate_score
@@ -1479,6 +1545,12 @@ class FileSearchRuntime:
         record = self._load_candidate_record(run_id, candidate_id)
         if run.selected_git_head:
             self._checkout_git_revision(record.task.workspace, run.selected_git_head)
+            frozen = self._load_frozen_spec(run.frozen_spec_id)
+            self._ensure_results_tsv(
+                record,
+                frozen.spec.metric_name,
+                force_after_checkout=True,
+            )
             detected_changed = self._detect_changed_files(
                 Path(run.source_path), record.task.workspace
             )
@@ -2572,10 +2644,10 @@ class FileSearchRuntime:
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
             "A local git repository has already been initialized with the copied baseline; use git status, git diff, git add, git commit, git reset, git restore, and git checkout only inside this workspace.",
             "All scoring must go through goal-plus_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
-            "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
+            "Pass context.agent_session_id to search_run_verifier and include a concise hypothesis describing the tested design so the runtime can record iteration provenance and rationale.",
             "Each run_verifier call records an iteration. Work within the configured host budget. Complete and verify a candidate early, stop starting new optimization iterations before the limit, and leave enough time to return a concise summary.",
             "search_run_verifier automatically commits changed candidate artifact files before running the verifier; use git status, git diff, and git log to inspect iteration provenance.",
-            "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). After each verifier call, use the returned/runtime-recorded git_head as the commit column.",
+            "Inspect the inherited iteration log at workspace/results.tsv before planning another variant. The runtime owns and commits this append-only ledger, validates that existing rows are unchanged, and adds exactly one row for every returned verifier report; never rewrite, truncate, delete, or manually append it.",
         ]
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
@@ -2615,6 +2687,361 @@ class FileSearchRuntime:
                 "workspace_base_revision": materialization.base_revision,
             },
         )
+
+    @staticmethod
+    def _results_tsv_path(workspace: Path) -> Path:
+        return workspace / RESULTS_TSV_RELATIVE_PATH
+
+    @staticmethod
+    def _legacy_results_tsv_path(workspace: Path) -> Path:
+        return workspace / LEGACY_RESULTS_TSV_RELATIVE_PATH
+
+    @staticmethod
+    def _tsv_cell(value: str) -> str:
+        return " ".join(value.replace("\t", " ").split()).strip()
+
+    @classmethod
+    def _iteration_hypothesis(
+        cls,
+        hypothesis: str | None,
+        record: CandidateRecord,
+        iteration_number: int,
+        *,
+        scope: str,
+        agent_session_id: str | None,
+    ) -> str:
+        if hypothesis is not None:
+            normalized = cls._tsv_cell(hypothesis)
+            if normalized:
+                return normalized
+        if agent_session_id is None:
+            return f"main {scope} verification"
+        if iteration_number == 1:
+            candidate_hypothesis = cls._tsv_cell(record.task.hypothesis)
+            if candidate_hypothesis:
+                return f"candidate baseline: {candidate_hypothesis}"
+        return f"iteration {iteration_number}"
+
+    @staticmethod
+    def _format_result_score(score: float | None) -> str:
+        if score is None:
+            return ""
+        if math.isfinite(score) and score.is_integer():
+            return str(int(score))
+        return str(score)
+
+    def _read_results_tsv(self, record: CandidateRecord) -> list[ResultLedgerEntry]:
+        paths = (
+            self._results_tsv_path(record.task.workspace),
+            self._legacy_results_tsv_path(record.task.workspace),
+        )
+        path = next((candidate for candidate in paths if candidate.is_file()), None)
+        if path is None:
+            return []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        if not lines:
+            return []
+        header = lines[0].split("\t")
+        if len(header) < 4 or header[0].strip() != "commit":
+            return []
+        metric_name = header[1].strip()
+        if not metric_name:
+            return []
+
+        remaining_iterations = list(record.iterations)
+
+        entries: list[ResultLedgerEntry] = []
+        for line in lines[1:]:
+            columns = line.split("\t", 3)
+            if len(columns) != 4:
+                continue
+            git_head, score_text, status, hypothesis = columns
+            try:
+                score = float(score_text) if score_text.strip() else None
+            except ValueError:
+                score = None
+            normalized_git_head = git_head.strip()
+            matching_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(remaining_iterations)
+                    if candidate.git_head
+                    and normalized_git_head
+                    and (
+                        candidate.git_head == normalized_git_head
+                        or candidate.git_head.startswith(normalized_git_head)
+                        or normalized_git_head.startswith(candidate.git_head)
+                    )
+                ),
+                None,
+            )
+            iteration = (
+                remaining_iterations.pop(matching_index)
+                if matching_index is not None
+                else None
+            )
+            normalized_status = self._tsv_cell(status) or "unknown"
+            entries.append(
+                ResultLedgerEntry(
+                    source_run_id=record.task.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration.iteration if iteration else None,
+                    git_head=git_head.strip() or None,
+                    ledger_git_head=iteration.ledger_git_head if iteration else None,
+                    metric_name=metric_name,
+                    score=score,
+                    status=normalized_status,
+                    hypothesis=self._tsv_cell(hypothesis),
+                    failure_class=iteration.failure_class if iteration else None,
+                    created_at=iteration.created_at if iteration else None,
+                )
+            )
+        for iteration in remaining_iterations:
+            hypothesis = self._tsv_cell(iteration.hypothesis or iteration.summary)
+            entries.append(
+                ResultLedgerEntry(
+                    source_run_id=record.task.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration.iteration,
+                    git_head=iteration.git_head,
+                    ledger_git_head=iteration.ledger_git_head,
+                    metric_name=metric_name,
+                    score=iteration.score,
+                    status="pass" if iteration.process_passed else "fail",
+                    hypothesis=hypothesis or f"recovered iteration {iteration.iteration}",
+                    failure_class=iteration.failure_class,
+                    created_at=iteration.created_at,
+                )
+            )
+        return entries
+
+    def _backfill_results_ledger_from_iterations(
+        self,
+        record: CandidateRecord,
+        metric_name: str,
+    ) -> None:
+        represented = {
+            entry.iteration
+            for entry in record.results_ledger
+            if entry.source_run_id == record.task.run_id
+            and entry.source_candidate_id == record.candidate_id
+            and entry.iteration is not None
+        }
+        for iteration in record.iterations:
+            if iteration.iteration in represented:
+                continue
+            hypothesis = self._tsv_cell(iteration.hypothesis or iteration.summary)
+            record.results_ledger.append(
+                ResultLedgerEntry(
+                    source_run_id=record.task.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration.iteration,
+                    git_head=iteration.git_head,
+                    ledger_git_head=iteration.ledger_git_head,
+                    metric_name=metric_name,
+                    score=iteration.score,
+                    status="pass" if iteration.process_passed else "fail",
+                    hypothesis=hypothesis or f"recovered iteration {iteration.iteration}",
+                    failure_class=iteration.failure_class,
+                    created_at=iteration.created_at,
+                )
+            )
+
+    def _candidate_results_ledger(
+        self,
+        record: CandidateRecord,
+    ) -> list[ResultLedgerEntry]:
+        if record.results_ledger:
+            return [entry.model_copy(deep=True) for entry in record.results_ledger]
+        return self._read_results_tsv(record)
+
+    def _preferred_source_candidate_record(
+        self,
+        source_run_id: str,
+    ) -> CandidateRecord | None:
+        source_run = self._load_run(source_run_id)
+        records = self._load_candidate_records(source_run_id)
+        by_id = {record.candidate_id: record for record in records}
+        source_frozen = self._load_frozen_spec(source_run.frozen_spec_id)
+        for candidate_id in (
+            source_run.selected_candidate_id,
+            source_run.best_candidate_id,
+        ):
+            if candidate_id and candidate_id in by_id:
+                record = by_id[candidate_id]
+                self._backfill_results_ledger_from_iterations(
+                    record,
+                    source_frozen.spec.metric_name,
+                )
+                return record
+        if not records:
+            return None
+        frontier = self._top_records(records, source_frozen.spec, 1)
+        if not frontier:
+            return None
+        record = frontier[0]
+        self._backfill_results_ledger_from_iterations(
+            record,
+            source_frozen.spec.metric_name,
+        )
+        return record
+
+    def _inherited_results_ledger(
+        self,
+        run: RunRecord,
+        task: CandidateTask,
+    ) -> list[ResultLedgerEntry]:
+        source_record: CandidateRecord | None = None
+        if task.base_candidate_id:
+            source_record = self._load_candidate_record(
+                run.run_id,
+                task.base_candidate_id,
+            )
+        elif run.source_run_id:
+            source_record = self._preferred_source_candidate_record(run.source_run_id)
+        if source_record is None:
+            return []
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        self._backfill_results_ledger_from_iterations(
+            source_record,
+            frozen.spec.metric_name,
+        )
+        return self._candidate_results_ledger(source_record)
+
+    def _render_results_tsv(
+        self,
+        entries: list[ResultLedgerEntry],
+        metric_name: str,
+    ) -> str:
+        normalized_metric_name = self._tsv_cell(metric_name) or "metric"
+        lines = [f"commit\t{normalized_metric_name}\tstatus\thypothesis"]
+        for entry in entries:
+            if entry.metric_name != metric_name:
+                continue
+            lines.append(
+                "\t".join(
+                    [
+                        entry.git_head or "",
+                        self._format_result_score(entry.score),
+                        self._tsv_cell(entry.status) or "unknown",
+                        self._tsv_cell(entry.hypothesis),
+                    ]
+                )
+            )
+        return "\n".join(lines) + "\n"
+
+    def _assert_results_tsv_unchanged(
+        self,
+        record: CandidateRecord,
+        metric_name: str,
+    ) -> Path:
+        path = self._results_tsv_path(record.task.workspace)
+        expected = self._render_results_tsv(record.results_ledger, metric_name)
+        try:
+            actual = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                "ResultsLedgerMutation: workspace/results.tsv is missing; "
+                "the runtime-owned ledger may not be deleted or replaced"
+            ) from exc
+        if actual != expected:
+            raise RuntimeError(
+                "ResultsLedgerMutation: workspace/results.tsv changed outside "
+                "the runtime; existing rows are immutable and only one "
+                "runtime-appended row is allowed per returned verifier report"
+            )
+        try:
+            status = self._git_output(
+                record.task.workspace,
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                    "--",
+                    RESULTS_TSV_RELATIVE_PATH,
+                ],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                "ResultsLedgerMutation: could not verify the Git state of "
+                "workspace/results.tsv"
+            ) from exc
+        if status.strip():
+            raise RuntimeError(
+                "ResultsLedgerMutation: workspace/results.tsv must stay clean "
+                "between runtime appends"
+            )
+        return path
+
+    def _ensure_results_tsv(
+        self,
+        record: CandidateRecord,
+        metric_name: str,
+        *,
+        force_after_checkout: bool = False,
+    ) -> Path:
+        if record.results_ledger_git_head is not None and not force_after_checkout:
+            return self._assert_results_tsv_unchanged(record, metric_name)
+        if not record.results_ledger and record.results_ledger_git_head is None:
+            record.results_ledger = self._read_results_tsv(record)
+        if record.results_ledger_git_head is None:
+            self._backfill_results_ledger_from_iterations(record, metric_name)
+        path = self._results_tsv_path(record.task.workspace)
+        write_text(path, self._render_results_tsv(record.results_ledger, metric_name))
+        self._initialize_workspace_git_for_results(record.task.workspace)
+        ledger_git_head = self._commit_results_tsv(
+            record.task.workspace,
+            f"goal-plus results ledger sync {record.candidate_id}",
+        )
+        if ledger_git_head is None:
+            raise RuntimeError(
+                "ResultsLedgerCommitError: failed to commit workspace/results.tsv"
+            )
+        record.results_ledger_git_head = ledger_git_head
+        self._assert_results_tsv_unchanged(record, metric_name)
+        return path
+
+    def _append_results_tsv(
+        self,
+        record: CandidateRecord,
+        entry: ResultLedgerEntry,
+        metric_name: str,
+    ) -> str:
+        path = self._assert_results_tsv_unchanged(record, metric_name)
+        before = self._render_results_tsv(record.results_ledger, metric_name)
+        after = self._render_results_tsv(
+            [*record.results_ledger, entry],
+            metric_name,
+        )
+        if not after.startswith(before) or len(after.splitlines()) != len(
+            before.splitlines()
+        ) + 1:
+            raise RuntimeError(
+                "ResultsLedgerAppendError: a verifier result must append exactly "
+                "one row without changing the existing workspace/results.tsv"
+            )
+        write_text(path, after)
+        ledger_git_head = self._commit_results_tsv(
+            record.task.workspace,
+            (
+                f"goal-plus results ledger {record.candidate_id}:"
+                f"{entry.iteration or 'legacy'}"
+            ),
+        )
+        if ledger_git_head is None:
+            raise RuntimeError(
+                "ResultsLedgerCommitError: failed to commit the appended "
+                "workspace/results.tsv row"
+            )
+        entry.ledger_git_head = ledger_git_head
+        record.results_ledger.append(entry)
+        record.results_ledger_git_head = ledger_git_head
+        self._assert_results_tsv_unchanged(record, metric_name)
+        return ledger_git_head
 
     def _history_view(
         self,
@@ -3710,6 +4137,8 @@ class FileSearchRuntime:
         workspace_hashes = self._hash_tree(workspace)
         changed: list[str] = []
         for rel_path in sorted(set(source_hashes) | set(workspace_hashes)):
+            if rel_path == RESULTS_TSV_RELATIVE_PATH:
+                continue
             if source_hashes.get(rel_path) != workspace_hashes.get(rel_path):
                 changed.append(rel_path)
         return changed
@@ -3794,6 +4223,80 @@ class FileSearchRuntime:
         )
         process.communicate()
         return process.returncode
+
+    def _initialize_workspace_git_for_results(self, workspace: Path) -> None:
+        if self._git_head(workspace) is not None:
+            return
+        files = [
+            path.relative_to(workspace).as_posix()
+            for path in list_files(workspace)
+        ]
+        try:
+            self._git_output(workspace, ["git", "init", "-q"])
+            self._git_output(workspace, ["git", "add", "-f", "--", *files])
+            self._git_output(
+                workspace,
+                [
+                    "git",
+                    "-c",
+                    "user.name=goal-plus",
+                    "-c",
+                    "user.email=goal-plus@example.invalid",
+                    "commit",
+                    "-q",
+                    "--no-verify",
+                    "-m",
+                    "search candidate baseline",
+                ],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                "ResultsLedgerCommitError: candidate workspace has no usable "
+                "Git repository for workspace/results.tsv"
+            ) from exc
+
+    def _commit_results_tsv(self, workspace: Path, message: str) -> str | None:
+        try:
+            self._git_output(
+                workspace,
+                ["git", "add", "--", RESULTS_TSV_RELATIVE_PATH],
+            )
+            staged_returncode = self._git_returncode(
+                workspace,
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--quiet",
+                    "--",
+                    RESULTS_TSV_RELATIVE_PATH,
+                ],
+            )
+            if staged_returncode == 0:
+                return self._git_head(workspace)
+            if staged_returncode != 1:
+                return None
+            self._git_output(
+                workspace,
+                [
+                    "git",
+                    "-c",
+                    "user.name=goal-plus",
+                    "-c",
+                    "user.email=goal-plus@example.invalid",
+                    "commit",
+                    "-q",
+                    "--no-verify",
+                    "--only",
+                    "-m",
+                    message,
+                    "--",
+                    RESULTS_TSV_RELATIVE_PATH,
+                ],
+            )
+            return self._git_head(workspace)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
 
     def _commit_workspace_iteration(
         self,
@@ -3975,9 +4478,12 @@ class FileSearchRuntime:
         ]
 
     def _load_candidate_record(self, run_id: str, candidate_id: str) -> CandidateRecord:
-        return CandidateRecord.model_validate(
+        record = CandidateRecord.model_validate(
             load_json(self._candidate_dir(run_id, candidate_id) / "candidate.json")
         )
+        if not record.results_ledger and record.results_ledger_git_head is None:
+            record.results_ledger = self._read_results_tsv(record)
+        return record
 
     def _write_candidate_record(self, run_id: str, record: CandidateRecord) -> None:
         candidate_dir = self._candidate_dir(run_id, record.candidate_id)
