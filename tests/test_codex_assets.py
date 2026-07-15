@@ -76,10 +76,12 @@ def test_codex_search_skill_projects_launch_metadata_to_current_tool_schema() ->
     text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     assert "current `spawn_agent` tool schema" in text
     assert "task_name`, `message`, and `fork_turns`" in text
     assert "inherits the parent Codex model" in text
+    assert "Never synthesize optional launch metadata" in normalized
     assert "agent_type=launch.agent_type" not in text
 
 

@@ -947,7 +947,7 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
     assert session.host_handle.host == "codex"
     assert session.host_handle.task_name == session.launch["task_name"]
     assert session.launch["tool"] == "spawn_agent"
-    assert "agent_type" not in session.launch
+    assert session.launch["agent_type"] == "default"
     assert session.launch["fork_turns"] == "none"
     assert "agent_session_id=" in session.launch["message"]
 
@@ -2440,13 +2440,13 @@ def test_random_strategy_name_normalizes_case_and_dash(
             "codex",
             "default",
             True,
-            {"tool": "spawn_agent"},
+            {"tool": "spawn_agent", "agent_type": "default"},
         ),
         (
             "codex",
             "random-mode",
             False,
-            {"tool": "spawn_agent"},
+            {"tool": "spawn_agent", "agent_type": "default"},
         ),
         (
             "claude-code",

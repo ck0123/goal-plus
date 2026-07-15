@@ -55,6 +55,7 @@ returns a launch payload like:
 {
   "tool": "spawn_agent",
   "task_name": "search_agent_001",
+  "agent_type": "default",
   "fork_turns": "none",
   "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
 }
@@ -62,10 +63,11 @@ returns a launch payload like:
 
 Project it onto the current tool schema. `task_name`, `message`, and the fork
 field are stable. The default candidate-worker contract is self-contained in
-`message`, so the child uses Codex's native parent-model inheritance without a
-project role reload. Pass a non-default `agent_type`, model, reasoning, or
-service tier only when explicitly requested by `strategy.worker_launch` and
-exposed by the current tool schema.
+`message`, and `agent_type="default"` selects Codex's built-in no-config role,
+so the child uses native parent-model inheritance without a project role
+reload. Pass other optional metadata, including `strategy.worker_launch`
+overrides, only when it is present in the returned launch payload and exposed
+by the current tool schema; never synthesize it from the schema alone.
 
 The parent then:
 

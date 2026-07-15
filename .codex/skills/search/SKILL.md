@@ -118,8 +118,11 @@ launch more work.
    - Project the payload onto the current `spawn_agent` tool schema. Always pass
      `task_name`, `message`, and `fork_turns` when those fields are exposed.
    - Pass optional `agent_type`, `model`, `reasoning_effort`, or `service_tier`
-     metadata only when the current tool schema exposes the corresponding
-     field. Some Codex configurations intentionally hide this metadata.
+     metadata only when the returned launch payload contains that key and the
+     current tool schema exposes the corresponding field. Never synthesize
+     optional launch metadata merely because the tool schema offers it. The
+     adapter may deliberately select the built-in `default` role so the worker
+     inherits the parent model without reloading a project role.
    - Do not fail merely because optional launch metadata is hidden. When no
      model override can be passed, the worker inherits the parent Codex model.
 5. If `spawn_agent` returns a task name or nickname, call `search_bind_agent_handle` with:

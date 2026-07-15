@@ -66,7 +66,7 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     )
 
     assert payload["tool"] == "spawn_agent"
-    assert "agent_type" not in payload
+    assert payload["agent_type"] == "default"
     assert payload["fork_turns"] == "none"
     assert payload["task_name"] == "search_agent_0001"
     assert "agent_session_id=agent-0001" in payload["message"]
@@ -74,7 +74,7 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
 
 
 @pytest.mark.codex
-def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> None:
+def test_codex_launch_maps_candidate_contract_to_builtin_default_role() -> None:
     adapter = get_agent_host_adapter("codex")
 
     payload = adapter.build_launch_payload(
@@ -86,11 +86,10 @@ def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> 
     )
 
     message = payload["message"]
-    # Codex already inherits the parent model for an untyped child. Supplying
-    # the default project role makes Codex reload config layers after applying
-    # the inherited/explicit model, which can clear that runtime-only model
-    # before service-tier validation.
-    assert "agent_type" not in payload
+    # Codex's built-in default role has no config layer, so it preserves the
+    # inherited parent model. The project search role would reload config after
+    # inheritance and can clear a runtime-only model before tier validation.
+    assert payload["agent_type"] == "default"
     assert "candidate worker, not the search orchestrator" in message
     assert "search_get_agent_context" in message
     assert "search_run_verifier" in message
