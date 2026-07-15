@@ -55,15 +55,17 @@ returns a launch payload like:
 {
   "tool": "spawn_agent",
   "task_name": "search_agent_001",
-  "agent_type": "search_candidate_agent",
   "fork_turns": "none",
   "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
 }
 ```
 
 Project it onto the current tool schema. `task_name`, `message`, and the fork
-field are stable; pass optional `agent_type`, model, reasoning, or service tier
-only when exposed. `strategy.worker_launch` may request those optional fields.
+field are stable. The default candidate-worker contract is self-contained in
+`message`, so the child uses Codex's native parent-model inheritance without a
+project role reload. Pass a non-default `agent_type`, model, reasoning, or
+service tier only when explicitly requested by `strategy.worker_launch` and
+exposed by the current tool schema.
 
 The parent then:
 

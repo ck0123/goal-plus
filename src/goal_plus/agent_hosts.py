@@ -274,7 +274,6 @@ class CodexAdapter:
         payload = {
             "tool": "spawn_agent",
             "task_name": task_name,
-            "agent_type": worker_agent_type or "search_candidate_agent",
             "fork_turns": "none",
             "message": (
                 f"{worker_contract}\n\n"
@@ -284,6 +283,13 @@ class CodexAdapter:
                 f"idea: {one_paragraph_idea}"
             ),
         }
+        # The default worker contract is already embedded in ``message``.  Do
+        # not select the project-local role for that default: Codex applies
+        # explicit/inherited model settings before reloading a custom role, and
+        # that reload can discard a runtime-only parent model before service
+        # tier validation.  Non-default roles remain an explicit opt-in.
+        if worker_agent_type and worker_agent_type != "search_candidate_agent":
+            payload["agent_type"] = worker_agent_type
         if worker_launch:
             payload.update(
                 {
