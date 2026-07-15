@@ -106,11 +106,27 @@ When the user or outer harness supplies a wall-clock, attempt, or token budget:
    directions based on evidence and remaining time.
 
 After every `candidate_ready`, failed, or interrupted pool event, refresh
-remaining time and `search_list_history`. Decide independently whether each free
-slot should continue a promising candidate, start a new direction, stay idle,
-or begin final selection. `requested_k` is only the number of new candidate
-workspaces desired at that decision point. Never wait for unrelated slow
-workers merely to preserve a batch boundary.
+remaining time and `search_list_history`. Review the current-run
+`feature_ledger`, `verifier_assessments`, and pitfalls before deciding how to
+use each free slot. Treat pitfalls as conditional observations, not global
+prohibitions: `candidate_local` stays with that candidate; `feature_family`
+applies only when the target uses the same mechanism and conditions; and
+`evaluation_contract` affects the run only after main-agent confirmation. One
+`single_observation` never rules out another candidate. Consider all three
+search actions without imposing a quota:
+
+- `deepen_incumbent`: continue a high-performing artifact or its candidate;
+- `transfer_feature`: probe a portable, orthogonal feature from any candidate,
+  including one outside the visible ranking frontier, against the incumbent;
+- `macro_restart`: start a structurally different direction from source or an
+  earlier ancestor.
+
+Then decide independently whether to continue a candidate, start a new
+candidate for one of those actions, stay idle, or begin final selection.
+`requested_k` is only the number of new candidate workspaces desired at that
+decision point. Record the chosen action in
+`proposal.metadata.search_action`. Never wait for unrelated slow workers merely
+to preserve a batch boundary.
 
 Treat the frozen `strategy.worker_budget` as the normal per-worker budget, not
 as a rule that every direction deserves identical depth. The main agent owns
@@ -143,11 +159,31 @@ No worker lease ending completes the Goal Plus record.
    alone is not success.
 7. Review each event's `result.steps`, `handle.metadata.pi_metrics`, and
    `final_score_report`. Also inspect every
-   `handle.metadata.progress_handoff.model_handoff`: carry its `key_results`,
-   scenario-specific `pitfalls`, `blockers`, and `next_steps` into the next
-   decision's candidate proposals. Do not reduce the next decision to only the best
-   score or copy raw transcripts.
-8. Refill each free slot immediately with one deliberate action:
+   `handle.metadata.progress_handoff.model_handoff`: carry its feature-ledger
+   `key_results`, scenario-specific `pitfalls`, `blockers`, `next_steps`, and
+   `verifier_assessment` into the next decision's candidate proposals. A feature
+   entry identifies its code surface, artifact/git head, portability,
+   dependencies, measured effect, and relation to the incumbent. Do not reduce
+   the next decision to only the best score or copy raw transcripts.
+   Treat `candidate_ready` as a decision event, not run completion. When a
+   worker reports verifier `concern`, assess its concrete evidence before
+   acting. While investigating, do not refill newly free slots. Sparse
+   diagnostics, a low score, or lack of progress are not enough to refreeze. If
+   the concern is not confirmed, record the `keep_spec` justification and
+   resume normal refill. If the main agent confirms verifier contract,
+   coverage, determinism, target-alignment, or infrastructure failure, execute
+   this mandatory quiesce/refreeze sequence before any other search action:
+   1. call `search_invalidate_run` with a concrete reason, summary, and evidence;
+   2. call `pi_search_pool_close(pool_id, mode="interrupt")`;
+   3. poll the exact pool until `active_count=0`, preserving terminal handoffs;
+   4. repair or regenerate the source-owned verifier and freeze a new spec;
+   5. call `search_create(new_frozen_spec_id, source_run_id=old_run_id)` and
+      link the successor run under the same `goal_plus_id`.
+   Never select or promote the invalidated run. Its artifacts, scoped pitfalls,
+   and features remain research input, but every old score is historical and
+   every imported feature must be re-verified under the successor contract.
+8. Unless step 7 has paused refill for verifier investigation, refill each free
+   slot immediately with one deliberate action:
    - `pi_search_pool_continue` for state-level reinvestment in a promising
      candidate, optionally with a larger one-dispatch budget;
    - `search_plan_next(requested_k=<new direction count>)`,
@@ -164,9 +200,17 @@ No worker lease ending completes the Goal Plus record.
    best committed candidate `git_head`, and runs a main-agent final verifier on
    that exact commit before recording the selected candidate.
 10. Call `goal_plus_record_search_result`.
-11. Run the raw-goal audit. If another verifier-backed search is needed,
-    freeze/create and link a new `run_id`, then repeat the Search Mode flow
-    under the same `goal_plus_id`.
+11. Run the raw-goal audit. A checkpoint, meaningful gain, or newly preferred
+    artifact does not by itself justify selecting/promoting and opening another
+    run: verifier-recorded iterations already preserve those states. Keep the
+    same `run_id` while its evaluation/edit contract remains adequate and its
+    candidate budget remains usable. Create another run only for a concrete
+    contract/spec revision, a distinct measurable subproblem, or exhausted
+    immutable run budget. If another run is unavoidable, read the prior run's
+    history first, then call `search_create` with `source_run_id`. The runtime
+    snapshots its frontier candidates, scoped pitfalls, feature ledger, and
+    non-winning portable innovations into `inherited_research`; do not silently
+    restart from only the prior winner. Inherited scores are never reusable.
 12. Run the final raw-goal audit. For a normal record, finish with
     `goal_plus_set_status`. If `policy.final_check.mode="required"`, instead:
     - call `goal_plus_prepare_final_check(checker_host="pi")`
@@ -195,11 +239,16 @@ criterion, or known upper bound is unavailable, state that uncertainty and
 explicitly consider whether the apparent improvement could still be far from
 useful success.
 
-Use the existing raw-goal audit to consider the appropriate response:
+Use the existing raw-goal audit to consider the appropriate response. The
+default after a score improvement is to continue the current run; changing
+search direction, transferring a feature, or deepening an artifact does not
+require a new frozen spec.
 
-- `upgrade_spec`: the current verifier, edit contract, or search directive is
-  too weak or too narrow. Save a stronger draft, freeze a new spec, and create a
-  new Search run. Never modify the prior frozen artifacts in place.
+- `upgrade_spec`: concrete evidence shows that the current verifier or edit
+  contract misrepresents the raw goal, or the measurable subproblem itself must
+  change. Save a stronger draft, freeze a new spec, and create a new Search run.
+  Never modify the prior frozen artifacts in place. Sparse diagnostics, low
+  scores, slow progress, or a better search idea are not sufficient evidence.
 - `keep_spec_with_justification`: the current spec remains a credible proxy for
   the raw goal. State the evidence for keeping it and direct subsequent Search
   toward deeper or structurally different approaches rather than assuming that
@@ -212,6 +261,18 @@ Use the existing raw-goal audit to consider the appropriate response:
 These labels describe a main-agent decision inside the existing raw-goal audit;
 they are not new runtime states, an additional workflow phase, or a user
 approval checkpoint.
+
+Every asynchronous completion may add a `verifier_assessment`. The main agent
+must review reported `concern` evidence promptly because one worker can discover
+an evaluation-contract defect while other workers remain live. Pause refill
+while checking, but do not interrupt siblings on an unconfirmed worker opinion.
+Once confirmed, `search_invalidate_run` fences new plans, sessions, verifier
+records, selection, and promotion; then the main agent must interrupt and wait
+for every host worker before changing verifier files. An infrastructure failure
+follows the same mandatory path. A quality or coverage concern requires
+demonstrated ranking unreliability or missing raw-goal coverage; when a
+standardized evaluator agrees with the target judge, retain it and continue the
+same run.
 
 One Goal Plus record is the complete user task. `search_tasks` is its
 append-only search-task history; each item is one `run_id` over one frozen

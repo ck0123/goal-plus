@@ -67,6 +67,13 @@ class Budget(SearchModel):
 
 
 WorkspaceBackend = Literal["copy", "git_worktree"]
+VerifierInvalidationReason = Literal[
+    "verifier_contract_invalid",
+    "verifier_coverage_inadequate",
+    "verifier_nondeterministic",
+    "verifier_target_mismatch",
+    "verifier_infrastructure_failure",
+]
 
 
 class WorkspaceSpec(SearchModel):
@@ -527,6 +534,10 @@ class RunSummary(SearchModel):
     best_candidate_id: str | None = None
     best_score: float | None = None
     budget_used: dict[str, Any] = Field(default_factory=dict)
+    source_run_id: str | None = None
+    invalidated_at: str | None = None
+    invalidation_reason: VerifierInvalidationReason | None = None
+    replacement_run_id: str | None = None
 
 
 class RunRecord(SearchModel):
@@ -547,6 +558,13 @@ class RunRecord(SearchModel):
     selected_iteration: int | None = None
     selected_git_head: str | None = None
     budget_used: dict[str, Any] = Field(default_factory=dict)
+    source_run_id: str | None = None
+    inherited_research: dict[str, Any] = Field(default_factory=dict)
+    invalidated_at: str | None = None
+    invalidation_reason: VerifierInvalidationReason | None = None
+    invalidation_summary: str | None = None
+    invalidation_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    replacement_run_id: str | None = None
 
 
 class CandidateRecord(SearchModel):

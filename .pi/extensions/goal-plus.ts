@@ -334,8 +334,29 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
-	search_create: Type.Object({ frozen_spec_id: Type.String() }, { additionalProperties: false }),
+	search_create: Type.Object(
+		{
+			frozen_spec_id: Type.String(),
+			source_run_id: Type.Optional(Type.String()),
+		},
+		{ additionalProperties: false },
+	),
 	search_status: Type.Object({ run_id: Type.String() }, { additionalProperties: false }),
+	search_invalidate_run: Type.Object(
+		{
+			run_id: Type.String(),
+			reason: Type.Union([
+				Type.Literal("verifier_contract_invalid"),
+				Type.Literal("verifier_coverage_inadequate"),
+				Type.Literal("verifier_nondeterministic"),
+				Type.Literal("verifier_target_mismatch"),
+				Type.Literal("verifier_infrastructure_failure"),
+			]),
+			summary: Type.String({ minLength: 1 }),
+			evidence: Type.Array(LooseObject, { minItems: 1 }),
+		},
+		{ additionalProperties: false },
+	),
 	search_list_history: Type.Object(
 		{
 			run_id: Type.String(),
@@ -521,6 +542,8 @@ const RuntimeToolDescriptions: Record<string, string> = {
 		"Freeze an immutable SearchSpec and verifier bundle. Preflight uses a disposable source copy and rejects verifier workspace side effects; verifier temp files belong in the unique GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, never a fixed /tmp path under concurrent Search. budget.max_candidates is the total cap across the whole run and all rounds; budget.max_parallel is the per-batch cap. Equal values normally permit only one full batch.",
 	search_run_verifier:
 		"Score one candidate. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
+	search_invalidate_run:
+		"Atomically fence a run after the main agent confirms verifier contract, coverage, determinism, target-alignment, or infrastructure failure. Then interrupt every host worker, wait for zero active workers, repair/freeze, and create a successor with source_run_id.",
 	search_plan_next:
 		"Plan one candidate batch/round. requested_k applies only to this call; planned_k is min(requested_k, remaining max_candidates, max_parallel). The default request of 4 is not a whole-run budget.",
 	pi_search_run_candidate:
@@ -1299,6 +1322,7 @@ export default function (pi: ExtensionAPI) {
 		"search_freeze_spec",
 		"search_create",
 		"search_status",
+		"search_invalidate_run",
 		"search_list_history",
 		"search_plan_next",
 		"search_start_batch",

@@ -67,11 +67,20 @@ When the user or outer harness supplies a wall-clock, attempt, or token budget:
    directions based on evidence and remaining time.
 
 After every terminal worker event, refresh remaining time and
-`search_list_history`. Decide independently whether each free slot should
-continue a promising worker, start a new direction, remain idle, or begin final
-selection. `requested_k` is only the number of new candidate workspaces desired
-at that decision point. Never wait for unrelated slow workers merely to preserve
-a batch boundary.
+`search_list_history`. Review the current-run `feature_ledger`,
+`verifier_assessments`, and pitfalls. Treat pitfalls as conditional evidence:
+`candidate_local` stays with one candidate, `feature_family` transfers only
+when mechanism and conditions match, and `evaluation_contract` changes run
+policy only after main-agent confirmation. A single observation never forbids
+another candidate. Consider all three search actions without imposing a quota:
+`deepen_incumbent`, `transfer_feature` from any candidate
+(including one outside the visible ranking frontier), and `macro_restart` from
+source or an earlier ancestor. Decide independently whether each free slot
+should continue a promising worker, start a candidate for one of those actions,
+remain idle, or begin final selection. Record the chosen action in
+`proposal.metadata.search_action`. `requested_k` is only the number of new
+candidate workspaces desired at that decision point. Never wait for unrelated
+slow workers merely to preserve a batch boundary.
 
 ## Main Workflow
 
@@ -103,8 +112,23 @@ a batch boundary.
 7. For each terminal worker, bind its final summary/timeout metadata and run
    `search_run_verifier` from the main agent. Only after that verifier returns is
    the pool event `candidate_ready`. Refresh history immediately; do not wait
-   for the other live workers.
-8. For each newly free slot, choose one action:
+   for the other live workers. `candidate_ready` is a decision event, not run
+   completion. Inspect its `verifier_assessment`: sparse diagnostics, a low
+   score, or lack of progress are not grounds to refreeze, while demonstrated
+   evaluation-contract misalignment must be investigated before spending more
+   candidate budget. Pause refill while investigating. If the concern is not
+   confirmed, record why the spec remains adequate and resume. If the main
+   agent confirms contract, coverage, determinism, target-alignment, or
+   infrastructure failure, call `search_invalidate_run` first so no later
+   verifier result can enter the run; then `interrupt_agent` every live worker
+   and use `list_agents`/`wait_agent` until all are terminal. Preserve their
+   handoffs, repair or regenerate the verifier only after quiescence, freeze a
+   new spec, and call
+   `search_create(new_frozen_spec_id, source_run_id=old_run_id)`. Never
+   select/promote the invalidated run. Inherited features must be re-verified;
+   inherited scores are historical only.
+8. Unless verifier investigation has paused refill, choose one action for each
+   newly free slot:
    - call `search_continue_agent_session(..., worker_budget?)`, then project its
      launch payload onto `followup_task`, to give the same Codex worker a deeper
      turn on the same candidate;
@@ -124,6 +148,15 @@ a batch boundary.
     other completion. Do not apply one worker's timeout to the whole pool.
 11. Drain or interrupt every live worker before `search_select`. Then use
     `search_select`, `search_report`, and `search_promote` when appropriate.
+    Do not select/promote merely to checkpoint a new incumbent;
+    verifier-recorded Git iterations already preserve it. Keep the same run
+    while the evaluation/edit contract is adequate and candidate budget remains.
+    If a new run is unavoidable because the contract/subproblem changed or the
+    immutable run budget is exhausted, read the old run history and pass
+    `source_run_id` to `search_create`. The successor's `inherited_research`
+    explicitly snapshots the old frontier, scoped pitfalls, feature ledger, and
+    non-winning portable innovations. It never imports old scores as current
+    evidence.
 
 ## Worker Budget Control
 
@@ -171,9 +204,16 @@ candidate results through `search_list_history`; workers recover state through
 `search_get_agent_context`, which returns `context.history` and
 `context.iterations`. When a bound worker provides `.tmp/handoff.json`, later
 history also includes its structured `research_summary`. Use the verifier-backed
-`key_results`, scenario-specific `pitfalls`, `blockers`, and `next_steps` to
-design later candidate proposals; do not carry only the best score or raw
-transcript text.
+feature ledger in `key_results`, scoped conditional `pitfalls`, `blockers`,
+`next_steps`, and `verifier_assessment` to design later candidate proposals; do
+not carry only the best score or raw transcript text. Each feature records its
+code surface, artifact/git head, portability, dependencies, measured effect,
+and relation to the incumbent. The run-level ledger deliberately retains
+features from candidates outside the visible score frontier.
+
+When `inherited_research` is present, use it only to seed hypotheses and
+feature-transfer probes. Candidate ids are qualified by `source_run_id`, and
+source scores are non-reusable until the successor verifier records them again.
 
 Codex supports same-worker continuation through `followup_task`. First call
 `search_continue_agent_session` so the runtime records the directive and

@@ -142,6 +142,18 @@ def test_pi_goal_plus_skill_documents_rolling_pool_budget_planning() -> None:
     assert "worker_budgets" in text
     assert "research_summary" in text
     assert "not the depth policy" in normalized
+    assert "deepen_incumbent" in text
+    assert "transfer_feature" in text
+    assert "macro_restart" in text
+    assert "candidate_ready" in text
+    assert "decision event, not run completion" in normalized
+    assert "Keep the same `run_id`" in normalized
+    assert "source_run_id" in text
+    assert "search_invalidate_run" in text
+    assert "active_count=0" in text
+    assert "candidate_local" in text
+    assert "feature_family" in text
+    assert "single_observation" in text
 
 
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
@@ -161,6 +173,15 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "10-15 distinct verifier-recorded artifacts" in text
     assert "verifier is an evaluator, not an analysis service" in text
     assert "next_steps" in text
+    assert "verifier_assessment" in text
+    assert "code_surface" in text
+    assert "measured_effect" in text
+    assert "portability" in text
+    assert "relation_to_incumbent" in text
+    assert "candidate_local" in text
+    assert "feature_family" in text
+    assert "evaluation_contract" in text
+    assert "single_observation" in text
     assert "edit the allowed candidate artifact first" in text
     assert "verifying the unmodified starting point" in text
     assert "valid baseline iteration first" in text
@@ -175,6 +196,7 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "VerifierWorkspaceSideEffect" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
+    assert "candidate-local analysis scripts" not in text
 
 
 def test_pi_skill_documents_post_tool_time_advisory() -> None:
@@ -282,6 +304,8 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "parameters: JsonArgs" not in text
     assert "goal_plus_record_triage: Type.Object" in text
     assert "const SearchSpecSchema = Type.Object" in text
+    assert "search_invalidate_run: Type.Object" in text
+    assert "source_run_id: Type.Optional(Type.String())" in text
     assert "const SearchSpecDraftSchema = Type.Partial(SearchSpecSchema)" in text
     assert "spec: SearchSpecSchema" in text
     assert "search_spec: SearchSpecDraftSchema" in text
@@ -329,6 +353,7 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert '"search_bind_agent_handle"' not in main_tools
     assert '"search_continue_agent_session"' not in main_tools
     assert '"pi_search_pool_wait_any"' in main_tools
+    assert '"search_invalidate_run"' in main_tools
     assert '"pi_search_pool_continue"' in main_tools
     assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
@@ -407,7 +432,7 @@ def test_pi_goal_plus_reassesses_spec_after_real_result() -> None:
     flattened_skill = " ".join(skill.split())
 
     assert "After the first meaningful optimization result" in combined
-    assert "large relative improvement" in combined
+    assert "large relative factor" in combined
     assert "absolute target" in skill
     assert "acceptance threshold" in skill
     assert "success criterion" in flattened_skill

@@ -52,14 +52,46 @@ def create_mcp(
         return tools.search_freeze_spec(spec, verifier_artifact_paths)
 
     @mcp.tool()
-    def search_create(frozen_spec_id: str) -> dict[str, str]:
-        """Start a search run from a frozen spec. Returns `run_id`."""
-        return tools.search_create(frozen_spec_id)
+    def search_create(
+        frozen_spec_id: str,
+        source_run_id: str | None = None,
+    ) -> dict[str, str]:
+        """Start a search run from a frozen spec. Returns `run_id`.
+
+        Pass `source_run_id` only when a new immutable run is unavoidable. The
+        new run receives a bounded snapshot of the source frontier, scoped
+        pitfalls, and feature ledger. Source scores are historical and must be
+        re-verified under the new contract.
+        """
+        return tools.search_create(frozen_spec_id, source_run_id)
 
     @mcp.tool()
     def search_status(run_id: str) -> dict[str, Any]:
         """Read-only snapshot of run state, budget usage, and best score."""
         return tools.search_status(run_id)
+
+    @mcp.tool()
+    def search_invalidate_run(
+        run_id: str,
+        reason: Literal[
+            "verifier_contract_invalid",
+            "verifier_coverage_inadequate",
+            "verifier_nondeterministic",
+            "verifier_target_mismatch",
+            "verifier_infrastructure_failure",
+        ],
+        summary: str,
+        evidence: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Fence a run after the main agent confirms verifier inadequacy.
+
+        This atomically blocks new planning, sessions, verifier records,
+        selection, and promotion. It does not control host workers: after this
+        call, the main agent must interrupt the host pool, wait until every
+        worker is terminal, then repair/freeze the verifier and create a new
+        run with `source_run_id`.
+        """
+        return tools.search_invalidate_run(run_id, reason, summary, evidence)
 
     @mcp.tool()
     def goal_plus_monitor_snapshot(

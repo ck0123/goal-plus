@@ -47,6 +47,7 @@ from goal_plus.models import (
     SearchSpec,
     StrategySpec,
     VerifierCommand,
+    VerifierInvalidationReason,
     VerifierResult,
     VerifierRole,
     WorkerBudget,
@@ -406,8 +407,15 @@ class FileSearchRuntime:
             hashes[rel_path.as_posix()] = sha256_file(path)
         return hashes
 
-    def create_run(self, frozen_spec_id: str) -> str:
+    def create_run(
+        self,
+        frozen_spec_id: str,
+        source_run_id: str | None = None,
+    ) -> str:
         frozen = self._load_frozen_spec(frozen_spec_id)
+        inherited_research = (
+            self._build_inherited_research(source_run_id) if source_run_id else {}
+        )
         run_id = f"run_{time.strftime('%Y%m%d_%H%M%S', time.gmtime())}_{uuid.uuid4().hex[:8]}"
         run = RunRecord(
             run_id=run_id,
@@ -415,13 +423,66 @@ class FileSearchRuntime:
             frozen_spec_id=frozen.frozen_spec_id,
             source_path=str(Path(frozen.spec.source_path).resolve()),
             created_at=utc_timestamp(),
+            source_run_id=source_run_id,
+            inherited_research=inherited_research,
         )
         self._write_run(run)
         (self._run_dir(run_id) / "candidates").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "agent_sessions").mkdir(parents=True, exist_ok=True)
+        if source_run_id:
+            with self._run_transaction(source_run_id):
+                source_run = self._load_run(source_run_id)
+                if source_run.invalidated_at:
+                    source_run.replacement_run_id = run_id
+                    self._write_run(source_run)
         return run_id
+
+    def invalidate_run(
+        self,
+        run_id: str,
+        *,
+        reason: VerifierInvalidationReason,
+        summary: str,
+        evidence: list[dict[str, Any]],
+    ) -> RunRecord:
+        """Atomically fence a verifier-invalid run before host workers stop."""
+
+        if not summary.strip():
+            raise ValueError("summary must be non-empty")
+        if not evidence:
+            raise ValueError("evidence must contain at least one concrete item")
+
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if run.state == RunState.PROMOTED:
+                raise RuntimeError("cannot invalidate an already promoted run")
+            if run.invalidated_at:
+                if run.invalidation_reason != reason:
+                    raise RuntimeError(
+                        "run is already invalidated for a different verifier reason"
+                    )
+                return run
+            updated = RunRecord.model_validate(
+                {
+                    **run.model_dump(mode="json"),
+                    "state": RunState.ABORTED,
+                    "invalidated_at": utc_timestamp(),
+                    "invalidation_reason": reason,
+                    "invalidation_summary": summary.strip(),
+                    "invalidation_evidence": evidence,
+                }
+            )
+            self._write_run(updated)
+            return updated
+
+    def _assert_run_not_invalidated(self, run: RunRecord, operation: str) -> None:
+        if run.invalidated_at:
+            raise RuntimeError(
+                f"cannot {operation}: run {run.run_id} was invalidated because "
+                f"{run.invalidation_reason}"
+            )
 
     def status(self, run_id: str) -> RunSummary:
         run = self._load_run(run_id)
@@ -436,6 +497,10 @@ class FileSearchRuntime:
             best_candidate_id=run.best_candidate_id,
             best_score=run.best_score,
             budget_used=run.budget_used,
+            source_run_id=run.source_run_id,
+            invalidated_at=run.invalidated_at,
+            invalidation_reason=run.invalidation_reason,
+            replacement_run_id=run.replacement_run_id,
         )
 
     def list_history(self, run_id: str, top_n: int = 5, sort_by: str = "score") -> dict[str, Any]:
@@ -475,11 +540,23 @@ class FileSearchRuntime:
         candidates = [
             self._history_candidate_payload(record, frozen.spec) for record in selected
         ]
+        research_rollup = self._run_research_rollup(
+            records,
+            frozen.spec,
+            visible_candidate_ids=[record.candidate_id for record in selected],
+        )
 
         return {
             "run_id": run.run_id,
             "state": run.state,
             "frozen_spec_id": run.frozen_spec_id,
+            "source_run_id": run.source_run_id,
+            "inherited_research": run.inherited_research,
+            "invalidated_at": run.invalidated_at,
+            "invalidation_reason": run.invalidation_reason,
+            "invalidation_summary": run.invalidation_summary,
+            "invalidation_evidence": run.invalidation_evidence,
+            "replacement_run_id": run.replacement_run_id,
             "objective": frozen.spec.objective,
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
@@ -492,6 +569,10 @@ class FileSearchRuntime:
             "top_n": top_n,
             "sort_by": sort_by,
             "candidates": candidates,
+            "feature_ledger": research_rollup["feature_ledger"],
+            "pitfalls": research_rollup["pitfalls"],
+            "verifier_assessments": research_rollup["verifier_assessments"],
+            "research_rollup": research_rollup,
         }
 
     def list_iterations(
@@ -503,6 +584,10 @@ class FileSearchRuntime:
         return [it.model_dump(mode="json") for it in record.iterations]
 
     def plan_next(self, run_id: str, requested_k: int = 4) -> SearchPlan:
+        with self._run_transaction(run_id):
+            return self._plan_next_locked(run_id, requested_k)
+
+    def _plan_next_locked(self, run_id: str, requested_k: int) -> SearchPlan:
         if requested_k <= 0:
             raise ValueError("requested_k must be > 0")
 
@@ -1035,6 +1120,7 @@ class FileSearchRuntime:
         without it. Records an IterationReport for each call.
         """
         run = self._load_run(run_id)
+        self._assert_run_not_invalidated(run, "run verifier")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
         if record.status not in {"created", "evaluated"}:
@@ -1102,6 +1188,7 @@ class FileSearchRuntime:
 
             with self._run_transaction(run_id):
                 run = self._load_run(run_id)
+                self._assert_run_not_invalidated(run, "record verifier result")
                 record = self._load_candidate_record(run_id, candidate_id)
                 record.detected_changed_files = detected_changed
                 record.touched_denied_files = touched_denied
@@ -1165,12 +1252,14 @@ class FileSearchRuntime:
         except Exception:
             with self._run_transaction(run_id):
                 run = self._load_run(run_id)
-                run.state = RunState.FAILED
-                self._write_run(run)
+                if not run.invalidated_at:
+                    run.state = RunState.FAILED
+                    self._write_run(run)
             raise
 
     def select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
         run = self._load_run(run_id)
+        self._assert_run_not_invalidated(run, "select")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
         options = self._selection_options(run, records, frozen.spec.metric_direction)
@@ -1199,15 +1288,17 @@ class FileSearchRuntime:
         if selected_record is None or selected_score is None:
             raise RuntimeError("no selected candidate passed final verification")
 
-        run = self._load_run(run_id)
-        run.state = RunState.READY_TO_PROMOTE
-        run.selected_candidate_id = selected_record.candidate_id
-        run.best_candidate_id = selected_record.candidate_id
-        run.best_score = selected_score
-        run.selected_score = selected_score
-        run.selected_iteration = selected_iteration
-        run.selected_git_head = selected_git_head
-        self._write_run(run)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            self._assert_run_not_invalidated(run, "record selection")
+            run.state = RunState.READY_TO_PROMOTE
+            run.selected_candidate_id = selected_record.candidate_id
+            run.best_candidate_id = selected_record.candidate_id
+            run.best_score = selected_score
+            run.selected_score = selected_score
+            run.selected_iteration = selected_iteration
+            run.selected_git_head = selected_git_head
+            self._write_run(run)
         return {
             "strategy": strategy,
             "selected_candidate_id": selected_record.candidate_id,
@@ -1242,6 +1333,9 @@ class FileSearchRuntime:
             f"# Search Report: {run_id}",
             "",
             f"- Frozen spec: `{frozen.frozen_spec_id}`",
+            f"- State: `{run.state}`",
+            f"- Source run: `{run.source_run_id}`",
+            f"- Replacement run: `{run.replacement_run_id}`",
             f"- Spec hash: `{frozen.spec_hash}`",
             f"- Objective: {frozen.spec.objective}",
             f"- Metric: `{frozen.spec.metric_name}` ({frozen.spec.metric_direction})",
@@ -1251,6 +1345,13 @@ class FileSearchRuntime:
             f"- Selected score: `{run.selected_score}`",
             f"- Selected iteration: `{run.selected_iteration}`",
             f"- Selected git head: `{run.selected_git_head}`",
+            f"- Invalidated at: `{run.invalidated_at}`",
+            f"- Invalidation reason: `{run.invalidation_reason}`",
+            f"- Invalidation summary: {run.invalidation_summary or ''}",
+            (
+                "- Invalidation evidence: "
+                f"{self._markdown_cell(canonical_json(run.invalidation_evidence))}"
+            ),
             "",
             "## Strategy Plans",
             "",
@@ -1370,6 +1471,7 @@ class FileSearchRuntime:
 
     def promote(self, run_id: str, candidate_id: str) -> Path:
         run = self._load_run(run_id)
+        self._assert_run_not_invalidated(run, "promote")
         if run.selected_candidate_id != candidate_id:
             raise RuntimeError(
                 "cannot promote candidate before search_select selects it"
@@ -1387,13 +1489,21 @@ class FileSearchRuntime:
         if record.touched_denied_files or record.changed_outside_allowed:
             raise RuntimeError("cannot promote candidate that changed denied/out-of-surface files")
 
-        promotion_dir = self._run_dir(run_id) / "promotion"
-        promotion_dir.mkdir(parents=True, exist_ok=True)
-        patch_path = promotion_dir / f"{candidate_id}.patch"
-        self._write_patch(Path(run.source_path), record.task.workspace, record.detected_changed_files, patch_path)
-        run.state = RunState.PROMOTED
-        run.selected_candidate_id = candidate_id
-        self._write_run(run)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            self._assert_run_not_invalidated(run, "record promotion")
+            promotion_dir = self._run_dir(run_id) / "promotion"
+            promotion_dir.mkdir(parents=True, exist_ok=True)
+            patch_path = promotion_dir / f"{candidate_id}.patch"
+            self._write_patch(
+                Path(run.source_path),
+                record.task.workspace,
+                record.detected_changed_files,
+                patch_path,
+            )
+            run.state = RunState.PROMOTED
+            run.selected_candidate_id = candidate_id
+            self._write_run(run)
         return patch_path
 
     def _strategy_mode(self, strategy: StrategySpec) -> str:
@@ -1846,6 +1956,8 @@ class FileSearchRuntime:
         notes = [
             "The main agent may remember more chat history, but this is the official runtime view for the next batch.",
             "Submitted proposals must cite at least one official candidate when candidate references are available.",
+            "Review the current-run feature_ledger and verifier_assessments before proposing work; do not discard portable discoveries only because their source candidate is outside the visible frontier.",
+            "Consider deepen_incumbent, transfer_feature, and macro_restart actions after each ready event without imposing a quota; record the chosen action in proposal.metadata.search_action.",
         ]
         return SearchPlan(
             run_id=run.run_id,
@@ -2533,15 +2645,27 @@ class FileSearchRuntime:
         if policy.scope != "all" and forced_candidate_ids is None:
             selected_records = selected_records[: policy.top_n]
 
+        visible_candidate_ids = [record.candidate_id for record in selected_records]
+        research_rollup = self._run_research_rollup(
+            records,
+            frozen.spec,
+            visible_candidate_ids=visible_candidate_ids,
+        )
+
         return {
             "policy": scope,
             "top_n": policy.top_n,
             "include": policy.include,
-            "visible_candidate_ids": [record.candidate_id for record in selected_records],
+            "visible_candidate_ids": visible_candidate_ids,
             "candidates": [
                 self._history_candidate_payload(record, frozen.spec)
                 for record in selected_records
             ],
+            "feature_ledger": research_rollup["feature_ledger"],
+            "pitfalls": research_rollup["pitfalls"],
+            "verifier_assessments": research_rollup["verifier_assessments"],
+            "research_rollup": research_rollup,
+            "inherited_research": run.inherited_research,
             "description": (
                 "Official runtime-selected history view for the current strategy plan."
             ),
@@ -3178,25 +3302,226 @@ class FileSearchRuntime:
             summary = model_handoff.get("summary")
             if not isinstance(summary, str):
                 summary = progress.get("summary")
+            key_results = items(
+                model_handoff.get("key_results", model_handoff.get("what_was_tried"))
+            )
+            verifier_assessment = model_handoff.get("verifier_assessment")
+            if not isinstance(verifier_assessment, dict):
+                verifier_assessment = {
+                    "status": "unknown",
+                    "evidence": [],
+                    "impact": "",
+                    "recommended_action": "keep_spec",
+                }
+            else:
+                verifier_assessment = dict(verifier_assessment)
+                status = verifier_assessment.get("status")
+                evidence = items(verifier_assessment.get("evidence"))
+                if status not in {"adequate", "concern", "unknown"}:
+                    status = "unknown"
+                if status == "concern" and not evidence:
+                    status = "unknown"
+                action = verifier_assessment.get("recommended_action")
+                if action not in {"keep_spec", "investigate", "upgrade_spec"}:
+                    action = "investigate" if status == "concern" else "keep_spec"
+                verifier_assessment = {
+                    "status": status,
+                    "evidence": evidence,
+                    "impact": str(verifier_assessment.get("impact") or ""),
+                    "recommended_action": action,
+                }
             return {
                 "summary": summary if isinstance(summary, str) else "",
-                "key_results": items(
-                    model_handoff.get("key_results", model_handoff.get("what_was_tried"))
-                ),
+                "key_results": key_results,
+                "feature_ledger": key_results,
                 "pitfalls": items(model_handoff.get("pitfalls")),
                 "blockers": items(model_handoff.get("blockers")),
                 "next_steps": items(
                     model_handoff.get("next_steps", model_handoff.get("next_action"))
                 ),
+                "verifier_assessment": verifier_assessment,
                 "source_agent_session_id": session.agent_session_id,
             }
         return {
             "summary": "",
             "key_results": [],
+            "feature_ledger": [],
             "pitfalls": [],
             "blockers": [],
             "next_steps": [],
+            "verifier_assessment": {
+                "status": "unknown",
+                "evidence": [],
+                "impact": "",
+                "recommended_action": "keep_spec",
+            },
             "source_agent_session_id": None,
+        }
+
+    def _run_research_rollup(
+        self,
+        records: list[CandidateRecord],
+        spec: SearchSpec,
+        *,
+        visible_candidate_ids: list[str],
+    ) -> dict[str, Any]:
+        """Keep portable discoveries visible even when candidates leave the frontier."""
+
+        visible = set(visible_candidate_ids)
+        feature_groups: list[list[dict[str, Any]]] = []
+        verifier_assessments: list[dict[str, Any]] = []
+        pitfall_groups: list[list[dict[str, Any]]] = []
+
+        for record in self._records_by_created(records):
+            research = self._candidate_research_summary(
+                record.task.run_id,
+                record.candidate_id,
+            )
+            best_iteration = self._best_iteration_record(record, spec.metric_direction)
+            score = self._record_ranking_score(record, spec)
+            best_git_head = best_iteration.git_head if best_iteration else None
+
+            candidate_features: list[dict[str, Any]] = []
+            for result in research["feature_ledger"]:
+                item = (
+                    dict(result)
+                    if isinstance(result, dict)
+                    else {"conclusion": str(result)}
+                )
+                candidate_features.append(
+                    {
+                        **item,
+                        "candidate_id": record.candidate_id,
+                        "candidate_visible": record.candidate_id in visible,
+                        "candidate_score": score,
+                        "best_git_head": best_git_head,
+                    }
+                )
+            if candidate_features:
+                feature_groups.append(candidate_features)
+
+            assessment = research["verifier_assessment"]
+            evidence = assessment.get("evidence")
+            status = assessment.get("status", "unknown")
+            if status != "unknown" or evidence:
+                verifier_assessments.append(
+                    {
+                        **assessment,
+                        "candidate_id": record.candidate_id,
+                    }
+                )
+
+            candidate_pitfalls: list[dict[str, Any]] = []
+            for pitfall in research["pitfalls"]:
+                item = (
+                    dict(pitfall)
+                    if isinstance(pitfall, dict)
+                    else {"observed_result": str(pitfall)}
+                )
+                scope = item.get("scope")
+                if scope not in {
+                    "candidate_local",
+                    "feature_family",
+                    "evaluation_contract",
+                }:
+                    scope = "candidate_local"
+                confidence = item.get("confidence")
+                if confidence not in {"single_observation", "reproduced"}:
+                    confidence = "single_observation"
+                candidate_pitfalls.append(
+                    {
+                        **item,
+                        "scope": scope,
+                        "confidence": confidence,
+                        "candidate_id": record.candidate_id,
+                    }
+                )
+            if candidate_pitfalls:
+                pitfall_groups.append(candidate_pitfalls)
+
+        def round_robin(
+            groups: list[list[dict[str, Any]]],
+            limit: int,
+        ) -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            for index in range(max((len(group) for group in groups), default=0)):
+                for group in groups:
+                    if index < len(group):
+                        rows.append(group[index])
+                        if len(rows) == limit:
+                            return rows
+            return rows
+
+        return {
+            "feature_ledger": round_robin(feature_groups, 50),
+            "verifier_assessments": verifier_assessments[:15],
+            "pitfalls": round_robin(pitfall_groups, 30),
+            "description": (
+                "Bounded current-run research rollup across all candidates, including "
+                "discoveries from candidates outside the visible ranking frontier."
+            ),
+        }
+
+    def _build_inherited_research(self, source_run_id: str) -> dict[str, Any]:
+        source_run = self._load_run(source_run_id)
+        source_frozen = self._load_frozen_spec(source_run.frozen_spec_id)
+        records = self._load_candidate_records(source_run_id)
+        frontier_records = self._top_records(records, source_frozen.spec, 5)
+        visible_candidate_ids = [record.candidate_id for record in frontier_records]
+        rollup = self._run_research_rollup(
+            records,
+            source_frozen.spec,
+            visible_candidate_ids=visible_candidate_ids,
+        )
+
+        inherited_features = list(
+            source_run.inherited_research.get("feature_ledger", [])
+        )
+        inherited_pitfalls = list(source_run.inherited_research.get("pitfalls", []))
+        current_features = [
+            {
+                **entry,
+                "source_run_id": source_run_id,
+                "score_reusable": False,
+            }
+            for entry in rollup["feature_ledger"]
+        ]
+        current_pitfalls = [
+            {**entry, "source_run_id": source_run_id}
+            for entry in rollup["pitfalls"]
+        ]
+        frontier: list[dict[str, Any]] = []
+        for record in frontier_records:
+            payload = self._history_candidate_payload(record, source_frozen.spec)
+            frontier.append(
+                {
+                    "source_run_id": source_run_id,
+                    "candidate_id": record.candidate_id,
+                    "score": payload["score"],
+                    "score_reusable": False,
+                    "best_iteration": payload["best_iteration"],
+                    "best_git_head": payload["best_git_head"],
+                    "summary": payload["summary"],
+                    "feature_ledger": payload["feature_ledger"],
+                }
+            )
+
+        return {
+            "source_run_id": source_run_id,
+            "source_frozen_spec_id": source_run.frozen_spec_id,
+            "source_invalidation": {
+                "reason": source_run.invalidation_reason,
+                "summary": source_run.invalidation_summary,
+                "evidence": source_run.invalidation_evidence,
+            },
+            "frontier": frontier,
+            "feature_ledger": (current_features + inherited_features)[:50],
+            "pitfalls": (current_pitfalls + inherited_pitfalls)[:30],
+            "score_reusable": False,
+            "description": (
+                "Bounded inherited research context. Source scores are historical "
+                "only and every imported artifact or feature must be re-verified."
+            ),
         }
 
     def _history_candidate_payload(
@@ -3317,10 +3642,17 @@ class FileSearchRuntime:
             "agent_sessions": agent_sessions,
             "summary": research_summary["summary"],
             "key_results": research_summary["key_results"],
+            "feature_ledger": research_summary["feature_ledger"],
             "next_ideas": research_summary["next_steps"],
             "risk_notes": risk_notes,
             "blockers": research_summary["blockers"],
+            "verifier_assessment": research_summary["verifier_assessment"],
             "research_summary": research_summary,
+            "search_action": (
+                record.task.proposal.metadata.get("search_action")
+                if record.task.proposal
+                else None
+            ),
             "artifact_status": None,
             "changed_files": record.detected_changed_files,
             "touched_denied_files": record.touched_denied_files,

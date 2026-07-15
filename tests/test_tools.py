@@ -13,6 +13,7 @@ from goal_plus.models import (
     GoalPlusNextAction,
     GoalPlusRecord,
     RunState,
+    RunRecord,
     RunSummary,
     ScoreReport,
     SearchPlan,
@@ -112,6 +113,17 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         candidates_total=0,
         candidates_evaluated=0,
     )
+    runtime.invalidate_run.return_value = RunRecord(
+        run_id="run_1",
+        state=RunState.ABORTED,
+        frozen_spec_id="spec_123",
+        source_path=".",
+        created_at="2026-06-24T00:00:00Z",
+        invalidated_at="2026-06-24T00:01:00Z",
+        invalidation_reason="verifier_coverage_inadequate",
+        invalidation_summary="missing required case",
+        invalidation_evidence=[{"case": "edge"}],
+    )
     runtime.list_history.return_value = {
         "run_id": "run_1",
         "candidates": [],
@@ -194,6 +206,13 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     tools = SearchTools(runtime)
 
     assert tools.search_create("spec_123") == {"run_id": "run_1"}
+    invalidated = tools.search_invalidate_run(
+        "run_1",
+        "verifier_coverage_inadequate",
+        "missing required case",
+        [{"case": "edge"}],
+    )
+    assert invalidated["state"] == "aborted"
     assert tools.search_status("run_1")["state"] == "running"
     assert tools.search_list_history("run_1", top_n=3, sort_by="created") == {
         "run_id": "run_1",
@@ -255,6 +274,13 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     proposal_arg = runtime.start_batch.call_args.args[2][0]
     assert isinstance(proposal_arg, CandidateProposal)
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
+    runtime.create_run.assert_called_once_with("spec_123", source_run_id=None)
+    runtime.invalidate_run.assert_called_once_with(
+        "run_1",
+        reason="verifier_coverage_inadequate",
+        summary="missing required case",
+        evidence=[{"case": "edge"}],
+    )
     runtime.plan_next.assert_called_once_with("run_1", requested_k=1)
     runtime.start_agent_session.assert_called_once_with(
         run_id="run_1",

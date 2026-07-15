@@ -98,6 +98,15 @@ def test_codex_search_skill_documents_rolling_pool_budget_planning() -> None:
     assert "targetless `wait_agent`" in text
     assert "`list_agents`" in text
     assert "`followup_task`" in text
+    assert "deepen_incumbent" in text
+    assert "transfer_feature" in text
+    assert "macro_restart" in text
+    assert "decision event, not run completion" in " ".join(text.split())
+    assert "source_run_id" in text
+    assert "search_invalidate_run" in text
+    assert "interrupt_agent" in text
+    assert "candidate_local" in text
+    assert "feature_family" in text
 
 
 def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
@@ -182,6 +191,16 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert "PostTool time advisory is informational" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
+    assert "verifier_assessment" in text
+    assert "code_surface" in text
+    assert "measured_effect" in text
+    assert "portability" in text
+    assert "relation_to_incumbent" in text
+    assert "candidate_local" in text
+    assert "feature_family" in text
+    assert "evaluation_contract" in text
+    assert "single_observation" in text
+    assert "candidate-local analysis scripts" not in text
 
 
 def test_codex_search_skill_documents_state_level_resume() -> None:
@@ -200,7 +219,7 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
     assert "search_redispatch_candidate" in text
     assert "one-dispatch override on initial launch or redispatch" in text
     assert "research_summary" in text
-    assert "scenario-specific `pitfalls`" in text
+    assert "scoped conditional `pitfalls`" in text
     assert "do not rely on chat transcript" in agent
 
 

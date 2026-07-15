@@ -11,6 +11,7 @@ from goal_plus.models import (
     GoalPlusSpecDraftInput,
     GoalPlusTriage,
     SearchSpec,
+    VerifierInvalidationReason,
 )
 from goal_plus.monitor import goal_plus_monitor_snapshot
 from goal_plus.runtime import FileSearchRuntime
@@ -34,8 +35,31 @@ class SearchTools:
         )
         return frozen.model_dump(mode="json")
 
-    def search_create(self, frozen_spec_id: str) -> dict[str, str]:
-        return {"run_id": self.runtime.create_run(frozen_spec_id)}
+    def search_create(
+        self,
+        frozen_spec_id: str,
+        source_run_id: str | None = None,
+    ) -> dict[str, str]:
+        return {
+            "run_id": self.runtime.create_run(
+                frozen_spec_id,
+                source_run_id=source_run_id,
+            )
+        }
+
+    def search_invalidate_run(
+        self,
+        run_id: str,
+        reason: VerifierInvalidationReason,
+        summary: str,
+        evidence: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return self.runtime.invalidate_run(
+            run_id,
+            reason=reason,
+            summary=summary,
+            evidence=evidence,
+        ).model_dump(mode="json")
 
     def search_status(self, run_id: str) -> dict[str, Any]:
         return self.runtime.status(run_id).model_dump(mode="json")

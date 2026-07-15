@@ -23,6 +23,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_freeze_spec",
         "search_create",
         "search_status",
+        "search_invalidate_run",
         "search_list_history",
         "search_plan_next",
         "search_start_batch",
@@ -51,6 +52,28 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "goal_plus_set_status",
         "goal_plus_gate",
     }
+
+
+def test_invalidate_run_and_successor_expose_contract_fields(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+    tools = asyncio.run(mcp.get_tools())
+
+    create_properties = tools["search_create"].parameters["properties"]
+    invalidation = tools["search_invalidate_run"].parameters
+
+    assert "source_run_id" in create_properties
+    assert set(invalidation["required"]) == {
+        "run_id",
+        "reason",
+        "summary",
+        "evidence",
+    }
+    assert "verifier_coverage_inadequate" in invalidation["properties"]["reason"][
+        "enum"
+    ]
+    description = " ".join(tools["search_invalidate_run"].description.split())
+    assert "atomically blocks new planning" in description
+    assert "interrupt the host pool" in description
 
 
 def test_start_agent_session_returns_launch_payload(tmp_path: Path) -> None:

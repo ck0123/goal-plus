@@ -32,9 +32,10 @@ goal can retain multiple search tasks.
 | Tool | Purpose |
 |---|---|
 | `search_freeze_spec` | preflight and hash-pin a `SearchSpec` plus verifier artifacts |
-| `search_create` | create a `run_id` from a frozen spec |
+| `search_create` | create a `run_id`; optional `source_run_id` snapshots bounded predecessor research with non-reusable scores |
 | `search_status` | read budget use, candidates, and current best |
-| `search_list_history` | rank evaluated candidates and recover historical bests |
+| `search_invalidate_run` | atomically fence a run after main-confirmed verifier inadequacy |
+| `search_list_history` | rank candidates and return current-run feature/verifier research rollups |
 | `search_list_iterations` | inspect every verifier iteration for one candidate |
 | `goal_plus_monitor_snapshot` | read combined goal/run/session/host evidence without controlling workers |
 
@@ -55,6 +56,22 @@ The default `requested_k=4` is a request for one planning call, not a whole-run
 budget. `max_candidates` is the immutable cap on distinct workspaces across all
 rounds.
 
+`search_invalidate_run` requires a typed verifier reason, non-empty summary,
+and concrete evidence. It changes the run to `aborted` and blocks new planning,
+sessions, verifier records, selection, and promotion. It does not own host
+workers: the caller must next interrupt the complete host pool and wait for zero
+active workers before repairing verifier files.
+
+When a successor is unavoidable, use:
+
+```text
+search_create(new_frozen_spec_id, source_run_id=invalidated_or_exhausted_run)
+```
+
+The new run exposes `inherited_research` containing a bounded predecessor
+frontier, feature ledger, and scoped pitfalls. It marks predecessor scores
+non-reusable.
+
 ### Worker context
 
 | Tool | Caller | Purpose |
@@ -70,6 +87,20 @@ rounds.
 must use the returned `launch` object. A one-dispatch `worker_budget` can be
 passed to initial launch, continuation, or redispatch without mutating the
 frozen spec.
+
+Worker handoffs remain one bounded protocol. `key_results` supplies feature
+ledger entries (artifact, code surface/change, portability/dependencies,
+measured effect, verifier result, and incumbent relation), while
+`verifier_assessment` reports evidence-backed contract quality. Candidate
+history preserves these fields, and top-level `feature_ledger` and
+`verifier_assessments` aggregate the current run across candidates outside the
+visible ranking frontier as well as those inside it.
+
+Pitfalls are not a run-wide deny list. Their `scope` is `candidate_local`,
+`feature_family`, or `evaluation_contract`, with `condition`, evidence artifact,
+and `confidence`. Missing scope defaults to candidate-local. A worker's
+`verifier_assessment` is advisory until the main agent confirms it and calls
+`search_invalidate_run`.
 
 ### Verify and finish
 
@@ -138,6 +169,8 @@ hash-pinned.
 - `VerifierWorkspaceSideEffect` with infrastructure-failure metrics means the
   evaluator violated isolation; stop the candidate and repair/refreeze.
 - Frozen artifact hash mismatches invalidate scoring.
+- A main-confirmed verifier defect requires `search_invalidate_run`, then host
+  interruption/quiescence, then a repaired frozen spec and successor run.
 - Host timeouts and runner failures are different: a timeout proves deadline
   enforcement, while a runner failure requires host recovery evidence.
 

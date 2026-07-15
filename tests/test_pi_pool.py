@@ -160,6 +160,25 @@ def test_pi_pool_enforces_frozen_parallel_limit(tmp_path: Path) -> None:
         )
 
 
+def test_pi_pool_rejects_work_after_run_invalidation(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        _pi_rpc_spec_with_budget(project, max_candidates=1, max_parallel=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    runtime.invalidate_run(
+        run_id,
+        reason="verifier_infrastructure_failure",
+        summary="main agent confirmed verifier infrastructure failure",
+        evidence=[{"failure_class": "VerifierWorkspaceSideEffect"}],
+    )
+
+    with pytest.raises(RuntimeError, match="invalidated"):
+        open_pi_search_pool(root_dir=runtime.root_dir, run_id=run_id)
+
+
 def test_pi_pool_worker_publishes_candidate_ready_after_driver_completion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

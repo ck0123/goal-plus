@@ -11,6 +11,8 @@ import pytest
 from goal_plus.models import (
     CandidateProposal,
     CandidateRecord,
+    RunState,
+    ScoreReport,
     SearchSpec,
 )
 from goal_plus.runtime import (
@@ -1835,6 +1837,10 @@ def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) 
 
     plan2 = runtime.plan_next(run_id, requested_k=1)
     assert plan2.proposal_contract.must_reference_one_of == ["c001"]  # type: ignore[union-attr]
+    assert any(
+        "deepen_incumbent, transfer_feature, and macro_restart" in note
+        for note in plan2.proposal_contract.notes  # type: ignore[union-attr]
+    )
     with pytest.raises(ValueError):
         runtime.start_batch(
             run_id,
@@ -3545,7 +3551,13 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
                         "key_results": [
                             {
                                 "artifact": "iteration 3",
-                                "verifier": "score 7.0",
+                                "code_surface": "kernel.py:build_schedule",
+                                "change": "keep scratch values resident",
+                                "portability": "standalone",
+                                "depends_on": [],
+                                "measured_effect": "score 5.0 -> 7.0",
+                                "verifier_result": "score 7.0",
+                                "relation_to_incumbent": "orthogonal",
                                 "conclusion": "batch reuse is promising",
                             }
                         ],
@@ -3559,6 +3571,12 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
                         ],
                         "blockers": ["no cheap slot-occupancy probe"],
                         "next_steps": ["test four-way interleave"],
+                        "verifier_assessment": {
+                            "status": "adequate",
+                            "evidence": ["local ranking is deterministic"],
+                            "impact": "safe to compare variants",
+                            "recommended_action": "keep_spec",
+                        },
                     },
                 }
             },
@@ -3570,6 +3588,17 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
 
     assert candidate["summary"] == "reworked scratch residency"
     assert candidate["key_results"][0]["artifact"] == "iteration 3"
+    assert candidate["feature_ledger"][0]["code_surface"] == (
+        "kernel.py:build_schedule"
+    )
+    assert candidate["verifier_assessment"]["status"] == "adequate"
+    assert history["feature_ledger"][0]["relation_to_incumbent"] == "orthogonal"
+    assert history["verifier_assessments"][0]["candidate_id"] == task.candidate_id
+    assert history["research_rollup"]["pitfalls"][0]["scope"] == "candidate_local"
+    assert history["pitfalls"] == history["research_rollup"]["pitfalls"]
+    assert history["research_rollup"]["pitfalls"][0]["confidence"] == (
+        "single_observation"
+    )
     assert candidate["risk_notes"][0].startswith(
         "Condition: when the gather spans six lanes; "
         "failed approach: fully interleave all loads"
@@ -3582,6 +3611,213 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
     assert candidate["research_summary"]["source_agent_session_id"] == (
         session.agent_session_id
     )
+
+
+def test_history_feature_ledger_retains_non_frontier_candidate(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 600},
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    for task in tasks:
+        session = runtime.start_agent_session(run_id, task.candidate_id)
+        runtime.bind_agent_handle(
+            session.agent_session_id,
+            {
+                "host": "pi-rpc",
+                "external_id": f"pi-{task.candidate_id}",
+                "metadata": {
+                    "progress_handoff": {
+                        "model_handoff": {
+                            "summary": f"result from {task.candidate_id}",
+                            "key_results": [
+                                {
+                                    "artifact": "iteration 1",
+                                    "code_surface": f"feature-{task.candidate_id}",
+                                    "change": "candidate-specific feature",
+                                    "portability": "standalone",
+                                    "depends_on": [],
+                                    "measured_effect": "0.0 -> 1.0",
+                                    "verifier_result": "passed",
+                                    "relation_to_incumbent": "orthogonal",
+                                    "conclusion": "portable",
+                                }
+                            ],
+                            "pitfalls": [],
+                            "blockers": [],
+                            "next_steps": [],
+                            "verifier_assessment": {
+                                "status": "unknown",
+                                "evidence": [],
+                                "impact": "",
+                                "recommended_action": "keep_spec",
+                            },
+                        }
+                    }
+                },
+            },
+        )
+
+    history = runtime.list_history(run_id, top_n=1)
+
+    assert history["returned_candidates"] == 1
+    assert {entry["candidate_id"] for entry in history["feature_ledger"]} == {
+        "c001",
+        "c002",
+    }
+    hidden = next(
+        entry for entry in history["feature_ledger"] if entry["candidate_id"] == "c002"
+    )
+    assert hidden["candidate_visible"] is False
+
+
+def test_invalidate_run_fences_work_and_successor_inherits_research(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(
+        run_id,
+        plan.plan_id,
+        [CandidateProposal(intent="bootstrap")],
+    )[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        session.agent_session_id,
+        {
+            "host": "opencode",
+            "metadata": {
+                "progress_handoff": {
+                    "model_handoff": {
+                        "summary": "found a portable fusion",
+                        "key_results": [
+                            {
+                                "artifact": "iteration 1",
+                                "code_surface": "kernel.py:hash_stage",
+                                "change": "fuse stages 0/2/4",
+                                "portability": "standalone",
+                                "depends_on": [],
+                                "measured_effect": "1.0 -> 2.0",
+                                "verifier_result": "passed",
+                                "relation_to_incumbent": "orthogonal",
+                                "conclusion": "probe against the next incumbent",
+                            }
+                        ],
+                        "pitfalls": [
+                            {
+                                "scope": "feature_family",
+                                "condition": "when all lanes share one scratch bank",
+                                "failed_approach": "fully interleave writes",
+                                "observed_result": "score regressed",
+                                "reason": "bank pressure",
+                                "evidence_artifact": "iteration 1",
+                                "confidence": "single_observation",
+                                "recommendation": "apply only with separate banks",
+                            }
+                        ],
+                        "blockers": [],
+                        "next_steps": ["transfer fusion"],
+                        "verifier_assessment": {
+                            "status": "concern",
+                            "evidence": ["required edge case is absent"],
+                            "impact": "ranking can accept invalid artifacts",
+                            "recommended_action": "upgrade_spec",
+                        },
+                    }
+                }
+            },
+        },
+    )
+    runtime.run_verifier(
+        run_id,
+        task.candidate_id,
+        agent_session_id=session.agent_session_id,
+    )
+
+    invalidated = runtime.invalidate_run(
+        run_id,
+        reason="verifier_coverage_inadequate",
+        summary="main agent confirmed the missing required edge case",
+        evidence=[{"case": "required-edge", "source_candidate_id": "c001"}],
+    )
+
+    assert invalidated.state == RunState.ABORTED
+    assert invalidated.invalidation_reason == "verifier_coverage_inadequate"
+    with pytest.raises(RuntimeError, match="invalidated"):
+        runtime.run_verifier(run_id, task.candidate_id)
+    with pytest.raises(RuntimeError):
+        runtime.plan_next(run_id, requested_k=1)
+    with pytest.raises(RuntimeError):
+        runtime.start_agent_session(run_id, task.candidate_id)
+    with pytest.raises(RuntimeError, match="invalidated"):
+        runtime.select(run_id)
+
+    successor_id = runtime.create_run(
+        frozen.frozen_spec_id,
+        source_run_id=run_id,
+    )
+    successor_history = runtime.list_history(successor_id)
+    inherited = successor_history["inherited_research"]
+
+    assert successor_history["source_run_id"] == run_id
+    assert inherited["frontier"][0]["candidate_id"] == "c001"
+    assert inherited["feature_ledger"][0]["code_surface"] == (
+        "kernel.py:hash_stage"
+    )
+    assert inherited["feature_ledger"][0]["score_reusable"] is False
+    assert inherited["pitfalls"][0]["scope"] == "feature_family"
+    assert runtime.status(run_id).replacement_run_id == successor_id
+
+
+def test_invalidation_rejects_in_flight_verifier_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    original_run_commands = runtime._run_commands
+
+    def invalidate_after_execution(*args: object, **kwargs: object) -> ScoreReport:
+        report = original_run_commands(*args, **kwargs)  # type: ignore[arg-type]
+        runtime.invalidate_run(
+            run_id,
+            reason="verifier_target_mismatch",
+            summary="main agent confirmed target mismatch while verifier ran",
+            evidence=[{"target": "hidden judge"}],
+        )
+        return report
+
+    monkeypatch.setattr(runtime, "_run_commands", invalidate_after_execution)
+
+    with pytest.raises(RuntimeError, match="record verifier result"):
+        runtime.run_verifier(run_id, task.candidate_id)
+
+    assert runtime.status(run_id).state == RunState.ABORTED
+    assert runtime.list_iterations(run_id, task.candidate_id) == []
 
 
 def test_runtime_does_not_create_event_or_observation_dirs(tmp_path: Path) -> None:

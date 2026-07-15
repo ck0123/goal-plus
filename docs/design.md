@@ -14,6 +14,8 @@ host agent
                          +-> frozen specs and verifier artifacts
                          +-> candidate workspaces and Git commits
                          +-> plans, iterations, selection, reports, patches
+                         +-> bounded feature/pitfall research rollups
+                         +-> run invalidation and successor provenance
 
 host adapter / supervisor
   -> launches and waits for native workers
@@ -33,6 +35,7 @@ product flow with extension events and a durable local worker supervisor.
 | frozen specs and hashes | wait-any and live status | candidate/continuation policy |
 | workspace materialization | time, turn, or step enforcement | final verification and drain |
 | verifier execution and history | native logs/transcripts | selection, report, promotion |
+| run invalidation fence and inherited research | stopping every live worker | verifier concern confirmation |
 | selection/report/patch artifacts | host handles | full-goal audit |
 
 Host pool state must not be copied into Search lifecycle fields. The Pi pool is
@@ -71,6 +74,50 @@ The core records are:
   process lifecycle record.
 - `IterationRecord`: verifier result, failure, metrics, changed files, session
   provenance, and exact candidate Git commit.
+- `RunRecord`: also stores optional verifier invalidation evidence,
+  `source_run_id`, `replacement_run_id`, and bounded `inherited_research`.
+
+## Search Run State And Succession
+
+```text
+running/waiting/selecting
+        │
+        ├─ normal closeout -> ready_to_promote -> promoted
+        │
+        ├─ execution failure -> failed
+        │
+        └─ main-confirmed verifier defect
+             -> search_invalidate_run -> aborted (fenced)
+             -> host interrupts and waits for all workers
+             -> repaired frozen spec
+             -> successor running run with source_run_id
+```
+
+Invalidation is runtime state; worker termination is host state. They are
+separate operations in a strict order: fence first, stop workers second. The
+runtime checks the fence both before verifier execution and before recording a
+completed verifier result, so an in-flight worker cannot race a confirmed
+invalidation.
+
+`search_create(source_run_id=...)` snapshots bounded research rather than
+deriving a workspace across contracts. It carries frontier summaries, the
+feature ledger, and scoped pitfalls. Every inherited score is marked
+non-reusable; successor candidates must materialize and verify their own
+artifacts.
+
+## Research Handoff
+
+One worker handoff feeds two different views:
+
+| View | Semantics |
+|---|---|
+| feature ledger | run-wide, bounded; portable discoveries remain visible even when their candidate leaves the score frontier |
+| pitfalls | conditional; default `candidate_local`, transferred only when scope and conditions match |
+| verifier assessment | worker advisory; only main-agent confirmation can invalidate a run |
+
+`feature_family` pitfalls require matching mechanism/conditions.
+`evaluation_contract` pitfalls do not become global merely because a worker
+labels them so; the main agent must confirm the underlying verifier evidence.
 
 ## Invariants
 
@@ -97,6 +144,16 @@ The core records are:
 10. **Stop only from durable state.** A top-level active goal always receives a
     full-goal and elapsed-time audit prompt. It may stop only after the main
     agent records a terminal status; worker lease expiry is not goal completion.
+11. **Prefer one run per contract.** A new incumbent, planning decision, or
+    feature transfer stays in the current run; verifier-recorded Git iterations
+    already provide durable checkpoints.
+12. **Scope negative evidence.** One candidate's failed attempt cannot silently
+    forbid another candidate. Missing pitfall scope is candidate-local.
+13. **Fence before quiescing.** Confirmed verifier defects invalidate the run
+    before the host interrupts workers; invalidated runs cannot accept verifier
+    results, selection, or promotion.
+14. **Never reuse cross-run scores.** Successor runs may inherit bounded
+    hypotheses and artifacts as research context, but must re-verify them.
 
 ## Host Pool Contract
 

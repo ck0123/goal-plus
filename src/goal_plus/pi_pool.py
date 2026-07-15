@@ -109,6 +109,7 @@ def _validate_pool_run(
 ) -> int:
     runtime = FileSearchRuntime(root_dir)
     run = runtime._load_run(run_id)
+    runtime._assert_run_not_invalidated(run, "open or submit Pi pool work")
     frozen = runtime._load_frozen_spec(run.frozen_spec_id)
     if frozen.spec.strategy.worker_host != "pi-rpc":
         raise ValueError(
