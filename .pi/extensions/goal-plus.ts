@@ -137,6 +137,8 @@ const HistoryPolicy = Type.Object(
 		),
 		top_n: Type.Optional(PositiveInteger),
 		include: Type.Optional(Type.Array(Type.String())),
+		inherited_feature_limit: Type.Optional(NullablePositiveInteger),
+		inherited_pitfall_limit: Type.Optional(NullablePositiveInteger),
 	},
 	{ additionalProperties: false },
 );

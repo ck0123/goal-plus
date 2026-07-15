@@ -82,6 +82,28 @@ remain idle, or begin final selection. Record the chosen action in
 candidate workspaces desired at that decision point. Never wait for unrelated
 slow workers merely to preserve a batch boundary.
 
+Before starting another candidate, assess whether recent and active attempts
+cluster around the same underlying mechanism or bottleneck. Different candidate
+ids do not by themselves provide search diversity. When work has concentrated
+in one family, step back and analyze the current bottleneck, then prefer a
+materially different high-potential direction when the evidence supports one.
+This is advisory: it does not require `macro_restart`, impose an action quota,
+or make superficial difference more valuable than a strong hypothesis.
+
+After substantial attempts without meaningful progress, do not keep applying
+nearby mutations by default. Reassess the objective's applicable theoretical or
+structural limits, such as lower or upper bounds, critical paths, resource
+bottlenecks, saturation evidence, or infeasibility constraints. Use that
+analysis to identify a credible breakthrough and decide whether to deepen,
+transfer, or redirect; the analysis does not force any particular action.
+
+When an existing candidate remains promising and further progress benefits from
+its accumulated source and workspace understanding, prefer same-candidate
+continuation with a larger one-dispatch budget over launching near-duplicate
+candidates. Parallel candidates in the same feature family are useful only when
+they test materially distinct hypotheses. A free slot is not an obligation to
+launch more work.
+
 ## Main Workflow
 
 1. Call `search_freeze_spec` for the Goal Plus spec draft, or `search_create`
@@ -190,10 +212,10 @@ hard per-subagent step tier like OpenCode, so the enforceable escalation is a
 larger `worker_budget.max_runtime_seconds` for the next search run or a
 one-dispatch override on initial launch or redispatch. Treat the frozen budget
 as a baseline, not a requirement to give every direction equal depth. When a
-macro direction is promising, allocate a larger budget that fits the outer
-remaining time and let the worker continue hypothesis -> artifact -> verifier
-cycles; roughly 10-15 meaningful verifier-recorded artifacts may be reasonable
-for a long worker, but this is not a quota. You may also override
+direction is promising, allocate a larger budget that fits the outer remaining
+time and let the worker continue hypothesis -> artifact -> verifier cycles
+while distinct evidence-backed hypotheses remain and the expected information
+or performance gain justifies the time. You may also override
 `worker_agent_type` when local Codex agent
 variants exist, but that is prompt/agent selection, not a hard step cap. If a
 watchdog stops a worker before it records any verifier iteration or usable

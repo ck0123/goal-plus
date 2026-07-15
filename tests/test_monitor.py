@@ -120,6 +120,8 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
             "scope": "top_n",
             "top_n": 5,
             "include": ["summary", "score", "key_metrics", "parent_id", "changed_files"],
+            "inherited_feature_limit": 50,
+            "inherited_pitfall_limit": 30,
         },
         "latest_plan": {
             "plan_id": plan.plan_id,

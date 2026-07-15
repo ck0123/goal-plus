@@ -78,6 +78,27 @@ another useful batch fits the remaining budget. Select only when the candidate
 cap is exhausted, another batch no longer fits before the final reserve, an
 explicit attempt/token cap is reached, or a declared early-stop condition holds.
 
+Before starting another candidate, assess whether recent attempts cluster
+around the same underlying mechanism or bottleneck. Different candidate ids do
+not by themselves provide search diversity. When work has concentrated in one
+family, step back and analyze the current bottleneck, then prefer a materially
+different high-potential direction when the evidence supports one. This is
+advisory: it does not require `macro_restart` or impose an action quota.
+
+After substantial attempts without meaningful progress, do not keep applying
+nearby mutations by default. Reassess the objective's applicable theoretical or
+structural limits, such as lower or upper bounds, critical paths, resource
+bottlenecks, saturation evidence, or infeasibility constraints. Use that
+analysis to identify a credible breakthrough and decide whether to deepen or
+redirect; the analysis does not force any particular action.
+
+When an existing candidate remains promising and further progress benefits from
+its accumulated workspace understanding, prefer same-candidate continuation or
+state-level redispatch with a larger worker tier over launching near-duplicate
+candidates. Parallel candidates in the same feature family are useful only when
+they test materially distinct hypotheses. Available candidate capacity is not
+an obligation to launch more work.
+
 ## Main Workflow
 
 1. Call `search_freeze_spec` for the Goal Plus spec draft, or `search_create`

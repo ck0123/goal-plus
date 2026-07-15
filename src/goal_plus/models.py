@@ -104,6 +104,22 @@ class HistoryPolicy(SearchModel):
             "changed_files",
         ]
     )
+    inherited_feature_limit: int | None = Field(
+        default=50,
+        gt=0,
+        description=(
+            "Maximum inherited feature-ledger entries retained for a successor "
+            "run; null disables runtime truncation."
+        ),
+    )
+    inherited_pitfall_limit: int | None = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Maximum inherited pitfall entries retained for a successor run; "
+            "null disables runtime truncation."
+        ),
+    )
 
 
 AgentHostKind = Literal["opencode", "codex", "claude-code", "pi-rpc"]

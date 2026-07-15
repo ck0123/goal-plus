@@ -107,6 +107,11 @@ def test_codex_search_skill_documents_rolling_pool_budget_planning() -> None:
     assert "interrupt_agent" in text
     assert "candidate_local" in text
     assert "feature_family" in text
+    assert "Different candidate ids do not by themselves provide search diversity" in normalized
+    assert "same-candidate continuation" in normalized
+    assert "free slot is not an obligation" in normalized
+    assert "theoretical or structural limits" in normalized
+    assert "does not require `macro_restart`" in text
 
 
 def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
@@ -186,7 +191,11 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert "pitfalls" in text
     assert "condition" in text
     assert "failed_approach" in text
-    assert "10-15 distinct verifier-recorded artifacts" in text
+    assert "assigned candidate idea as a hypothesis" in text
+    assert "treat any promising direction" in text
+    assert "fixed artifact count" in text
+    assert "theoretical or structural limits" in text
+    assert "10-15 distinct verifier-recorded artifacts" not in text
     assert "verifier is an evaluator, not an analysis service" in text
     assert "PostTool time advisory is informational" in text
     assert "candidate_action=stop_and_report" in text

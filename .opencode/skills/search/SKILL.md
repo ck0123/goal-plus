@@ -216,6 +216,27 @@ useful result, call `search_redispatch_candidate` for the same candidate with a
 higher `worker_agent_type` instead of repeating the underpowered launch. Do not
 ask the worker to infer history from chat transcript.
 
+Before starting another candidate, assess whether recent attempts cluster
+around the same underlying mechanism or bottleneck. Different candidate ids do
+not by themselves provide search diversity. When work has concentrated in one
+family, step back and analyze the current bottleneck, then prefer a materially
+different high-potential direction when the evidence supports one. This is
+advisory: it does not require `macro_restart` or impose an action quota.
+
+After substantial attempts without meaningful progress, do not keep applying
+nearby mutations by default. Reassess the objective's applicable theoretical or
+structural limits, such as lower or upper bounds, critical paths, resource
+bottlenecks, saturation evidence, or infeasibility constraints. Use that
+analysis to identify a credible breakthrough and decide whether to deepen or
+redirect; the analysis does not force any particular action.
+
+When an existing candidate remains promising and further progress benefits from
+its accumulated session and workspace understanding, prefer same-candidate
+continuation or state-level redispatch with a larger worker tier over launching
+near-duplicate candidates. Parallel candidates in the same feature family are
+useful only when they test materially distinct hypotheses. Available candidate
+capacity is not an obligation to launch more work.
+
 ## Workflow
 
 ### Step 1: Probe Read-Only Context

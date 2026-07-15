@@ -75,7 +75,8 @@ The core records are:
 - `IterationRecord`: verifier result, failure, metrics, changed files, session
   provenance, and exact candidate Git commit.
 - `RunRecord`: also stores optional verifier invalidation evidence,
-  `source_run_id`, `replacement_run_id`, and bounded `inherited_research`.
+  `source_run_id`, `replacement_run_id`, and policy-controlled
+  `inherited_research`.
 
 ## Search Run State And Succession
 
@@ -99,11 +100,12 @@ runtime checks the fence both before verifier execution and before recording a
 completed verifier result, so an in-flight worker cannot race a confirmed
 invalidation.
 
-`search_create(source_run_id=...)` snapshots bounded research rather than
-deriving a workspace across contracts. It carries frontier summaries, the
+`search_create(source_run_id=...)` snapshots policy-controlled research rather
+than deriving a workspace across contracts. It carries frontier summaries, the
 feature ledger, and scoped pitfalls. Every inherited score is marked
 non-reusable; successor candidates must materialize and verify their own
-artifacts.
+artifacts. The receiving spec's history policy controls inherited feature and
+pitfall limits; either limit may be `null` when truncation should be disabled.
 
 ## Research Handoff
 

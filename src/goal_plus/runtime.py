@@ -424,7 +424,12 @@ class FileSearchRuntime:
     ) -> str:
         frozen = self._load_frozen_spec(frozen_spec_id)
         inherited_research = (
-            self._build_inherited_research(source_run_id) if source_run_id else {}
+            self._build_inherited_research(
+                source_run_id,
+                history_policy=frozen.spec.strategy.history_policy,
+            )
+            if source_run_id
+            else {}
         )
         run_id = f"run_{time.strftime('%Y%m%d_%H%M%S', time.gmtime())}_{uuid.uuid4().hex[:8]}"
         run = RunRecord(
@@ -2030,6 +2035,9 @@ class FileSearchRuntime:
             "Submitted proposals must cite at least one official candidate when candidate references are available.",
             "Review the current-run feature_ledger and verifier_assessments before proposing work; do not discard portable discoveries only because their source candidate is outside the visible frontier.",
             "Consider deepen_incumbent, transfer_feature, and macro_restart actions after each ready event without imposing a quota; record the chosen action in proposal.metadata.search_action.",
+            "Before starting another candidate, assess whether recent and active attempts cluster around the same mechanism or bottleneck; different candidate ids do not by themselves provide search diversity.",
+            "When an existing candidate remains promising and benefits from accumulated workspace understanding, prefer continuing it with a larger one-dispatch budget over launching near-duplicate candidates. A free slot is not an obligation to launch more work.",
+            "After substantial attempts without meaningful progress, reassess applicable theoretical or structural limits, such as lower or upper bounds, critical paths, resource bottlenecks, saturation evidence, or infeasibility constraints, before proposing more nearby mutations.",
         ]
         return SearchPlan(
             run_id=run.run_id,
@@ -3889,7 +3897,12 @@ class FileSearchRuntime:
             ),
         }
 
-    def _build_inherited_research(self, source_run_id: str) -> dict[str, Any]:
+    def _build_inherited_research(
+        self,
+        source_run_id: str,
+        *,
+        history_policy: HistoryPolicy,
+    ) -> dict[str, Any]:
         source_run = self._load_run(source_run_id)
         source_frozen = self._load_frozen_spec(source_run.frozen_spec_id)
         records = self._load_candidate_records(source_run_id)
@@ -3917,6 +3930,12 @@ class FileSearchRuntime:
             {**entry, "source_run_id": source_run_id}
             for entry in rollup["pitfalls"]
         ]
+        features = current_features + inherited_features
+        pitfalls = current_pitfalls + inherited_pitfalls
+        if history_policy.inherited_feature_limit is not None:
+            features = features[: history_policy.inherited_feature_limit]
+        if history_policy.inherited_pitfall_limit is not None:
+            pitfalls = pitfalls[: history_policy.inherited_pitfall_limit]
         frontier: list[dict[str, Any]] = []
         for record in frontier_records:
             payload = self._history_candidate_payload(record, source_frozen.spec)
@@ -3942,11 +3961,11 @@ class FileSearchRuntime:
                 "evidence": source_run.invalidation_evidence,
             },
             "frontier": frontier,
-            "feature_ledger": (current_features + inherited_features)[:50],
-            "pitfalls": (current_pitfalls + inherited_pitfalls)[:30],
+            "feature_ledger": features,
+            "pitfalls": pitfalls,
             "score_reusable": False,
             "description": (
-                "Bounded inherited research context. Source scores are historical "
+                "Policy-controlled inherited research context. Source scores are historical "
                 "only and every imported artifact or feature must be re-verified."
             ),
         }

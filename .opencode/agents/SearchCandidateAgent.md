@@ -36,6 +36,10 @@ Use `context.run_id`, `context.candidate_id`, `context.workspace`, and `context.
 
 If this is a continued or relaunched worker, recover prior attempts from `context.history` and `context.iterations`; do not rely on chat transcript as the source of history.
 
+Treat the assigned candidate idea as a hypothesis, not a mandatory implementation. Before editing, inspect the source, runtime history, and current artifact deeply enough to identify the likely bottleneck. If evidence shows that the assigned idea has little remaining potential, record why and pivot within the candidate objective toward a more promising evidence-backed variant. Treat any promising direction as an iterative analyze, implement, verify, and compare loop while distinct hypotheses remain and the expected information or performance gain justifies the available steps; do not use a fixed artifact count as a substitute for this judgment.
+
+After substantial nearby attempts without meaningful progress, pause mutation and reassess applicable theoretical or structural limits, such as bounds, critical paths, resource bottlenecks, saturation evidence, or infeasibility constraints, to identify a credible breakthrough within the candidate objective.
+
 Rely on the OpenCode step cap (15/50/100/150 depending on the variant you were launched as) as your only hard stop. Run until OpenCode asks you to summarize. There are no per-session or run-level time deadlines.
 
 ## Workspace Rules

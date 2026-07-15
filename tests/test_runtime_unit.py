@@ -1841,6 +1841,11 @@ def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) 
         "deepen_incumbent, transfer_feature, and macro_restart" in note
         for note in plan2.proposal_contract.notes  # type: ignore[union-attr]
     )
+    notes = " ".join(plan2.proposal_contract.notes)  # type: ignore[union-attr]
+    assert "different candidate ids do not by themselves provide search diversity" in notes
+    assert "prefer continuing it with a larger one-dispatch budget" in notes
+    assert "free slot is not an obligation" in notes
+    assert "theoretical or structural limits" in notes
     with pytest.raises(ValueError):
         runtime.start_batch(
             run_id,
@@ -3939,6 +3944,56 @@ def test_invalidate_run_fences_work_and_successor_inherits_research(
     assert inherited["feature_ledger"][0]["score_reusable"] is False
     assert inherited["pitfalls"][0]["scope"] == "feature_family"
     assert runtime.status(run_id).replacement_run_id == successor_id
+
+
+def test_successor_history_uses_receiving_policy_limits(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    source_spec = spec_with_strategy(
+        project,
+        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+    )
+    source_frozen = runtime.freeze_spec(source_spec, [project / "evaluator.py"])
+    source_run_id = runtime.create_run(source_frozen.frozen_spec_id)
+    source_run = runtime._load_run(source_run_id)
+    source_run.inherited_research = {
+        "feature_ledger": [{"artifact": f"feature-{index}"} for index in range(60)],
+        "pitfalls": [{"condition": f"pitfall-{index}"} for index in range(40)],
+    }
+    runtime._write_run(source_run)
+
+    default_spec = spec_with_strategy(
+        project,
+        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+    )
+    default_frozen = runtime.freeze_spec(default_spec, [project / "evaluator.py"])
+    default_run_id = runtime.create_run(
+        default_frozen.frozen_spec_id,
+        source_run_id=source_run_id,
+    )
+    default_inherited = runtime.list_history(default_run_id)["inherited_research"]
+    assert len(default_inherited["feature_ledger"]) == 50
+    assert len(default_inherited["pitfalls"]) == 30
+
+    custom_spec = spec_with_strategy(
+        project,
+        {
+            "name": "agent_guided",
+            "worker_mode": "agent-session-pool",
+            "history_policy": {
+                "inherited_feature_limit": None,
+                "inherited_pitfall_limit": 7,
+            },
+        },
+    )
+    custom_frozen = runtime.freeze_spec(custom_spec, [project / "evaluator.py"])
+    custom_run_id = runtime.create_run(
+        custom_frozen.frozen_spec_id,
+        source_run_id=source_run_id,
+    )
+    custom_inherited = runtime.list_history(custom_run_id)["inherited_research"]
+    assert len(custom_inherited["feature_ledger"]) == 60
+    assert len(custom_inherited["pitfalls"]) == 7
 
 
 def test_invalidation_rejects_in_flight_verifier_result(

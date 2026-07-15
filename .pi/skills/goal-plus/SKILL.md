@@ -128,15 +128,38 @@ decision point. Record the chosen action in
 `proposal.metadata.search_action`. Never wait for unrelated slow workers merely
 to preserve a batch boundary.
 
+Before starting another candidate, assess whether recent and active attempts
+cluster around the same underlying mechanism or bottleneck. Different candidate
+ids do not by themselves provide search diversity. When work has concentrated
+in one family, step back and analyze the current bottleneck, then prefer a
+materially different high-potential direction when the evidence supports one.
+This is advisory: it does not require `macro_restart`, impose an action quota,
+or make superficial difference more valuable than a strong hypothesis.
+
+After substantial attempts without meaningful progress, do not keep applying
+nearby mutations by default. Reassess the objective's applicable theoretical or
+structural limits, such as lower or upper bounds, critical paths, resource
+bottlenecks, saturation evidence, or infeasibility constraints. Use that
+analysis to identify a credible breakthrough and decide whether to deepen,
+transfer, or redirect; the analysis does not force any particular action.
+
+When an existing candidate remains promising and further progress benefits from
+its accumulated source and workspace understanding, prefer
+`pi_search_pool_continue` with a larger one-dispatch budget over launching
+near-duplicate candidates. Parallel candidates in the same feature family are
+useful only when they test materially distinct hypotheses. A free slot is not
+an obligation to launch more work.
+
 Treat the frozen `strategy.worker_budget` as the normal per-worker budget, not
 as a rule that every direction deserves identical depth. The main agent owns
-reinvestment decisions. When a proposal is unusually promising or represents
-a structurally distinct macro direction, assign a larger one-dispatch
-`worker_budget` that still fits the outer remaining time. Do not encode a fixed
-number of worker iterations or Search rounds as a substitute for this judgment.
-A long worker may need roughly 10-15 meaningful verifier-recorded artifacts to
-explore a direction, while an unpromising direction may stop earlier on
-evidence. Preserve final-verification and closeout reserve in either case.
+reinvestment decisions. When a proposal is unusually promising, assign a
+larger one-dispatch `worker_budget` that still fits the outer remaining time. Do
+not encode a fixed number of worker iterations or Search rounds as a substitute
+for this judgment.
+Let a valuable worker continue while distinct evidence-backed hypotheses remain
+and the expected information or performance gain justifies the assigned time;
+stop an unpromising direction earlier on evidence. Preserve final-verification
+and closeout reserve in either case.
 
 Follow the exploration line in `raw_goal`. In `probe` mode, return once
 feasibility, potential, and blockers are credible, then decide whether to
@@ -182,8 +205,9 @@ No worker lease ending completes the Goal Plus record.
    Never select or promote the invalidated run. Its artifacts, scoped pitfalls,
    and features remain research input, but every old score is historical and
    every imported feature must be re-verified under the successor contract.
-8. Unless step 7 has paused refill for verifier investigation, refill each free
-   slot immediately with one deliberate action:
+8. Unless step 7 has paused refill for verifier investigation, reassess each
+   free slot promptly. A free slot is not an obligation to launch another
+   candidate; choose one deliberate action:
    - `pi_search_pool_continue` for state-level reinvestment in a promising
      candidate, optionally with a larger one-dispatch budget;
    - `search_plan_next(requested_k=<new direction count>)`,

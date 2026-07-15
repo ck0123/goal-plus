@@ -154,6 +154,11 @@ def test_pi_goal_plus_skill_documents_rolling_pool_budget_planning() -> None:
     assert "candidate_local" in text
     assert "feature_family" in text
     assert "single_observation" in text
+    assert "Different candidate ids do not by themselves provide search diversity" in normalized
+    assert "free slot is not an obligation" in normalized
+    assert "prefer `pi_search_pool_continue`" in normalized
+    assert "theoretical or structural limits" in normalized
+    assert "does not require `macro_restart`" in text
 
 
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
@@ -173,7 +178,11 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "pitfalls" in text
     assert "condition" in text
     assert "failed_approach" in text
-    assert "10-15 distinct verifier-recorded artifacts" in text
+    assert "assigned candidate idea as a hypothesis" in text
+    assert "Treat any promising direction" in text
+    assert "fixed artifact count" in text
+    assert "theoretical or structural limits" in text
+    assert "10-15 distinct verifier-recorded artifacts" not in text
     assert "verifier is an evaluator, not an analysis service" in text
     assert "next_steps" in text
     assert "verifier_assessment" in text
@@ -317,6 +326,8 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "metric_direction: Type.Union" in text
     assert "process_verifiers: Type.Array(VerifierCommand" in text
     assert "worker_budget: Type.Optional(Type.Union" in text
+    assert "inherited_feature_limit: Type.Optional(NullablePositiveInteger)" in text
+    assert "inherited_pitfall_limit: Type.Optional(NullablePositiveInteger)" in text
     assert "const RuntimeToolDescriptions" in text
     assert "RuntimeToolDescriptions[name]" in text
     assert "Hard cap on total distinct candidate workspaces" in text

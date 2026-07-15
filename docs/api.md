@@ -68,9 +68,12 @@ When a successor is unavoidable, use:
 search_create(new_frozen_spec_id, source_run_id=invalidated_or_exhausted_run)
 ```
 
-The new run exposes `inherited_research` containing a bounded predecessor
-frontier, feature ledger, and scoped pitfalls. It marks predecessor scores
-non-reusable.
+The new run exposes `inherited_research` containing a predecessor frontier,
+feature ledger, and scoped pitfalls. It marks predecessor scores non-reusable.
+`strategy.history_policy.inherited_feature_limit` and
+`inherited_pitfall_limit` bound the inherited ledgers by default; set either to
+`null` to disable that runtime truncation when the host context can carry the
+full history.
 
 ### Worker context
 
