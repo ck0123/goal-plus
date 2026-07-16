@@ -140,7 +140,11 @@ launch more work.
    agent. The terminal bind automatically harvests a bounded
    `.tmp/handoff.json` from that candidate workspace into durable runtime
    history; a missing or malformed handoff does not make handle binding fail
-   and is exposed as metadata for diagnosis. Every returned report appends
+   and is exposed as metadata for diagnosis. Use
+   `search_get_agent_observability(agent_session_id)` when model, token,
+   duration, context, terminal, or native session evidence is needed; it is
+   read-only and does not replace `list_agents` for host liveness. Every
+   returned report appends
    exactly one validated row to the
    runtime-owned inherited workspace-root `results.tsv` and commits it. Only
    after that verifier returns is

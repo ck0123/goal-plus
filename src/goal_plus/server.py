@@ -231,6 +231,19 @@ def create_mcp(
         return tools.search_bind_agent_handle(agent_session_id, handle)
 
     @mcp.tool()
+    def search_get_agent_observability(
+        agent_session_id: str,
+    ) -> dict[str, Any]:
+        """Read normalized host metrics and artifacts for one agent session.
+
+        The schema is shared across hosts. Codex resolves its native session
+        JSONL when available; Pi normalizes bound `pi_metrics`. This call is
+        read-only and does not wait for, continue, or interrupt the worker.
+        Prompt, reasoning, and tool payload contents are never returned.
+        """
+        return tools.search_get_agent_observability(agent_session_id)
+
+    @mcp.tool()
     def search_continue_agent_session(
         agent_session_id: str,
         directive: dict[str, Any] | str | None = None,

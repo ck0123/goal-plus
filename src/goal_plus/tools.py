@@ -156,6 +156,9 @@ class SearchTools:
     def search_get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
         return self.runtime.get_agent_context(agent_session_id)
 
+    def search_get_agent_observability(self, agent_session_id: str) -> dict[str, Any]:
+        return self.runtime.get_agent_observability(agent_session_id)
+
     def search_run_verifier(
         self,
         run_id: str,

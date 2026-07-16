@@ -422,6 +422,10 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{ additionalProperties: false },
 	),
 	search_get_agent_context: Type.Object({ agent_session_id: Type.String() }, { additionalProperties: false }),
+	search_get_agent_observability: Type.Object(
+		{ agent_session_id: Type.String() },
+		{ additionalProperties: false },
+	),
 	search_run_verifier: Type.Object(
 		{
 			run_id: Type.String(),
@@ -1329,6 +1333,7 @@ export default function (pi: ExtensionAPI) {
 		"search_list_history",
 		"search_plan_next",
 		"search_start_batch",
+		"search_get_agent_observability",
 		"search_run_verifier",
 		"search_select",
 		"search_report",

@@ -386,6 +386,41 @@ def _search_candidate_stop_context(
     }
 
 
+def _bind_codex_subagent_observability(
+    search_root: Path,
+    agent_session_id: str,
+    hook_input: dict[str, Any],
+) -> None:
+    """Persist native transcript identity exposed by Codex SubagentStop."""
+    transcript_path = hook_input.get("agent_transcript_path") or hook_input.get(
+        "agentTranscriptPath"
+    )
+    model = hook_input.get("model")
+    agent_id = hook_input.get("agent_id") or hook_input.get("agentId")
+    metadata: dict[str, Any] = {
+        "subagent_stop_observed_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    }
+    if isinstance(transcript_path, str) and transcript_path:
+        metadata["session_file"] = transcript_path
+    if isinstance(model, str) and model:
+        metadata["model"] = model
+    handle: dict[str, Any] = {"host": "codex", "metadata": metadata}
+    session = find_agent_session(search_root, agent_session_id)
+    if (
+        isinstance(agent_id, str)
+        and agent_id
+        and session is not None
+        and session.host_handle.external_id is None
+    ):
+        handle["external_id"] = agent_id
+    from goal_plus.runtime import FileSearchRuntime
+
+    FileSearchRuntime(search_root).bind_agent_handle(agent_session_id, handle)
+
+
 def _claim_time_advisory(
     search_root: Path,
     agent_session_id: str,
@@ -760,6 +795,15 @@ def _handle_stop_event(
         candidate_context = _search_candidate_stop_context(search_root, hook_input)
         if candidate_context is not None:
             gate_context = {**hook_input, **candidate_context}
+            agent_session_id = candidate_context.get(
+                "search_candidate_agent_session_id"
+            )
+            if isinstance(agent_session_id, str):
+                _bind_codex_subagent_observability(
+                    search_root,
+                    agent_session_id,
+                    hook_input,
+                )
         else:
             record = runtime.status(goal_id)
             latest = record.final_checks[-1] if record.final_checks else None

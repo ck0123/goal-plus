@@ -441,6 +441,11 @@ one-shot time-advisory evidence, Pi RPC token/cost/context metrics, and
 stale/timed-out warnings. It does not
 start, wait for, or stop workers.
 
+For one worker, use
+`search_get_agent_observability(agent_session_id)`. It returns the same
+versioned model/timing/terminal/usage/context/artifact/handoff schema across
+hosts and never returns prompt, reasoning, or tool payload bodies.
+
 If the MCP tool is not directly exposed in the current host, use the matching
 Pi facade instead of manually tailing state files:
 

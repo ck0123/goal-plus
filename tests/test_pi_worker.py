@@ -227,7 +227,9 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     )
 
     metrics = handle["metadata"]["pi_metrics"]
-    assert metrics["session_file"] is None
+    assert metrics["session_file"] == str(session_dir / "2026_agent_1.jsonl")
+    assert metrics["model"] == "gpt-5.4-mini"
+    assert metrics["thinking_level"] == "high"
     assert metrics["baseline_entry_count"] == 1
     assert metrics["final_entry_count"] == 2
     assert metrics["duration_seconds"] >= 0
@@ -259,7 +261,7 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert popen_env["GOAL_PLUS_PI_ROLE"] == "worker"
     assert handle["metadata"]["raw_logging"] is False
     assert handle["metadata"]["text_log"] is None
-    assert handle["metadata"]["session_file"] is None
+    assert handle["metadata"]["session_file"] == str(session_dir / "2026_agent_1.jsonl")
     assert handle["metadata"]["continuation"] == "state_redispatch"
     assert handle["metadata"]["progress_handoff"]["status"] == "completed"
     assert handle["metadata"]["progress_handoff"]["summary"] == "done"

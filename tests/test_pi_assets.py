@@ -340,6 +340,7 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     )[0]
     assert "spec: LooseObject" not in freeze_schema
     assert "goal_plus_monitor_snapshot: Type.Object" in text
+    assert "search_get_agent_observability: Type.Object" in text
     assert "goal_plus_update_goal: Type.Object" in text
     assert "goal_plus_prepare_final_check: Type.Object" in text
     assert "goal_plus_submit_final_check: Type.Object" in text
@@ -371,6 +372,7 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert '"pi_search_pool_wait_any"' in main_tools
     assert '"search_invalidate_run"' in main_tools
     assert '"pi_search_pool_continue"' in main_tools
+    assert '"search_get_agent_observability"' in main_tools
     assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
     assert "is_optimization: Type.Boolean()" in text
@@ -394,6 +396,7 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" in combined
     assert "pi_search_run_candidate" in combined
     assert "goal_plus_monitor_snapshot" in combined
+    assert "search_get_agent_observability" in combined
     assert "read-only" in combined
     assert "one user-facing `goal-plus` skill" in combined
     assert "does not expose a separate user-facing `search` skill" in combined

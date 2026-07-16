@@ -117,6 +117,11 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
 starts, waits for, or stops a worker. The complete concise tool index is in
 [API](api.md).
 
+Use `search_get_agent_observability(agent_session_id)` for the same normalized
+per-worker schema used by Codex. Pi maps the existing `pi_metrics` model,
+thinking level, duration, usage/cost, context, and log/session paths into that
+schema; the legacy bound fields remain readable.
+
 ## State And Logs
 
 Search state, candidate commits, and workspaces under `.gp/` are authoritative.
@@ -130,7 +135,8 @@ It stores event/tool status, bounded errors, timing, and usage without prompts
 or reasoning. Set `GOAL_PLUS_PI_RAW_LOG=1` only for focused debugging; raw
 streams can become very large.
 
-Bound handles include `metadata.pi_metrics`, timeout/failure evidence, and a
+Bound handles include `metadata.pi_metrics` (including resolved model and
+thinking level), timeout/failure evidence, and a
 bounded `metadata.progress_handoff`. A timeout is successful deadline
 enforcement; runner failure is recorded separately with synthetic failure
 metadata so monitoring never mistakes it for a live session.

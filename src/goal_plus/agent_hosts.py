@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from goal_plus.agent_pool import HostPoolContract
-from goal_plus.models import AgentHostKind
+from goal_plus.host_observability import (
+    collect_codex_observability,
+    collect_metadata_observability,
+    collect_pi_observability,
+)
+from goal_plus.models import AgentHostKind, AgentSessionRecord
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
@@ -42,6 +47,12 @@ class HostCapabilities:
 class AgentHostAdapter(Protocol):
     name: AgentHostKind
     capabilities: HostCapabilities
+
+    def collect_observability(
+        self,
+        session: AgentSessionRecord,
+    ) -> dict[str, Any]:
+        ...
 
     def build_launch_payload(
         self,
@@ -170,6 +181,9 @@ class OpenCodeAdapter:
         supports_trace_export=True,
     )
 
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_metadata_observability(session)
+
     def build_launch_payload(
         self,
         *,
@@ -239,6 +253,7 @@ class CodexAdapter:
         supports_model_override=True,
         supports_reasoning_effort=True,
         supports_service_tier=True,
+        supports_usage_metadata=True,
         pool=HostPoolContract(
             launch_mode="async",
             wait_mode="wait_any",
@@ -254,6 +269,9 @@ class CodexAdapter:
             interrupt_tool="interrupt_agent",
         ),
     )
+
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_codex_observability(session)
 
     def build_launch_payload(
         self,
@@ -357,6 +375,9 @@ class ClaudeCodeAdapter:
         uses_background_workers=False,
     )
 
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_metadata_observability(session)
+
     def build_launch_payload(
         self,
         *,
@@ -452,6 +473,9 @@ class PiRpcAdapter:
             interrupt_tool="pi_search_pool_close",
         ),
     )
+
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_pi_observability(session)
 
     def _budget_control(
         self,

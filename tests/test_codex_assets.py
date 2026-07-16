@@ -58,6 +58,7 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
 
     assert "search_start_agent_session" in text
     assert "search_redispatch_candidate" in text
+    assert "search_get_agent_observability" in text
     assert "spawn_agent" in text
     assert "search_bind_agent_handle" in text
     assert "terminal bind automatically harvests" in text

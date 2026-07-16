@@ -111,6 +111,15 @@ the remaining outer/worker time is below observed verifier-submission time.
 It never stops the worker. Evidence is visible through
 `goal_plus_monitor_snapshot`.
 
+For one worker, call `search_get_agent_observability(agent_session_id)`. Codex
+uses the `SubagentStop.agent_transcript_path` when present and otherwise
+discovers the native `${CODEX_HOME:-~/.codex}/sessions/...` JSONL from the
+bound unique task name. The normalized result includes resolved model and
+reasoning effort, active and wall duration, terminal state, token/context
+counts, tool/message counts, and the session artifact path. It intentionally
+omits prompt, reasoning, and tool payload content. Interrupted workers that do
+not emit `SubagentStop` remain discoverable by task name.
+
 ## Resume
 
 Prefer native continuation while the Codex worker remains available:

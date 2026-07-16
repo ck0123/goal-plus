@@ -85,11 +85,21 @@ full history.
 | `search_bind_opencode_session` | OpenCode main | attach a Task session id |
 | `search_continue_agent_session` | main | return native same-worker continuation fields when supported |
 | `search_get_agent_context` | candidate worker | load authoritative ids, workspace, history, iterations, and resume data |
+| `search_get_agent_observability` | main/monitor | read normalized model, timing, terminal, usage, context, artifact, and handoff evidence for one session |
 
 `search_start_agent_session` does not launch or supervise a worker. The caller
 must use the returned `launch` object. A one-dispatch `worker_budget` can be
 passed to initial launch, continuation, or redispatch without mutating the
 frozen spec.
+
+`search_get_agent_observability` has one versioned cross-host schema. Codex
+reads its native subagent session JSONL (bound by `SubagentStop` or discovered
+from the unique task name); Pi normalizes `metadata.pi_metrics`. OpenCode and
+Claude Code expose the portable evidence already bound to their handles. The
+call never returns prompt, reasoning, tool arguments, or tool output content,
+and never waits for or controls a worker. `goal_plus_monitor_snapshot` embeds
+the same object under each `subagents[].observability` while retaining legacy
+Pi fields for backward compatibility.
 
 Worker handoffs remain one bounded protocol. `key_results` supplies feature
 ledger entries (artifact, code surface/change, portability/dependencies,

@@ -243,6 +243,26 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
   --pretty
 ```
 
+For a detailed terminal dashboard that polls a project directory, use the
+repository script. It discovers `.gp`, `.search`, or `.goal-plus`, selects the
+latest linked task by default, and shows planning decisions, candidate
+intent/hypothesis/tradeoff, verifier evidence, normalized host observability,
+handoffs, artifacts, Pi persisted pool state, and monitor warnings:
+
+```bash
+./scripts/monitor_goal_plus.sh /path/to/project
+./scripts/monitor_goal_plus.sh --once --goal gp_... /path/to/project
+./scripts/monitor_goal_plus.sh --run run_... --no-clear /path/to/project
+INTERVAL=2 RUN_LIMIT=0 ./scripts/monitor_goal_plus.sh /path/to/project
+```
+
+The dashboard is read-only. In particular, its Pi pool section reads the
+persisted host snapshot and does not call pool reconciliation, wait, close, or
+interrupt operations. The default view is a one-screen summary; add `--verbose`
+for full per-worker usage, identity, directive, handoff, advisory, and artifact
+details. Use `--json` when the assembled monitor/API payload is more useful
+than either human view.
+
 The snapshot summarizes the complete Goal Plus search-task history and the
 selected run's detailed state. `search_tasks` contains per-run state, frozen
 spec, strategy, and round summaries;
@@ -253,6 +273,12 @@ inspect after an interrupted edit or reviewer run.
 worker-session, verifier-run, and Pi cost counts. The selected task retains the
 detailed run, strategy, candidate, session, duration/cost/context, file-mtime,
 and stale/timed-out views.
+
+Each selected-run `subagents[]` entry also contains the versioned
+`observability` object. Query the same object directly with
+`search_get_agent_observability(agent_session_id)` when diagnosing one worker.
+Codex resolves native session JSONL metrics; Pi normalizes `pi_metrics`. Both
+paths omit prompt, reasoning, and tool payload bodies.
 
 Pi RPC workers use `--no-session` and do not support same-worker continuation.
 Normal Pi main-agent flow uses `pi_search_pool_continue`; the supervisor calls

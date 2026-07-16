@@ -181,6 +181,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.bind_opencode_session.return_value = bound_session
     runtime.continue_agent_session.return_value = continued_session
     runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
+    runtime.get_agent_observability.return_value = {
+        "agent_session_id": "agent_001",
+        "source": "codex_session_jsonl",
+    }
     runtime.run_verifier.return_value = ScoreReport(
         run_id="run_1",
         candidate_id="c001",
@@ -252,6 +256,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     )
     assert continued["launch"]["task_id"] == "opencode_session_001"
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
+    assert tools.search_get_agent_observability("agent_001") == {
+        "agent_session_id": "agent_001",
+        "source": "codex_session_jsonl",
+    }
     assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
     assert tools.search_run_verifier(
         "run_1",
@@ -312,6 +320,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         directive={"goal": "continue same node"},
         worker_budget=None,
     )
+    runtime.get_agent_observability.assert_called_once_with("agent_001")
 
 
 def test_search_tools_expose_no_lifecycle_methods() -> None:

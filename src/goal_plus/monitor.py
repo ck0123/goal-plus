@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from goal_plus.agent_hosts import get_agent_host_adapter
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.models import (
     AgentSessionRecord,
@@ -237,18 +238,59 @@ def _goal_payload(record: GoalPlusRecord | None) -> dict[str, Any] | None:
     }
 
 
-def _usage_cost(metrics: dict[str, Any]) -> float:
-    usage_total = metrics.get("usage_total")
-    if isinstance(usage_total, dict):
-        value = usage_total.get("costTotal")
-        if isinstance(value, int | float):
-            return float(value)
-    session_stats = metrics.get("session_stats")
-    if isinstance(session_stats, dict):
-        value = session_stats.get("cost")
-        if isinstance(value, int | float):
-            return float(value)
-    return 0.0
+def _observability_cost(observability: dict[str, Any]) -> float:
+    usage = observability.get("usage")
+    value = usage.get("cost_usd") if isinstance(usage, dict) else None
+    return float(value) if isinstance(value, int | float) else 0.0
+
+
+def _agent_observability(
+    session: AgentSessionRecord,
+    cache: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    key = (session.run_id, session.agent_session_id)
+    if cache is not None and key in cache:
+        return cache[key]
+    try:
+        payload = get_agent_host_adapter(session.host).collect_observability(session)
+    except Exception as exc:
+        payload = {
+            "schema_version": 1,
+            "agent_session_id": session.agent_session_id,
+            "run_id": session.run_id,
+            "candidate_id": session.candidate_id,
+            "host": session.host,
+            "source": "collection_failed",
+            "identity": {
+                "native_session_id": None,
+                "external_id": session.host_handle.external_id,
+                "task_name": session.host_handle.task_name,
+                "nickname": session.host_handle.nickname,
+            },
+            "execution": {
+                "duration_seconds": None,
+                "terminal_state": "unknown",
+                "timed_out": bool(session.host_handle.metadata.get("timed_out")),
+                "runner_failed": bool(session.host_handle.metadata.get("runner_failed")),
+            },
+            "usage": {"cost_usd": None},
+            "context": {
+                "tokens": None,
+                "context_window": None,
+                "percent": None,
+                "source": "unknown",
+            },
+            "artifacts": {
+                "event_log": session.host_handle.metadata.get("event_log"),
+                "text_log": session.host_handle.metadata.get("text_log"),
+                "session_file": session.host_handle.metadata.get("session_file"),
+            },
+            "handoff": {"present": False, "source_path": None, "error": None},
+            "errors": [f"{type(exc).__name__}: {exc}"],
+        }
+    if cache is not None:
+        cache[key] = payload
+    return payload
 
 
 def _context_payload(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -280,6 +322,7 @@ def _session_liveness(
     stale_after_seconds: int,
     timed_out: bool,
     runner_failed: bool,
+    terminal_state: str = "unknown",
 ) -> str:
     if candidate and candidate.status == "failed":
         return "failed"
@@ -289,6 +332,8 @@ def _session_liveness(
         return "evaluated"
     if timed_out:
         return "timed_out"
+    if terminal_state in {"completed", "interrupted"}:
+        return terminal_state
     if latest_output_mtime is not None and now - latest_output_mtime > stale_after_seconds:
         return "stale"
     return "running_or_waiting"
@@ -299,6 +344,7 @@ def _search_task_payload(
     task: GoalPlusLinkedSearch,
     *,
     current_run_id: str | None,
+    observability_cache: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = task.model_dump(mode="json")
     run_id = task.run_id
@@ -334,9 +380,9 @@ def _search_task_payload(
     sessions = _load_agent_sessions(run_dir)
     estimated_cost_total = 0.0
     for session in sessions:
-        metadata = session.host_handle.metadata
-        metrics = metadata.get("pi_metrics") if isinstance(metadata.get("pi_metrics"), dict) else {}
-        estimated_cost_total += _usage_cost(metrics if isinstance(metrics, dict) else {})
+        estimated_cost_total += _observability_cost(
+            _agent_observability(session, observability_cache)
+        )
     payload.update(
         {
             "run_exists": True,
@@ -443,8 +489,14 @@ def goal_plus_monitor_snapshot(
             }
         )
 
+    observability_cache: dict[tuple[str, str], dict[str, Any]] = {}
     search_tasks = [
-        _search_task_payload(root, task, current_run_id=current_search_run_id)
+        _search_task_payload(
+            root,
+            task,
+            current_run_id=current_search_run_id,
+            observability_cache=observability_cache,
+        )
         for task in task_links
     ]
     search_task_aggregate = _search_task_aggregate(search_tasks)
@@ -593,16 +645,32 @@ def goal_plus_monitor_snapshot(
             candidate = by_candidate.get(session.candidate_id)
             metadata = session.host_handle.metadata
             time_advisory = _time_advisory_evidence(root, session)
+            observability = _agent_observability(session, observability_cache)
+            execution = (
+                observability.get("execution")
+                if isinstance(observability.get("execution"), dict)
+                else {}
+            )
+            artifacts = (
+                observability.get("artifacts")
+                if isinstance(observability.get("artifacts"), dict)
+                else {}
+            )
             metrics = metadata.get("pi_metrics") if isinstance(metadata.get("pi_metrics"), dict) else {}
             usage_delta = metrics.get("usage_delta") if isinstance(metrics, dict) else None
             usage_total = metrics.get("usage_total") if isinstance(metrics, dict) else None
-            context = _context_payload(metrics if isinstance(metrics, dict) else {})
-            event_log = metadata.get("event_log") if isinstance(metadata.get("event_log"), str) else None
-            text_log = metadata.get("text_log") if isinstance(metadata.get("text_log"), str) else None
-            session_file = metadata.get("session_file") if isinstance(metadata.get("session_file"), str) else None
+            context = (
+                observability.get("context")
+                if isinstance(observability.get("context"), dict)
+                else _context_payload(metrics if isinstance(metrics, dict) else {})
+            )
+            event_log = artifacts.get("event_log") if isinstance(artifacts.get("event_log"), str) else None
+            text_log = artifacts.get("text_log") if isinstance(artifacts.get("text_log"), str) else None
+            session_file = artifacts.get("session_file") if isinstance(artifacts.get("session_file"), str) else None
             latest_output_mtime = _latest_mtime([event_log, text_log, session_file])
-            timed_out = bool(metadata.get("timed_out"))
-            runner_failed = bool(metadata.get("runner_failed"))
+            timed_out = bool(execution.get("timed_out"))
+            runner_failed = bool(execution.get("runner_failed"))
+            terminal_state = str(execution.get("terminal_state") or "unknown")
             session_iterations = [
                 iteration
                 for iteration in (candidate.iterations if candidate else [])
@@ -615,10 +683,11 @@ def goal_plus_monitor_snapshot(
                 stale_after_seconds=stale_after_seconds,
                 timed_out=timed_out,
                 runner_failed=runner_failed,
+                terminal_state=terminal_state,
             )
-            main_agent["estimated_cost_total"] = float(main_agent["estimated_cost_total"]) + _usage_cost(
-                metrics if isinstance(metrics, dict) else {}
-            )
+            main_agent["estimated_cost_total"] = float(
+                main_agent["estimated_cost_total"]
+            ) + _observability_cost(observability)
             if isinstance(context.get("tokens"), int | float):
                 current = main_agent["context_tokens_max"]
                 main_agent["context_tokens_max"] = max(current or 0, context["tokens"])  # type: ignore[arg-type]
@@ -666,7 +735,7 @@ def goal_plus_monitor_snapshot(
                     "last_verifier_at": (
                         candidate.iterations[-1].created_at if candidate and candidate.iterations else None
                     ),
-                    "duration_seconds": metrics.get("duration_seconds") if isinstance(metrics, dict) else None,
+                    "duration_seconds": execution.get("duration_seconds"),
                     "usage_delta": usage_delta if isinstance(usage_delta, dict) else None,
                     "usage_total": usage_total if isinstance(usage_total, dict) else None,
                     "context": context,
@@ -689,6 +758,7 @@ def goal_plus_monitor_snapshot(
                     "time_advisory": time_advisory,
                     "raw_logging": bool(metadata.get("raw_logging")),
                     "liveness": liveness,
+                    "observability": observability,
                 }
             )
 

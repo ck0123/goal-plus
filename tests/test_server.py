@@ -33,6 +33,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_bind_opencode_session",
         "search_continue_agent_session",
         "search_get_agent_context",
+        "search_get_agent_observability",
         "search_run_verifier",
         "search_list_iterations",
         "search_select",
@@ -234,6 +235,18 @@ def test_goal_plus_monitor_snapshot_exposes_read_only_schema(tmp_path: Path) -> 
     assert "goal_plus_id" in schema["properties"]
     assert "run_id" in schema["properties"]
     assert "stale_after_seconds" in schema["properties"]
+
+
+def test_agent_observability_exposes_read_only_schema(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    schema = tools["search_get_agent_observability"].parameters
+
+    assert set(schema["required"]) == {"agent_session_id"}
+    description = " ".join(tools["search_get_agent_observability"].description.split())
+    assert "read-only" in description
+    assert "reasoning" in description
 
 
 def test_goal_plus_create_has_no_mode_hint_and_confirm_tool_is_registered(

@@ -662,9 +662,16 @@ def test_search_candidate_stop_is_owned_by_its_verifier_not_parent_next_action(
             "hook_event_name": "SubagentStop",
             "session_id": "session-codex",
             "agent_id": agent_identity,
+            "agent_transcript_path": "/tmp/codex-search-worker.jsonl",
+            "model": "gpt-5.5",
         },
     )
     assert after_verifier.stdout == ""
+    rebound = search_runtime._load_agent_session_by_id(agent_session_id)
+    assert rebound.host_handle.external_id == agent_identity
+    assert rebound.host_handle.metadata["session_file"] == "/tmp/codex-search-worker.jsonl"
+    assert rebound.host_handle.metadata["model"] == "gpt-5.5"
+    assert "subagent_stop_observed_at" in rebound.host_handle.metadata
 
     parent_stop = _run_hook(
         tmp_path,

@@ -34,6 +34,12 @@ current `spawn_agent` schema rather than assumed optional metadata.
 | Goal gate | instruction-driven | `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop` | PostToolUse binding + Stop backstop | extension input/tool/turn events |
 | Strategy coverage | all existing tested paths | portable builtins | portable builtins | portable builtins |
 | Trace export | yes | no | no | no |
+| Normalized observability | bound metadata | native session JSONL + bound metadata | bound metadata | `pi_metrics` + bound metadata |
+
+All adapters implement the read-only `collect_observability` contract exposed
+as `search_get_agent_observability`. This is provenance and diagnostics only;
+it does not add worker lifecycle state to Search records or turn the runtime
+into a supervisor.
 
 Portable builtins are `agent_guided`/`agent`/`default` and
 `random`/`random_mode`. Other strategies remain OpenCode-only until a host has

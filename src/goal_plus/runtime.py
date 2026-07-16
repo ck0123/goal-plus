@@ -1111,6 +1111,12 @@ class FileSearchRuntime:
         self._write_agent_session(updated)
         return updated
 
+    def get_agent_observability(self, agent_session_id: str) -> dict[str, Any]:
+        """Return normalized, read-only host evidence for one worker session."""
+        session = self._load_agent_session_by_id(agent_session_id)
+        adapter = get_agent_host_adapter(session.host)
+        return adapter.collect_observability(session)
+
     def get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
         """Subagent first call. Returns the authoritative ids, workspace, and
         candidate context. The subagent must treat prompt-supplied ids as
