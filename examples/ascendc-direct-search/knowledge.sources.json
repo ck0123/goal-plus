@@ -1,0 +1,381 @@
+{
+  "schema_version": 2,
+  "name": "ascendc-direct-invoke-knowledge-v2",
+  "sources": [
+    {
+      "name": "akg",
+      "role": "primary",
+      "kind": "skill_tree",
+      "repository": "https://gitcode.com/mindspore/akg.git",
+      "commit": "a2c1a23fd371e234b7e767247e8c4753462ecdca",
+      "license": {
+        "name": "Apache License 2.0",
+        "path": "LICENSE"
+      },
+      "include_root": "akg_agents/python/akg_agents/op/resources/skills/ascendc",
+      "output_root": "akg"
+    },
+    {
+      "name": "cannbot",
+      "role": "supplement",
+      "kind": "files",
+      "repository": "https://gitcode.com/cann/cannbot-skills.git",
+      "commit": "d5ddcacc6e51eeaa8b52fa446c3b768c6813602e",
+      "license": {
+        "name": "CANN Open Software License Agreement Version 2.0",
+        "path": "LICENSE"
+      },
+      "output_root": "cannbot",
+      "files": [
+        {
+          "category": "architecture",
+          "source": "ops/npu-arch/SKILL.md",
+          "output": "architecture/SKILL.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "architecture",
+          "source": "ops/npu-arch/references/npu-arch-guide.md",
+          "output": "architecture/npu-arch-guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "architecture",
+          "source": "ops/npu-arch/references/npu-hardware-params.md",
+          "output": "architecture/npu-hardware-params.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "architecture",
+          "source": "ops/npu-arch/references/simt-arch-guide.md",
+          "output": "architecture/simt-arch-guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_api",
+          "source": "ops/ascendc-api-best-practices/references/api-gmm.md",
+          "output": "api/api-gmm.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_api",
+          "source": "ops/ascendc-api-best-practices/references/api-loaddata.md",
+          "output": "api/api-loaddata.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_api",
+          "source": "ops/ascendc-api-best-practices/references/api-matmul.md",
+          "output": "api/api-matmul.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "sort",
+          "source": "ops/ascendc-api-best-practices/references/api-mrgsort.md",
+          "output": "api/api-mrgsort.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "conversion",
+          "source": "ops/ascendc-tiling-design/references/conversion/patterns.md",
+          "output": "tiling/conversion-patterns.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "attention",
+          "source": "ops/ascendc-tiling-design/references/flashattention/design.md",
+          "output": "tiling/flashattention-design.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "attention",
+          "source": "ops/ascendc-tiling-design/references/flashattention/overview.md",
+          "output": "tiling/flashattention-overview.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "attention",
+          "source": "ops/ascendc-tiling-design/references/flashattention/subfamilies.md",
+          "output": "tiling/flashattention-subfamilies.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-tiling-design/references/matmul/ascendc-api-gmm-tiling.md",
+          "output": "tiling/matmul-api-gmm.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-tiling-design/references/matmul/ascendc-api-matmul-tiling.md",
+          "output": "tiling/matmul-api.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "cube_vector",
+          "source": "ops/ascendc-tiling-design/references/matmul/matmul-fusion-design-template.md",
+          "output": "tiling/matmul-fusion-design.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-tiling-design/references/matmul/patterns.md",
+          "output": "tiling/matmul-patterns.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "sort",
+          "source": "ops/ascendc-tiling-design/references/sort/alg-two-level-mrgsort.md",
+          "output": "tiling/sort-two-level-mrgsort.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "sort",
+          "source": "ops/ascendc-tiling-design/references/sort/patterns.md",
+          "output": "tiling/sort-patterns.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "cube_vector",
+          "source": "ops/ascendc-direct-invoke-template/references/matmul_fusion_guide.md",
+          "output": "direct-invoke/matmul-fusion-guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "cube_vector",
+          "source": "ops/ascendc-blaze-best-practice/SKILL.md",
+          "output": "blaze/SKILL.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-blaze-best-practice/references/group_matmul.md",
+          "output": "blaze/group-matmul.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_basic.md",
+          "output": "blaze/matmul-basic.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_fixpopti.md",
+          "output": "blaze/matmul-fixpipe.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "cube_vector",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_fixpopti_regbase_epilogue.md",
+          "output": "blaze/matmul-fixpipe-regbase-epilogue.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_full_load.md",
+          "output": "blaze/matmul-full-load.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_layout_guide.md",
+          "output": "blaze/matmul-layout-guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_tiling",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_pattern.md",
+          "output": "blaze/matmul-pattern.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-blaze-best-practice/references/matmul_streamk.md",
+          "output": "blaze/matmul-streamk.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "cube_vector",
+          "source": "ops/ascendc-blaze-best-practice/references/sync_coding_guide.md",
+          "output": "blaze/sync-coding-guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "cube_vector",
+          "source": "ops/ascendc-blaze-best-practice/references/tensor_api_user_guide.md",
+          "output": "blaze/tensor-api-user-guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-perf-optimize/references/tiling/matmul/index.md",
+          "output": "performance/matmul/index.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-perf-optimize/references/tiling/matmul/fallback/fallback-algorithm.md",
+          "output": "performance/matmul/fallback-algorithm.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-perf-optimize/references/tiling/matmul/fallback/tiling-fields.md",
+          "output": "performance/matmul/fallback-fields.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-perf-optimize/references/tiling/matmul/fallback/tiling-flow.md",
+          "output": "performance/matmul/fallback-flow.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-perf-optimize/references/tiling/matmul/fallback/tiling-variants.md",
+          "output": "performance/matmul/fallback-variants.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/guide.md",
+          "output": "performance/matmul/guide.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/fullload_design.md",
+          "output": "performance/matmul/full-load.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/mte2_preload_design.md",
+          "output": "performance/matmul/mte2-preload.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/pingpong_design.md",
+          "output": "performance/matmul/pingpong.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/scale_coalescing_design.md",
+          "output": "performance/matmul/scale-coalescing.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/streamk_design.md",
+          "output": "performance/matmul/streamk.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "matmul_performance",
+          "source": "ops/ascendc-performance-best-practices/reference/matmul/swat_design.md",
+          "output": "performance/matmul/swat.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "conversion",
+          "source": "ops/ascendc-performance-best-practices/reference/conversion/transpose_fusion_design.md",
+          "output": "performance/conversion/transpose-fusion.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/SKILL.md",
+          "output": "simt/best-practices/SKILL.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/overview.md",
+          "output": "simt/best-practices/overview.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/compute-operators.md",
+          "output": "simt/best-practices/compute-operators.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/data-transfer.md",
+          "output": "simt/best-practices/data-transfer.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/debug-api.md",
+          "output": "simt/best-practices/debug-api.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/index-calculation.md",
+          "output": "simt/best-practices/index-calculation.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/intra-core-shared.md",
+          "output": "simt/best-practices/intra-core-shared.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/macro-api.md",
+          "output": "simt/best-practices/macro-api.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/multi-core-sync.md",
+          "output": "simt/best-practices/multi-core-sync.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/tensorlist-handling.md",
+          "output": "simt/best-practices/tensorlist-handling.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/thread-stride-pattern.md",
+          "output": "simt/best-practices/thread-stride-pattern.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/vf-call.md",
+          "output": "simt/best-practices/vf-call.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-best-practices/references/vf-declaration.md",
+          "output": "simt/best-practices/vf-declaration.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-tiling-design/SKILL.md",
+          "output": "simt/tiling/SKILL.md",
+          "transform": "sanitize_markdown"
+        },
+        {
+          "category": "simt",
+          "source": "ops/ascendc-simt-tiling-design/references/guide.md",
+          "output": "simt/tiling/guide.md",
+          "transform": "sanitize_markdown"
+        }
+      ]
+    }
+  ]
+}

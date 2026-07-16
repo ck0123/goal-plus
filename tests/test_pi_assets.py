@@ -257,6 +257,7 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "await ctx.waitForIdle()" not in text
     assert "do not read or audit target files before goal_plus_record_triage" in text
     assert "workspaceGuard" in text
+    assert "resource_lock: Type.Optional(Type.String({ minLength: 1 }))" in text
     assert "MAIN_GATED_TOOLS" in text
     assert "pi_rpc_run_worker" in text
     assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER" in text

@@ -41,6 +41,7 @@ Pi RPC. See
 | `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-format C++/text-I/O public fixture, 4 candidates, pool=2 |
 | `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `SearchCandidateAgent` (50 steps) | 4 candidates, pool=2, single batch |
 | `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
+| `ascendc-direct-search/` | Natural-language operator semantics, approximate shapes/dtypes, and reference hints | `/goal-plus` host + candidate workers | Spec Discovery generates the Direct Invoke workspace, Golden, cases, verifier, baseline, SearchSpec, and promotion gate |
 | `kernel-optimize/` | reusable PyTorch-reference kernel verifier template | `/goal-plus` host | Correctness + latency verifier and a worked C++ prompt; not a standalone fixture |
 | `workspace-backends/` | tiny local Python source tree | none (runtime-only E2E) | 3 Git worktree candidates, including a follow-up from the best parent commit |
 | `model-opt-gpu/` | future standalone TorchBench `BERT_pytorch` source | `/goal-plus` host on V100 | **WIP, incomplete, not validated, and not recommended yet**; preparation prompt only |
@@ -183,6 +184,17 @@ goal-plus skill first and uses the internal `search` skill only after Search
 Mode starts. Interactive and non-interactive runs use the same autonomous
 admission rule; verifier/spec hints are optional and no confirmation text is
 required.
+
+### AscendC Direct Invoke
+
+Use [`ascendc-direct-search/README.md`](ascendc-direct-search/README.md) for the
+goal-driven AscendC Direct Invoke scenario. The user describes operator
+semantics, approximate shapes/dtypes, and references such as CANNBench, AKG,
+PyTorch, or local code. The main agent resolves those references and generates
+the Golden, cases, verifier, baseline, and SearchSpec during Spec Discovery.
+Candidates receive the generated contract plus API, tiling, performance, and
+debugging knowledge exported from an exact CANNBot Git commit during Spec
+Discovery; no CANNBot Agent or Plugin runs.
 
 ### circle_packing — fork-style continuation smoke test
 

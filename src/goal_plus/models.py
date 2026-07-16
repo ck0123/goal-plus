@@ -24,6 +24,7 @@ class RunState(str, Enum):
     WAITING_FOR_WORKERS = "waiting_for_workers"
     EVALUATING = "evaluating"
     SELECTING = "selecting"
+    SELECTION_BLOCKED = "selection_blocked"
     READY_TO_PROMOTE = "ready_to_promote"
     PROMOTED = "promoted"
     ABORTED = "aborted"
@@ -172,6 +173,14 @@ class VerifierCommand(SearchModel):
     command: list[str] = Field(min_length=1)
     cwd: str = "."
     timeout_seconds: int = Field(default=300, gt=0)
+    resource_lock: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional host-wide exclusive resource name. Verifier commands "
+            "with the same value execute serially across candidates and runs."
+        ),
+    )
     feedback_policy: FeedbackPolicy = FeedbackPolicy.VISIBLE_TO_WORKERS
     expected_outputs: list[str] = Field(
         default_factory=list,
@@ -180,6 +189,19 @@ class VerifierCommand(SearchModel):
             "this field does not parse verifier stdout metrics."
         ),
     )
+
+    @field_validator("resource_lock")
+    @classmethod
+    def resource_lock_must_be_nonempty(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("resource_lock must be non-empty when provided")
+        return normalized
 
 
 class SearchSpec(SearchModel):
@@ -500,6 +522,15 @@ class ScoreReport(SearchModel):
     hardcoding_suspected: bool = False
 
 
+class PromotionEvidence(SearchModel):
+    candidate_id: str
+    selected_git_head: str | None = None
+    git_head: str | None = None
+    artifact_hash: str
+    passed: bool
+    created_at: str
+
+
 class IterationRecord(SearchModel):
     iteration: int
     agent_session_id: str | None = None
@@ -546,6 +577,7 @@ class RunRecord(SearchModel):
     selected_score: float | None = None
     selected_iteration: int | None = None
     selected_git_head: str | None = None
+    selected_artifact_hash: str | None = None
     budget_used: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -557,6 +589,8 @@ class CandidateRecord(SearchModel):
     touched_denied_files: bool = False
     changed_outside_allowed: bool = False
     score_report: ScoreReport | None = None
+    promotion_report: ScoreReport | None = None
+    promotion_evidence: PromotionEvidence | None = None
     iterations: list[IterationRecord] = Field(default_factory=list)
 
 

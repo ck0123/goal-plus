@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://goal-plus.local/schemas/ascendc-direct-request-v1.json",
+  "title": "AscendC Direct Invoke Operator Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operator",
+    "inputs",
+    "outputs",
+    "references",
+    "case_policy",
+    "ranking_policy"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "invocation_mode", "semantics"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "invocation_mode": {"const": "direct_invoke"},
+        "semantics": {"type": "string", "minLength": 1}
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [{"$ref": "#/$defs/primary_tensor"}],
+      "items": {"$ref": "#/$defs/argument"}
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {"$ref": "#/$defs/output"}
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/reference"}
+    },
+    "case_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "correctness_requirement",
+        "correctness_case_ids",
+        "performance_case_ids"
+      ],
+      "properties": {
+        "correctness_requirement": {"const": "all_cases_pass"},
+        "correctness_case_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]}
+        },
+        "performance_case_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]}
+        },
+        "shape_examples": {
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "value_ranges": {"type": "object"},
+        "performance_weights": {
+          "type": "object",
+          "additionalProperties": {"type": "number", "exclusiveMinimum": 0}
+        }
+      }
+    },
+    "ranking_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "metric_name", "metric_direction", "aggregation"],
+      "properties": {
+        "source": {"enum": ["user", "reference", "default"]},
+        "metric_name": {"type": "string", "minLength": 1},
+        "metric_direction": {"enum": ["minimize", "maximize"]},
+        "aggregation": {"type": "string", "minLength": 1},
+        "reference_locator": {"type": "string", "minLength": 1}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "device": {"const": "npu"},
+        "soc": {"type": "string"}
+      }
+    }
+  },
+  "$defs": {
+    "argument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "kind": {"enum": ["tensor", "scalar", "boolean", "integer", "string"]},
+        "optional": {"type": "boolean", "default": false},
+        "dtypes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "shape": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "rank_min": {"type": "integer", "minimum": 0},
+            "rank_max": {"type": "integer", "minimum": 0},
+            "total_elements_min": {"type": "integer", "minimum": 0},
+            "total_elements_max": {"type": "integer", "minimum": 0},
+            "relation": {"type": "string"},
+            "examples": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        },
+        "default": {}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"kind": {"const": "tensor"}},
+            "required": ["kind"]
+          },
+          "then": {"required": ["dtypes", "shape"]}
+        }
+      ]
+    },
+    "primary_tensor": {
+      "allOf": [
+        {"$ref": "#/$defs/argument"},
+        {
+          "type": "object",
+          "required": ["optional", "dtypes", "shape"],
+          "properties": {
+            "kind": {"const": "tensor"},
+            "optional": {"const": false}
+          }
+        }
+      ]
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "shape_relation", "dtype_relation"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "kind": {"const": "tensor"},
+        "shape_relation": {"type": "string", "minLength": 1},
+        "dtype_relation": {"type": "string", "minLength": 1}
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator", "roles"],
+      "properties": {
+        "kind": {"enum": ["cannbench", "akg", "pytorch", "local", "documentation"]},
+        "locator": {"type": "string", "minLength": 1},
+        "revision": {"type": ["string", "null"]},
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["semantics", "golden", "cases", "tolerances", "baseline", "scoring", "implementation"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -128,6 +128,22 @@ def test_expected_outputs_schema_describes_artifact_paths_not_stdout_parser() ->
     assert "does not parse verifier stdout metrics" in description
 
 
+def test_verifier_resource_lock_rejects_blank_names() -> None:
+    command = {
+        "name": "score",
+        "role": "ranking_signal",
+        "command": ["python", "verify.py"],
+        "resource_lock": "ascend-npu:0",
+    }
+    assert VerifierCommand.model_validate(command).resource_lock == "ascend-npu:0"
+    command["resource_lock"] = "  ascend-npu:0  "
+    assert VerifierCommand.model_validate(command).resource_lock == "ascend-npu:0"
+
+    command["resource_lock"] = " "
+    with pytest.raises(ValidationError, match="resource_lock must be non-empty"):
+        VerifierCommand.model_validate(command)
+
+
 def test_search_spec_supports_copy_and_git_worktree_workspace_backends() -> None:
     default_spec = SearchSpec.model_validate(valid_spec_dict())
     assert default_spec.workspace.backend == "git_worktree"

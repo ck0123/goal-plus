@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://gitcode.com/cann/cannbot-skills.git",
+  "source_commit": "d5ddcacc6e51eeaa8b52fa446c3b768c6813602e",
+  "source_root": "ops/ascendc-direct-invoke-template/references/add_custom",
+  "license": "CANN Open Software License Agreement Version 2.0",
+  "purpose": "source template only; Goal Plus Spec Discovery generates the task verifier"
+}

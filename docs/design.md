@@ -72,6 +72,16 @@ The core records are:
 - `IterationRecord`: verifier result, failure, metrics, changed files, session
   provenance, and exact candidate Git commit.
 
+`VerifierCommand.resource_lock` is an optional host-wide exclusive resource
+name. Commands with the same value are serialized across candidates and runs;
+this keeps a shared accelerator or profiler stable without reducing worker
+editing concurrency.
+
+Process-scope verifier calls create ranking iterations. Promotion-scope calls
+do not alter those iterations or scores; they write a separate
+`promotion_report` and `promotion_evidence` bound to the selected Git head and
+artifact hash. Changing the selected artifact invalidates that evidence.
+
 ## Invariants
 
 1. **Freeze before search.** Ranking verifiers must pass preflight in a
@@ -97,6 +107,19 @@ The core records are:
 10. **Stop only from durable state.** A top-level active goal always receives a
     full-goal and elapsed-time audit prompt. It may stop only after the main
     agent records a terminal status; worker lease expiry is not goal completion.
+
+If no verifier-backed revision is eligible, or all ranked revisions fail parent
+final verification, selection records a recoverable `selection_blocked` reason.
+Promotion always reruns configured gates against the selected immutable
+revision. It emits no patch on failure; on success, patch content comes from the
+selected Git object rather than mutable live-workspace contents.
+
+Each verifier invocation also receives a persistent, invocation-specific
+`GOAL_PLUS_VERIFIER_DIAGNOSTICS_DIR` for compact reports and failure evidence.
+Large build products remain in `GOAL_PLUS_VERIFIER_TMPDIR` and are deleted after
+the command. The public
+`goal_plus.verifier_support.isolated_verifier_workspace` helper copies the live
+Candidate input into that scratch directory for build and evaluation.
 
 ## Host Pool Contract
 
