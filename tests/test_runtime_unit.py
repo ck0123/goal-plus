@@ -376,6 +376,110 @@ def test_runtime_rejects_non_null_verifier_error_after_clean_preflight(
     assert report.verifier_results[0].metrics["error"] == "candidate evaluation failed"
 
 
+def test_visible_verifier_failure_returns_diagnostics_and_preserves_logs(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, sys\n"
+        "from initial_program import VALUE\n"
+        "if VALUE == 0:\n"
+        "    print(json.dumps({'combined_score': 0.0}))\n"
+        "else:\n"
+        "    print('x' * 5000 + f'-stdout-value-{VALUE}')\n"
+        "    print(f'stderr-value-{VALUE}', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+    first_report = runtime.run_verifier(run_id, task.candidate_id)
+    first_result = first_report.verifier_results[0]
+    first_log = Path(first_result.log_path)
+
+    assert first_result.failure_class == "VerifierCommandFailed"
+    assert len(first_result.metrics["stdout_tail"]) == 4000
+    assert first_result.metrics["stdout_tail"].endswith("-stdout-value-1")
+    assert first_result.metrics["stderr_tail"] == "stderr-value-1"
+    assert first_log.name.startswith("iteration-0001-score-")
+    assert "-stdout-value-1" in first_log.read_text(encoding="utf-8")
+
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 22\n",
+        encoding="utf-8",
+    )
+    second_report = runtime.run_verifier(run_id, task.candidate_id)
+    second_result = second_report.verifier_results[0]
+    second_log = Path(second_result.log_path)
+
+    assert second_log != first_log
+    assert second_log.name.startswith("iteration-0002-score-")
+    assert "-stdout-value-22" in second_log.read_text(encoding="utf-8")
+    assert "-stdout-value-1" in first_log.read_text(encoding="utf-8")
+    iterations = runtime.list_iterations(
+        run_id,
+        task.candidate_id,
+    )
+    assert [iteration["log_paths"] for iteration in iterations] == [
+        [str(first_log)],
+        [str(second_log)],
+    ]
+
+
+@pytest.mark.parametrize("feedback_policy", ["summary_only", "final_only"])
+def test_non_visible_feedback_policy_keeps_diagnostics_in_runtime_log(
+    tmp_path: Path,
+    feedback_policy: str,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, sys\n"
+        "from initial_program import VALUE\n"
+        "if VALUE == 0:\n"
+        "    print(json.dumps({'combined_score': 0.0}))\n"
+        "else:\n"
+        "    print('private stdout')\n"
+        "    print('private stderr', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["process_verifiers"][0]["feedback_policy"] = feedback_policy
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+    report = runtime.run_verifier(run_id, task.candidate_id)
+
+    result = report.verifier_results[0]
+    assert result.failure_class == "VerifierCommandFailed"
+    assert "stdout_tail" not in result.metrics
+    assert "stderr_tail" not in result.metrics
+    log_text = Path(result.log_path).read_text(encoding="utf-8")
+    assert "private stdout" in log_text
+    assert "private stderr" in log_text
+
+
 @pytest.mark.parametrize("runtime_dir", [".gp", ".search"])
 def test_freeze_spec_rejects_verifier_artifact_under_runtime_root(
     tmp_path: Path,

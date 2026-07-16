@@ -36,6 +36,7 @@ from goal_plus.models import (
     CandidateProposal,
     CandidateTask,
     CandidateWorkOrder,
+    FeedbackPolicy,
     FrozenSpec,
     HistoryPolicy,
     ProposalContract,
@@ -78,6 +79,7 @@ RESULTS_TSV_RELATIVE_PATH = "results.tsv"
 LEGACY_RESULTS_TSV_RELATIVE_PATH = ".tmp/results.tsv"
 MODEL_HANDOFF_RELATIVE_PATH = ".tmp/handoff.json"
 MAX_MODEL_HANDOFF_BYTES = 64 * 1024
+MAX_VERIFIER_FEEDBACK_CHARS = 4_000
 
 
 def utc_timestamp() -> str:
@@ -1327,6 +1329,11 @@ class FileSearchRuntime:
                     changed_outside_allowed=outside_allowed,
                     artifact_hash=artifact_hash,
                     metrics={r.name: r.metrics for r in report.verifier_results},
+                    log_paths=[
+                        str(result.log_path)
+                        for result in report.verifier_results
+                        if result.log_path is not None
+                    ],
                     created_at=created_at,
                 )
                 ledger_entry = ResultLedgerEntry(
@@ -3426,7 +3433,11 @@ class FileSearchRuntime:
 
         logs_dir = self._run_dir(run.run_id) / "candidates" / record.candidate_id / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
-        log_path = logs_dir / f"{command.name}.log"
+        iteration_number = len(record.iterations) + 1
+        log_path = logs_dir / (
+            f"iteration-{iteration_number:04d}-{command.name}-"
+            f"{uuid.uuid4().hex[:8]}.log"
+        )
         cwd = (record.task.workspace / command.cwd).resolve()
         workspace_before = self._hash_verifier_workspace(record.task.workspace)
         git_head_before = self._git_head(record.task.workspace)
@@ -3471,6 +3482,12 @@ class FileSearchRuntime:
                         "candidate_action": "stop_and_report",
                     }
                 )
+                self._add_visible_verifier_feedback(
+                    command,
+                    metrics,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
                 log_path.write_text(
                     "\n".join(
                         [
@@ -3507,12 +3524,18 @@ class FileSearchRuntime:
             )
             if missing_numeric_metric:
                 metrics["expected_metric_name"] = frozen.spec.metric_name
-                metrics["stdout_tail"] = completed.stdout.strip()[-2000:]
             passed = (
                 completed.returncode == 0
                 and not has_verifier_error
                 and not missing_numeric_metric
             )
+            if not passed:
+                self._add_visible_verifier_feedback(
+                    command,
+                    metrics,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
             log_path.write_text(
                 "\n".join(
                     [
@@ -3556,26 +3579,68 @@ class FileSearchRuntime:
                 side_effects,
                 git_head_before,
             ) if side_effects else []
-            log_path.write_text(str(exc), encoding="utf-8")
+            metrics = {
+                "timeout_seconds": command.timeout_seconds,
+                "verifier_workspace_side_effects": side_effects,
+                "cleanup_failures": cleanup_failures,
+                "infrastructure_failure": bool(side_effects),
+                "candidate_action": (
+                    "stop_and_report" if side_effects else "inspect_timeout"
+                ),
+            }
+            self._add_visible_verifier_feedback(
+                command,
+                metrics,
+                stdout=exc.stdout,
+                stderr=exc.stderr,
+            )
+            log_path.write_text(
+                "\n".join(
+                    [
+                        str(exc),
+                        "",
+                        "## stdout",
+                        self._coerce_verifier_output(exc.stdout),
+                        "## stderr",
+                        self._coerce_verifier_output(exc.stderr),
+                    ]
+                ),
+                encoding="utf-8",
+            )
             return VerifierResult(
                 name=command.name,
                 role=command.role,
                 passed=False,
                 score=0.0,
-                metrics={
-                    "timeout_seconds": command.timeout_seconds,
-                    "verifier_workspace_side_effects": side_effects,
-                    "cleanup_failures": cleanup_failures,
-                    "infrastructure_failure": bool(side_effects),
-                    "candidate_action": (
-                        "stop_and_report" if side_effects else "inspect_timeout"
-                    ),
-                },
+                metrics=metrics,
                 log_path=log_path,
                 failure_class=(
                     "VerifierWorkspaceSideEffect" if side_effects else "Timeout"
                 ),
             )
+
+    @staticmethod
+    def _coerce_verifier_output(value: str | bytes | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value
+
+    def _add_visible_verifier_feedback(
+        self,
+        command: VerifierCommand,
+        metrics: dict[str, Any],
+        *,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+    ) -> None:
+        if command.feedback_policy != FeedbackPolicy.VISIBLE_TO_WORKERS:
+            return
+        for key, value in (("stdout_tail", stdout), ("stderr_tail", stderr)):
+            output = self._coerce_verifier_output(value).strip()
+            if output:
+                metrics[key] = output[-MAX_VERIFIER_FEEDBACK_CHARS:]
 
     def _restore_verifier_workspace(
         self,
@@ -4124,6 +4189,7 @@ class FileSearchRuntime:
             and score_report.aggregate_score == evidence_score
         )
         if best_iteration is not None:
+            log_paths = list(best_iteration.log_paths)
             for verifier_metrics in best_iteration.metrics.values():
                 if isinstance(verifier_metrics, dict):
                     metrics.update(

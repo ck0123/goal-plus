@@ -540,6 +540,7 @@ class IterationRecord(SearchModel):
     changed_outside_allowed: bool = False
     artifact_hash: str | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
+    log_paths: list[str] = Field(default_factory=list)
     created_at: str
 
 

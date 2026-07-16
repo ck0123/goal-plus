@@ -304,7 +304,7 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     ├── candidates/<candidate_id>/
     │   ├── candidate.json                        # CandidateRecord: status, score_report, iterations[], results_ledger[]
     │   ├── task.json                             # CandidateTask snapshot
-    │   └── logs/<verifier_name>.log              # verifier stdout/stderr per call
+    │   └── logs/iteration-<n>-<verifier>-<id>.log # durable stdout/stderr per call
     ├── workspace/<candidate_id>/                 # the agent's editable workspace
     │   ├── .git/                                 # agent and runtime ledger Git history
     │   ├── results.tsv                           # committed, runtime-owned inherited append-only ledger
@@ -312,6 +312,11 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate/OpenCode binding, launch payload, counters
     └── report.md / promotion/                    # final outputs
 ```
+
+Failed process verifiers with `feedback_policy=visible_to_workers` return
+bounded `stdout_tail` and `stderr_tail` metrics to the caller. Complete output
+stays in the unique per-call log, and each `iterations[]` entry records its
+`log_paths`, so a later verifier run does not overwrite earlier failure evidence.
 
 There is no `agent_events/` or `observations/` directory. The session record carries optional `opencode_session_id`, `launch` (the OpenCode Task fields), `directive`, and `counters.verifier_runs`.
 

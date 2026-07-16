@@ -197,6 +197,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
                 role=VerifierRole.RANKING_SIGNAL,
                 passed=True,
                 score=1.0,
+                metrics={"stderr_tail": "candidate diagnostic"},
+                log_path=Path("/tmp/iteration-0001-score-a1b2c3d4.log"),
             )
         ],
     )
@@ -260,7 +262,14 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "agent_session_id": "agent_001",
         "source": "codex_session_jsonl",
     }
-    assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
+    verifier_report = tools.search_run_verifier("run_1", "c001")
+    assert verifier_report["aggregate_score"] == 1.0
+    assert verifier_report["verifier_results"][0]["metrics"]["stderr_tail"] == (
+        "candidate diagnostic"
+    )
+    assert verifier_report["verifier_results"][0]["log_path"].endswith(
+        "iteration-0001-score-a1b2c3d4.log"
+    )
     assert tools.search_run_verifier(
         "run_1",
         "c001",
