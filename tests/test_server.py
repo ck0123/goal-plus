@@ -23,6 +23,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_freeze_spec",
         "search_create",
         "search_status",
+        "search_invalidate_run",
         "search_list_history",
         "search_plan_next",
         "search_start_batch",
@@ -32,6 +33,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_bind_opencode_session",
         "search_continue_agent_session",
         "search_get_agent_context",
+        "search_get_agent_observability",
         "search_run_verifier",
         "search_list_iterations",
         "search_select",
@@ -51,6 +53,28 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "goal_plus_set_status",
         "goal_plus_gate",
     }
+
+
+def test_invalidate_run_and_successor_expose_contract_fields(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+    tools = asyncio.run(mcp.get_tools())
+
+    create_properties = tools["search_create"].parameters["properties"]
+    invalidation = tools["search_invalidate_run"].parameters
+
+    assert "source_run_id" in create_properties
+    assert set(invalidation["required"]) == {
+        "run_id",
+        "reason",
+        "summary",
+        "evidence",
+    }
+    assert "verifier_coverage_inadequate" in invalidation["properties"]["reason"][
+        "enum"
+    ]
+    description = " ".join(tools["search_invalidate_run"].description.split())
+    assert "atomically blocks new planning" in description
+    assert "interrupt the host pool" in description
 
 
 def test_start_agent_session_returns_launch_payload(tmp_path: Path) -> None:
@@ -100,6 +124,7 @@ def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
     schema = tools["search_run_verifier"].parameters
 
     assert "agent_session_id" in schema["properties"]
+    assert "hypothesis" in schema["properties"]
 
 
 def test_freeze_spec_exposes_complete_nested_search_spec_schema(tmp_path: Path) -> None:
@@ -210,6 +235,18 @@ def test_goal_plus_monitor_snapshot_exposes_read_only_schema(tmp_path: Path) -> 
     assert "goal_plus_id" in schema["properties"]
     assert "run_id" in schema["properties"]
     assert "stale_after_seconds" in schema["properties"]
+
+
+def test_agent_observability_exposes_read_only_schema(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+
+    tools = asyncio.run(mcp.get_tools())
+    schema = tools["search_get_agent_observability"].parameters
+
+    assert set(schema["required"]) == {"agent_session_id"}
+    description = " ".join(tools["search_get_agent_observability"].description.split())
+    assert "read-only" in description
+    assert "reasoning" in description
 
 
 def test_goal_plus_create_has_no_mode_hint_and_confirm_tool_is_registered(

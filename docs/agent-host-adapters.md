@@ -34,6 +34,12 @@ current `spawn_agent` schema rather than assumed optional metadata.
 | Goal gate | instruction-driven | `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop` | PostToolUse binding + Stop backstop | extension input/tool/turn events |
 | Strategy coverage | all existing tested paths | portable builtins | portable builtins | portable builtins |
 | Trace export | yes | no | no | no |
+| Normalized observability | bound metadata | native session JSONL + bound metadata | bound metadata | `pi_metrics` + bound metadata |
+
+All adapters implement the read-only `collect_observability` contract exposed
+as `search_get_agent_observability`. This is provenance and diagnostics only;
+it does not add worker lifecycle state to Search records or turn the runtime
+into a supervisor.
 
 Portable builtins are `agent_guided`/`agent`/`default` and
 `random`/`random_mode`. Other strategies remain OpenCode-only until a host has
@@ -84,8 +90,28 @@ State-level redispatch is the portable recovery path:
 Same-worker continuation is an optional optimization. Codex and OpenCode
 support it; Pi intentionally performs state-level redispatch.
 
-Every worker handoff should state the most important work, verifier-backed key
-results, blockers, next steps, and at most five scenario-specific pitfalls.
+Every worker handoff should state the most important work, verifier-backed
+feature entries, blockers, next steps, and at most five scoped conditional
+pitfalls. Candidate-local pitfalls stay local; feature-family pitfalls transfer
+only when mechanism and conditions match. Verifier concerns remain advisory
+until the main agent confirms them.
+
+## Confirmed Verifier Invalidation
+
+The runtime fence is host-neutral; quiescence is adapter-specific:
+
+| Step | Codex | Pi RPC |
+|---|---|---|
+| Fence | `search_invalidate_run` | `search_invalidate_run` |
+| Stop live work | `interrupt_agent` for every live candidate | `pi_search_pool_close(mode="interrupt")` |
+| Prove quiescence | `list_agents`/`wait_agent` until all terminal | snapshot/wait until `active_count=0` |
+| Rebuild | repair/freeze only after quiescence | repair/freeze only after quiescence |
+| Successor | `search_create(..., source_run_id=old)` | same |
+
+Adapters must not attempt to refill an invalidated run. The runtime also rejects
+Pi pool open/submit and rejects a verifier result that finishes after the fence.
+The old run remains readable for diagnosis and research inheritance, but its
+scores cannot be promoted or reused by the successor.
 
 ## Verification Evidence
 

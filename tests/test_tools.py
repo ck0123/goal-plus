@@ -13,6 +13,7 @@ from goal_plus.models import (
     GoalPlusNextAction,
     GoalPlusRecord,
     RunState,
+    RunRecord,
     RunSummary,
     ScoreReport,
     SearchPlan,
@@ -112,6 +113,17 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         candidates_total=0,
         candidates_evaluated=0,
     )
+    runtime.invalidate_run.return_value = RunRecord(
+        run_id="run_1",
+        state=RunState.ABORTED,
+        frozen_spec_id="spec_123",
+        source_path=".",
+        created_at="2026-06-24T00:00:00Z",
+        invalidated_at="2026-06-24T00:01:00Z",
+        invalidation_reason="verifier_coverage_inadequate",
+        invalidation_summary="missing required case",
+        invalidation_evidence=[{"case": "edge"}],
+    )
     runtime.list_history.return_value = {
         "run_id": "run_1",
         "candidates": [],
@@ -169,6 +181,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.bind_opencode_session.return_value = bound_session
     runtime.continue_agent_session.return_value = continued_session
     runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
+    runtime.get_agent_observability.return_value = {
+        "agent_session_id": "agent_001",
+        "source": "codex_session_jsonl",
+    }
     runtime.run_verifier.return_value = ScoreReport(
         run_id="run_1",
         candidate_id="c001",
@@ -181,6 +197,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
                 role=VerifierRole.RANKING_SIGNAL,
                 passed=True,
                 score=1.0,
+                metrics={"stderr_tail": "candidate diagnostic"},
+                log_path=Path("/tmp/iteration-0001-score-a1b2c3d4.log"),
             )
         ],
     )
@@ -194,6 +212,13 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     tools = SearchTools(runtime)
 
     assert tools.search_create("spec_123") == {"run_id": "run_1"}
+    invalidated = tools.search_invalidate_run(
+        "run_1",
+        "verifier_coverage_inadequate",
+        "missing required case",
+        [{"case": "edge"}],
+    )
+    assert invalidated["state"] == "aborted"
     assert tools.search_status("run_1")["state"] == "running"
     assert tools.search_list_history("run_1", top_n=3, sort_by="created") == {
         "run_id": "run_1",
@@ -233,15 +258,30 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     )
     assert continued["launch"]["task_id"] == "opencode_session_001"
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
-    assert tools.search_run_verifier("run_1", "c001")["aggregate_score"] == 1.0
+    assert tools.search_get_agent_observability("agent_001") == {
+        "agent_session_id": "agent_001",
+        "source": "codex_session_jsonl",
+    }
+    verifier_report = tools.search_run_verifier("run_1", "c001")
+    assert verifier_report["aggregate_score"] == 1.0
+    assert verifier_report["verifier_results"][0]["metrics"]["stderr_tail"] == (
+        "candidate diagnostic"
+    )
+    assert verifier_report["verifier_results"][0]["log_path"].endswith(
+        "iteration-0001-score-a1b2c3d4.log"
+    )
     assert tools.search_run_verifier(
-        "run_1", "c001", agent_session_id="agent_001"
+        "run_1",
+        "c001",
+        agent_session_id="agent_001",
+        hypothesis="try a fused path",
     )["aggregate_score"] == 1.0
     runtime.run_verifier.assert_called_with(
         "run_1",
         "c001",
         scope="process",
         agent_session_id="agent_001",
+        hypothesis="try a fused path",
     )
     iterations = tools.search_list_iterations("run_1", "c001")
     assert len(iterations) == 2
@@ -255,6 +295,13 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     proposal_arg = runtime.start_batch.call_args.args[2][0]
     assert isinstance(proposal_arg, CandidateProposal)
     runtime.list_history.assert_called_once_with("run_1", top_n=3, sort_by="created")
+    runtime.create_run.assert_called_once_with("spec_123", source_run_id=None)
+    runtime.invalidate_run.assert_called_once_with(
+        "run_1",
+        reason="verifier_coverage_inadequate",
+        summary="missing required case",
+        evidence=[{"case": "edge"}],
+    )
     runtime.plan_next.assert_called_once_with("run_1", requested_k=1)
     runtime.start_agent_session.assert_called_once_with(
         run_id="run_1",
@@ -282,6 +329,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         directive={"goal": "continue same node"},
         worker_budget=None,
     )
+    runtime.get_agent_observability.assert_called_once_with("agent_001")
 
 
 def test_search_tools_expose_no_lifecycle_methods() -> None:

@@ -563,10 +563,24 @@ def _collect_pi_metrics(
     baseline_count = len(baseline_entries)
     delta_entries = final_entries[baseline_count:] if len(final_entries) >= baseline_count else []
     scope = "run_delta" if not baseline_error and final_entries else "session_total_fallback"
+    state_model = state_data.get("model")
+    model = (
+        state_model.get("id") or state_model.get("modelId")
+        if isinstance(state_model, dict)
+        else state_model
+    )
+    provider = (
+        state_model.get("provider") or state_model.get("providerId")
+        if isinstance(state_model, dict)
+        else state_data.get("provider")
+    )
     metrics: dict[str, Any] = {
         "scope": scope,
         "session_id": session_id,
-        "session_file": None,
+        "session_file": state_data.get("sessionFile") or state_data.get("session_file"),
+        "model": model,
+        "provider": provider,
+        "thinking_level": state_data.get("thinkingLevel") or state_data.get("thinking_level"),
         "started_at": started_at,
         "ended_at": ended_at,
         "duration_seconds": duration_seconds,
@@ -629,6 +643,7 @@ def run_pi_rpc_worker(
         or launch.get("model_pattern")
         or os.environ.get("GOAL_PLUS_PI_MODEL")
     )
+    selected_thinking = thinking_level or launch.get("thinking_level")
     cmd = [pi_binary]
     if selected_model_pattern:
         cmd.extend(["--model", selected_model_pattern])
@@ -691,7 +706,6 @@ def run_pi_rpc_worker(
                 {"type": "set_model", "provider": provider, "modelId": model_id},
                 timeout=min(30, timeout_seconds),
             )
-        selected_thinking = thinking_level or launch.get("thinking_level")
         if selected_thinking:
             rpc.command(
                 {"type": "set_thinking_level", "level": selected_thinking},
@@ -804,6 +818,10 @@ def run_pi_rpc_worker(
     finally:
         ended_at = _utc_timestamp()
         duration_seconds = time.monotonic() - started_monotonic
+        if selected_model_pattern:
+            last_state_data.setdefault("model", selected_model_pattern)
+        if selected_thinking:
+            last_state_data.setdefault("thinkingLevel", selected_thinking)
         try:
             pi_metrics = _collect_pi_metrics(
                 rpc,

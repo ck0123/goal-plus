@@ -120,6 +120,8 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
             "scope": "top_n",
             "top_n": 5,
             "include": ["summary", "score", "key_metrics", "parent_id", "changed_files"],
+            "inherited_feature_limit": 50,
+            "inherited_pitfall_limit": 30,
         },
         "latest_plan": {
             "plan_id": plan.plan_id,
@@ -134,6 +136,10 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert snapshot["main_agent"]["subagent_count"] == 1
     assert snapshot["main_agent"]["verifier_count"] == 1
     assert snapshot["main_agent"]["estimated_cost_total"] == 0.18
+    results_tsv = snapshot["candidates"][first.candidate_id]["results_tsv"]
+    assert results_tsv["path"].endswith(f"/{first.candidate_id}/results.tsv")
+    assert results_tsv["exists"] is True
+    assert results_tsv["row_count"] == 1
 
     [subagent] = snapshot["subagents"]
     assert subagent["agent_session_id"] == session.agent_session_id
@@ -151,9 +157,13 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert subagent["runner_failed"] is False
     assert subagent["progress_handoff"] is None
     assert subagent["liveness"] == "evaluated"
+    assert subagent["observability"]["source"] == "pi_metrics"
+    assert subagent["observability"]["usage"]["cost_usd"] == 0.18
+    assert subagent["observability"]["context"]["tokens"] == 12345
 
     assert snapshot["candidates"][second.candidate_id]["status"] == "created"
     assert snapshot["candidates"][second.candidate_id]["agent_session_count"] == 0
+    assert snapshot["candidates"][second.candidate_id]["results_tsv"]["row_count"] == 0
     assert any(warning["kind"] == "candidate_without_agent_session" for warning in snapshot["warnings"])
 
 
@@ -266,6 +276,7 @@ def test_goal_plus_monitor_snapshot_is_exposed_to_mcp_and_pi_facade(tmp_path: Pa
     assert "goal_plus_monitor_snapshot" in tools
     assert "run_id" in tools["goal_plus_monitor_snapshot"].parameters["properties"]
     assert "goal_plus_id" in tools["goal_plus_monitor_snapshot"].parameters["properties"]
+    assert "search_get_agent_observability" in tools
 
     result = call_pi_tool(
         runtime_root,
@@ -276,6 +287,16 @@ def test_goal_plus_monitor_snapshot_is_exposed_to_mcp_and_pi_facade(tmp_path: Pa
     assert result["run"]["run_id"] == run_id
     assert result["strategy"]["name"] == "random"
     assert result["strategy"]["latest_plan"] is None
+
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    observability = call_pi_tool(
+        runtime_root,
+        "search_get_agent_observability",
+        {"agent_session_id": session.agent_session_id},
+    )
+    assert observability["host"] == "pi-rpc"
 
 
 def test_goal_plus_monitor_snapshot_summarizes_strategy_specific_plan_state(

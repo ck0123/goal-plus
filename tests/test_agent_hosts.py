@@ -66,7 +66,7 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
     )
 
     assert payload["tool"] == "spawn_agent"
-    assert payload["agent_type"] == "search_candidate_agent"
+    assert payload["agent_type"] == "default"
     assert payload["fork_turns"] == "none"
     assert payload["task_name"] == "search_agent_0001"
     assert "agent_session_id=agent-0001" in payload["message"]
@@ -74,7 +74,7 @@ def test_codex_adapter_builds_foreground_spawn_payload() -> None:
 
 
 @pytest.mark.codex
-def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> None:
+def test_codex_launch_maps_candidate_contract_to_builtin_default_role() -> None:
     adapter = get_agent_host_adapter("codex")
 
     payload = adapter.build_launch_payload(
@@ -86,6 +86,10 @@ def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> 
     )
 
     message = payload["message"]
+    # Codex's built-in default role has no config layer, so it preserves the
+    # inherited parent model. The project search role would reload config after
+    # inheritance and can clear a runtime-only model before tier validation.
+    assert payload["agent_type"] == "default"
     assert "candidate worker, not the search orchestrator" in message
     assert "search_get_agent_context" in message
     assert "search_run_verifier" in message
@@ -95,6 +99,51 @@ def test_codex_launch_message_preserves_worker_boundary_without_agent_type() -> 
     assert "search_report" in message
     assert "search_promote" in message
     assert "Do not call any `goal_plus_*` tool" in message
+
+
+@pytest.mark.codex
+def test_codex_launch_preserves_explicit_nondefault_agent_type() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type="search_candidate_agent_deep",
+        candidate_id="c001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+    )
+
+    assert payload["agent_type"] == "search_candidate_agent_deep"
+
+
+@pytest.mark.codex
+def test_codex_launch_and_continue_embed_full_worker_prompt() -> None:
+    adapter = get_agent_host_adapter("codex")
+    worker_prompt = "FULL WORKER CONTRACT: write .tmp/handoff.json before returning."
+
+    launch = adapter.build_launch_payload(
+        worker_agent_type="search_candidate_agent",
+        candidate_id="c001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_prompt=worker_prompt,
+    )
+    continued = adapter.build_continue_payload(
+        worker_agent_type="search_candidate_agent",
+        candidate_id="c001",
+        agent_session_id="agent-0001",
+        external_id=None,
+        task_name=launch["task_name"],
+        short_intent="continue",
+        one_paragraph_idea="continue",
+        worker_prompt=worker_prompt,
+    )
+
+    assert worker_prompt in launch["message"]
+    assert worker_prompt in continued["message"]
+    assert "candidate worker, not the search orchestrator" in launch["message"]
+    assert "candidate worker, not the search orchestrator" in continued["message"]
 
 
 @pytest.mark.codex

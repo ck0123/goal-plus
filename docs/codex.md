@@ -55,15 +55,19 @@ returns a launch payload like:
 {
   "tool": "spawn_agent",
   "task_name": "search_agent_001",
-  "agent_type": "search_candidate_agent",
+  "agent_type": "default",
   "fork_turns": "none",
   "message": "agent_session_id=agent_001; candidate_id=c001; idea: ..."
 }
 ```
 
 Project it onto the current tool schema. `task_name`, `message`, and the fork
-field are stable; pass optional `agent_type`, model, reasoning, or service tier
-only when exposed. `strategy.worker_launch` may request those optional fields.
+field are stable. The default candidate-worker contract is self-contained in
+`message`, and `agent_type="default"` selects Codex's built-in no-config role,
+so the child uses native parent-model inheritance without a project role
+reload. Pass other optional metadata, including `strategy.worker_launch`
+overrides, only when it is present in the returned launch payload and exposed
+by the current tool schema; never synthesize it from the schema alone.
 
 The parent then:
 
@@ -106,6 +110,15 @@ The `PostToolUse` hook may also inject one informational timing advisory when
 the remaining outer/worker time is below observed verifier-submission time.
 It never stops the worker. Evidence is visible through
 `goal_plus_monitor_snapshot`.
+
+For one worker, call `search_get_agent_observability(agent_session_id)`. Codex
+uses the `SubagentStop.agent_transcript_path` when present and otherwise
+discovers the native `${CODEX_HOME:-~/.codex}/sessions/...` JSONL from the
+bound unique task name. The normalized result includes resolved model and
+reasoning effort, active and wall duration, terminal state, token/context
+counts, tool/message counts, and the session artifact path. It intentionally
+omits prompt, reasoning, and tool payload content. Interrupted workers that do
+not emit `SubagentStop` remain discoverable by task name.
 
 ## Resume
 

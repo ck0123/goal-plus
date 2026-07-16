@@ -58,7 +58,7 @@ def test_codex_and_pi_publish_native_parity_capabilities() -> None:
     assert codex.supports_model_override is True
     assert codex.supports_reasoning_effort is True
     assert codex.supports_service_tier is True
-    assert codex.supports_usage_metadata is False
+    assert codex.supports_usage_metadata is True
     assert codex.supports_process_kill is False
     assert codex.pool.launch_mode == "async"
     assert codex.pool.wait_mode == "wait_any"

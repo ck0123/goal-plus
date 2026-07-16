@@ -45,7 +45,8 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
     )
     run_id = runtime.create_run(frozen.frozen_spec_id)
     initial = _planned_candidates(runtime, run_id, 2)
-    completion_delays = iter((0.05, 0.45, 0.05))
+    completion_delays = iter((0.05, None, 0.05))
+    release_slowest = threading.Event()
     threads: list[threading.Thread] = []
 
     def fake_launcher(*, root_dir: Path | str, pool_id: str, job_id: str) -> int:
@@ -53,7 +54,10 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
 
         def complete() -> None:
             request = load_json(pi_pool._job_dir(root_dir, pool_id, job_id) / "request.json")
-            time.sleep(delay)
+            if delay is None:
+                release_slowest.wait(timeout=5)
+            else:
+                time.sleep(delay)
             result = {
                 "ok": True,
                 "run_id": request["run_id"],
@@ -120,6 +124,7 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
         for job in after_refill["jobs"]
     )
 
+    release_slowest.set()
     observed = []
     while len(observed) < 2:
         update = wait_any_pi_search_pool(
@@ -158,6 +163,25 @@ def test_pi_pool_enforces_frozen_parallel_limit(tmp_path: Path) -> None:
             run_id=run_id,
             max_parallel=2,
         )
+
+
+def test_pi_pool_rejects_work_after_run_invalidation(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        _pi_rpc_spec_with_budget(project, max_candidates=1, max_parallel=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    runtime.invalidate_run(
+        run_id,
+        reason="verifier_infrastructure_failure",
+        summary="main agent confirmed verifier infrastructure failure",
+        evidence=[{"failure_class": "VerifierWorkspaceSideEffect"}],
+    )
+
+    with pytest.raises(RuntimeError, match="invalidated"):
+        open_pi_search_pool(root_dir=runtime.root_dir, run_id=run_id)
 
 
 def test_pi_pool_worker_publishes_candidate_ready_after_driver_completion(

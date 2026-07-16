@@ -13,6 +13,8 @@ import pytest
 from goal_plus.models import (
     CandidateProposal,
     CandidateRecord,
+    RunState,
+    ScoreReport,
     SearchSpec,
 )
 from goal_plus.runtime import (
@@ -508,6 +510,110 @@ def test_runtime_rejects_non_null_verifier_error_after_clean_preflight(
     assert report.aggregate_score == 0.0
     assert report.verifier_results[0].failure_class == "VerifierCommandFailed"
     assert report.verifier_results[0].metrics["error"] == "candidate evaluation failed"
+
+
+def test_visible_verifier_failure_returns_diagnostics_and_preserves_logs(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, sys\n"
+        "from initial_program import VALUE\n"
+        "if VALUE == 0:\n"
+        "    print(json.dumps({'combined_score': 0.0}))\n"
+        "else:\n"
+        "    print('x' * 5000 + f'-stdout-value-{VALUE}')\n"
+        "    print(f'stderr-value-{VALUE}', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_candidates=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+    first_report = runtime.run_verifier(run_id, task.candidate_id)
+    first_result = first_report.verifier_results[0]
+    first_log = Path(first_result.log_path)
+
+    assert first_result.failure_class == "VerifierCommandFailed"
+    assert len(first_result.metrics["stdout_tail"]) == 4000
+    assert first_result.metrics["stdout_tail"].endswith("-stdout-value-1")
+    assert first_result.metrics["stderr_tail"] == "stderr-value-1"
+    assert first_log.name.startswith("iteration-0001-score-")
+    assert "-stdout-value-1" in first_log.read_text(encoding="utf-8")
+
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 22\n",
+        encoding="utf-8",
+    )
+    second_report = runtime.run_verifier(run_id, task.candidate_id)
+    second_result = second_report.verifier_results[0]
+    second_log = Path(second_result.log_path)
+
+    assert second_log != first_log
+    assert second_log.name.startswith("iteration-0002-score-")
+    assert "-stdout-value-22" in second_log.read_text(encoding="utf-8")
+    assert "-stdout-value-1" in first_log.read_text(encoding="utf-8")
+    iterations = runtime.list_iterations(
+        run_id,
+        task.candidate_id,
+    )
+    assert [iteration["log_paths"] for iteration in iterations] == [
+        [str(first_log)],
+        [str(second_log)],
+    ]
+
+
+@pytest.mark.parametrize("feedback_policy", ["summary_only", "final_only"])
+def test_non_visible_feedback_policy_keeps_diagnostics_in_runtime_log(
+    tmp_path: Path,
+    feedback_policy: str,
+) -> None:
+    project = make_project(tmp_path)
+    (project / "evaluator.py").write_text(
+        "import json, sys\n"
+        "from initial_program import VALUE\n"
+        "if VALUE == 0:\n"
+        "    print(json.dumps({'combined_score': 0.0}))\n"
+        "else:\n"
+        "    print('private stdout')\n"
+        "    print('private stderr', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["process_verifiers"][0]["feedback_policy"] = feedback_policy
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    task.workspace.joinpath("initial_program.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+    report = runtime.run_verifier(run_id, task.candidate_id)
+
+    result = report.verifier_results[0]
+    assert result.failure_class == "VerifierCommandFailed"
+    assert "stdout_tail" not in result.metrics
+    assert "stderr_tail" not in result.metrics
+    log_text = Path(result.log_path).read_text(encoding="utf-8")
+    assert "private stdout" in log_text
+    assert "private stderr" in log_text
 
 
 @pytest.mark.parametrize("runtime_dir", [".gp", ".search"])
@@ -1527,11 +1633,14 @@ def test_start_agent_session_returns_codex_launch_payload(tmp_path: Path) -> Non
 
     session = runtime.start_agent_session(run_id, task.candidate_id)
 
+    assert "theoretical or structural limits" in session.launch["message"]
+    assert "Before returning, create `.tmp/handoff.json`" in session.launch["message"]
+
     assert session.host == "codex"
     assert session.host_handle.host == "codex"
     assert session.host_handle.task_name == session.launch["task_name"]
     assert session.launch["tool"] == "spawn_agent"
-    assert session.launch["agent_type"] == "search_candidate_agent"
+    assert session.launch["agent_type"] == "default"
     assert session.launch["fork_turns"] == "none"
     assert "agent_session_id=" in session.launch["message"]
 
@@ -2045,6 +2154,60 @@ def test_bind_agent_handle_records_codex_task_name(tmp_path: Path) -> None:
 
 
 @pytest.mark.codex
+def test_bind_agent_handle_harvests_workspace_handoff_into_history(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_host(project, "codex", strategy_name="random", max_candidates=1)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    handoff_path = task.workspace / ".tmp" / "handoff.json"
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(
+        handoff_path,
+        {
+            "summary": "tested a distinct allocation strategy",
+            "key_results": ["iteration 2 improved the score"],
+            "pitfalls": [],
+            "blockers": [],
+            "next_steps": ["test the portable subset"],
+            "verifier_assessment": {
+                "status": "adequate",
+                "evidence": ["deterministic score"],
+                "impact": "safe to continue",
+                "recommended_action": "keep_spec",
+            },
+        },
+    )
+
+    updated = runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "codex", "task_name": "search_agent_0001"},
+    )
+
+    progress = updated.host_handle.metadata["progress_handoff"]
+    assert progress["source_path"] == ".tmp/handoff.json"
+    assert progress["model_handoff"]["summary"] == "tested a distinct allocation strategy"
+    history = runtime.list_history(run_id)
+    assert history["candidates"][0]["summary"] == "tested a distinct allocation strategy"
+    report = runtime.report(run_id).read_text(encoding="utf-8")
+    assert "tested a distinct allocation strategy" in report
+
+    handoff_path.write_text("{not-json", encoding="utf-8")
+    rebound = runtime.bind_agent_handle(
+        session.agent_session_id,
+        {"host": "codex", "task_name": "search_agent_0001"},
+    )
+    assert "JSONDecodeError" in rebound.host_handle.metadata["progress_handoff_error"]
+    assert (
+        rebound.host_handle.metadata["progress_handoff"]["model_handoff"]["summary"]
+        == "tested a distinct allocation strategy"
+    )
+
+
+@pytest.mark.codex
 def test_codex_continue_agent_session_uses_bound_worker_and_budget(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
@@ -2068,6 +2231,8 @@ def test_codex_continue_agent_session_uses_bound_worker_and_budget(tmp_path: Pat
     assert continued.launch["tool"] == "followup_task"
     assert continued.launch["target"] == "search_agent_0001"
     assert continued.launch["budget_control"]["max_runtime_seconds"] == 900
+    assert "theoretical or structural limits" in continued.launch["message"]
+    assert "Before returning, create `.tmp/handoff.json`" in continued.launch["message"]
 
 
 def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path) -> None:
@@ -2424,6 +2589,15 @@ def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) 
 
     plan2 = runtime.plan_next(run_id, requested_k=1)
     assert plan2.proposal_contract.must_reference_one_of == ["c001"]  # type: ignore[union-attr]
+    assert any(
+        "deepen_incumbent, transfer_feature, and macro_restart" in note
+        for note in plan2.proposal_contract.notes  # type: ignore[union-attr]
+    )
+    notes = " ".join(plan2.proposal_contract.notes)  # type: ignore[union-attr]
+    assert "different candidate ids do not by themselves provide search diversity" in notes
+    assert "prefer continuing it with a larger one-dispatch budget" in notes
+    assert "free slot is not an obligation" in notes
+    assert "theoretical or structural limits" in notes
     with pytest.raises(ValueError):
         runtime.start_batch(
             run_id,
@@ -2558,9 +2732,15 @@ def test_git_worktree_runtime_branches_followup_from_best_parent_commit(
     assert child.workspace_backend == "git_worktree"
     assert child.workspace_branch == f"gp/{run_id}/c003"
     assert child.workspace_base_revision == best_parent_iteration.git_head
-    assert subprocess.check_output(
+    child_record = runtime._load_candidate_record(run_id, child.candidate_id)
+    child_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=child.workspace, text=True
-    ).strip() == best_parent_iteration.git_head
+    ).strip()
+    assert child_head == child_record.results_ledger_git_head
+    assert child_head != best_parent_iteration.git_head
+    assert child.workspace.joinpath("results.tsv").read_text(encoding="utf-8") == (
+        parent.task.workspace.joinpath("results.tsv").read_text(encoding="utf-8")
+    )
     assert (child.workspace / "initial_program.py").read_text(
         encoding="utf-8"
     ) == "VALUE = 2\n"
@@ -2953,13 +3133,13 @@ def test_random_strategy_name_normalizes_case_and_dash(
             "codex",
             "default",
             True,
-            {"tool": "spawn_agent", "agent_type": "search_candidate_agent"},
+            {"tool": "spawn_agent", "agent_type": "default"},
         ),
         (
             "codex",
             "random-mode",
             False,
-            {"tool": "spawn_agent", "agent_type": "search_candidate_agent"},
+            {"tool": "spawn_agent", "agent_type": "default"},
         ),
         (
             "claude-code",
@@ -3949,60 +4129,27 @@ def test_select_can_recover_best_iteration_after_artifact_changed(
     ) == "VALUE = 'fast'\n"
 
 
-def test_select_ignores_old_artifact_without_git_commit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_run_verifier_rejects_missing_results_ledger_git_history(
+    tmp_path: Path,
 ) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(
-        spec_for(project, max_candidates=2),
-        [project / "evaluator.py"],
-    )
+    frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=2)
+    plan = runtime.plan_next(run_id, requested_k=1)
     tasks = runtime.start_batch(run_id, plan.plan_id)
+    results_before = tasks[0].workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    )
     shutil.rmtree(tasks[0].workspace / ".git")
 
-    scores_by_candidate = {
-        "c001": [0.9, 0.4],
-        "c002": [0.7, 0.7],
-    }
-    real_run = subprocess.run
+    with pytest.raises(RuntimeError, match="ResultsLedgerMutation"):
+        runtime.run_verifier(run_id, tasks[0].candidate_id)
 
-    def fake_run(*args, **kwargs):
-        command = args[0]
-        if command and command[0] != "python":
-            return real_run(*args, **kwargs)
-        candidate_id = Path(kwargs["cwd"]).name
-        score = scores_by_candidate[candidate_id].pop(0)
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout=f'{{"combined_score": {score}, "valid": true}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-
-    c001_workspace = tasks[0].workspace
-    c001_workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 'fast'\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c001")
-    c001_workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 'slow'\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c001")
-
-    tasks[1].workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 'middle'\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c002")
-
-    selection = runtime.select(run_id)
-
-    assert selection["selected_candidate_id"] == "c002"
-    assert selection["selected_score"] == 0.7
+    assert tasks[0].workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ) == results_before
+    assert runtime.list_iterations(run_id, tasks[0].candidate_id) == []
 
 
 def test_run_verifier_records_real_git_commit_for_iteration(
@@ -4036,8 +4183,191 @@ def test_run_verifier_records_real_git_commit_for_iteration(
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
     ).strip()
-    assert iteration["git_head"] == head
+    assert iteration["ledger_git_head"] == head
+    assert iteration["git_head"] != head
     assert iteration["git_artifact_clean"] is True
+
+
+def test_results_tsv_is_committed_and_runtime_enforces_one_row_per_report(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    results_path = workspace / "results.tsv"
+
+    assert results_path.read_text(encoding="utf-8") == (
+        "commit\tcombined_score\tstatus\thypothesis\n"
+    )
+    assert not (workspace / ".tmp" / "results.tsv").exists()
+    assert subprocess.check_output(
+        ["git", "ls-files", "--", "results.tsv"],
+        cwd=workspace,
+        text=True,
+    ).strip() == "results.tsv"
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--", "results.tsv"],
+        cwd=workspace,
+        text=True,
+    ).strip() == ""
+
+    session = runtime.start_agent_session(run_id, candidate_id)
+    first = runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session.agent_session_id,
+        hypothesis="measure inherited baseline",
+    )
+    assert first.process_passed is True
+    first_text = results_path.read_text(encoding="utf-8")
+    assert len(first_text.splitlines()) == 2
+    assert first_text.splitlines()[1].endswith(
+        "\tpass\tmeasure inherited baseline"
+    )
+
+    (workspace / "config.yaml").write_text("name: denied edit\n", encoding="utf-8")
+    second = runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session.agent_session_id,
+        hypothesis="probe denied configuration change",
+    )
+    assert second.process_passed is False
+    second_text = results_path.read_text(encoding="utf-8")
+    assert second_text.startswith(first_text)
+    assert len(second_text.splitlines()) == 3
+    assert second_text.splitlines()[2].endswith(
+        "\tfail\tprobe denied configuration change"
+    )
+
+    record = runtime._load_candidate_record(run_id, candidate_id)
+    assert len(record.iterations) == 2
+    assert len(record.results_ledger) == 2
+    assert record.iterations[-1].ledger_git_head == record.results_ledger_git_head
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, text=True
+    ).strip() == record.results_ledger_git_head
+
+    redispatched = runtime.redispatch_candidate(run_id, candidate_id)
+    context = runtime.get_agent_context(redispatched.agent_session_id)
+    assert context["results_tsv"] == str(results_path)
+    assert len(context["results"]) == 2
+
+    report = runtime.report(run_id).read_text(encoding="utf-8")
+    relative_results = f"workspace/{candidate_id}/results.tsv"
+    assert "## Results Ledgers" in report
+    assert f"[results.tsv]({relative_results}) (2 rows)" in report
+    assert f"[results.tsv]({relative_results})" in report
+    assert "probe denied configuration change" in report
+
+    results_path.write_text(
+        second_text.replace("measure inherited baseline", "rewritten baseline"),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="ResultsLedgerMutation"):
+        runtime.run_verifier(run_id, candidate_id, hypothesis="must not run")
+    assert len(runtime._load_candidate_record(run_id, candidate_id).results_ledger) == 2
+
+
+def test_results_tsv_inherits_across_derived_candidate_and_successor_run(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(project, {"name": "evolve"}, max_candidates=3)
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    first_run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    first_plan = runtime.plan_next(first_run_id, requested_k=1)
+    parent = runtime.start_batch(first_run_id, first_plan.plan_id)[0]
+    runtime.run_verifier(
+        first_run_id,
+        parent.candidate_id,
+        hypothesis="parent design",
+    )
+    parent_results = parent.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    )
+
+    second_plan = runtime.plan_next(first_run_id, requested_k=1)
+    child = runtime.start_batch(first_run_id, second_plan.plan_id)[0]
+    assert child.base_candidate_id == parent.candidate_id
+    assert child.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ) == parent_results
+    runtime.run_verifier(
+        first_run_id,
+        child.candidate_id,
+        hypothesis="child design",
+    )
+    child_results = child.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    )
+    assert child_results.startswith(parent_results)
+    assert len(child_results.splitlines()) == len(parent_results.splitlines()) + 1
+
+    successor_run_id = runtime.create_run(
+        frozen.frozen_spec_id,
+        source_run_id=first_run_id,
+    )
+    successor_plan = runtime.plan_next(successor_run_id, requested_k=1)
+    successor = runtime.start_batch(successor_run_id, successor_plan.plan_id)[0]
+    assert successor.workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ) == parent_results
+    successor_record = runtime._load_candidate_record(
+        successor_run_id,
+        successor.candidate_id,
+    )
+    assert [entry.source_run_id for entry in successor_record.results_ledger] == [
+        first_run_id
+    ]
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--", "results.tsv"],
+        cwd=successor.workspace,
+        text=True,
+    ).strip() == ""
+
+
+def test_legacy_tmp_results_tsv_migrates_and_backfills_missing_iterations(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    run_id, candidate_id, workspace = create_candidate(runtime, project)
+    runtime.run_verifier(run_id, candidate_id, hypothesis="legacy row kept")
+    runtime.run_verifier(run_id, candidate_id, hypothesis="missing legacy row")
+
+    current_lines = workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    legacy_path = workspace / ".tmp" / "results.tsv"
+    legacy_path.write_text("\n".join(current_lines[:2]) + "\n", encoding="utf-8")
+    workspace.joinpath("results.tsv").unlink()
+
+    candidate_path = runtime._candidate_dir(run_id, candidate_id) / "candidate.json"
+    legacy_record = load_json(candidate_path)
+    legacy_record.pop("results_ledger", None)
+    legacy_record.pop("results_ledger_git_head", None)
+    for iteration in legacy_record["iterations"]:
+        iteration.pop("ledger_git_head", None)
+        iteration.pop("hypothesis", None)
+        iteration["summary"] = ""
+    write_json(candidate_path, legacy_record)
+
+    session = runtime.start_agent_session(run_id, candidate_id)
+    context = runtime.get_agent_context(session.agent_session_id)
+    migrated_lines = workspace.joinpath("results.tsv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+    assert len(migrated_lines) == 3
+    assert migrated_lines[1] == current_lines[1]
+    assert migrated_lines[2].endswith("\tpass\trecovered iteration 2")
+    assert len(context["results"]) == 2
+    migrated_record = runtime._load_candidate_record(run_id, candidate_id)
+    assert migrated_record.results_ledger_git_head is not None
+    assert len(migrated_record.results_ledger) == 2
 
 
 def test_select_checks_out_best_git_commit_before_final_verify(
@@ -4101,9 +4431,12 @@ def test_select_checks_out_best_git_commit_before_final_verify(
     assert c001_workspace.joinpath("initial_program.py").read_text(
         encoding="utf-8"
     ) == "VALUE = 'fast'\n"
-    assert subprocess.check_output(
+    final_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=c001_workspace, text=True
-    ).strip() == fast_commit
+    ).strip()
+    selected_record = runtime._load_candidate_record(run_id, "c001")
+    assert final_head == selected_record.results_ledger_git_head
+    assert final_head != fast_commit
 
 
 def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
@@ -4385,7 +4718,13 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
                         "key_results": [
                             {
                                 "artifact": "iteration 3",
-                                "verifier": "score 7.0",
+                                "code_surface": "kernel.py:build_schedule",
+                                "change": "keep scratch values resident",
+                                "portability": "standalone",
+                                "depends_on": [],
+                                "measured_effect": "score 5.0 -> 7.0",
+                                "verifier_result": "score 7.0",
+                                "relation_to_incumbent": "orthogonal",
                                 "conclusion": "batch reuse is promising",
                             }
                         ],
@@ -4399,6 +4738,12 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
                         ],
                         "blockers": ["no cheap slot-occupancy probe"],
                         "next_steps": ["test four-way interleave"],
+                        "verifier_assessment": {
+                            "status": "adequate",
+                            "evidence": ["local ranking is deterministic"],
+                            "impact": "safe to compare variants",
+                            "recommended_action": "keep_spec",
+                        },
                     },
                 }
             },
@@ -4410,6 +4755,17 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
 
     assert candidate["summary"] == "reworked scratch residency"
     assert candidate["key_results"][0]["artifact"] == "iteration 3"
+    assert candidate["feature_ledger"][0]["code_surface"] == (
+        "kernel.py:build_schedule"
+    )
+    assert candidate["verifier_assessment"]["status"] == "adequate"
+    assert history["feature_ledger"][0]["relation_to_incumbent"] == "orthogonal"
+    assert history["verifier_assessments"][0]["candidate_id"] == task.candidate_id
+    assert history["research_rollup"]["pitfalls"][0]["scope"] == "candidate_local"
+    assert history["pitfalls"] == history["research_rollup"]["pitfalls"]
+    assert history["research_rollup"]["pitfalls"][0]["confidence"] == (
+        "single_observation"
+    )
     assert candidate["risk_notes"][0].startswith(
         "Condition: when the gather spans six lanes; "
         "failed approach: fully interleave all loads"
@@ -4422,6 +4778,263 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
     assert candidate["research_summary"]["source_agent_session_id"] == (
         session.agent_session_id
     )
+
+
+def test_history_feature_ledger_retains_non_frontier_candidate(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 600},
+        },
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    for task in tasks:
+        session = runtime.start_agent_session(run_id, task.candidate_id)
+        runtime.bind_agent_handle(
+            session.agent_session_id,
+            {
+                "host": "pi-rpc",
+                "external_id": f"pi-{task.candidate_id}",
+                "metadata": {
+                    "progress_handoff": {
+                        "model_handoff": {
+                            "summary": f"result from {task.candidate_id}",
+                            "key_results": [
+                                {
+                                    "artifact": "iteration 1",
+                                    "code_surface": f"feature-{task.candidate_id}",
+                                    "change": "candidate-specific feature",
+                                    "portability": "standalone",
+                                    "depends_on": [],
+                                    "measured_effect": "0.0 -> 1.0",
+                                    "verifier_result": "passed",
+                                    "relation_to_incumbent": "orthogonal",
+                                    "conclusion": "portable",
+                                }
+                            ],
+                            "pitfalls": [],
+                            "blockers": [],
+                            "next_steps": [],
+                            "verifier_assessment": {
+                                "status": "unknown",
+                                "evidence": [],
+                                "impact": "",
+                                "recommended_action": "keep_spec",
+                            },
+                        }
+                    }
+                },
+            },
+        )
+
+    history = runtime.list_history(run_id, top_n=1)
+
+    assert history["returned_candidates"] == 1
+    assert {entry["candidate_id"] for entry in history["feature_ledger"]} == {
+        "c001",
+        "c002",
+    }
+    hidden = next(
+        entry for entry in history["feature_ledger"] if entry["candidate_id"] == "c002"
+    )
+    assert hidden["candidate_visible"] is False
+
+
+def test_invalidate_run_fences_work_and_successor_inherits_research(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec = spec_with_strategy(
+        project,
+        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+        max_candidates=2,
+    )
+    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(
+        run_id,
+        plan.plan_id,
+        [CandidateProposal(intent="bootstrap")],
+    )[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    runtime.bind_agent_handle(
+        session.agent_session_id,
+        {
+            "host": "opencode",
+            "metadata": {
+                "progress_handoff": {
+                    "model_handoff": {
+                        "summary": "found a portable fusion",
+                        "key_results": [
+                            {
+                                "artifact": "iteration 1",
+                                "code_surface": "kernel.py:hash_stage",
+                                "change": "fuse stages 0/2/4",
+                                "portability": "standalone",
+                                "depends_on": [],
+                                "measured_effect": "1.0 -> 2.0",
+                                "verifier_result": "passed",
+                                "relation_to_incumbent": "orthogonal",
+                                "conclusion": "probe against the next incumbent",
+                            }
+                        ],
+                        "pitfalls": [
+                            {
+                                "scope": "feature_family",
+                                "condition": "when all lanes share one scratch bank",
+                                "failed_approach": "fully interleave writes",
+                                "observed_result": "score regressed",
+                                "reason": "bank pressure",
+                                "evidence_artifact": "iteration 1",
+                                "confidence": "single_observation",
+                                "recommendation": "apply only with separate banks",
+                            }
+                        ],
+                        "blockers": [],
+                        "next_steps": ["transfer fusion"],
+                        "verifier_assessment": {
+                            "status": "concern",
+                            "evidence": ["required edge case is absent"],
+                            "impact": "ranking can accept invalid artifacts",
+                            "recommended_action": "upgrade_spec",
+                        },
+                    }
+                }
+            },
+        },
+    )
+    runtime.run_verifier(
+        run_id,
+        task.candidate_id,
+        agent_session_id=session.agent_session_id,
+    )
+
+    invalidated = runtime.invalidate_run(
+        run_id,
+        reason="verifier_coverage_inadequate",
+        summary="main agent confirmed the missing required edge case",
+        evidence=[{"case": "required-edge", "source_candidate_id": "c001"}],
+    )
+
+    assert invalidated.state == RunState.ABORTED
+    assert invalidated.invalidation_reason == "verifier_coverage_inadequate"
+    with pytest.raises(RuntimeError, match="invalidated"):
+        runtime.run_verifier(run_id, task.candidate_id)
+    with pytest.raises(RuntimeError):
+        runtime.plan_next(run_id, requested_k=1)
+    with pytest.raises(RuntimeError):
+        runtime.start_agent_session(run_id, task.candidate_id)
+    with pytest.raises(RuntimeError, match="invalidated"):
+        runtime.select(run_id)
+
+    successor_id = runtime.create_run(
+        frozen.frozen_spec_id,
+        source_run_id=run_id,
+    )
+    successor_history = runtime.list_history(successor_id)
+    inherited = successor_history["inherited_research"]
+
+    assert successor_history["source_run_id"] == run_id
+    assert inherited["frontier"][0]["candidate_id"] == "c001"
+    assert inherited["feature_ledger"][0]["code_surface"] == (
+        "kernel.py:hash_stage"
+    )
+    assert inherited["feature_ledger"][0]["score_reusable"] is False
+    assert inherited["pitfalls"][0]["scope"] == "feature_family"
+    assert runtime.status(run_id).replacement_run_id == successor_id
+
+
+def test_successor_history_uses_receiving_policy_limits(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    source_spec = spec_with_strategy(
+        project,
+        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+    )
+    source_frozen = runtime.freeze_spec(source_spec, [project / "evaluator.py"])
+    source_run_id = runtime.create_run(source_frozen.frozen_spec_id)
+    source_run = runtime._load_run(source_run_id)
+    source_run.inherited_research = {
+        "feature_ledger": [{"artifact": f"feature-{index}"} for index in range(60)],
+        "pitfalls": [{"condition": f"pitfall-{index}"} for index in range(40)],
+    }
+    runtime._write_run(source_run)
+
+    default_spec = spec_with_strategy(
+        project,
+        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+    )
+    default_frozen = runtime.freeze_spec(default_spec, [project / "evaluator.py"])
+    default_run_id = runtime.create_run(
+        default_frozen.frozen_spec_id,
+        source_run_id=source_run_id,
+    )
+    default_inherited = runtime.list_history(default_run_id)["inherited_research"]
+    assert len(default_inherited["feature_ledger"]) == 50
+    assert len(default_inherited["pitfalls"]) == 30
+
+    custom_spec = spec_with_strategy(
+        project,
+        {
+            "name": "agent_guided",
+            "worker_mode": "agent-session-pool",
+            "history_policy": {
+                "inherited_feature_limit": None,
+                "inherited_pitfall_limit": 7,
+            },
+        },
+    )
+    custom_frozen = runtime.freeze_spec(custom_spec, [project / "evaluator.py"])
+    custom_run_id = runtime.create_run(
+        custom_frozen.frozen_spec_id,
+        source_run_id=source_run_id,
+    )
+    custom_inherited = runtime.list_history(custom_run_id)["inherited_research"]
+    assert len(custom_inherited["feature_ledger"]) == 60
+    assert len(custom_inherited["pitfalls"]) == 7
+
+
+def test_invalidation_rejects_in_flight_verifier_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    original_run_commands = runtime._run_commands
+
+    def invalidate_after_execution(*args: object, **kwargs: object) -> ScoreReport:
+        report = original_run_commands(*args, **kwargs)  # type: ignore[arg-type]
+        runtime.invalidate_run(
+            run_id,
+            reason="verifier_target_mismatch",
+            summary="main agent confirmed target mismatch while verifier ran",
+            evidence=[{"target": "hidden judge"}],
+        )
+        return report
+
+    monkeypatch.setattr(runtime, "_run_commands", invalidate_after_execution)
+
+    with pytest.raises(RuntimeError, match="record verifier result"):
+        runtime.run_verifier(run_id, task.candidate_id)
+
+    assert runtime.status(run_id).state == RunState.ABORTED
+    assert runtime.list_iterations(run_id, task.candidate_id) == []
 
 
 def test_runtime_does_not_create_event_or_observation_dirs(tmp_path: Path) -> None:

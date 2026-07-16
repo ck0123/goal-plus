@@ -72,11 +72,18 @@ For Codex, copy `.codex/config.example.toml` to the ignored local
 - A **candidate** is an isolated workspace with verifier history.
 - A **worker session** is a host context/provenance handle. Worker lifecycle
   belongs to the host, not the Search runtime.
+- A **verifier concern** is worker advice. Only the main agent can confirm it;
+  confirmation fences the run before all host workers are stopped and a
+  successor spec/run is created.
 
 Search uses a rolling pool: fill up to `budget.max_parallel`, react whenever
 any worker finishes, and immediately continue that direction, launch another
 candidate, leave the slot idle, or drain for selection. Slower workers do not
 block completed work from being evaluated. See [Flow](docs/flow-view.md).
+
+Keep one run for one valid evaluation/edit contract. If a successor is
+unavoidable, `source_run_id` preserves bounded frontier/features/scoped
+pitfalls as research context, never as reusable scores.
 
 Runtime state lives under `.gp/`. `search_tasks` is append-only; `linked_search`
 is only the compatibility view of the current task.

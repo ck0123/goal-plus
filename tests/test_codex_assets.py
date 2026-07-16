@@ -58,8 +58,10 @@ def test_codex_search_skill_uses_spawn_agent_and_generic_bind() -> None:
 
     assert "search_start_agent_session" in text
     assert "search_redispatch_candidate" in text
+    assert "search_get_agent_observability" in text
     assert "spawn_agent" in text
     assert "search_bind_agent_handle" in text
+    assert "terminal bind automatically harvests" in text
     assert "search_bind_opencode_session" not in text
     assert "background" not in text.lower()
     assert "## Verifier Freeze Contract" in text
@@ -75,10 +77,12 @@ def test_codex_search_skill_projects_launch_metadata_to_current_tool_schema() ->
     text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     assert "current `spawn_agent` tool schema" in text
     assert "task_name`, `message`, and `fork_turns`" in text
     assert "inherits the parent Codex model" in text
+    assert "Never synthesize optional launch metadata" in normalized
     assert "agent_type=launch.agent_type" not in text
 
 
@@ -98,6 +102,20 @@ def test_codex_search_skill_documents_rolling_pool_budget_planning() -> None:
     assert "targetless `wait_agent`" in text
     assert "`list_agents`" in text
     assert "`followup_task`" in text
+    assert "deepen_incumbent" in text
+    assert "transfer_feature" in text
+    assert "macro_restart" in text
+    assert "decision event, not run completion" in " ".join(text.split())
+    assert "source_run_id" in text
+    assert "search_invalidate_run" in text
+    assert "interrupt_agent" in text
+    assert "candidate_local" in text
+    assert "feature_family" in text
+    assert "Different candidate ids do not by themselves provide search diversity" in normalized
+    assert "same-candidate continuation" in normalized
+    assert "free slot is not an obligation" in normalized
+    assert "theoretical or structural limits" in normalized
+    assert "does not require `macro_restart`" in text
 
 
 def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
@@ -177,11 +195,25 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert "pitfalls" in text
     assert "condition" in text
     assert "failed_approach" in text
-    assert "10-15 distinct verifier-recorded artifacts" in text
+    assert "assigned candidate idea as a hypothesis" in text
+    assert "treat any promising direction" in text
+    assert "fixed artifact count" in text
+    assert "theoretical or structural limits" in text
+    assert "10-15 distinct verifier-recorded artifacts" not in text
     assert "verifier is an evaluator, not an analysis service" in text
     assert "PostTool time advisory is informational" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
+    assert "verifier_assessment" in text
+    assert "code_surface" in text
+    assert "measured_effect" in text
+    assert "portability" in text
+    assert "relation_to_incumbent" in text
+    assert "candidate_local" in text
+    assert "feature_family" in text
+    assert "evaluation_contract" in text
+    assert "single_observation" in text
+    assert "candidate-local analysis scripts" not in text
 
 
 def test_codex_search_skill_documents_state_level_resume() -> None:
@@ -200,7 +232,7 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
     assert "search_redispatch_candidate" in text
     assert "one-dispatch override on initial launch or redispatch" in text
     assert "research_summary" in text
-    assert "scenario-specific `pitfalls`" in text
+    assert "scoped conditional `pitfalls`" in text
     assert "do not rely on chat transcript" in agent
 
 
@@ -212,6 +244,9 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert 'name = "search_candidate_agent"' in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "workspace root" in text
+    assert "exactly one validated row" in text
+    assert "hypothesis=" in text
     assert "not the search orchestrator" in text
     assert "search_select" in text
     assert "search_report" in text

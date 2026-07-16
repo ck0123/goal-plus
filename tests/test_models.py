@@ -168,7 +168,29 @@ def test_search_spec_requires_structured_strategy() -> None:
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.name == "agent_guided"
     assert spec.strategy.history_policy.top_n == 3
+    assert spec.strategy.history_policy.inherited_feature_limit == 50
+    assert spec.strategy.history_policy.inherited_pitfall_limit == 30
     assert spec.strategy.worker_mode == "agent-session-pool"
+
+    data = valid_spec_dict()
+    data["strategy"] = {
+        "name": "agent_guided",
+        "history_policy": {
+            "inherited_feature_limit": None,
+            "inherited_pitfall_limit": 75,
+        },
+    }
+    spec = SearchSpec.model_validate(data)
+    assert spec.strategy.history_policy.inherited_feature_limit is None
+    assert spec.strategy.history_policy.inherited_pitfall_limit == 75
+
+    data = valid_spec_dict()
+    data["strategy"] = {
+        "name": "agent_guided",
+        "history_policy": {"inherited_feature_limit": 0},
+    }
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(data)
 
     data = valid_spec_dict()
     data["strategy"] = {

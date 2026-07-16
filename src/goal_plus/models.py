@@ -68,6 +68,13 @@ class Budget(SearchModel):
 
 
 WorkspaceBackend = Literal["copy", "git_worktree"]
+VerifierInvalidationReason = Literal[
+    "verifier_contract_invalid",
+    "verifier_coverage_inadequate",
+    "verifier_nondeterministic",
+    "verifier_target_mismatch",
+    "verifier_infrastructure_failure",
+]
 
 
 class WorkspaceSpec(SearchModel):
@@ -97,6 +104,22 @@ class HistoryPolicy(SearchModel):
             "parent_id",
             "changed_files",
         ]
+    )
+    inherited_feature_limit: int | None = Field(
+        default=50,
+        gt=0,
+        description=(
+            "Maximum inherited feature-ledger entries retained for a successor "
+            "run; null disables runtime truncation."
+        ),
+    )
+    inherited_pitfall_limit: int | None = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Maximum inherited pitfall entries retained for a successor run; "
+            "null disables runtime truncation."
+        ),
     )
 
 
@@ -537,16 +560,33 @@ class IterationRecord(SearchModel):
     score: float | None = None
     process_passed: bool | None = None
     git_head: str | None = None
+    ledger_git_head: str | None = None
     git_artifact_clean: bool | None = None
     git_status: list[str] = Field(default_factory=list)
     failure_class: str | None = None
     summary: str = ""
+    hypothesis: str = ""
     changed_files: list[str] = Field(default_factory=list)
     touched_denied_files: bool = False
     changed_outside_allowed: bool = False
     artifact_hash: str | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
+    log_paths: list[str] = Field(default_factory=list)
     created_at: str
+
+
+class ResultLedgerEntry(SearchModel):
+    source_run_id: str
+    source_candidate_id: str
+    iteration: int | None = Field(default=None, ge=1)
+    git_head: str | None = None
+    ledger_git_head: str | None = None
+    metric_name: str = Field(min_length=1)
+    score: float | None = None
+    status: str = Field(min_length=1)
+    hypothesis: str = ""
+    failure_class: str | None = None
+    created_at: str | None = None
 
 
 class RunSummary(SearchModel):
@@ -558,6 +598,10 @@ class RunSummary(SearchModel):
     best_candidate_id: str | None = None
     best_score: float | None = None
     budget_used: dict[str, Any] = Field(default_factory=dict)
+    source_run_id: str | None = None
+    invalidated_at: str | None = None
+    invalidation_reason: VerifierInvalidationReason | None = None
+    replacement_run_id: str | None = None
 
 
 class RunRecord(SearchModel):
@@ -579,6 +623,13 @@ class RunRecord(SearchModel):
     selected_git_head: str | None = None
     selected_artifact_hash: str | None = None
     budget_used: dict[str, Any] = Field(default_factory=dict)
+    source_run_id: str | None = None
+    inherited_research: dict[str, Any] = Field(default_factory=dict)
+    invalidated_at: str | None = None
+    invalidation_reason: VerifierInvalidationReason | None = None
+    invalidation_summary: str | None = None
+    invalidation_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    replacement_run_id: str | None = None
 
 
 class CandidateRecord(SearchModel):
@@ -592,6 +643,8 @@ class CandidateRecord(SearchModel):
     promotion_report: ScoreReport | None = None
     promotion_evidence: PromotionEvidence | None = None
     iterations: list[IterationRecord] = Field(default_factory=list)
+    results_ledger: list[ResultLedgerEntry] = Field(default_factory=list)
+    results_ledger_git_head: str | None = None
 
 
 class AgentSessionRecord(SearchModel):

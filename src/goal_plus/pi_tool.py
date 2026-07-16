@@ -25,6 +25,7 @@ from goal_plus.tools import GoalPlusTools, SearchTools
 SEARCH_TOOL_NAMES = {
     "search_freeze_spec",
     "search_create",
+    "search_invalidate_run",
     "search_status",
     "search_list_history",
     "search_plan_next",
@@ -35,6 +36,7 @@ SEARCH_TOOL_NAMES = {
     "search_bind_agent_handle",
     "search_continue_agent_session",
     "search_get_agent_context",
+    "search_get_agent_observability",
     "search_run_verifier",
     "search_list_iterations",
     "search_select",

@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import tomllib
 import uuid
 from fnmatch import fnmatch
 from pathlib import Path
@@ -36,6 +37,7 @@ from goal_plus.models import (
     CandidateProposal,
     CandidateTask,
     CandidateWorkOrder,
+    FeedbackPolicy,
     FrozenSpec,
     HistoryPolicy,
     ProposalContract,
@@ -44,11 +46,13 @@ from goal_plus.models import (
     RunState,
     RunSummary,
     IterationRecord,
+    ResultLedgerEntry,
     ScoreReport,
     SearchPlan,
     SearchSpec,
     StrategySpec,
     VerifierCommand,
+    VerifierInvalidationReason,
     VerifierResult,
     VerifierRole,
     WorkerBudget,
@@ -127,6 +131,11 @@ def _verifier_output_tail_detail(stdout: str, stderr: str) -> str:
     if stderr_tail:
         details.append(f"Stderr tail: {stderr_tail}")
     return " " + " ".join(details) if details else ""
+RESULTS_TSV_RELATIVE_PATH = "results.tsv"
+LEGACY_RESULTS_TSV_RELATIVE_PATH = ".tmp/results.tsv"
+MODEL_HANDOFF_RELATIVE_PATH = ".tmp/handoff.json"
+MAX_MODEL_HANDOFF_BYTES = 64 * 1024
+MAX_VERIFIER_FEEDBACK_CHARS = 4_000
 
 
 def utc_timestamp() -> str:
@@ -168,6 +177,13 @@ def write_json(path: Path, data: Any) -> None:
     with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True, ensure_ascii=True)
         handle.write("\n")
+    tmp_path.replace(path)
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_text(text, encoding="utf-8")
     tmp_path.replace(path)
 
 
@@ -646,8 +662,20 @@ class FileSearchRuntime:
             hashes[rel_path.as_posix()] = sha256_file(path)
         return hashes
 
-    def create_run(self, frozen_spec_id: str) -> str:
+    def create_run(
+        self,
+        frozen_spec_id: str,
+        source_run_id: str | None = None,
+    ) -> str:
         frozen = self._load_frozen_spec(frozen_spec_id)
+        inherited_research = (
+            self._build_inherited_research(
+                source_run_id,
+                history_policy=frozen.spec.strategy.history_policy,
+            )
+            if source_run_id
+            else {}
+        )
         run_id = f"run_{time.strftime('%Y%m%d_%H%M%S', time.gmtime())}_{uuid.uuid4().hex[:8]}"
         run = RunRecord(
             run_id=run_id,
@@ -655,13 +683,66 @@ class FileSearchRuntime:
             frozen_spec_id=frozen.frozen_spec_id,
             source_path=str(Path(frozen.spec.source_path).resolve()),
             created_at=utc_timestamp(),
+            source_run_id=source_run_id,
+            inherited_research=inherited_research,
         )
         self._write_run(run)
         (self._run_dir(run_id) / "candidates").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "agent_sessions").mkdir(parents=True, exist_ok=True)
+        if source_run_id:
+            with self._run_transaction(source_run_id):
+                source_run = self._load_run(source_run_id)
+                if source_run.invalidated_at:
+                    source_run.replacement_run_id = run_id
+                    self._write_run(source_run)
         return run_id
+
+    def invalidate_run(
+        self,
+        run_id: str,
+        *,
+        reason: VerifierInvalidationReason,
+        summary: str,
+        evidence: list[dict[str, Any]],
+    ) -> RunRecord:
+        """Atomically fence a verifier-invalid run before host workers stop."""
+
+        if not summary.strip():
+            raise ValueError("summary must be non-empty")
+        if not evidence:
+            raise ValueError("evidence must contain at least one concrete item")
+
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if run.state == RunState.PROMOTED:
+                raise RuntimeError("cannot invalidate an already promoted run")
+            if run.invalidated_at:
+                if run.invalidation_reason != reason:
+                    raise RuntimeError(
+                        "run is already invalidated for a different verifier reason"
+                    )
+                return run
+            updated = RunRecord.model_validate(
+                {
+                    **run.model_dump(mode="json"),
+                    "state": RunState.ABORTED,
+                    "invalidated_at": utc_timestamp(),
+                    "invalidation_reason": reason,
+                    "invalidation_summary": summary.strip(),
+                    "invalidation_evidence": evidence,
+                }
+            )
+            self._write_run(updated)
+            return updated
+
+    def _assert_run_not_invalidated(self, run: RunRecord, operation: str) -> None:
+        if run.invalidated_at:
+            raise RuntimeError(
+                f"cannot {operation}: run {run.run_id} was invalidated because "
+                f"{run.invalidation_reason}"
+            )
 
     def status(self, run_id: str) -> RunSummary:
         run = self._load_run(run_id)
@@ -676,6 +757,10 @@ class FileSearchRuntime:
             best_candidate_id=run.best_candidate_id,
             best_score=run.best_score,
             budget_used=run.budget_used,
+            source_run_id=run.source_run_id,
+            invalidated_at=run.invalidated_at,
+            invalidation_reason=run.invalidation_reason,
+            replacement_run_id=run.replacement_run_id,
         )
 
     def list_history(self, run_id: str, top_n: int = 5, sort_by: str = "score") -> dict[str, Any]:
@@ -715,11 +800,23 @@ class FileSearchRuntime:
         candidates = [
             self._history_candidate_payload(record, frozen.spec) for record in selected
         ]
+        research_rollup = self._run_research_rollup(
+            records,
+            frozen.spec,
+            visible_candidate_ids=[record.candidate_id for record in selected],
+        )
 
         return {
             "run_id": run.run_id,
             "state": run.state,
             "frozen_spec_id": run.frozen_spec_id,
+            "source_run_id": run.source_run_id,
+            "inherited_research": run.inherited_research,
+            "invalidated_at": run.invalidated_at,
+            "invalidation_reason": run.invalidation_reason,
+            "invalidation_summary": run.invalidation_summary,
+            "invalidation_evidence": run.invalidation_evidence,
+            "replacement_run_id": run.replacement_run_id,
             "objective": frozen.spec.objective,
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
@@ -732,6 +829,10 @@ class FileSearchRuntime:
             "top_n": top_n,
             "sort_by": sort_by,
             "candidates": candidates,
+            "feature_ledger": research_rollup["feature_ledger"],
+            "pitfalls": research_rollup["pitfalls"],
+            "verifier_assessments": research_rollup["verifier_assessments"],
+            "research_rollup": research_rollup,
         }
 
     def list_iterations(
@@ -743,6 +844,10 @@ class FileSearchRuntime:
         return [it.model_dump(mode="json") for it in record.iterations]
 
     def plan_next(self, run_id: str, requested_k: int = 4) -> SearchPlan:
+        with self._run_transaction(run_id):
+            return self._plan_next_locked(run_id, requested_k)
+
+    def _plan_next_locked(self, run_id: str, requested_k: int) -> SearchPlan:
         if requested_k <= 0:
             raise ValueError("requested_k must be > 0")
 
@@ -819,6 +924,7 @@ class FileSearchRuntime:
             key=lambda record: record.candidate_id,
         )
         for record in plan_records:
+            self._ensure_results_tsv(record, frozen.spec.metric_name)
             self._write_candidate_record(run_id, record)
         if all_records:
             highest_index = max(
@@ -886,7 +992,13 @@ class FileSearchRuntime:
                 proposal=proposal,
                 slot=index,
             )
-            record = CandidateRecord(candidate_id=candidate_id, status="created", task=task)
+            record = CandidateRecord(
+                candidate_id=candidate_id,
+                status="created",
+                task=task,
+                results_ledger=self._inherited_results_ledger(run, task),
+            )
+            self._ensure_results_tsv(record, frozen.spec.metric_name)
             self._write_candidate_record(run_id, record)
             tasks.append(task)
             run.next_candidate_index += 1
@@ -1108,6 +1220,37 @@ class FileSearchRuntime:
             **session.host_handle.metadata,
             **dict(handle.get("metadata") or {}),
         }
+        progress = metadata.get("progress_handoff")
+        if isinstance(progress, dict) and not isinstance(progress.get("model_handoff"), dict):
+            model_keys = {
+                "key_results",
+                "what_was_tried",
+                "pitfalls",
+                "blockers",
+                "next_steps",
+                "verifier_assessment",
+            }
+            if model_keys.intersection(progress):
+                progress = {
+                    "model_handoff": dict(progress),
+                    "source": "bound_metadata",
+                }
+
+        model_handoff, handoff_error = self._workspace_model_handoff(session.workspace)
+        if model_handoff is not None:
+            progress_payload = dict(progress) if isinstance(progress, dict) else {}
+            progress_payload.update(
+                {
+                    "model_handoff": model_handoff,
+                    "source_path": MODEL_HANDOFF_RELATIVE_PATH,
+                }
+            )
+            metadata["progress_handoff"] = progress_payload
+            metadata.pop("progress_handoff_error", None)
+        elif isinstance(progress, dict):
+            metadata["progress_handoff"] = progress
+        if handoff_error:
+            metadata["progress_handoff_error"] = handoff_error
         updated_handle = session.host_handle.model_copy(
             update={
                 "host": session.host,
@@ -1126,6 +1269,26 @@ class FileSearchRuntime:
         updated = session.model_copy(update=update)
         self._write_agent_session(updated)
         return updated
+
+    @staticmethod
+    def _workspace_model_handoff(workspace: Path) -> tuple[dict[str, Any] | None, str | None]:
+        """Read a bounded candidate-authored handoff without failing handle binding."""
+        workspace = workspace.resolve()
+        handoff_path = workspace / MODEL_HANDOFF_RELATIVE_PATH
+        if not handoff_path.exists():
+            return None, None
+        try:
+            resolved = handoff_path.resolve(strict=True)
+            if not resolved.is_relative_to(workspace):
+                return None, "handoff path resolves outside the candidate workspace"
+            if resolved.stat().st_size > MAX_MODEL_HANDOFF_BYTES:
+                return None, f"handoff exceeds {MAX_MODEL_HANDOFF_BYTES} bytes"
+            payload = json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return None, f"could not read handoff: {type(exc).__name__}: {exc}"
+        if not isinstance(payload, dict):
+            return None, "handoff must be a JSON object"
+        return payload, None
 
     def continue_agent_session(
         self,
@@ -1202,6 +1365,12 @@ class FileSearchRuntime:
         self._write_agent_session(updated)
         return updated
 
+    def get_agent_observability(self, agent_session_id: str) -> dict[str, Any]:
+        """Return normalized, read-only host evidence for one worker session."""
+        session = self._load_agent_session_by_id(agent_session_id)
+        adapter = get_agent_host_adapter(session.host)
+        return adapter.collect_observability(session)
+
     def get_agent_context(self, agent_session_id: str) -> dict[str, Any]:
         """Subagent first call. Returns the authoritative ids, workspace, and
         candidate context. The subagent must treat prompt-supplied ids as
@@ -1245,6 +1414,13 @@ class FileSearchRuntime:
                     ),
                 }
             )
+        results_were_initialized = candidate_record.results_ledger_git_head is not None
+        results_tsv = self._ensure_results_tsv(
+            candidate_record,
+            frozen.spec.metric_name,
+        )
+        if not results_were_initialized:
+            self._write_candidate_record(session.run_id, candidate_record)
         workspace_status = self._git_status(candidate_record.task.workspace)
         return {
             "agent_session_id": session.agent_session_id,
@@ -1259,6 +1435,11 @@ class FileSearchRuntime:
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
             "candidate_task": candidate_record.task.model_dump(mode="json"),
+            "results_tsv": str(results_tsv),
+            "results": [
+                entry.model_dump(mode="json")
+                for entry in candidate_record.results_ledger
+            ],
             "resume": {
                 "is_redispatch": bool(session.directive.get("state_level_resume")),
                 "previous_sessions": previous_sessions,
@@ -1282,12 +1463,14 @@ class FileSearchRuntime:
         candidate_id: str,
         scope: Literal["process", "promotion"] = "process",
         agent_session_id: str | None = None,
+        hypothesis: str | None = None,
     ) -> ScoreReport:
         """Subagent self-score with ``agent_session_id``; main final verify
         without it. Process calls record ranking iterations; promotion calls
         retain separate acceptance evidence.
         """
         run = self._load_run(run_id)
+        self._assert_run_not_invalidated(run, "run verifier")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
         if record.status not in {"created", "evaluated"}:
@@ -1318,6 +1501,10 @@ class FileSearchRuntime:
                     "agent_session_id does not belong to this candidate"
                 )
 
+        results_were_initialized = record.results_ledger_git_head is not None
+        self._ensure_results_tsv(record, frozen.spec.metric_name)
+        if not results_were_initialized:
+            self._write_candidate_record(run_id, record)
         detected_changed = self._detect_changed_files(
             Path(run.source_path), record.task.workspace
         )
@@ -1394,6 +1581,7 @@ class FileSearchRuntime:
 
             with self._run_transaction(run_id):
                 run = self._load_run(run_id)
+                self._assert_run_not_invalidated(run, "record verifier result")
                 record = self._load_candidate_record(run_id, candidate_id)
                 record.detected_changed_files = detected_changed
                 record.touched_denied_files = touched_denied
@@ -1407,43 +1595,74 @@ class FileSearchRuntime:
                     ):
                         record.promotion_report = None
                         record.promotion_evidence = None
-                    record.iterations.append(
-                        IterationRecord(
-                            iteration=len(record.iterations) + 1,
-                            agent_session_id=agent_session_id,
-                            score=report.aggregate_score,
-                            process_passed=report.process_passed,
-                            git_head=git_head,
-                            git_artifact_clean=git_artifact_clean,
-                            git_status=git_status,
-                            failure_class=(
-                                next(
-                                    (
-                                        r.failure_class
-                                        for r in report.verifier_results
-                                        if r.failure_class
-                                    ),
-                                    None,
-                                )
-                            ),
-                            summary="",
-                            changed_files=list(detected_changed),
-                            touched_denied_files=touched_denied,
-                            changed_outside_allowed=outside_allowed,
-                            artifact_hash=artifact_hash,
-                            metrics={
-                                r.name: r.metrics
-                                for r in report.verifier_results
-                            },
-                            created_at=utc_timestamp(),
-                        )
+                    iteration_number = len(record.iterations) + 1
+                    failure_class = next(
+                        (
+                            result.failure_class
+                            for result in report.verifier_results
+                            if result.failure_class
+                        ),
+                        None,
                     )
+                    iteration_hypothesis = self._iteration_hypothesis(
+                        hypothesis,
+                        record,
+                        iteration_number,
+                        scope=scope,
+                        agent_session_id=agent_session_id,
+                    )
+                    created_at = utc_timestamp()
+                    iteration_record = IterationRecord(
+                        iteration=iteration_number,
+                        agent_session_id=agent_session_id,
+                        score=report.aggregate_score,
+                        process_passed=report.process_passed,
+                        git_head=git_head,
+                        git_artifact_clean=git_artifact_clean,
+                        git_status=git_status,
+                        failure_class=failure_class,
+                        summary=iteration_hypothesis,
+                        hypothesis=iteration_hypothesis,
+                        changed_files=list(detected_changed),
+                        touched_denied_files=touched_denied,
+                        changed_outside_allowed=outside_allowed,
+                        artifact_hash=artifact_hash,
+                        metrics={
+                            result.name: result.metrics
+                            for result in report.verifier_results
+                        },
+                        log_paths=[
+                            str(result.log_path)
+                            for result in report.verifier_results
+                            if result.log_path is not None
+                        ],
+                        created_at=created_at,
+                    )
+                    ledger_entry = ResultLedgerEntry(
+                        source_run_id=run_id,
+                        source_candidate_id=candidate_id,
+                        iteration=iteration_number,
+                        git_head=git_head,
+                        metric_name=frozen.spec.metric_name,
+                        score=report.aggregate_score,
+                        status="pass" if report.process_passed else "fail",
+                        hypothesis=iteration_hypothesis,
+                        failure_class=failure_class,
+                        created_at=created_at,
+                    )
+                    ledger_git_head = self._append_results_tsv(
+                        record,
+                        ledger_entry,
+                        frozen.spec.metric_name,
+                    )
+                    iteration_record.ledger_git_head = ledger_git_head
+                    record.iterations.append(iteration_record)
                 else:
                     record.promotion_report = report
                     record.promotion_evidence = PromotionEvidence(
                         candidate_id=candidate_id,
                         selected_git_head=run.selected_git_head,
-                        git_head=git_head,
+                        git_head=run.selected_git_head,
                         artifact_hash=artifact_hash,
                         passed=bool(report.promotion_passed),
                         created_at=utc_timestamp(),
@@ -1479,23 +1698,26 @@ class FileSearchRuntime:
             if scope == "process":
                 with self._run_transaction(run_id):
                     run = self._load_run(run_id)
-                    run.state = RunState.FAILED
-                    self._write_run(run)
+                    if not run.invalidated_at:
+                        run.state = RunState.FAILED
+                        self._write_run(run)
             raise
 
     def select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
-        run = self._load_run(run_id)
-        if run.state not in {
-            RunState.RUNNING,
-            RunState.WAITING_FOR_WORKERS,
-            RunState.SELECTING,
-            RunState.SELECTION_BLOCKED,
-            RunState.READY_TO_PROMOTE,
-        }:
-            raise RuntimeError(f"cannot select candidate from state {run.state}")
-        run.state = RunState.SELECTING
-        run.budget_used.pop("selection_blocked_reason", None)
-        self._write_run(run)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            self._assert_run_not_invalidated(run, "select")
+            if run.state not in {
+                RunState.RUNNING,
+                RunState.WAITING_FOR_WORKERS,
+                RunState.SELECTING,
+                RunState.SELECTION_BLOCKED,
+                RunState.READY_TO_PROMOTE,
+            }:
+                raise RuntimeError(f"cannot select candidate from state {run.state}")
+            run.state = RunState.SELECTING
+            run.budget_used.pop("selection_blocked_reason", None)
+            self._write_run(run)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
         options = self._selection_options(run, records, frozen.spec.metric_direction)
@@ -1516,6 +1738,12 @@ class FileSearchRuntime:
         for option_score, option_record, option_iteration, option_git_head in ranked:
             if option_git_head:
                 self._checkout_git_revision(option_record.task.workspace, option_git_head)
+                self._ensure_results_tsv(
+                    option_record,
+                    frozen.spec.metric_name,
+                    force_after_checkout=True,
+                )
+                self._write_candidate_record(run_id, option_record)
             report = self.run_verifier(run_id, option_record.candidate_id)
             if report.process_passed and report.aggregate_score is not None:
                 selected_score = report.aggregate_score
@@ -1539,23 +1767,25 @@ class FileSearchRuntime:
             selected_record.task.workspace,
             selected_changed_files,
         )
-        run = self._load_run(run_id)
-        run.state = RunState.READY_TO_PROMOTE
-        run.selected_candidate_id = selected_record.candidate_id
-        run.best_candidate_id = selected_record.candidate_id
-        run.best_score = selected_score
-        run.selected_score = selected_score
-        run.selected_iteration = selected_iteration
-        run.selected_git_head = selected_git_head
-        run.selected_artifact_hash = selected_artifact_hash
-        run.budget_used.pop("selection_blocked_reason", None)
-        self._write_run(run)
-        selected_record = self._load_candidate_record(
-            run_id, selected_record.candidate_id
-        )
-        selected_record.promotion_report = None
-        selected_record.promotion_evidence = None
-        self._write_candidate_record(run_id, selected_record)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            self._assert_run_not_invalidated(run, "record selection")
+            run.state = RunState.READY_TO_PROMOTE
+            run.selected_candidate_id = selected_record.candidate_id
+            run.best_candidate_id = selected_record.candidate_id
+            run.best_score = selected_score
+            run.selected_score = selected_score
+            run.selected_iteration = selected_iteration
+            run.selected_git_head = selected_git_head
+            run.selected_artifact_hash = selected_artifact_hash
+            run.budget_used.pop("selection_blocked_reason", None)
+            self._write_run(run)
+            selected_record = self._load_candidate_record(
+                run_id, selected_record.candidate_id
+            )
+            selected_record.promotion_report = None
+            selected_record.promotion_evidence = None
+            self._write_candidate_record(run_id, selected_record)
         return {
             "strategy": strategy,
             "selected_candidate_id": selected_record.candidate_id,
@@ -1597,6 +1827,9 @@ class FileSearchRuntime:
             f"# Search Report: {run_id}",
             "",
             f"- Frozen spec: `{frozen.frozen_spec_id}`",
+            f"- State: `{run.state}`",
+            f"- Source run: `{run.source_run_id}`",
+            f"- Replacement run: `{run.replacement_run_id}`",
             f"- Spec hash: `{frozen.spec_hash}`",
             f"- Objective: {frozen.spec.objective}",
             f"- Metric: `{frozen.spec.metric_name}` ({frozen.spec.metric_direction})",
@@ -1606,6 +1839,13 @@ class FileSearchRuntime:
             f"- Selected score: `{run.selected_score}`",
             f"- Selected iteration: `{run.selected_iteration}`",
             f"- Selected git head: `{run.selected_git_head}`",
+            f"- Invalidated at: `{run.invalidated_at}`",
+            f"- Invalidation reason: `{run.invalidation_reason}`",
+            f"- Invalidation summary: {run.invalidation_summary or ''}",
+            (
+                "- Invalidation evidence: "
+                f"{self._markdown_cell(canonical_json(run.invalidation_evidence))}"
+            ),
             "",
             "## Strategy Plans",
             "",
@@ -1626,10 +1866,11 @@ class FileSearchRuntime:
                 "",
                 "## Candidates",
                 "",
-                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Git Head | Best Iteration | Best Score | Best Git Head | Process | Summary | Key Metrics | Changed Files |",
-                "|---|---|---|---|---|---:|---|---:|---:|---|---|---|---|---|",
+                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Git Head | Best Iteration | Best Score | Best Git Head | Process | Summary | Key Metrics | Changed Files | Results Ledger |",
+                "|---|---|---|---|---|---:|---|---:|---:|---|---|---|---|---|---|",
             ]
         )
+        ledger_summaries: list[tuple[CandidateRecord, Path, list[ResultLedgerEntry]]] = []
         for record in records:
             score = ""
             passed = ""
@@ -1664,6 +1905,18 @@ class FileSearchRuntime:
                 ]
                 if part
             )
+            results_path = self._results_tsv_path(record.task.workspace)
+            results_entries = self._read_results_tsv(record)
+            ledger_summaries.append((record, results_path, results_entries))
+            try:
+                ledger_link = results_path.relative_to(report_path.parent).as_posix()
+            except ValueError:
+                ledger_link = results_path.as_posix()
+            ledger_display = (
+                f"[results.tsv]({ledger_link}) ({len(results_entries)} rows)"
+                if results_path.is_file()
+                else "missing"
+            )
             lines.append(
                 f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
                 f"{self._markdown_cell(agent_sessions)} | "
@@ -1672,7 +1925,36 @@ class FileSearchRuntime:
                 f"{best_iteration_value} | {best_score_value} | "
                 f"{self._markdown_cell(best_git_head)} | {passed} | "
                 f"{self._markdown_cell(payload['summary'])} | "
-                f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} |"
+                f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} | "
+                f"{self._markdown_cell(ledger_display)} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Results Ledgers",
+                "",
+                "Each candidate workspace owns the complete inherited verifier ledger.",
+                "",
+                "| Candidate | Ledger | Rows | Latest Commit | Latest Score | Latest Status | Latest Hypothesis |",
+                "|---|---|---:|---|---:|---|---|",
+            ]
+        )
+        for record, results_path, results_entries in ledger_summaries:
+            latest = results_entries[-1] if results_entries else None
+            try:
+                ledger_link = results_path.relative_to(report_path.parent).as_posix()
+            except ValueError:
+                ledger_link = results_path.as_posix()
+            ledger_display = (
+                f"[results.tsv]({ledger_link})" if results_path.is_file() else "missing"
+            )
+            lines.append(
+                f"| `{record.candidate_id}` | {self._markdown_cell(ledger_display)} | "
+                f"{len(results_entries)} | "
+                f"{self._markdown_cell(latest.git_head if latest else '')} | "
+                f"{'' if latest is None or latest.score is None else latest.score} | "
+                f"{self._markdown_cell(latest.status if latest else '')} | "
+                f"{self._markdown_cell(latest.hypothesis if latest else '')} |"
             )
         agent_sessions = self._load_agent_sessions(run_id)
         if agent_sessions:
@@ -1725,6 +2007,7 @@ class FileSearchRuntime:
 
     def promote(self, run_id: str, candidate_id: str) -> Path:
         run = self._load_run(run_id)
+        self._assert_run_not_invalidated(run, "promote")
         if run.selected_candidate_id != candidate_id:
             raise RuntimeError(
                 "cannot promote candidate before search_select selects it"
@@ -1770,6 +2053,12 @@ class FileSearchRuntime:
             reject_promotion(
                 "cannot promote candidate because the selected Git revision is stale"
             )
+        self._ensure_results_tsv(
+            record,
+            frozen.spec.metric_name,
+            force_after_checkout=True,
+        )
+        self._write_candidate_record(run_id, record)
         if run.selected_artifact_hash is None:
             run.selected_artifact_hash = artifact_hash
             self._write_run(run)
@@ -1806,7 +2095,7 @@ class FileSearchRuntime:
                 evidence
                 and evidence.candidate_id == candidate_id
                 and evidence.selected_git_head == run.selected_git_head
-                and evidence.git_head == git_head
+                and evidence.git_head == run.selected_git_head
                 and evidence.artifact_hash == artifact_hash
                 and evidence.artifact_hash == run.selected_artifact_hash
                 and evidence.passed
@@ -1816,19 +2105,22 @@ class FileSearchRuntime:
                     "cannot promote candidate without fresh passing promotion evidence"
                 )
 
-        promotion_dir = self._run_dir(run_id) / "promotion"
-        promotion_dir.mkdir(parents=True, exist_ok=True)
-        patch_path = promotion_dir / f"{candidate_id}.patch"
-        self._write_patch(
-            Path(run.source_path),
-            record.task.workspace,
-            run.selected_git_head,
-            detected_changed,
-            patch_path,
-        )
-        run.state = RunState.PROMOTED
-        run.selected_candidate_id = candidate_id
-        self._write_run(run)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            self._assert_run_not_invalidated(run, "record promotion")
+            promotion_dir = self._run_dir(run_id) / "promotion"
+            promotion_dir.mkdir(parents=True, exist_ok=True)
+            patch_path = promotion_dir / f"{candidate_id}.patch"
+            self._write_patch(
+                Path(run.source_path),
+                record.task.workspace,
+                run.selected_git_head,
+                detected_changed,
+                patch_path,
+            )
+            run.state = RunState.PROMOTED
+            run.selected_candidate_id = candidate_id
+            self._write_run(run)
         return patch_path
 
     def _strategy_mode(self, strategy: StrategySpec) -> str:
@@ -2191,9 +2483,18 @@ class FileSearchRuntime:
         )
 
     def _worker_prompt_for_host(self, host: str) -> str | None:
+        repository_root = Path(__file__).resolve().parents[2]
+        if host == "codex":
+            agent_path = repository_root / ".codex" / "agents" / "search_candidate_agent.toml"
+            try:
+                payload = tomllib.loads(agent_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+                return None
+            prompt = payload.get("developer_instructions")
+            return prompt if isinstance(prompt, str) and prompt.strip() else None
         if host != "pi-rpc":
             return None
-        prompt_path = Path(__file__).resolve().parents[2] / ".pi" / "prompts" / "search-candidate-worker.md"
+        prompt_path = repository_root / ".pi" / "prompts" / "search-candidate-worker.md"
         if prompt_path.exists():
             return prompt_path.read_text(encoding="utf-8")
         return (
@@ -2281,6 +2582,11 @@ class FileSearchRuntime:
         notes = [
             "The main agent may remember more chat history, but this is the official runtime view for the next batch.",
             "Submitted proposals must cite at least one official candidate when candidate references are available.",
+            "Review the current-run feature_ledger and verifier_assessments before proposing work; do not discard portable discoveries only because their source candidate is outside the visible frontier.",
+            "Consider deepen_incumbent, transfer_feature, and macro_restart actions after each ready event without imposing a quota; record the chosen action in proposal.metadata.search_action.",
+            "Before starting another candidate, assess whether recent and active attempts cluster around the same mechanism or bottleneck; different candidate ids do not by themselves provide search diversity.",
+            "When an existing candidate remains promising and benefits from accumulated workspace understanding, prefer continuing it with a larger one-dispatch budget over launching near-duplicate candidates. A free slot is not an obligation to launch more work.",
+            "After substantial attempts without meaningful progress, reassess applicable theoretical or structural limits, such as lower or upper bounds, critical paths, resource bottlenecks, saturation evidence, or infeasibility constraints, before proposing more nearby mutations.",
         ]
         return SearchPlan(
             run_id=run.run_id,
@@ -2895,10 +3201,10 @@ class FileSearchRuntime:
             "Do not delete, move, or clean files; destructive commands such as rm, mv, rmdir, unlink, trash, and find -delete are forbidden.",
             "A local git repository has already been initialized with the copied baseline; use git status, git diff, git add, git commit, git reset, git restore, and git checkout only inside this workspace.",
             "All scoring must go through goal-plus_search_run_verifier; do not run the process_verifiers command directly via bash, and do not write your own scorer.",
-            "Pass context.agent_session_id to search_run_verifier so the runtime can record iteration provenance.",
+            "Pass context.agent_session_id to search_run_verifier and include a concise hypothesis describing the tested design so the runtime can record iteration provenance and rationale.",
             "Each run_verifier call records an iteration. Work within the configured host budget. Complete and verify a candidate early, stop starting new optimization iterations before the limit, and leave enough time to return a concise summary.",
             "search_run_verifier automatically commits changed candidate artifact files before running the verifier; use git status, git diff, and git log to inspect iteration provenance.",
-            "Maintain an iteration log at workspace/.tmp/results.tsv with header: commit \\t <metric_name> \\t status \\t hypothesis (use the literal context.metric_name value as the column-2 header). After each verifier call, use the returned/runtime-recorded git_head as the commit column.",
+            "Inspect the inherited iteration log at workspace/results.tsv before planning another variant. The runtime owns and commits this append-only ledger, validates that existing rows are unchanged, and adds exactly one row for every returned verifier report; never rewrite, truncate, delete, or manually append it.",
         ]
         if plan.worker_policy.get("subagent_type"):
             instructions.append(
@@ -2939,6 +3245,361 @@ class FileSearchRuntime:
             },
         )
 
+    @staticmethod
+    def _results_tsv_path(workspace: Path) -> Path:
+        return workspace / RESULTS_TSV_RELATIVE_PATH
+
+    @staticmethod
+    def _legacy_results_tsv_path(workspace: Path) -> Path:
+        return workspace / LEGACY_RESULTS_TSV_RELATIVE_PATH
+
+    @staticmethod
+    def _tsv_cell(value: str) -> str:
+        return " ".join(value.replace("\t", " ").split()).strip()
+
+    @classmethod
+    def _iteration_hypothesis(
+        cls,
+        hypothesis: str | None,
+        record: CandidateRecord,
+        iteration_number: int,
+        *,
+        scope: str,
+        agent_session_id: str | None,
+    ) -> str:
+        if hypothesis is not None:
+            normalized = cls._tsv_cell(hypothesis)
+            if normalized:
+                return normalized
+        if agent_session_id is None:
+            return f"main {scope} verification"
+        if iteration_number == 1:
+            candidate_hypothesis = cls._tsv_cell(record.task.hypothesis)
+            if candidate_hypothesis:
+                return f"candidate baseline: {candidate_hypothesis}"
+        return f"iteration {iteration_number}"
+
+    @staticmethod
+    def _format_result_score(score: float | None) -> str:
+        if score is None:
+            return ""
+        if math.isfinite(score) and score.is_integer():
+            return str(int(score))
+        return str(score)
+
+    def _read_results_tsv(self, record: CandidateRecord) -> list[ResultLedgerEntry]:
+        paths = (
+            self._results_tsv_path(record.task.workspace),
+            self._legacy_results_tsv_path(record.task.workspace),
+        )
+        path = next((candidate for candidate in paths if candidate.is_file()), None)
+        if path is None:
+            return []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        if not lines:
+            return []
+        header = lines[0].split("\t")
+        if len(header) < 4 or header[0].strip() != "commit":
+            return []
+        metric_name = header[1].strip()
+        if not metric_name:
+            return []
+
+        remaining_iterations = list(record.iterations)
+
+        entries: list[ResultLedgerEntry] = []
+        for line in lines[1:]:
+            columns = line.split("\t", 3)
+            if len(columns) != 4:
+                continue
+            git_head, score_text, status, hypothesis = columns
+            try:
+                score = float(score_text) if score_text.strip() else None
+            except ValueError:
+                score = None
+            normalized_git_head = git_head.strip()
+            matching_index = next(
+                (
+                    index
+                    for index, candidate in enumerate(remaining_iterations)
+                    if candidate.git_head
+                    and normalized_git_head
+                    and (
+                        candidate.git_head == normalized_git_head
+                        or candidate.git_head.startswith(normalized_git_head)
+                        or normalized_git_head.startswith(candidate.git_head)
+                    )
+                ),
+                None,
+            )
+            iteration = (
+                remaining_iterations.pop(matching_index)
+                if matching_index is not None
+                else None
+            )
+            normalized_status = self._tsv_cell(status) or "unknown"
+            entries.append(
+                ResultLedgerEntry(
+                    source_run_id=record.task.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration.iteration if iteration else None,
+                    git_head=git_head.strip() or None,
+                    ledger_git_head=iteration.ledger_git_head if iteration else None,
+                    metric_name=metric_name,
+                    score=score,
+                    status=normalized_status,
+                    hypothesis=self._tsv_cell(hypothesis),
+                    failure_class=iteration.failure_class if iteration else None,
+                    created_at=iteration.created_at if iteration else None,
+                )
+            )
+        for iteration in remaining_iterations:
+            hypothesis = self._tsv_cell(iteration.hypothesis or iteration.summary)
+            entries.append(
+                ResultLedgerEntry(
+                    source_run_id=record.task.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration.iteration,
+                    git_head=iteration.git_head,
+                    ledger_git_head=iteration.ledger_git_head,
+                    metric_name=metric_name,
+                    score=iteration.score,
+                    status="pass" if iteration.process_passed else "fail",
+                    hypothesis=hypothesis or f"recovered iteration {iteration.iteration}",
+                    failure_class=iteration.failure_class,
+                    created_at=iteration.created_at,
+                )
+            )
+        return entries
+
+    def _backfill_results_ledger_from_iterations(
+        self,
+        record: CandidateRecord,
+        metric_name: str,
+    ) -> None:
+        represented = {
+            entry.iteration
+            for entry in record.results_ledger
+            if entry.source_run_id == record.task.run_id
+            and entry.source_candidate_id == record.candidate_id
+            and entry.iteration is not None
+        }
+        for iteration in record.iterations:
+            if iteration.iteration in represented:
+                continue
+            hypothesis = self._tsv_cell(iteration.hypothesis or iteration.summary)
+            record.results_ledger.append(
+                ResultLedgerEntry(
+                    source_run_id=record.task.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration.iteration,
+                    git_head=iteration.git_head,
+                    ledger_git_head=iteration.ledger_git_head,
+                    metric_name=metric_name,
+                    score=iteration.score,
+                    status="pass" if iteration.process_passed else "fail",
+                    hypothesis=hypothesis or f"recovered iteration {iteration.iteration}",
+                    failure_class=iteration.failure_class,
+                    created_at=iteration.created_at,
+                )
+            )
+
+    def _candidate_results_ledger(
+        self,
+        record: CandidateRecord,
+    ) -> list[ResultLedgerEntry]:
+        if record.results_ledger:
+            return [entry.model_copy(deep=True) for entry in record.results_ledger]
+        return self._read_results_tsv(record)
+
+    def _preferred_source_candidate_record(
+        self,
+        source_run_id: str,
+    ) -> CandidateRecord | None:
+        source_run = self._load_run(source_run_id)
+        records = self._load_candidate_records(source_run_id)
+        by_id = {record.candidate_id: record for record in records}
+        source_frozen = self._load_frozen_spec(source_run.frozen_spec_id)
+        for candidate_id in (
+            source_run.selected_candidate_id,
+            source_run.best_candidate_id,
+        ):
+            if candidate_id and candidate_id in by_id:
+                record = by_id[candidate_id]
+                self._backfill_results_ledger_from_iterations(
+                    record,
+                    source_frozen.spec.metric_name,
+                )
+                return record
+        if not records:
+            return None
+        frontier = self._top_records(records, source_frozen.spec, 1)
+        if not frontier:
+            return None
+        record = frontier[0]
+        self._backfill_results_ledger_from_iterations(
+            record,
+            source_frozen.spec.metric_name,
+        )
+        return record
+
+    def _inherited_results_ledger(
+        self,
+        run: RunRecord,
+        task: CandidateTask,
+    ) -> list[ResultLedgerEntry]:
+        source_record: CandidateRecord | None = None
+        if task.base_candidate_id:
+            source_record = self._load_candidate_record(
+                run.run_id,
+                task.base_candidate_id,
+            )
+        elif run.source_run_id:
+            source_record = self._preferred_source_candidate_record(run.source_run_id)
+        if source_record is None:
+            return []
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        self._backfill_results_ledger_from_iterations(
+            source_record,
+            frozen.spec.metric_name,
+        )
+        return self._candidate_results_ledger(source_record)
+
+    def _render_results_tsv(
+        self,
+        entries: list[ResultLedgerEntry],
+        metric_name: str,
+    ) -> str:
+        normalized_metric_name = self._tsv_cell(metric_name) or "metric"
+        lines = [f"commit\t{normalized_metric_name}\tstatus\thypothesis"]
+        for entry in entries:
+            if entry.metric_name != metric_name:
+                continue
+            lines.append(
+                "\t".join(
+                    [
+                        entry.git_head or "",
+                        self._format_result_score(entry.score),
+                        self._tsv_cell(entry.status) or "unknown",
+                        self._tsv_cell(entry.hypothesis),
+                    ]
+                )
+            )
+        return "\n".join(lines) + "\n"
+
+    def _assert_results_tsv_unchanged(
+        self,
+        record: CandidateRecord,
+        metric_name: str,
+    ) -> Path:
+        path = self._results_tsv_path(record.task.workspace)
+        expected = self._render_results_tsv(record.results_ledger, metric_name)
+        try:
+            actual = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                "ResultsLedgerMutation: workspace/results.tsv is missing; "
+                "the runtime-owned ledger may not be deleted or replaced"
+            ) from exc
+        if actual != expected:
+            raise RuntimeError(
+                "ResultsLedgerMutation: workspace/results.tsv changed outside "
+                "the runtime; existing rows are immutable and only one "
+                "runtime-appended row is allowed per returned verifier report"
+            )
+        try:
+            status = self._git_output(
+                record.task.workspace,
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                    "--",
+                    RESULTS_TSV_RELATIVE_PATH,
+                ],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                "ResultsLedgerMutation: could not verify the Git state of "
+                "workspace/results.tsv"
+            ) from exc
+        if status.strip():
+            raise RuntimeError(
+                "ResultsLedgerMutation: workspace/results.tsv must stay clean "
+                "between runtime appends"
+            )
+        return path
+
+    def _ensure_results_tsv(
+        self,
+        record: CandidateRecord,
+        metric_name: str,
+        *,
+        force_after_checkout: bool = False,
+    ) -> Path:
+        if record.results_ledger_git_head is not None and not force_after_checkout:
+            return self._assert_results_tsv_unchanged(record, metric_name)
+        if not record.results_ledger and record.results_ledger_git_head is None:
+            record.results_ledger = self._read_results_tsv(record)
+        if record.results_ledger_git_head is None:
+            self._backfill_results_ledger_from_iterations(record, metric_name)
+        path = self._results_tsv_path(record.task.workspace)
+        write_text(path, self._render_results_tsv(record.results_ledger, metric_name))
+        self._initialize_workspace_git_for_results(record.task.workspace)
+        ledger_git_head = self._commit_results_tsv(
+            record.task.workspace,
+            f"goal-plus results ledger sync {record.candidate_id}",
+        )
+        if ledger_git_head is None:
+            raise RuntimeError(
+                "ResultsLedgerCommitError: failed to commit workspace/results.tsv"
+            )
+        record.results_ledger_git_head = ledger_git_head
+        self._assert_results_tsv_unchanged(record, metric_name)
+        return path
+
+    def _append_results_tsv(
+        self,
+        record: CandidateRecord,
+        entry: ResultLedgerEntry,
+        metric_name: str,
+    ) -> str:
+        path = self._assert_results_tsv_unchanged(record, metric_name)
+        before = self._render_results_tsv(record.results_ledger, metric_name)
+        after = self._render_results_tsv(
+            [*record.results_ledger, entry],
+            metric_name,
+        )
+        if not after.startswith(before) or len(after.splitlines()) != len(
+            before.splitlines()
+        ) + 1:
+            raise RuntimeError(
+                "ResultsLedgerAppendError: a verifier result must append exactly "
+                "one row without changing the existing workspace/results.tsv"
+            )
+        write_text(path, after)
+        ledger_git_head = self._commit_results_tsv(
+            record.task.workspace,
+            (
+                f"goal-plus results ledger {record.candidate_id}:"
+                f"{entry.iteration or 'legacy'}"
+            ),
+        )
+        if ledger_git_head is None:
+            raise RuntimeError(
+                "ResultsLedgerCommitError: failed to commit the appended "
+                "workspace/results.tsv row"
+            )
+        entry.ledger_git_head = ledger_git_head
+        record.results_ledger.append(entry)
+        record.results_ledger_git_head = ledger_git_head
+        self._assert_results_tsv_unchanged(record, metric_name)
+        return ledger_git_head
+
     def _history_view(
         self,
         run: RunRecord,
@@ -2968,15 +3629,27 @@ class FileSearchRuntime:
         if policy.scope != "all" and forced_candidate_ids is None:
             selected_records = selected_records[: policy.top_n]
 
+        visible_candidate_ids = [record.candidate_id for record in selected_records]
+        research_rollup = self._run_research_rollup(
+            records,
+            frozen.spec,
+            visible_candidate_ids=visible_candidate_ids,
+        )
+
         return {
             "policy": scope,
             "top_n": policy.top_n,
             "include": policy.include,
-            "visible_candidate_ids": [record.candidate_id for record in selected_records],
+            "visible_candidate_ids": visible_candidate_ids,
             "candidates": [
                 self._history_candidate_payload(record, frozen.spec)
                 for record in selected_records
             ],
+            "feature_ledger": research_rollup["feature_ledger"],
+            "pitfalls": research_rollup["pitfalls"],
+            "verifier_assessments": research_rollup["verifier_assessments"],
+            "research_rollup": research_rollup,
+            "inherited_research": run.inherited_research,
             "description": (
                 "Official runtime-selected history view for the current strategy plan."
             ),
@@ -3209,7 +3882,11 @@ class FileSearchRuntime:
         )
         logs_dir.mkdir(parents=True, exist_ok=True)
         command_log_name = safe_verifier_name(command.name)
-        log_path = logs_dir / f"{command_log_name}.log"
+        iteration_number = len(record.iterations) + 1
+        log_path = logs_dir / (
+            f"iteration-{iteration_number:04d}-{command_log_name}-"
+            f"{uuid.uuid4().hex[:8]}.log"
+        )
         diagnostics_dir = (
             logs_dir
             / "diagnostics"
@@ -3264,6 +3941,12 @@ class FileSearchRuntime:
                         "candidate_action": "stop_and_report",
                     }
                 )
+                self._add_visible_verifier_feedback(
+                    command,
+                    metrics,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
                 log_path.write_text(
                     _bounded_log(
                         "\n".join(
@@ -3302,12 +3985,18 @@ class FileSearchRuntime:
             )
             if missing_numeric_metric:
                 metrics["expected_metric_name"] = frozen.spec.metric_name
-                metrics["stdout_tail"] = completed.stdout.strip()[-2000:]
             passed = (
                 completed.returncode == 0
                 and not has_verifier_error
                 and not missing_numeric_metric
             )
+            if not passed:
+                self._add_visible_verifier_feedback(
+                    command,
+                    metrics,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
             log_path.write_text(
                 _bounded_log(
                     "\n".join(
@@ -3353,8 +4042,8 @@ class FileSearchRuntime:
                 side_effects,
                 git_head_before,
             ) if side_effects else []
-            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            stdout = self._coerce_verifier_output(exc.stdout)
+            stderr = self._coerce_verifier_output(exc.stderr)
             log_path.write_text(
                 _bounded_log(
                     "\n".join(
@@ -3382,6 +4071,12 @@ class FileSearchRuntime:
                 ),
             }
             metrics.update(self._verifier_diagnostics(diagnostics_dir))
+            self._add_visible_verifier_feedback(
+                command,
+                metrics,
+                stdout=stdout,
+                stderr=stderr,
+            )
             return VerifierResult(
                 name=command.name,
                 role=command.role,
@@ -3420,6 +4115,29 @@ class FileSearchRuntime:
             "diagnostics_dir": str(diagnostics_dir),
             "diagnostic_files": files,
         }
+
+    @staticmethod
+    def _coerce_verifier_output(value: str | bytes | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value
+
+    def _add_visible_verifier_feedback(
+        self,
+        command: VerifierCommand,
+        metrics: dict[str, Any],
+        *,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+    ) -> None:
+        if command.feedback_policy != FeedbackPolicy.VISIBLE_TO_WORKERS:
+            return
+        for key, value in (("stdout_tail", stdout), ("stderr_tail", stderr)):
+            output = self._coerce_verifier_output(value).strip()
+            if output:
+                metrics[key] = output[-MAX_VERIFIER_FEEDBACK_CHARS:]
 
     def _restore_verifier_workspace(
         self,
@@ -3697,29 +4415,253 @@ class FileSearchRuntime:
                 continue
             model_handoff = progress.get("model_handoff")
             if not isinstance(model_handoff, dict):
-                continue
+                legacy_keys = {
+                    "key_results",
+                    "what_was_tried",
+                    "pitfalls",
+                    "blockers",
+                    "next_steps",
+                    "next_action",
+                    "verifier_assessment",
+                }
+                if legacy_keys.intersection(progress):
+                    model_handoff = progress
+                else:
+                    continue
             summary = model_handoff.get("summary")
             if not isinstance(summary, str):
                 summary = progress.get("summary")
+            key_results = items(
+                model_handoff.get("key_results", model_handoff.get("what_was_tried"))
+            )
+            verifier_assessment = model_handoff.get("verifier_assessment")
+            if not isinstance(verifier_assessment, dict):
+                verifier_assessment = {
+                    "status": "unknown",
+                    "evidence": [],
+                    "impact": "",
+                    "recommended_action": "keep_spec",
+                }
+            else:
+                verifier_assessment = dict(verifier_assessment)
+                status = verifier_assessment.get("status")
+                evidence = items(verifier_assessment.get("evidence"))
+                if status not in {"adequate", "concern", "unknown"}:
+                    status = "unknown"
+                if status == "concern" and not evidence:
+                    status = "unknown"
+                action = verifier_assessment.get("recommended_action")
+                if action not in {"keep_spec", "investigate", "upgrade_spec"}:
+                    action = "investigate" if status == "concern" else "keep_spec"
+                verifier_assessment = {
+                    "status": status,
+                    "evidence": evidence,
+                    "impact": str(verifier_assessment.get("impact") or ""),
+                    "recommended_action": action,
+                }
             return {
                 "summary": summary if isinstance(summary, str) else "",
-                "key_results": items(
-                    model_handoff.get("key_results", model_handoff.get("what_was_tried"))
-                ),
+                "key_results": key_results,
+                "feature_ledger": key_results,
                 "pitfalls": items(model_handoff.get("pitfalls")),
                 "blockers": items(model_handoff.get("blockers")),
                 "next_steps": items(
                     model_handoff.get("next_steps", model_handoff.get("next_action"))
                 ),
+                "verifier_assessment": verifier_assessment,
                 "source_agent_session_id": session.agent_session_id,
             }
         return {
             "summary": "",
             "key_results": [],
+            "feature_ledger": [],
             "pitfalls": [],
             "blockers": [],
             "next_steps": [],
+            "verifier_assessment": {
+                "status": "unknown",
+                "evidence": [],
+                "impact": "",
+                "recommended_action": "keep_spec",
+            },
             "source_agent_session_id": None,
+        }
+
+    def _run_research_rollup(
+        self,
+        records: list[CandidateRecord],
+        spec: SearchSpec,
+        *,
+        visible_candidate_ids: list[str],
+    ) -> dict[str, Any]:
+        """Keep portable discoveries visible even when candidates leave the frontier."""
+
+        visible = set(visible_candidate_ids)
+        feature_groups: list[list[dict[str, Any]]] = []
+        verifier_assessments: list[dict[str, Any]] = []
+        pitfall_groups: list[list[dict[str, Any]]] = []
+
+        for record in self._records_by_created(records):
+            research = self._candidate_research_summary(
+                record.task.run_id,
+                record.candidate_id,
+            )
+            best_iteration = self._best_iteration_record(record, spec.metric_direction)
+            score = self._record_ranking_score(record, spec)
+            best_git_head = best_iteration.git_head if best_iteration else None
+
+            candidate_features: list[dict[str, Any]] = []
+            for result in research["feature_ledger"]:
+                item = (
+                    dict(result)
+                    if isinstance(result, dict)
+                    else {"conclusion": str(result)}
+                )
+                candidate_features.append(
+                    {
+                        **item,
+                        "candidate_id": record.candidate_id,
+                        "candidate_visible": record.candidate_id in visible,
+                        "candidate_score": score,
+                        "best_git_head": best_git_head,
+                    }
+                )
+            if candidate_features:
+                feature_groups.append(candidate_features)
+
+            assessment = research["verifier_assessment"]
+            evidence = assessment.get("evidence")
+            status = assessment.get("status", "unknown")
+            if status != "unknown" or evidence:
+                verifier_assessments.append(
+                    {
+                        **assessment,
+                        "candidate_id": record.candidate_id,
+                    }
+                )
+
+            candidate_pitfalls: list[dict[str, Any]] = []
+            for pitfall in research["pitfalls"]:
+                item = (
+                    dict(pitfall)
+                    if isinstance(pitfall, dict)
+                    else {"observed_result": str(pitfall)}
+                )
+                scope = item.get("scope")
+                if scope not in {
+                    "candidate_local",
+                    "feature_family",
+                    "evaluation_contract",
+                }:
+                    scope = "candidate_local"
+                confidence = item.get("confidence")
+                if confidence not in {"single_observation", "reproduced"}:
+                    confidence = "single_observation"
+                candidate_pitfalls.append(
+                    {
+                        **item,
+                        "scope": scope,
+                        "confidence": confidence,
+                        "candidate_id": record.candidate_id,
+                    }
+                )
+            if candidate_pitfalls:
+                pitfall_groups.append(candidate_pitfalls)
+
+        def round_robin(
+            groups: list[list[dict[str, Any]]],
+            limit: int,
+        ) -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            for index in range(max((len(group) for group in groups), default=0)):
+                for group in groups:
+                    if index < len(group):
+                        rows.append(group[index])
+                        if len(rows) == limit:
+                            return rows
+            return rows
+
+        return {
+            "feature_ledger": round_robin(feature_groups, 50),
+            "verifier_assessments": verifier_assessments[:15],
+            "pitfalls": round_robin(pitfall_groups, 30),
+            "description": (
+                "Bounded current-run research rollup across all candidates, including "
+                "discoveries from candidates outside the visible ranking frontier."
+            ),
+        }
+
+    def _build_inherited_research(
+        self,
+        source_run_id: str,
+        *,
+        history_policy: HistoryPolicy,
+    ) -> dict[str, Any]:
+        source_run = self._load_run(source_run_id)
+        source_frozen = self._load_frozen_spec(source_run.frozen_spec_id)
+        records = self._load_candidate_records(source_run_id)
+        frontier_records = self._top_records(records, source_frozen.spec, 5)
+        visible_candidate_ids = [record.candidate_id for record in frontier_records]
+        rollup = self._run_research_rollup(
+            records,
+            source_frozen.spec,
+            visible_candidate_ids=visible_candidate_ids,
+        )
+
+        inherited_features = list(
+            source_run.inherited_research.get("feature_ledger", [])
+        )
+        inherited_pitfalls = list(source_run.inherited_research.get("pitfalls", []))
+        current_features = [
+            {
+                **entry,
+                "source_run_id": source_run_id,
+                "score_reusable": False,
+            }
+            for entry in rollup["feature_ledger"]
+        ]
+        current_pitfalls = [
+            {**entry, "source_run_id": source_run_id}
+            for entry in rollup["pitfalls"]
+        ]
+        features = current_features + inherited_features
+        pitfalls = current_pitfalls + inherited_pitfalls
+        if history_policy.inherited_feature_limit is not None:
+            features = features[: history_policy.inherited_feature_limit]
+        if history_policy.inherited_pitfall_limit is not None:
+            pitfalls = pitfalls[: history_policy.inherited_pitfall_limit]
+        frontier: list[dict[str, Any]] = []
+        for record in frontier_records:
+            payload = self._history_candidate_payload(record, source_frozen.spec)
+            frontier.append(
+                {
+                    "source_run_id": source_run_id,
+                    "candidate_id": record.candidate_id,
+                    "score": payload["score"],
+                    "score_reusable": False,
+                    "best_iteration": payload["best_iteration"],
+                    "best_git_head": payload["best_git_head"],
+                    "summary": payload["summary"],
+                    "feature_ledger": payload["feature_ledger"],
+                }
+            )
+
+        return {
+            "source_run_id": source_run_id,
+            "source_frozen_spec_id": source_run.frozen_spec_id,
+            "source_invalidation": {
+                "reason": source_run.invalidation_reason,
+                "summary": source_run.invalidation_summary,
+                "evidence": source_run.invalidation_evidence,
+            },
+            "frontier": frontier,
+            "feature_ledger": features,
+            "pitfalls": pitfalls,
+            "score_reusable": False,
+            "description": (
+                "Policy-controlled inherited research context. Source scores are historical "
+                "only and every imported artifact or feature must be re-verified."
+            ),
         }
 
     def _history_candidate_payload(
@@ -3753,6 +4695,7 @@ class FileSearchRuntime:
             and score_report.aggregate_score == evidence_score
         )
         if best_iteration is not None:
+            log_paths = list(best_iteration.log_paths)
             for verifier_metrics in best_iteration.metrics.values():
                 if isinstance(verifier_metrics, dict):
                     metrics.update(
@@ -3840,10 +4783,17 @@ class FileSearchRuntime:
             "agent_sessions": agent_sessions,
             "summary": research_summary["summary"],
             "key_results": research_summary["key_results"],
+            "feature_ledger": research_summary["feature_ledger"],
             "next_ideas": research_summary["next_steps"],
             "risk_notes": risk_notes,
             "blockers": research_summary["blockers"],
+            "verifier_assessment": research_summary["verifier_assessment"],
             "research_summary": research_summary,
+            "search_action": (
+                record.task.proposal.metadata.get("search_action")
+                if record.task.proposal
+                else None
+            ),
             "artifact_status": None,
             "changed_files": record.detected_changed_files,
             "touched_denied_files": record.touched_denied_files,
@@ -3901,6 +4851,8 @@ class FileSearchRuntime:
         workspace_hashes = self._hash_tree(workspace)
         changed: list[str] = []
         for rel_path in sorted(set(source_hashes) | set(workspace_hashes)):
+            if rel_path == RESULTS_TSV_RELATIVE_PATH:
+                continue
             if source_hashes.get(rel_path) != workspace_hashes.get(rel_path):
                 changed.append(rel_path)
         return changed
@@ -3985,6 +4937,80 @@ class FileSearchRuntime:
         )
         process.communicate()
         return process.returncode
+
+    def _initialize_workspace_git_for_results(self, workspace: Path) -> None:
+        if self._git_head(workspace) is not None:
+            return
+        files = [
+            path.relative_to(workspace).as_posix()
+            for path in list_files(workspace)
+        ]
+        try:
+            self._git_output(workspace, ["git", "init", "-q"])
+            self._git_output(workspace, ["git", "add", "-f", "--", *files])
+            self._git_output(
+                workspace,
+                [
+                    "git",
+                    "-c",
+                    "user.name=goal-plus",
+                    "-c",
+                    "user.email=goal-plus@example.invalid",
+                    "commit",
+                    "-q",
+                    "--no-verify",
+                    "-m",
+                    "search candidate baseline",
+                ],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                "ResultsLedgerCommitError: candidate workspace has no usable "
+                "Git repository for workspace/results.tsv"
+            ) from exc
+
+    def _commit_results_tsv(self, workspace: Path, message: str) -> str | None:
+        try:
+            self._git_output(
+                workspace,
+                ["git", "add", "--", RESULTS_TSV_RELATIVE_PATH],
+            )
+            staged_returncode = self._git_returncode(
+                workspace,
+                [
+                    "git",
+                    "diff",
+                    "--cached",
+                    "--quiet",
+                    "--",
+                    RESULTS_TSV_RELATIVE_PATH,
+                ],
+            )
+            if staged_returncode == 0:
+                return self._git_head(workspace)
+            if staged_returncode != 1:
+                return None
+            self._git_output(
+                workspace,
+                [
+                    "git",
+                    "-c",
+                    "user.name=goal-plus",
+                    "-c",
+                    "user.email=goal-plus@example.invalid",
+                    "commit",
+                    "-q",
+                    "--no-verify",
+                    "--only",
+                    "-m",
+                    message,
+                    "--",
+                    RESULTS_TSV_RELATIVE_PATH,
+                ],
+            )
+            return self._git_head(workspace)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
 
     def _commit_workspace_iteration(
         self,
@@ -4299,9 +5325,12 @@ class FileSearchRuntime:
         ]
 
     def _load_candidate_record(self, run_id: str, candidate_id: str) -> CandidateRecord:
-        return CandidateRecord.model_validate(
+        record = CandidateRecord.model_validate(
             load_json(self._candidate_dir(run_id, candidate_id) / "candidate.json")
         )
+        if not record.results_ledger and record.results_ledger_git_head is None:
+            record.results_ledger = self._read_results_tsv(record)
+        return record
 
     def _write_candidate_record(self, run_id: str, record: CandidateRecord) -> None:
         candidate_dir = self._candidate_dir(run_id, record.candidate_id)

@@ -73,6 +73,10 @@ def test_claude_search_skill_documents_whole_run_budget_planning() -> None:
     assert "set `max_candidates=15`" in text
     assert "default value 4 as the whole-run budget" in normalized
     assert "Do not call `search_select` while" in normalized
+    assert "Different candidate ids do not by themselves provide search diversity" in normalized
+    assert "same-candidate continuation" in normalized
+    assert "not an obligation to launch more work" in normalized
+    assert "theoretical or structural limits" in normalized
 
 
 def test_claude_goal_plus_skill_records_modes_and_mcp_tools() -> None:
@@ -119,8 +123,15 @@ def test_claude_worker_agent_calls_context_and_verifier() -> None:
     assert "mcp__goal-plus__*" in text
     assert "search_get_agent_context" in text
     assert "search_run_verifier" in text
+    assert "workspace root" in text
+    assert "exactly one validated row" in text
+    assert "hypothesis=" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
+    assert "assigned candidate idea as a hypothesis" in text
+    assert "any promising direction" in text
+    assert "fixed artifact count" in text
+    assert "theoretical or structural limits" in text
 
 
 def test_claude_worker_agent_turn_budget_variants_exist() -> None:
@@ -137,6 +148,10 @@ def test_claude_worker_agent_turn_budget_variants_exist() -> None:
     assert "maxTurns: 16" in deep
     assert "candidate_action=stop_and_report" in flash
     assert "candidate_action=stop_and_report" in deep
+    assert "assigned candidate idea as a hypothesis" in flash
+    assert "assigned candidate idea as a hypothesis" in deep
+    assert "theoretical or structural limits" in flash
+    assert "theoretical or structural limits" in deep
 
 
 def test_claude_search_skill_documents_tier_escalation_and_resume() -> None:

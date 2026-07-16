@@ -243,6 +243,26 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
   --pretty
 ```
 
+For a detailed terminal dashboard that polls a project directory, use the
+repository script. It discovers `.gp`, `.search`, or `.goal-plus`, selects the
+latest linked task by default, and shows planning decisions, candidate
+intent/hypothesis/tradeoff, verifier evidence, normalized host observability,
+handoffs, artifacts, Pi persisted pool state, and monitor warnings:
+
+```bash
+./scripts/monitor_goal_plus.sh /path/to/project
+./scripts/monitor_goal_plus.sh --once --goal gp_... /path/to/project
+./scripts/monitor_goal_plus.sh --run run_... --no-clear /path/to/project
+INTERVAL=2 RUN_LIMIT=0 ./scripts/monitor_goal_plus.sh /path/to/project
+```
+
+The dashboard is read-only. In particular, its Pi pool section reads the
+persisted host snapshot and does not call pool reconciliation, wait, close, or
+interrupt operations. The default view is a one-screen summary; add `--verbose`
+for full per-worker usage, identity, directive, handoff, advisory, and artifact
+details. Use `--json` when the assembled monitor/API payload is more useful
+than either human view.
+
 The snapshot summarizes the complete Goal Plus search-task history and the
 selected run's detailed state. `search_tasks` contains per-run state, frozen
 spec, strategy, and round summaries;
@@ -253,6 +273,12 @@ inspect after an interrupted edit or reviewer run.
 worker-session, verifier-run, and Pi cost counts. The selected task retains the
 detailed run, strategy, candidate, session, duration/cost/context, file-mtime,
 and stale/timed-out views.
+
+Each selected-run `subagents[]` entry also contains the versioned
+`observability` object. Query the same object directly with
+`search_get_agent_observability(agent_session_id)` when diagnosing one worker.
+Codex resolves native session JSONL metrics; Pi normalizes `pi_metrics`. Both
+paths omit prompt, reasoning, and tool payload bodies.
 
 Pi RPC workers use `--no-session` and do not support same-worker continuation.
 Normal Pi main-agent flow uses `pi_search_pool_continue`; the supervisor calls
@@ -276,16 +302,21 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     ├── run.json                                  # RunRecord: state, candidates_total/evaluated, best
     ├── plans/<plan_id>.json                      # SearchPlan snapshots
     ├── candidates/<candidate_id>/
-    │   ├── candidate.json                        # CandidateRecord: status, score_report, iterations[]
+    │   ├── candidate.json                        # CandidateRecord: status, score_report, iterations[], results_ledger[]
     │   ├── task.json                             # CandidateTask snapshot
-    │   └── logs/<verifier_name>.log              # verifier stdout/stderr per call
+    │   └── logs/iteration-<n>-<verifier>-<id>.log # durable stdout/stderr per call
     ├── workspace/<candidate_id>/                 # the agent's editable workspace
-    │   ├── .git/                                 # agent's git history (autoresearch loop)
-    │   ├── .tmp/results.tsv                      # iteration log: commit \t <metric_name> \t status \t hypothesis
+    │   ├── .git/                                 # agent and runtime ledger Git history
+    │   ├── results.tsv                           # committed, runtime-owned inherited append-only ledger
     │   └── <allowed_files>
     ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate/OpenCode binding, launch payload, counters
     └── report.md / promotion/                    # final outputs
 ```
+
+Failed process verifiers with `feedback_policy=visible_to_workers` return
+bounded `stdout_tail` and `stderr_tail` metrics to the caller. Complete output
+stays in the unique per-call log, and each `iterations[]` entry records its
+`log_paths`, so a later verifier run does not overwrite earlier failure evidence.
 
 There is no `agent_events/` or `observations/` directory. The session record carries optional `opencode_session_id`, `launch` (the OpenCode Task fields), `directive`, and `counters.verifier_runs`.
 
@@ -326,31 +357,47 @@ done
 find $RUN/workspace -name ".git" -execdir sh -c 'echo "=== $(pwd) ===" && git log --oneline' \;
 ```
 
-### Agent's private results.tsv
+### Runtime-owned results.tsv
 
 ```bash
 find $RUN/workspace -name "results.tsv" -exec sh -c 'echo "=== $1 ===" && cat "$1"' _ {} \;
 ```
 
-Columns (tab-separated, autoresearch-aligned):
+The runtime writes this file from durable `candidate.json.results_ledger` and
+commits the header plus every appended row. Every verifier call that returns a
+report contributes exactly one row. Calls that raise before a report exists
+contribute none. Before each verifier, the runtime checks that the old content
+is unchanged and Git-clean; deletion, rewriting, truncation, or a worker append
+raises `ResultsLedgerMutation`. The ledger survives same-candidate redispatch,
+is inherited by derived child workspaces, and is seeded from the selected/best
+source candidate for a successor run. It is runtime metadata, so it is excluded
+from edit-surface checks and promotion patches. Workers pass a concise
+`hypothesis` to `search_run_verifier` and must not edit this file directly.
+On first resume of an older candidate, a legacy `.tmp/results.tsv` is migrated
+to the workspace root; verifier-backed `iterations[]` missing from that legacy
+file are appended as recovered rows so old evidence is not silently dropped.
+
+Columns (tab-separated):
 
 | col | name | meaning |
 |---|---|---|
-| 1 | `commit` | 7-char git short hash of the iteration's commit (commit-first: committed before verify) |
+| 1 | `commit` | runtime-recorded full Git head for the verified artifact |
 | 2 | `<metric_name>` | the frozen `spec.metric_name` literal (e.g. `combined_score`, `val_bpb`) — set by the main agent at freeze time |
-| 3 | `status` | `keep` (improved, per `metric_direction`) or `discard` (regressed / verifier crash) |
+| 3 | `status` | `pass` when the returned report passed, otherwise `fail` |
 | 4 | `hypothesis` | short description of what this iteration tried |
 
 Example:
 
 ```
 commit	combined_score	status	hypothesis
-a1b2c3d	0.682	keep	baseline (concentric rings)
-b2c3d4e	0.949	keep	hex lattice [5,4,5,4,5,3] s=0.1875
-c3d4e5f	0.651	discard	switch to rectangular grid (regressed)
+a1b2c3d	0.682	pass	baseline (concentric rings)
+b2c3d4e	0.949	pass	hex lattice [5,4,5,4,5,3] s=0.1875
+c3d4e5f	0.651	fail	switch to rectangular grid (regressed)
 ```
 
-`discard` rows still carry a real commit hash; the commit was reset off the branch but remains in git reflog (~30 days), so `git -C <workspace> checkout <hash>` recovers any discarded experiment.
+The `commit` column names the code snapshot tested by the verifier. The
+subsequent ledger commit is stored as `ledger_git_head` in `candidate.json`, so
+the workspace `HEAD` normally points one commit past the tested code snapshot.
 
 ## Live Monitoring
 

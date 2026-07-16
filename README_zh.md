@@ -69,10 +69,16 @@ Codex 需要将 `.codex/config.example.toml` 复制为被忽略的本地文件
 - 一个 **candidate** 是带 verifier 历史的隔离工作区。
 - 一个 **worker session** 是宿主上下文/来源句柄。worker 生命周期属于宿主，
   不属于 Search 运行时。
+- 一个 **verifier concern** 只是 worker 的建议；只有 main agent 能确认。确认后先封锁
+  当前 run，再停止全部宿主 worker，并创建新的 spec/run。
 
 Search 使用滚动 pool：先填满 `budget.max_parallel`，任意 worker 完成后立即判断是
 继续该方向、启动新候选、空置槽位，还是排空后选择结果。慢 worker 不会阻塞已经完成
 的工作。完整流程见 [Flow](docs/flow-view.md)。
+
+同一份有效评价/编辑合同应保持一个 run。必须新建 successor 时，
+`source_run_id` 只继承有界 frontier、feature 和带作用域 pitfalls 作为研究上下文；
+旧分数不能复用，必须重新验证。
 
 运行时状态保存在 `.gp/`。`search_tasks` 只追加；`linked_search` 只是当前任务的
 兼容视图。

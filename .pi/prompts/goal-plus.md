@@ -26,9 +26,18 @@ temporary outputs. Never use one fixed `/tmp` path because
 workspace side effect before candidate budget is spent.
 
 After the first meaningful optimization result is available, apply the skill's
-existing raw-goal audit before assuming that the frozen spec should continue
-unchanged. A large relative improvement over baseline does not show that the
-result is close to meaningful success, especially when an absolute target or
-acceptance criterion is unavailable. Explicitly consider `upgrade_spec`,
-`keep_spec_with_justification`, or `revise_goal`; this is reasoning within the
+existing raw-goal audit without treating that result as run completion. A large
+relative improvement over baseline does not show that the result is close to
+meaningful success, especially when an absolute target or acceptance criterion
+is unavailable. Keep the same frozen spec and run by default. Use
+`upgrade_spec` only for concrete evaluation/edit-contract inadequacy, and use
+`revise_goal` only when the effective goal changed; a new search direction or
+feature transfer belongs inside the current run. This is reasoning within the
 existing flow, not a new runtime phase or approval step.
+
+If a worker reports a verifier concern, pause slot refill while checking its
+evidence. Do not rebuild for sparse diagnostics, low scores, or slow progress.
+If the main agent confirms a real contract/coverage/determinism/target or
+infrastructure defect, call `search_invalidate_run` first, interrupt the entire
+Pi pool and wait for `active_count=0`, then repair/freeze and create the
+successor with `source_run_id`. Never select or promote the invalidated run.

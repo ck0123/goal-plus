@@ -69,6 +69,10 @@ def test_opencode_search_skill_documents_whole_run_budget_planning() -> None:
     assert "set `max_candidates=15`" in skill
     assert "default value 4 as the whole-run budget" in normalized
     assert "Do not call `search_select` while" in normalized
+    assert "Different candidate ids do not by themselves provide search diversity" in normalized
+    assert "same-candidate" in normalized
+    assert "not an obligation to launch more work" in normalized
+    assert "theoretical or structural limits" in normalized
 
 
 def test_goal_any_optimize_command_is_goal_plus_alias() -> None:
@@ -226,8 +230,14 @@ def test_search_candidate_agent_documents_autoresearch_loop() -> None:
     assert "## Iteration Loop" in agent
     assert "git init" in agent
     assert "search_run_verifier" in agent
-    assert "results.tsv" in agent
+    assert "context.workspace/results.tsv" in agent
+    assert "exactly one validated `results.tsv` row" in agent
+    assert "hypothesis=" in agent
     assert "agent_session_id" in agent
+    assert "assigned candidate idea as a hypothesis" in agent
+    assert "any promising direction" in agent
+    assert "fixed artifact count" in agent
+    assert "theoretical or structural limits" in agent
 
 
 def test_opencode_search_skill_documents_tier_escalation_and_resume_history() -> None:
@@ -266,6 +276,8 @@ def test_search_candidate_agent_tier_has_expected_step_cap(
     assert "mode: subagent" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
+    assert "assigned candidate idea as a hypothesis" in text
+    assert "theoretical or structural limits" in text
 
 
 @pytest.mark.parametrize(

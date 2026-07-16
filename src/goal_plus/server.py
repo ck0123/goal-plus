@@ -52,14 +52,46 @@ def create_mcp(
         return tools.search_freeze_spec(spec, verifier_artifact_paths)
 
     @mcp.tool()
-    def search_create(frozen_spec_id: str) -> dict[str, str]:
-        """Start a search run from a frozen spec. Returns `run_id`."""
-        return tools.search_create(frozen_spec_id)
+    def search_create(
+        frozen_spec_id: str,
+        source_run_id: str | None = None,
+    ) -> dict[str, str]:
+        """Start a search run from a frozen spec. Returns `run_id`.
+
+        Pass `source_run_id` only when a new immutable run is unavoidable. The
+        new run receives a bounded snapshot of the source frontier, scoped
+        pitfalls, and feature ledger. Source scores are historical and must be
+        re-verified under the new contract.
+        """
+        return tools.search_create(frozen_spec_id, source_run_id)
 
     @mcp.tool()
     def search_status(run_id: str) -> dict[str, Any]:
         """Read-only snapshot of run state, budget usage, and best score."""
         return tools.search_status(run_id)
+
+    @mcp.tool()
+    def search_invalidate_run(
+        run_id: str,
+        reason: Literal[
+            "verifier_contract_invalid",
+            "verifier_coverage_inadequate",
+            "verifier_nondeterministic",
+            "verifier_target_mismatch",
+            "verifier_infrastructure_failure",
+        ],
+        summary: str,
+        evidence: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Fence a run after the main agent confirms verifier inadequacy.
+
+        This atomically blocks new planning, sessions, verifier records,
+        selection, and promotion. It does not control host workers: after this
+        call, the main agent must interrupt the host pool, wait until every
+        worker is terminal, then repair/freeze the verifier and create a new
+        run with `source_run_id`.
+        """
+        return tools.search_invalidate_run(run_id, reason, summary, evidence)
 
     @mcp.tool()
     def goal_plus_monitor_snapshot(
@@ -199,6 +231,19 @@ def create_mcp(
         return tools.search_bind_agent_handle(agent_session_id, handle)
 
     @mcp.tool()
+    def search_get_agent_observability(
+        agent_session_id: str,
+    ) -> dict[str, Any]:
+        """Read normalized host metrics and artifacts for one agent session.
+
+        The schema is shared across hosts. Codex resolves its native session
+        JSONL when available; Pi normalizes bound `pi_metrics`. This call is
+        read-only and does not wait for, continue, or interrupt the worker.
+        Prompt, reasoning, and tool payload contents are never returned.
+        """
+        return tools.search_get_agent_observability(agent_session_id)
+
+    @mcp.tool()
     def search_continue_agent_session(
         agent_session_id: str,
         directive: dict[str, Any] | str | None = None,
@@ -234,17 +279,27 @@ def create_mcp(
         candidate_id: str,
         scope: str = "process",
         agent_session_id: str | None = None,
+        hypothesis: str | None = None,
     ) -> dict[str, Any]:
         """Subagent self-score with `agent_session_id`; main final verify without it.
 
-        Subagents pass their own `agent_session_id` to record iteration
-        provenance. The main agent calls this without `agent_session_id`
+        Subagents pass their own `agent_session_id` and a concise `hypothesis`
+        describing the tested design. The runtime records iteration provenance
+        and appends exactly one validated row to the inherited
+        `workspace/results.tsv`, then commits that runtime-owned ledger.
+        The main agent calls this without `agent_session_id`
         after OpenCode Task completion to confirm the final score. A
         `VerifierWorkspaceSideEffect` with
         `candidate_action="stop_and_report"` is a frozen-verifier infrastructure
         failure: workers must not clean verifier outputs or retry it.
         """
-        return tools.search_run_verifier(run_id, candidate_id, scope, agent_session_id)
+        return tools.search_run_verifier(
+            run_id,
+            candidate_id,
+            scope,
+            agent_session_id,
+            hypothesis,
+        )
 
     @mcp.tool()
     def search_list_iterations(

@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from goal_plus.agent_pool import HostPoolContract
-from goal_plus.models import AgentHostKind
+from goal_plus.host_observability import (
+    collect_codex_observability,
+    collect_metadata_observability,
+    collect_pi_observability,
+)
+from goal_plus.models import AgentHostKind, AgentSessionRecord
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 
 
@@ -42,6 +47,12 @@ class HostCapabilities:
 class AgentHostAdapter(Protocol):
     name: AgentHostKind
     capabilities: HostCapabilities
+
+    def collect_observability(
+        self,
+        session: AgentSessionRecord,
+    ) -> dict[str, Any]:
+        ...
 
     def build_launch_payload(
         self,
@@ -121,6 +132,14 @@ CODEX_WORKER_BOUNDARY = (
 )
 
 
+def _codex_worker_contract(worker_prompt: str | None) -> str:
+    """Keep the portable worker boundary even when agent metadata is hidden."""
+    prompt = (worker_prompt or "").strip()
+    if not prompt or prompt == CODEX_WORKER_BOUNDARY:
+        return CODEX_WORKER_BOUNDARY
+    return f"{CODEX_WORKER_BOUNDARY}\n\n{prompt}"
+
+
 def _codex_budget_control(
     target: str,
     worker_budget: dict[str, Any] | None,
@@ -161,6 +180,9 @@ class OpenCodeAdapter:
         supports_same_worker_continue=True,
         supports_trace_export=True,
     )
+
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_metadata_observability(session)
 
     def build_launch_payload(
         self,
@@ -231,6 +253,7 @@ class CodexAdapter:
         supports_model_override=True,
         supports_reasoning_effort=True,
         supports_service_tier=True,
+        supports_usage_metadata=True,
         pool=HostPoolContract(
             launch_mode="async",
             wait_mode="wait_any",
@@ -247,6 +270,9 @@ class CodexAdapter:
         ),
     )
 
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_codex_observability(session)
+
     def build_launch_payload(
         self,
         *,
@@ -262,19 +288,29 @@ class CodexAdapter:
         worker_prompt: str | None = None,
     ) -> dict[str, Any]:
         task_name = _codex_task_name(agent_session_id)
+        worker_contract = _codex_worker_contract(worker_prompt)
         payload = {
             "tool": "spawn_agent",
             "task_name": task_name,
-            "agent_type": worker_agent_type or "search_candidate_agent",
+            "agent_type": "default",
             "fork_turns": "none",
             "message": (
-                f"{CODEX_WORKER_BOUNDARY}\n\n"
+                f"{worker_contract}\n\n"
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "
                 f"assigned_worker_budget={worker_budget or 'host default'}; "
                 f"idea: {one_paragraph_idea}"
             ),
         }
+        # The default worker contract is already embedded in ``message``. Map
+        # it to Codex's built-in no-config role: selecting the project-local
+        # role reloads config after model inheritance and can discard a
+        # runtime-only parent model before service-tier validation. An explicit
+        # ``default`` also prevents the orchestrator from inventing that custom
+        # role when projecting the returned payload. Non-default roles remain
+        # an explicit opt-in.
+        if worker_agent_type and worker_agent_type != "search_candidate_agent":
+            payload["agent_type"] = worker_agent_type
         if worker_launch:
             payload.update(
                 {
@@ -310,11 +346,12 @@ class CodexAdapter:
             raise UnsupportedHostCapability(
                 "codex continuation requires a bound task name or agent id"
             )
+        worker_contract = _codex_worker_contract(worker_prompt)
         payload: dict[str, Any] = {
             "tool": "followup_task",
             "target": target,
             "message": (
-                f"{CODEX_WORKER_BOUNDARY}\n\n"
+                f"{worker_contract}\n\n"
                 "continue_existing_agent_session=true; "
                 f"agent_session_id={agent_session_id}; "
                 f"candidate_id={candidate_id}; "
@@ -337,6 +374,9 @@ class ClaudeCodeAdapter:
         supports_trace_export=False,
         uses_background_workers=False,
     )
+
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_metadata_observability(session)
 
     def build_launch_payload(
         self,
@@ -433,6 +473,9 @@ class PiRpcAdapter:
             interrupt_tool="pi_search_pool_close",
         ),
     )
+
+    def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
+        return collect_pi_observability(session)
 
     def _budget_control(
         self,
