@@ -94,13 +94,15 @@ codex --model gpt-5.5 -c 'model_reasoning_effort="medium"'
 ```
 
 Paste `../prompts/codex-gp-single-lane.txt`. The prompt begins with
-`/goal-plus mode=autonomous` and requires:
+`/goal-plus mode=autonomous`, prepends the Goal Plus orchestration contract to
+the complete unchanged native AutoResearch prompt, and requires:
 
 - `budget.max_candidates=1` and `budget.max_parallel=1`;
-- one 7200-second initial Codex worker dispatch;
+- one candidate workspace and a full two-hour worker window;
 - same-agent continuation through `search_continue_agent_session` and
-  `followup_task` when the worker returns early;
-- same-candidate redispatch only if native continuation is unavailable;
+  `followup_task` whenever the worker returns early;
+- same-candidate redispatch only if the original native agent handle is
+  irrecoverably unavailable after interruption;
 - no technical direction from the main agent beyond evaluation-contract and
   lifecycle enforcement.
 

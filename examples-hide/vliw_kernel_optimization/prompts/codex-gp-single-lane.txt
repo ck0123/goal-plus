@@ -1,9 +1,37 @@
-/goal-plus mode=autonomous Optimize only solution.py to minimize score_cycles while preserving complete correctness and generality. Use python3 runner.py and the public verifier as the evaluation basis; do not inspect files outside this repository, use network access, hard-code public or hidden seeds, or modify problem.py, runner.py, verifier.py, tests, or test cases.
+/goal-plus mode=autonomous Run a controlled single-AutoResearch experiment for exactly one Codex candidate lane. The Goal Plus main agent is an orchestration shell only: it may discover and freeze the public evaluation contract, create the isolated candidate workspace, launch or resume the worker, enforce the two-hour budget, record verifier evidence, and perform final selection/reporting/promotion. It must not edit solution.py, propose implementation ideas, choose technical directions, summarize alternative approaches for the worker, or launch additional research candidates.
 
-This is a controlled single-lane Codex plus Goal Plus ablation. Freeze one Search run with budget.max_candidates=1 and budget.max_parallel=1. Start exactly one Codex candidate workspace and give its initial worker dispatch worker_budget.max_runtime_seconds=7200. The candidate worker owns the technical research strategy end to end. The main agent must not propose implementation directions, summarize alternative technical ideas for it, or create additional candidates.
+Freeze exactly one Search run with budget.max_candidates=1 and budget.max_parallel=1. Plan and start exactly one candidate workspace. Start exactly one Codex candidate subagent with worker_budget.max_runtime_seconds=7200. The two-hour experiment window begins when that subagent is first launched. The candidate subagent owns all technical analysis, planning, implementation, experimentation, rollback, and bottleneck reassessment end to end.
 
-Measure a two-hour worker experiment beginning when the candidate worker is first launched. If that worker returns before the two-hour experiment window has elapsed and the objective remains open, call search_continue_agent_session for the same agent_session_id with the remaining runtime budget and invoke the returned followup_task. Use only this neutral continuation directive: "Continue autonomously optimizing solution.py." Do not call search_plan_next to replace it or create another candidate.
+Use the entire two-hour worker window. If the subagent returns before 7200 seconds have elapsed for any non-infrastructure reason, do not accept that as completion and do not create a new candidate. Call search_continue_agent_session for the same agent_session_id with the remaining runtime budget, then invoke the returned followup_task. The follow-up directive must contain no technical content and must be exactly: "Continue autonomously optimizing solution.py."
 
-If native same-worker continuation is no longer available, call search_redispatch_candidate for the same candidate workspace with the remaining runtime budget and the same neutral directive. This is recovery of one lane, not a new research direction. Repeat continuation or same-candidate redispatch as necessary until the two-hour worker window is exhausted, a confirmed infrastructure fault requires stopping, or the worker provides concrete verifier-backed evidence that no materially promising direction remains.
+Repeat same-agent continuation whenever necessary until the two-hour window expires. Use search_redispatch_candidate only if the original native Codex agent handle is irrecoverably unavailable after an interruption; redispatch only the same candidate workspace with the remaining budget and the same neutral directive. Treat this solely as recovery of the single AutoResearch lane, never as a new direction or another candidate.
 
-The worker should call search_run_verifier after meaningful solution.py changes and retain the best correct verifier-backed artifact. The main agent should only enforce the frozen evaluation contract, worker lifecycle and remaining budget; it must not manage the candidate's technical content. After the worker window closes, run the main final verification, select the sole candidate's best eligible iteration, report, promote, and complete the Goal Plus audit.
+The candidate should call search_run_verifier after meaningful solution.py changes and retain its best correct verifier-backed artifact. Required main-agent bookkeeping or verification must not become technical guidance. After the two-hour worker window closes, drain the worker, run the main final verification, select the sole candidate's best eligible iteration, report, promote, and complete the Goal Plus audit.
+
+Deliver the following worker task to the single candidate subagent without adding, removing, or paraphrasing its technical instructions. In the worker task, "Do not use Goal Plus or subagents" applies to the candidate worker itself; it does not prohibit the main agent from performing the Goal Plus orchestration defined above.
+
+Optimize solution.py as much as possible to minimize the cycle count reported by `python3 runner.py`, while preserving complete correctness.
+
+Work autonomously and continuously. Do not use Goal Plus or subagents, and do not ask me to choose directions. Do not inspect anything outside the current repository.
+
+Read problem.py, runner.py, and solution.py first. Repeatedly analyze the current bottleneck, implement an experiment, run the evaluator, interpret the result, and continue from the strongest available implementation.
+
+For observability, before every material experiment, print a concise `Decision` update containing:
+
+- the current measured result and observed bottleneck
+- the concrete hypothesis being tested
+- the proposed code change and expected cycle impact
+- why this experiment is preferable to the main alternatives
+
+After every experiment, print a concise `Result` update containing:
+
+- measured cycles and correctness
+- comparison with the best result so far
+- what the result teaches you
+- whether you will keep, revert, or build further on the change
+
+These should be concrete decision summaries based on code and measurements, not fabricated private chain-of-thought.
+
+Do not stop after describing an idea: implement and measure it. Do not stop merely because several experiments fail. If progress stalls, perform a deeper critical-path, instruction-slot, dependency, register/scratch-pressure, and theoretical lower-bound analysis, then try a materially different high-potential direction.
+
+Keep track of the best correct implementation yourself. Before finishing, restore the best version of solution.py and run `python3 runner.py` one final time.
