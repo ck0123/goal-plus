@@ -180,7 +180,7 @@ After verification and reporting:
 
 ```text
 .gp/runs/<run_id>/report.md
-.gp/runs/<run_id>/candidates/<candidate_id>/logs/k_module_score.log
+.gp/runs/<run_id>/candidates/<candidate_id>/logs/iteration-*-k_module_score-*.log
 ```
 
 After promotion:
