@@ -10,7 +10,6 @@ benchmarks/data/
 benchmarks/reports/
 benchmarks/runs/
 .tmp/
-.examples-hide/
 docs/superpowers/
 .superpowers/
 .opencode/node_modules/

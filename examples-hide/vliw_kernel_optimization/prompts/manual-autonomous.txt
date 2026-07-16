@@ -1,0 +1,25 @@
+Optimize solution.py as much as possible to minimize the cycle count reported by `python3 runner.py`, while preserving complete correctness.
+
+Work autonomously and continuously. Do not use Goal Plus or subagents, and do not ask me to choose directions. Do not inspect anything outside the current repository.
+
+Read problem.py, runner.py, and solution.py first. Repeatedly analyze the current bottleneck, implement an experiment, run the evaluator, interpret the result, and continue from the strongest available implementation.
+
+For observability, before every material experiment, print a concise `Decision` update containing:
+
+- the current measured result and observed bottleneck
+- the concrete hypothesis being tested
+- the proposed code change and expected cycle impact
+- why this experiment is preferable to the main alternatives
+
+After every experiment, print a concise `Result` update containing:
+
+- measured cycles and correctness
+- comparison with the best result so far
+- what the result teaches you
+- whether you will keep, revert, or build further on the change
+
+These should be concrete decision summaries based on code and measurements, not fabricated private chain-of-thought.
+
+Do not stop after describing an idea: implement and measure it. Do not stop merely because several experiments fail. If progress stalls, perform a deeper critical-path, instruction-slot, dependency, register/scratch-pressure, and theoretical lower-bound analysis, then try a materially different high-potential direction.
+
+Keep track of the best correct implementation yourself. Before finishing, restore the best version of solution.py and run `python3 runner.py` one final time.
