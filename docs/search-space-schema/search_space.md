@@ -1,6 +1,6 @@
 # 面向开放式 Agentic Search 的搜索图式诱导与事务化协调
 
-## 背景、核心矛盾、方案设想与框架设计
+> 背景、核心矛盾、方案设想与框架设计
 
 ## 0. 核心摘要
 
@@ -17,11 +17,11 @@
 
 因此，我们设想的第三种路径不是再设计一个更复杂的搜索控制器，而是引入两个核心机制：
 
-### 1. Search Schema Induction：搜索图式诱导
+### 0.1 Search Schema Induction：搜索图式诱导
 
 使用一套跨场景通用的干预元语法，由 LLM 根据具体任务诱导领域本体和运行时搜索图式；每次搜索尝试被编译为结构化、多视图的 Search Footprint。空间表示不是预先固定的，也不是 LLM 一次性生成的，而是随着实验结果不断被拆分、合并和修订。
 
-### 2. Transactional Search Coordination：事务化搜索协调
+### 0.2 Transactional Search Coordination：事务化搜索协调
 
 多个 Agent 可以并行生成方案，但方案不能直接执行。每个方案必须以 `AtomicPlan` 的形式，针对某一版本的共享 Search State 提交；只有经过审核、冲突检测和原子预留后才能进入执行。执行结果经 verifier 验证后，再通过独立的 `EvidenceCommit` 原子写入共享状态。
 
@@ -35,15 +35,15 @@
 
 ---
 
-# 1. 背景
+## 1. 背景
 
-## 1.1 问题范围
+### 1.1 问题范围
 
 这里讨论的对象可以统一称为：
 
-# Evaluator-Guided Agentic Optimization
-
-# 评价器引导的智能体优化
+> **Evaluator-Guided Agentic Optimization**
+>
+> **评价器引导的智能体优化**
 
 系统中存在：
 
@@ -74,9 +74,9 @@ $$
 
 ---
 
-## 1.2 当前两种主要范式
+### 1.2 当前两种主要范式
 
-### 范式一：Model-Driven Loop
+#### 1.2.1 范式一：Model-Driven Loop
 
 基本假设是：
 
@@ -109,7 +109,7 @@ $$
 
 ---
 
-### 范式二：Algorithm-Guided Agent Search
+#### 1.2.2 范式二：Algorithm-Guided Agent Search
 
 这类方法将 LLM 放入显式搜索算法中：
 
@@ -153,7 +153,7 @@ LLM 负责：
 
 ---
 
-## 1.3 当前项目所处的位置
+### 1.3 当前项目所处的位置
 
 当前 `agentic-any-search-mcp` 已经形成了一个适合承载该研究问题的基础运行时：
 
@@ -197,9 +197,9 @@ LLM 负责：
 
 ---
 
-# 2. 核心矛盾
+## 2. 核心矛盾
 
-## 2.1 Model Intelligence 不等于 Search Intelligence
+### 2.1 Model Intelligence 不等于 Search Intelligence
 
 这里不是说当前模型能力没有增强。
 
@@ -239,7 +239,7 @@ $$
 
 ---
 
-## 2.2 并发数量与边际覆盖之间的矛盾
+### 2.2 并发数量与边际覆盖之间的矛盾
 
 理想情况下，启动 $N$ 个并发 worker，应当让它们探索 $N$ 个不同且有价值的区域。
 
@@ -260,11 +260,11 @@ $$
 
 这会产生两类碰撞：
 
-### Spatial Collision
+#### 2.2.1 Spatial Collision
 
 多个并发 rollout 同时探索相似区域。
 
-### Temporal Collision
+#### 2.2.2 Temporal Collision
 
 单个 loop 在不同时间反复尝试语义近似的方向。
 
@@ -276,7 +276,7 @@ $$
 
 ---
 
-## 2.3 开放性与可表示性之间的矛盾
+### 2.3 开放性与可表示性之间的矛盾
 
 Model-driven loop 的优势是无需预先定义空间。
 
@@ -305,7 +305,7 @@ Model-driven loop 的优势是无需预先定义空间。
 
 ---
 
-## 2.4 自然语言表达能力与空间可比性之间的矛盾
+### 2.4 自然语言表达能力与空间可比性之间的矛盾
 
 Agent 可以说：
 
@@ -364,7 +364,7 @@ $$
 
 ---
 
-## 2.5 Meta-Agent 与递归偏置之间的矛盾
+### 2.5 Meta-Agent 与递归偏置之间的矛盾
 
 一种直觉方案是：
 
@@ -403,7 +403,7 @@ search-strategy space
 
 ---
 
-## 2.6 Solution State 与 Search State 之间的矛盾
+### 2.6 Solution State 与 Search State 之间的矛盾
 
 当前很多 loop 只更新当前最优解：
 
@@ -453,9 +453,9 @@ $$
 
 ---
 
-# 3. 我们的方案设想
+## 3. 我们的方案设想
 
-## 3.1 核心判断
+### 3.1 核心判断
 
 我们不是要设计一种新的固定搜索算法，也不是要让 Agent 自由生成一个不可审计的搜索空间。
 
@@ -483,7 +483,7 @@ $$
 
 ---
 
-## 3.2 Search State 的定义
+### 3.2 Search State 的定义
 
 共享 Search State 可以表示为：
 
@@ -521,9 +521,9 @@ Search State 不是：
 
 ---
 
-## 3.3 Search Schema Induction
+### 3.3 Search Schema Induction
 
-### 3.3.1 一套通用 Meta-Grammar
+#### 3.3.1 一套通用 Meta-Grammar
 
 不同场景不应各自拥有完全不同的 meta-template。
 
@@ -557,7 +557,7 @@ $$
 
 ---
 
-### 3.3.2 Domain Ontology 是场景相关的
+#### 3.3.2 Domain Ontology 是场景相关的
 
 不同领域变化的是 ontology，而不是最上层元语法。
 
@@ -603,7 +603,7 @@ $$
 
 ---
 
-### 3.3.3 Run-Specific Schema 是动态的
+#### 3.3.3 Run-Specific Schema 是动态的
 
 即使在同一个领域，不同任务的重要维度也不同。
 
@@ -637,11 +637,11 @@ shape regime × tiling
 
 ---
 
-## 3.4 Event 是事实，Schema 是解释
+### 3.4 Event 是事实，Schema 是解释
 
 整个方案中最重要的边界是：
 
-# Events are permanent; abstractions are provisional.
+> **Events are permanent; abstractions are provisional.**
 
 中文即：
 
@@ -682,7 +682,7 @@ Agent 的描述不能直接成为 verified fact。
 
 ---
 
-## 3.5 一个事件可以位于多个空间视图中
+### 3.5 一个事件可以位于多个空间视图中
 
 开放式搜索不适合强制：
 
@@ -724,7 +724,7 @@ $$
 
 ---
 
-## 3.6 Declared Footprint 与 Realized Footprint
+### 3.6 Declared Footprint 与 Realized Footprint
 
 执行前，Agent 只能声明自己打算做什么：
 
@@ -760,7 +760,7 @@ unclassifiable
 
 ---
 
-## 3.7 正交性的重新定义
+### 3.7 正交性的重新定义
 
 “正交”不能被定义为：
 
@@ -771,9 +771,9 @@ unclassifiable
 
 更准确的定义是：
 
-# Schema-Relative Marginal Non-Redundancy
-
-# 相对于当前图式的边际非冗余性
+> **Schema-Relative Marginal Non-Redundancy**
+>
+> **相对于当前图式的边际非冗余性**
 
 两个方案的重合关系应写成：
 
@@ -819,7 +819,7 @@ $$
 
 ---
 
-## 3.8 Search-Time Learning
+### 3.8 Search-Time Learning
 
 这里的“学习”首先不是模型训练。
 
@@ -847,7 +847,7 @@ $$
 
 这可以称为：
 
-# Within-Task Search-Time Learning
+> **Within-Task Search-Time Learning**
 
 它比 `plans.md` 更严格，因为 plan 只是接下来做什么，而 Search State 需要表达：
 
@@ -861,9 +861,9 @@ $$
 
 ---
 
-# 4. 框架设计
+## 4. 框架设计
 
-## 4.1 总体架构
+### 4.1 总体架构
 
 ```text
                     SearchSpec + Artifact + Verifier
@@ -906,9 +906,9 @@ $$
 
 ---
 
-## 4.2 核心数据对象
+### 4.2 核心数据对象
 
-### 1. `SearchEvent`
+#### 4.2.1 `SearchEvent`
 
 不可修改的执行事实：
 
@@ -926,7 +926,7 @@ provenance
 
 ---
 
-### 2. `SearchSchema`
+#### 4.2.2 `SearchSchema`
 
 当前任务对空间的解释：
 
@@ -943,7 +943,7 @@ Schema 可以变化，Event 不变。
 
 ---
 
-### 3. `SearchState`
+#### 4.2.3 `SearchState`
 
 共享的官方状态：
 
@@ -961,7 +961,7 @@ budget
 
 ---
 
-### 4. `AtomicPlan`
+#### 4.2.4 `AtomicPlan`
 
 一个基于特定 state version 的搜索事务：
 
@@ -981,7 +981,7 @@ budget request
 
 ---
 
-### 5. `Reservation`
+#### 4.2.5 `Reservation`
 
 AtomicPlan 被接受后，对其搜索区域进行临时占位：
 
@@ -995,7 +995,7 @@ expiry or lifecycle reference
 
 ---
 
-### 6. `EvidenceCommit`
+#### 4.2.6 `EvidenceCommit`
 
 执行结束后提交：
 
@@ -1011,7 +1011,7 @@ schema revision proposal
 
 ---
 
-## 4.3 AtomicPlan 的事务语义
+### 4.3 AtomicPlan 的事务语义
 
 Agent 首先读取：
 
@@ -1060,11 +1060,11 @@ accepted_with_reclassification
 
 ---
 
-## 4.4 系统审核的内容
+### 4.4 系统审核的内容
 
 Plan admission 至少检查四类问题。
 
-### Freshness
+#### 4.4.1 Freshness
 
 Plan 是否基于仍然兼容的 Search State？
 
@@ -1076,7 +1076,7 @@ Plan 是否基于仍然兼容的 Search State？
 
 ---
 
-### Admissibility
+#### 4.4.2 Admissibility
 
 由确定性 runtime 检查：
 
@@ -1090,7 +1090,7 @@ Plan 是否基于仍然兼容的 Search State？
 
 ---
 
-### Conflict and Overlap
+#### 4.4.3 Conflict and Overlap
 
 根据当前 Search Schema 判断：
 
@@ -1101,7 +1101,7 @@ Plan 是否基于仍然兼容的 Search State？
 
 ---
 
-### Marginal Contribution
+#### 4.4.4 Marginal Contribution
 
 一个 Plan 至少应当明确带来一种价值：
 
@@ -1124,9 +1124,9 @@ $$
 
 ---
 
-## 4.5 LLM 与 Runtime 的职责边界
+### 4.5 LLM 与 Runtime 的职责边界
 
-### LLM 负责
+#### 4.5.1 LLM 负责
 
 * 将自然语言 proposal 编译成 typed Search IR；
 * 初始化 domain ontology；
@@ -1135,7 +1135,7 @@ $$
 * 提议 schema split、merge 或新维度；
 * 根据 Search State 生成下一步 hypothesis。
 
-### Runtime 负责
+#### 4.5.2 Runtime 负责
 
 * state version；
 * durable storage；
@@ -1156,7 +1156,7 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 ---
 
-## 4.6 可见性规则
+### 4.6 可见性规则
 
 并发 Agent 不需要看到彼此完整的 chain-of-thought、草稿或临时代码。
 
@@ -1164,14 +1164,14 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 更合理的规则是：
 
-### 私有
+#### 4.6.1 私有
 
 * 未提交 proposal；
 * rollout 内部推理；
 * 临时代码；
 * 未验证结论。
 
-### 共享
+#### 4.6.2 共享
 
 * 已提交 AtomicPlan；
 * active reservation；
@@ -1187,7 +1187,7 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 ---
 
-## 4.7 EvidenceCommit
+### 4.7 EvidenceCommit
 
 执行完成后，worker 不能直接修改官方 Search State。
 
@@ -1216,9 +1216,9 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 ---
 
-## 4.8 并发与单链的统一
+### 4.8 并发与单链的统一
 
-### 并发模式
+#### 4.8.1 并发模式
 
 多个 Agent 可以并行起草 proposal，但它们必须逐个提交 AtomicPlan。
 
@@ -1238,7 +1238,7 @@ Evidence commits serialize
 
 ---
 
-### 单链模式
+#### 4.8.2 单链模式
 
 当 `max_parallel = 1` 时，同一个协议仍然成立：
 
@@ -1266,11 +1266,11 @@ read SearchState
 
 ---
 
-## 4.9 Schema 的动态拆分、合并与重索引
+### 4.9 Schema 的动态拆分、合并与重索引
 
 Search Schema 不能无限膨胀，也不能永远保持初始粒度。
 
-### 需要拆分的信号
+#### 4.9.1 需要拆分的信号
 
 * 同一节点内部 outcome 高度多峰；
 * 相同标签下出现相反结果；
@@ -1278,7 +1278,7 @@ Search Schema 不能无限膨胀，也不能永远保持初始粒度。
 * 一个新的 context 变量显著改变结果；
 * 该节点内部仍存在大量搜索碰撞。
 
-### 可以合并的信号
+#### 4.9.2 可以合并的信号
 
 * 两个节点 outcome 分布接近；
 * 区分它们不能改变下一步决策；
@@ -1297,13 +1297,13 @@ LLM 可以提出：
 
 因此，图式优化的标准不是“语义上看起来更漂亮”，而是：
 
-# Decision Sufficiency
-
-# 对搜索决策是否足够有用
+> **Decision Sufficiency**
+>
+> **对搜索决策是否足够有用**
 
 ---
 
-# 5. 与当前 Runtime 的衔接
+## 5. 与当前 Runtime 的衔接
 
 当前 runtime 的边界不需要被推翻。
 
@@ -1319,7 +1319,7 @@ search state / workspace / verifier / score / report
 
 建议的变化集中在 control plane。
 
-## 当前流程
+### 5.1 当前流程
 
 ```text
 plan_next
@@ -1329,7 +1329,7 @@ plan_next
 → run_verifier
 ```
 
-## 建议流程
+### 5.2 建议流程
 
 ```text
 read_search_state
@@ -1365,11 +1365,11 @@ read_search_state
 
 ---
 
-# 6. 研究范围与第一阶段目标
+## 6. 研究范围与第一阶段目标
 
 第一阶段建议明确收窄为：
 
-## Within-Task Evaluator-Guided Search
+> **Within-Task Evaluator-Guided Search**
 
 暂时不要求：
 
@@ -1385,7 +1385,7 @@ read_search_state
 
 ---
 
-## 6.1 关键 Baseline
+### 6.1 关键 Baseline
 
 可以比较：
 
@@ -1401,23 +1401,23 @@ read_search_state
 
 ---
 
-## 6.2 关键指标
+### 6.2 关键指标
 
-### 搜索效果
+#### 6.2.1 搜索效果
 
 * best score；
 * best-score AUC；
 * post-stagnation improvement；
 * escape rate。
 
-### 搜索效率
+#### 6.2.2 搜索效率
 
 * token / evaluator call；
 * 单位计算的 score improvement；
 * 单位计算的 information gain；
 * marginal coverage per rollout。
 
-### 重复与覆盖
+#### 6.2.3 重复与覆盖
 
 * declared overlap；
 * realized overlap；
@@ -1425,7 +1425,7 @@ read_search_state
 * active plan collision rate；
 * serial repeated-attempt rate。
 
-### Schema 质量
+#### 6.2.4 Schema 质量
 
 * 对 outcome 的预测能力；
 * 对 plan collision 的预测能力；
@@ -1433,7 +1433,7 @@ read_search_state
 * declared footprint 与 realized footprint 的一致性；
 * schema complexity。
 
-### 事务化开销
+#### 6.2.5 事务化开销
 
 * Plan rejection rate；
 * rebase rate；
@@ -1443,9 +1443,9 @@ read_search_state
 
 ---
 
-# 7. 已知边界与开放问题
+## 7. 已知边界与开放问题
 
-## 7.1 Schema Induction 本身仍有模型偏置
+### 7.1 Schema Induction 本身仍有模型偏置
 
 LLM 可能：
 
@@ -1463,7 +1463,7 @@ LLM 可能：
 
 ---
 
-## 7.2 正交性不是客观真理
+### 7.2 正交性不是客观真理
 
 两个方案是否冗余依赖：
 
@@ -1479,7 +1479,7 @@ LLM 可能：
 
 ---
 
-## 7.3 过度去重可能破坏 exploitation
+### 7.3 过度去重可能破坏 exploitation
 
 一个有效方向通常值得重复优化。
 
@@ -1496,7 +1496,7 @@ LLM 可能：
 
 ---
 
-## 7.4 评价器决定了可学习边界
+### 7.4 评价器决定了可学习边界
 
 如果 verifier：
 
@@ -1512,7 +1512,7 @@ LLM 可能：
 
 ---
 
-## 7.5 跨任务迁移暂不作为必要条件
+### 7.5 跨任务迁移暂不作为必要条件
 
 Run-specific Search Schema 首先服务当前任务。
 
@@ -1534,17 +1534,17 @@ Run-specific Search Schema 首先服务当前任务。
 
 ---
 
-# 8. 最终定位
+## 8. 最终定位
 
 整个方案可以被概括为两个相互依赖、但逻辑上分离的模块。
 
-## Search Schema Induction
+### 8.1 Search Schema Induction
 
 解决：
 
 > 开放式任务中，“搜索空间是什么”以及“哪些差异值得被表示”如何在线形成。
 
-## Transactional Search Coordination
+### 8.2 Transactional Search Coordination
 
 解决：
 
@@ -1558,7 +1558,7 @@ Run-specific Search Schema 首先服务当前任务。
 
 ---
 
-## 最凝练的核心论点
+### 8.3 最凝练的核心论点
 
 > 当前 Agentic Search 通常只维护 solution history，而没有维护一个显式、共享、可修订的 search-space model。因此，由同一模型和 harness 产生的 rollout 容易在并发上重复、在单链上停滞。我们提出搜索图式诱导：使用统一干预元语法、LLM 诱导的领域 ontology 和运行时动态 schema，将每次尝试表示为基于事实事件的多视图 Search Footprint；空间节点不是永久事实，而是可以随证据拆分、合并和重索引的决策抽象。在此基础上，我们提出事务化搜索协调：Agent 可以并行生成方案，但 AtomicPlan 只有在针对版本化共享 Search State 完成审核、原子准入和 footprint reservation 后才能执行；验证后的结果再通过 EvidenceCommit 原子写入状态。Solution 可以回退，但 Search State 持续积累。
 
