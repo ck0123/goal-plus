@@ -58,6 +58,7 @@ therefore stored under `.gp/host-pools/pi/`, separate from run records.
     agent_sessions/<agent_session_id>.json
     workspace/<candidate_id>/
     report.md
+    report.html
     promotion/<candidate_id>.patch
   host-pools/pi/
 ```

@@ -13,6 +13,7 @@ benchmarks/runs/
 /output/
 docs/superpowers/
 .superpowers/
+.superdesign/tmp/
 .opencode/node_modules/
 .opencode/package.json
 .opencode/package-lock.json
@@ -24,3 +25,4 @@ docs/superpowers/
 dist/
 build/
 *.egg-info/
+.superdesign/

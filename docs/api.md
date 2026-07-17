@@ -92,7 +92,10 @@ must use the returned `launch` object. A one-dispatch `worker_budget` can be
 passed to initial launch, continuation, or redispatch without mutating the
 frozen spec.
 
-`search_get_agent_observability` has one versioned cross-host schema. Codex
+`search_get_agent_observability` has one versioned cross-host schema. Schema
+version 2 adds `execution.provider` and `usage.processed_tokens`; Pi processed
+tokens include input, cache read/write, and output tokens, while Codex uses its
+native total-token counter because cached input is already included. Codex
 reads its native subagent session JSONL (bound by `SubagentStop` or discovered
 from the unique task name); Pi normalizes `metadata.pi_metrics`. OpenCode and
 Claude Code expose the portable evidence already bound to their handles. The
@@ -100,6 +103,18 @@ call never returns prompt, reasoning, tool arguments, or tool output content,
 and never waits for or controls a worker. `goal_plus_monitor_snapshot` embeds
 the same object under each `subagents[].observability` while retaining legacy
 Pi fields for backward compatibility.
+
+`goal_plus_monitor_snapshot.statistics` is the unified statistical view. Its
+selected-run payload reports baseline/target improvement, success rates,
+stable terminal duration, time to first verifier/success, worker outcome and
+model/provider distributions, candidate lineage, selection survival,
+worker-vs-parent verifier counts, promotion report evidence, normalized usage,
+efficiency, and data-completeness gaps.
+When a Codex Goal Plus transcript is bound, `statistics.orchestrator` reports a
+content-free usage delta since Goal Plus creation, and `statistics.total_usage`
+combines that delta with worker usage. Per-task statistics are also retained in
+`search_tasks[].statistics` and aggregated under
+`search_task_aggregate.statistics`.
 
 Worker handoffs remain one bounded protocol. `key_results` supplies feature
 ledger entries (artifact, code surface/change, portability/dependencies,
@@ -121,8 +136,24 @@ and `confidence`. Missing scope defaults to candidate-local. A worker's
 |---|---|
 | `search_run_verifier` | record a worker iteration, validate the existing inherited `workspace/results.tsv`, append exactly one row, and commit the ledger; workers pass `agent_session_id` plus a concise `hypothesis`, while parent final verification omits the session id |
 | `search_select` | restore ranked commits and select the first final-verifier passing state |
-| `search_report` | generate the run report |
-| `search_promote` | export the selected commit as a patch |
+| `search_report` | generate `report.md` and the self-contained `report.html`, returning both paths |
+| `search_promote` | export the selected commit as a patch and refresh an existing report to the promoted state |
+
+`report.html` is the complete Goal Plus audit view for the run passed to
+`search_report`. When that run belongs to a Goal Plus record, the page keeps
+every linked Search task separate and then provides a cross-task aggregate.
+Planning-round counts remain in normalized data but do not have a separate
+report panel. The report includes unified statistics,
+candidate/session/verifier evidence, normalized main-agent usage, explicit
+metric gaps, and one independent execution timeline for each Search task. The
+Goal Plus state is summarized at the top rather than repeated in a separate
+lifecycle panel. Each Search timeline is assembled from run creation,
+worker-session observability, verifier iterations, and promotion evidence.
+Worker bars use observed host start/end timestamps. Configured maximum or
+minimum budgets are not rendered as actual duration. The file has inline
+CSS/JavaScript only and is readable without a web server. `report.md` remains
+the stable text artifact. A recorded Goal Plus Search result persists both
+`report_path` and `html_report_path` when the HTML artifact exists.
 
 ## Pi Local Tools
 

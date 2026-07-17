@@ -388,6 +388,7 @@ class GoalPlusLinkedSearch(SearchModel):
     linked_at: str | None = None
     selected_candidate_id: str | None = None
     report_path: str | None = None
+    html_report_path: str | None = None
     promotion_artifact_path: str | None = None
     summary: str | None = None
     result_recorded_at: str | None = None

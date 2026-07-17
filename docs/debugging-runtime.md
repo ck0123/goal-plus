@@ -270,15 +270,31 @@ the top-level goal payload includes `goal_revision`, `goal_revisions_total`,
 `final_check_policy`, and `latest_final_check`, which are the first fields to
 inspect after an interrupted edit or reviewer run.
 `search_task_aggregate` totals task, planning-round, started-round, candidate,
-worker-session, verifier-run, and Pi cost counts. The selected task retains the
-detailed run, strategy, candidate, session, duration/cost/context, file-mtime,
-and stale/timed-out views.
+worker-session, verifier-run, and known cost counts. Its nested `statistics`
+also totals worker outcomes, worker-vs-parent process verifiers, promotion
+reports, target attainment, and normalized usage. The selected task retains
+the detailed run, strategy, candidate, session, duration/cost/context,
+file-mtime, and stale/timed-out views.
+
+Use top-level `statistics.selected_run` for the canonical per-run statistical
+view. It separates run age from stable terminal `observed_duration_seconds`,
+recovers revision-scoped baseline and target evidence from the Goal Plus event
+log, and reports success, timing, verifier provenance, model/provider mix,
+candidate lineage, selection survival, usage, efficiency, and missing data.
+Metrics requiring SearchEvent/footprint evidence, hardware telemetry, or
+historical promotion attempts remain explicit in `unavailable_metrics` rather
+than being guessed. `statistics.orchestrator` contains only normalized Codex
+counts and identity metadata, never transcript content;
+`statistics.total_usage` combines it with worker usage and preserves field
+coverage so a known subtotal is not mistaken for complete cost data.
 
 Each selected-run `subagents[]` entry also contains the versioned
 `observability` object. Query the same object directly with
 `search_get_agent_observability(agent_session_id)` when diagnosing one worker.
 Codex resolves native session JSONL metrics; Pi normalizes `pi_metrics`. Both
 paths omit prompt, reasoning, and tool payload bodies.
+`subagents[].verifier_count` and `session_verifier_count` are session-scoped;
+`candidate_verifier_count` is the candidate-wide total.
 
 Pi RPC workers use `--no-session` and do not support same-worker continuation.
 Normal Pi main-agent flow uses `pi_search_pool_continue`; the supervisor calls
@@ -310,8 +326,22 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     │   ├── results.tsv                           # committed, runtime-owned inherited append-only ledger
     │   └── <allowed_files>
     ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate/OpenCode binding, launch payload, counters
-    └── report.md / promotion/                    # final outputs
+    ├── report.md / report.html                   # text and self-contained audit reports
+    └── promotion/                                # selected patch outputs
 ```
+
+Calling `search_report` writes both report files. Open `report.html` directly
+for the coverage-aware statistical view, multi-Search breakdown,
+candidate/session tables, and timelines. Planning-round counts remain available
+in normalized data but are not rendered as a separate panel. The Goal Plus
+state appears in the report summary; there is no separate lifecycle panel.
+Every Search task uses an independent execution scale: worker spans come from
+normalized host observability, while verifier and promotion markers come from
+candidate evidence. Configured worker budgets are limits rather than observed
+durations and do not determine bar width. An endpoint derived from a duration
+or last session update is labeled as inferred. The embedded complete normalized
+report data contains statistics and evidence metadata, not raw prompt,
+reasoning, or tool payload bodies.
 
 Failed process verifiers with `feedback_policy=visible_to_workers` return
 bounded `stdout_tail` and `stderr_tail` metrics to the caller. Complete output

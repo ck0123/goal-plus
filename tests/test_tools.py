@@ -289,7 +289,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert iterations[1]["score"] == 0.7
     runtime.list_iterations.assert_called_once_with("run_1", "c001")
     assert tools.search_select("run_1") == {"selected_candidate_id": "c001"}
-    assert tools.search_report("run_1") == {"report_path": "/tmp/report.md"}
+    assert tools.search_report("run_1") == {
+        "report_path": "/tmp/report.md",
+        "html_report_path": "/tmp/report.html",
+    }
     assert tools.search_promote("run_1", "c001") == {"artifact_path": "/tmp/c001.patch"}
 
     proposal_arg = runtime.start_batch.call_args.args[2][0]

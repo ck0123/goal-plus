@@ -1826,6 +1826,7 @@ class FileSearchRuntime:
         lines = [
             f"# Search Report: {run_id}",
             "",
+            "- HTML report: [report.html](report.html)",
             f"- Frozen spec: `{frozen.frozen_spec_id}`",
             f"- State: `{run.state}`",
             f"- Source run: `{run.source_run_id}`",
@@ -2003,6 +2004,9 @@ class FileSearchRuntime:
         lines.append("")
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
+        from goal_plus.reporting import write_html_report
+
+        write_html_report(self.root_dir, run_id, report_path.with_suffix(".html"))
         return report_path
 
     def promote(self, run_id: str, candidate_id: str) -> Path:
@@ -2121,6 +2125,9 @@ class FileSearchRuntime:
             run.state = RunState.PROMOTED
             run.selected_candidate_id = candidate_id
             self._write_run(run)
+        report_path = self._run_dir(run_id) / "report.md"
+        if report_path.exists():
+            self.report(run_id)
         return patch_path
 
     def _strategy_mode(self, strategy: StrategySpec) -> str:

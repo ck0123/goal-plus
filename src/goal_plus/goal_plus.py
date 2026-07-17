@@ -165,6 +165,7 @@ _SEARCH_TASK_FIELDS = (
     "linked_at",
     "selected_candidate_id",
     "report_path",
+    "html_report_path",
     "promotion_artifact_path",
     "summary",
     "result_recorded_at",
@@ -642,6 +643,7 @@ class FileGoalPlusRuntime:
             )
         selected_candidate_id = str(runtime_selected_candidate_id)
         report_path = self._canonical_report_path(run_id, report_path)
+        html_report_path = self._canonical_html_report_path(run_id)
         promotion_artifact_path = self._canonical_promotion_artifact_path(
             run_id,
             selected_candidate_id,
@@ -657,6 +659,7 @@ class FileGoalPlusRuntime:
                 "run_id": run_id,
                 "selected_candidate_id": selected_candidate_id,
                 "report_path": report_path,
+                "html_report_path": html_report_path,
                 "promotion_artifact_path": promotion_artifact_path,
                 "summary": summary,
                 "result_recorded_at": now,
@@ -701,6 +704,12 @@ class FileGoalPlusRuntime:
         if report_path.exists():
             return str(report_path.resolve())
         return fallback
+
+    def _canonical_html_report_path(self, run_id: str) -> str | None:
+        report_path = self.root_dir / "runs" / run_id / "report.html"
+        if report_path.exists():
+            return str(report_path.resolve())
+        return None
 
     def _canonical_promotion_artifact_path(
         self,

@@ -67,6 +67,8 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
                 },
                 "raw_logging": False,
                 "pi_metrics": {
+                    "provider": "openai-codex",
+                    "model": "gpt-5.6-luna",
                     "duration_seconds": 12.5,
                     "usage_delta": {
                         "assistantMessages": 2,
@@ -85,6 +87,8 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
                         "costTotal": 0.18,
                     },
                     "session_stats": {
+                        "toolCalls": 5,
+                        "toolResults": 5,
                         "contextUsage": {
                             "tokens": 12345,
                             "contextWindow": 272000,
@@ -159,7 +163,17 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert subagent["liveness"] == "evaluated"
     assert subagent["observability"]["source"] == "pi_metrics"
     assert subagent["observability"]["usage"]["cost_usd"] == 0.18
+    assert subagent["observability"]["usage"]["processed_tokens"] == 260
+    assert subagent["observability"]["usage"]["tool_calls"] == 5
     assert subagent["observability"]["context"]["tokens"] == 12345
+
+    statistics = snapshot["statistics"]["selected_run"]
+    assert statistics["workers"]["models"] == {"gpt-5.6-luna": 1}
+    assert statistics["workers"]["providers"] == {"openai-codex": 1}
+    assert statistics["workers"]["productive_sessions"] == 1
+    assert statistics["verifiers"]["process_runs"] == 1
+    assert statistics["verifiers"]["worker_process_runs"] == 1
+    assert statistics["usage"]["processed_tokens"] == 260
 
     assert snapshot["candidates"][second.candidate_id]["status"] == "created"
     assert snapshot["candidates"][second.candidate_id]["agent_session_count"] == 0
@@ -195,6 +209,35 @@ def test_goal_plus_monitor_snapshot_does_not_attach_unlinked_latest_run(
     assert snapshot["candidates"] == {}
     assert not any(warning["kind"] == "inferred_latest_run" for warning in snapshot["warnings"])
     assert unrelated_run_id is not None
+
+
+def test_goal_plus_monitor_snapshot_keeps_session_and_candidate_verifier_counts_separate(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime_root = tmp_path / ".search"
+    runtime = FileSearchRuntime(runtime_root)
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    first = runtime.start_agent_session(run_id, task.candidate_id)
+    second = runtime.redispatch_candidate(run_id, task.candidate_id)
+    runtime.run_verifier(
+        run_id,
+        task.candidate_id,
+        agent_session_id=second.agent_session_id,
+    )
+
+    snapshot = goal_plus_monitor_snapshot(root_dir=runtime_root, run_id=run_id)
+    by_session = {
+        subagent["agent_session_id"]: subagent for subagent in snapshot["subagents"]
+    }
+
+    assert by_session[first.agent_session_id]["verifier_count"] == 0
+    assert by_session[first.agent_session_id]["candidate_verifier_count"] == 1
+    assert by_session[second.agent_session_id]["verifier_count"] == 1
+    assert by_session[second.agent_session_id]["candidate_verifier_count"] == 1
 
 
 def test_goal_plus_monitor_snapshot_aggregates_multiple_search_tasks(
@@ -239,7 +282,20 @@ def test_goal_plus_monitor_snapshot_aggregates_multiple_search_tasks(
         "worker_mode": "agent-session-pool",
         "worker_host": "pi-rpc",
     }
-    assert snapshot["search_task_aggregate"] == {
+    aggregate = snapshot["search_task_aggregate"]
+    assert {
+        key: aggregate[key]
+        for key in (
+            "search_tasks_total",
+            "planning_rounds_total",
+            "started_rounds_total",
+            "candidates_total",
+            "candidates_evaluated",
+            "worker_sessions_total",
+            "verifier_runs_total",
+            "estimated_cost_total",
+        )
+    } == {
         "search_tasks_total": 2,
         "planning_rounds_total": 2,
         "started_rounds_total": 1,
@@ -249,6 +305,8 @@ def test_goal_plus_monitor_snapshot_aggregates_multiple_search_tasks(
         "verifier_runs_total": 0,
         "estimated_cost_total": 0.0,
     }
+    assert aggregate["statistics"]["runs_total"] == 2
+    assert aggregate["statistics"]["workers"]["sessions_total"] == 0
     assert snapshot["run"]["run_id"] == second_run_id
     assert snapshot["run"]["planning_rounds_total"] == 1
     assert snapshot["run"]["started_rounds_total"] == 1

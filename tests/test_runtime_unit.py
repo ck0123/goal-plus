@@ -1046,8 +1046,15 @@ def test_promote_patch_round_trips_file_without_trailing_newline(tmp_path: Path)
     workspace.joinpath("initial_program.py").write_bytes(b"VALUE = 1")
     assert runtime.run_verifier(run_id, candidate_id).process_passed is True
     runtime.select(run_id)
+    report_path = runtime.report(run_id)
+    html_report_path = report_path.with_suffix(".html")
+    assert "[report.html](report.html)" in report_path.read_text(encoding="utf-8")
+    assert html_report_path.is_file()
+    assert "- State: `ready_to_promote`" in report_path.read_text(encoding="utf-8")
 
     patch_path = runtime.promote(run_id, candidate_id)
+    assert "- State: `promoted`" in report_path.read_text(encoding="utf-8")
+    assert ">promoted</span>" in html_report_path.read_text(encoding="utf-8")
     apply_target = tmp_path / "apply-target"
     copy_source_tree(project, apply_target)
     subprocess.run(

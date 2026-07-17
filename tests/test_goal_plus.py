@@ -596,9 +596,11 @@ def test_high_confidence_spec_draft_links_search_and_final_audit(tmp_path) -> No
 
     run_dir = tmp_path / ".search" / "runs" / "run_001"
     report_path = run_dir / "report.md"
+    html_report_path = run_dir / "report.html"
     promotion_path = run_dir / "promotion" / "c001.patch"
     promotion_path.parent.mkdir(parents=True)
     report_path.write_text("# report\n", encoding="utf-8")
+    html_report_path.write_text("<!doctype html>\n", encoding="utf-8")
     promotion_path.write_text("patch\n", encoding="utf-8")
     (run_dir / "run.json").write_text(
         json.dumps({"state": "promoted", "selected_candidate_id": "c001"}),
@@ -731,9 +733,11 @@ def test_recording_superseded_search_result_preserves_current_task(tmp_path) -> 
 
     run_dir = root / "runs" / "run_001"
     report_path = run_dir / "report.md"
+    html_report_path = run_dir / "report.html"
     promotion_path = run_dir / "promotion" / "c001.patch"
     promotion_path.parent.mkdir(parents=True)
     report_path.write_text("# report\n", encoding="utf-8")
+    html_report_path.write_text("<!doctype html>\n", encoding="utf-8")
     promotion_path.write_text("patch\n", encoding="utf-8")
     (run_dir / "run.json").write_text(
         json.dumps({"state": "promoted", "selected_candidate_id": "c001"}),
@@ -751,6 +755,7 @@ def test_recording_superseded_search_result_preserves_current_task(tmp_path) -> 
     assert updated.linked_search is not None
     assert updated.linked_search.run_id == "run_002"
     assert updated.search_tasks[0].selected_candidate_id == "c001"
+    assert updated.search_tasks[0].html_report_path == str(html_report_path.resolve())
     assert updated.search_tasks[0].result_recorded_at is not None
 
 

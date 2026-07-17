@@ -7,6 +7,7 @@ import pytest
 
 from goal_plus.host_observability import (
     collect_codex_observability,
+    collect_codex_transcript_observability,
     collect_pi_observability,
     discover_codex_session_file,
 )
@@ -126,6 +127,7 @@ def test_codex_observability_discovers_and_normalizes_native_session(
     assert result["source"] == "codex_session_jsonl"
     assert result["identity"]["native_session_id"] == "codex-thread-1"
     assert result["execution"] == {
+        "provider": "openai-codex",
         "model": "gpt-5.5",
         "reasoning_effort": "medium",
         "service_tier": "priority",
@@ -141,6 +143,7 @@ def test_codex_observability_discovers_and_normalizes_native_session(
         "exit_code": None,
     }
     assert result["usage"]["total_tokens"] == 1120
+    assert result["usage"]["processed_tokens"] == 1120
     assert result["usage"]["cached_input_tokens"] == 600
     assert result["usage"]["assistant_messages"] == 1
     assert result["usage"]["tool_calls"] == 1
@@ -160,6 +163,7 @@ def test_pi_observability_normalizes_legacy_metrics(tmp_path: Path) -> None:
             metadata={
                 "pi_metrics": {
                     "scope": "run_delta",
+                    "provider": "openai-codex",
                     "model": "gpt-5.5",
                     "thinking_level": "medium",
                     "started_at": "2026-07-16T10:00:00Z",
@@ -174,6 +178,8 @@ def test_pi_observability_normalizes_legacy_metrics(tmp_path: Path) -> None:
                         "assistantMessages": 2,
                     },
                     "session_stats": {
+                        "toolCalls": 7,
+                        "toolResults": 6,
                         "contextUsage": {
                             "tokens": 12000,
                             "contextWindow": 240000,
@@ -188,9 +194,96 @@ def test_pi_observability_normalizes_legacy_metrics(tmp_path: Path) -> None:
     result = collect_pi_observability(session)
 
     assert result["source"] == "pi_metrics"
+    assert result["execution"]["provider"] == "openai-codex"
     assert result["execution"]["model"] == "gpt-5.5"
     assert result["execution"]["reasoning_effort"] == "medium"
     assert result["execution"]["terminal_state"] == "completed"
     assert result["usage"]["total_tokens"] == 125
+    assert result["usage"]["processed_tokens"] == 180
+    assert result["usage"]["tool_calls"] == 7
+    assert result["usage"]["tool_results"] == 6
     assert result["usage"]["cost_usd"] == 0.1
     assert result["context"]["tokens"] == 12000
+
+
+def test_codex_transcript_observability_reports_window_delta_without_content(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "rollout.jsonl"
+    events = [
+        {
+            "timestamp": "2026-07-16T09:59:00Z",
+            "type": "session_meta",
+            "payload": {"id": "thread-1", "timestamp": "2026-07-16T09:59:00Z"},
+        },
+        {
+            "timestamp": "2026-07-16T09:59:01Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6", "effort": "high"},
+        },
+        {
+            "timestamp": "2026-07-16T09:59:50Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 40,
+                        "output_tokens": 20,
+                        "reasoning_output_tokens": 5,
+                        "total_tokens": 120,
+                    },
+                    "last_token_usage": {"total_tokens": 30},
+                    "model_context_window": 1000,
+                },
+            },
+        },
+        {
+            "timestamp": "2026-07-16T10:00:01Z",
+            "type": "response_item",
+            "payload": {"type": "message", "role": "assistant", "content": "secret"},
+        },
+        {
+            "timestamp": "2026-07-16T10:00:02Z",
+            "type": "response_item",
+            "payload": {"type": "custom_tool_call", "arguments": "secret"},
+        },
+        {
+            "timestamp": "2026-07-16T10:00:03Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 160,
+                        "cached_input_tokens": 60,
+                        "output_tokens": 30,
+                        "reasoning_output_tokens": 8,
+                        "total_tokens": 190,
+                    },
+                    "last_token_usage": {"total_tokens": 50},
+                    "model_context_window": 1000,
+                },
+            },
+        },
+    ]
+    path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    result = collect_codex_transcript_observability(
+        path,
+        since="2026-07-16T10:00:00Z",
+    )
+
+    assert result["usage"]["scope"] == "window_delta"
+    assert result["usage"]["input_tokens"] == 60
+    assert result["usage"]["cached_input_tokens"] == 20
+    assert result["usage"]["output_tokens"] == 10
+    assert result["usage"]["total_tokens"] == 70
+    assert result["usage"]["processed_tokens"] == 70
+    assert result["usage"]["assistant_messages"] == 1
+    assert result["usage"]["tool_calls"] == 1
+    assert "secret" not in json.dumps(result)

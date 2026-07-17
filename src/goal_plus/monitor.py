@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import time
 from pathlib import Path
 from typing import Any
 
 from goal_plus.agent_hosts import get_agent_host_adapter
 from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.host_observability import collect_codex_transcript_observability
 from goal_plus.models import (
     AgentSessionRecord,
     CandidateRecord,
@@ -23,6 +25,11 @@ from goal_plus.runtime import (
     load_json,
     utc_timestamp,
     utc_timestamp_from_epoch,
+)
+from goal_plus.statistics import (
+    aggregate_run_statistics,
+    aggregate_usage,
+    build_run_statistics,
 )
 
 
@@ -58,6 +65,77 @@ def _parse_utc_timestamp(value: str | None) -> float | None:
         return datetime.fromisoformat(normalized).timestamp()
     except ValueError:
         return None
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _goal_metric_contexts(
+    root_dir: Path,
+    record: GoalPlusRecord | None,
+) -> dict[int, dict[str, Any]]:
+    """Recover revision-scoped baseline/target data from the append-only event log."""
+    if record is None:
+        return {}
+    contexts: dict[int, dict[str, Any]] = {}
+    current_revision = 1
+    events_path = root_dir / "goal-plus" / record.goal_plus_id / "events.jsonl"
+    try:
+        stream = events_path.open("r", encoding="utf-8")
+    except OSError:
+        stream = None
+    if stream is not None:
+        with stream:
+            for line in stream:
+                try:
+                    event = _load_json_line(line)
+                except ValueError:
+                    continue
+                payload = event.get("payload")
+                payload = payload if isinstance(payload, dict) else {}
+                event_type = event.get("event_type")
+                if event_type in {"created", "goal_updated"}:
+                    revision = payload.get("goal_revision")
+                    if isinstance(revision, int):
+                        current_revision = revision
+                elif event_type == "spec_draft_saved":
+                    contexts[current_revision] = payload
+    if record.spec_draft is not None:
+        contexts[record.goal_revision] = record.spec_draft.model_dump(mode="json")
+    return contexts
+
+
+def _load_json_line(line: str) -> dict[str, Any]:
+    payload = json.loads(line)
+    if not isinstance(payload, dict):
+        raise ValueError("expected JSON object")
+    return payload
+
+
+def _metric_context(
+    frozen: FrozenSpec,
+    task: GoalPlusLinkedSearch | None,
+    goal_metric_contexts: dict[int, dict[str, Any]],
+) -> tuple[float | None, float | None]:
+    draft = goal_metric_contexts.get(task.goal_revision) if task is not None else None
+    baseline = None
+    target = None
+    if isinstance(draft, dict):
+        baseline_payload = draft.get("baseline")
+        metric_payload = draft.get("metric")
+        correctness = draft.get("correctness_gate")
+        if isinstance(baseline_payload, dict):
+            baseline = _number(baseline_payload.get(frozen.spec.metric_name))
+        if isinstance(metric_payload, dict):
+            target = _number(metric_payload.get("target"))
+        if target is None and isinstance(correctness, dict):
+            target = _number(correctness.get("score_threshold"))
+    if target is None:
+        target = _number(frozen.spec.constraints.get("success_threshold"))
+    return baseline, target
 
 
 def _latest_mtime(paths: list[str | None]) -> float | None:
@@ -255,7 +333,7 @@ def _agent_observability(
         payload = get_agent_host_adapter(session.host).collect_observability(session)
     except Exception as exc:
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "agent_session_id": session.agent_session_id,
             "run_id": session.run_id,
             "candidate_id": session.candidate_id,
@@ -344,6 +422,8 @@ def _search_task_payload(
     task: GoalPlusLinkedSearch,
     *,
     current_run_id: str | None,
+    goal_metric_contexts: dict[int, dict[str, Any]],
+    now_epoch: float,
     observability_cache: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = task.model_dump(mode="json")
@@ -363,6 +443,7 @@ def _search_task_payload(
             "worker_sessions_total": 0,
             "verifier_runs_total": 0,
             "estimated_cost_total": 0.0,
+            "statistics": None,
         }
     )
     if run_id is None:
@@ -378,10 +459,31 @@ def _search_task_payload(
     plans = _load_plans(run_dir)
     candidates = _load_candidates(run_dir)
     sessions = _load_agent_sessions(run_dir)
-    estimated_cost_total = 0.0
-    for session in sessions:
-        estimated_cost_total += _observability_cost(
-            _agent_observability(session, observability_cache)
+    observations = {
+        session.agent_session_id: _agent_observability(session, observability_cache)
+        for session in sessions
+    }
+    estimated_cost_total = sum(
+        _observability_cost(observation) for observation in observations.values()
+    )
+    baseline_score = None
+    target_score = None
+    statistics = None
+    if frozen is not None:
+        baseline_score, target_score = _metric_context(
+            frozen,
+            task,
+            goal_metric_contexts,
+        )
+        statistics = build_run_statistics(
+            run,
+            frozen,
+            candidates,
+            sessions,
+            observations,
+            baseline_score=baseline_score,
+            target_score=target_score,
+            now_epoch=now_epoch,
         )
     payload.update(
         {
@@ -408,6 +510,7 @@ def _search_task_payload(
             "worker_sessions_total": len(sessions),
             "verifier_runs_total": sum(len(candidate.iterations) for candidate in candidates),
             "estimated_cost_total": estimated_cost_total,
+            "statistics": statistics,
         }
     )
     return payload
@@ -423,6 +526,9 @@ def _search_task_aggregate(search_tasks: list[dict[str, Any]]) -> dict[str, Any]
         "worker_sessions_total": sum(task["worker_sessions_total"] for task in search_tasks),
         "verifier_runs_total": sum(task["verifier_runs_total"] for task in search_tasks),
         "estimated_cost_total": sum(task["estimated_cost_total"] for task in search_tasks),
+        "statistics": aggregate_run_statistics(
+            [task.get("statistics") for task in search_tasks]
+        ),
     }
 
 
@@ -490,11 +596,14 @@ def goal_plus_monitor_snapshot(
         )
 
     observability_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    goal_metric_contexts = _goal_metric_contexts(root, goal_record)
     search_tasks = [
         _search_task_payload(
             root,
             task,
             current_run_id=current_search_run_id,
+            goal_metric_contexts=goal_metric_contexts,
+            now_epoch=now,
             observability_cache=observability_cache,
         )
         for task in task_links
@@ -557,8 +666,11 @@ def goal_plus_monitor_snapshot(
     strategy_payload: dict[str, Any] | None = None
     candidates_payload: dict[str, dict[str, Any]] = {}
     subagents: list[dict[str, Any]] = []
+    selected_run_statistics: dict[str, Any] | None = None
     main_agent = {
         "elapsed_seconds": None,
+        "run_age_seconds": None,
+        "observed_duration_seconds": None,
         "estimated_cost_total": 0.0,
         "subagent_count": 0,
         "verifier_count": 0,
@@ -587,7 +699,38 @@ def goal_plus_monitor_snapshot(
 
         created_at_epoch = _parse_utc_timestamp(run.created_at)
         if created_at_epoch is not None:
-            main_agent["elapsed_seconds"] = max(0.0, now - created_at_epoch)
+            main_agent["run_age_seconds"] = max(0.0, now - created_at_epoch)
+
+        observations = {
+            session.agent_session_id: _agent_observability(
+                session, observability_cache
+            )
+            for session in sessions
+        }
+        selected_task_link = next(
+            (task for task in task_links if task.run_id == run.run_id),
+            None,
+        )
+        baseline_score, target_score = _metric_context(
+            frozen,
+            selected_task_link,
+            goal_metric_contexts,
+        )
+        selected_run_statistics = build_run_statistics(
+            run,
+            frozen,
+            candidates,
+            sessions,
+            observations,
+            baseline_score=baseline_score,
+            target_score=target_score,
+            now_epoch=now,
+        )
+        observed_duration = selected_run_statistics["run"][
+            "observed_duration_seconds"
+        ]
+        main_agent["elapsed_seconds"] = observed_duration
+        main_agent["observed_duration_seconds"] = observed_duration
 
         run_payload = {
             "run_id": run.run_id,
@@ -619,6 +762,10 @@ def goal_plus_monitor_snapshot(
             candidates_payload[candidate.candidate_id] = {
                 "candidate_id": candidate.candidate_id,
                 "status": candidate.status,
+                "plan_id": candidate.task.plan_id,
+                "parent_id": candidate.task.parent_id,
+                "parent_candidate_ids": candidate.task.parent_candidate_ids,
+                "base_candidate_id": candidate.task.base_candidate_id,
                 "agent_session_count": len(candidate_sessions),
                 "verifier_count": len(candidate.iterations),
                 "last_score": last_iteration.score if last_iteration else None,
@@ -645,7 +792,7 @@ def goal_plus_monitor_snapshot(
             candidate = by_candidate.get(session.candidate_id)
             metadata = session.host_handle.metadata
             time_advisory = _time_advisory_evidence(root, session)
-            observability = _agent_observability(session, observability_cache)
+            observability = observations[session.agent_session_id]
             execution = (
                 observability.get("execution")
                 if isinstance(observability.get("execution"), dict)
@@ -729,8 +876,9 @@ def goal_plus_monitor_snapshot(
                     "created_at": session.created_at,
                     "updated_at": session.updated_at,
                     "attempt_count": len(sessions_by_candidate.get(session.candidate_id, [])),
-                    "verifier_count": len(candidate.iterations) if candidate else 0,
+                    "verifier_count": len(session_iterations),
                     "session_verifier_count": len(session_iterations),
+                    "candidate_verifier_count": len(candidate.iterations) if candidate else 0,
                     "last_score": candidate.iterations[-1].score if candidate and candidate.iterations else None,
                     "last_verifier_at": (
                         candidate.iterations[-1].created_at if candidate and candidate.iterations else None
@@ -765,6 +913,47 @@ def goal_plus_monitor_snapshot(
         main_agent["subagent_count"] = len(sessions)
         main_agent["verifier_count"] = sum(len(candidate.iterations) for candidate in candidates)
 
+    orchestrator_observability: dict[str, Any] | None = None
+    if (
+        goal_record is not None
+        and goal_record.active_session is not None
+        and goal_record.active_session.host == "codex"
+        and goal_record.active_session.transcript_path
+    ):
+        transcript_path = Path(goal_record.active_session.transcript_path).expanduser()
+        if transcript_path.is_file():
+            orchestrator_observability = collect_codex_transcript_observability(
+                transcript_path,
+                since=goal_record.created_at,
+            )
+        else:
+            warnings.append(
+                {
+                    "kind": "orchestrator_transcript_missing",
+                    "path": str(transcript_path),
+                }
+            )
+
+    usage_sources: list[dict[str, Any] | None] = []
+    if selected_run_statistics is not None:
+        usage_sources.append(selected_run_statistics.get("usage"))
+    if orchestrator_observability is not None:
+        usage_sources.append(orchestrator_observability.get("usage"))
+    total_usage = aggregate_usage(usage_sources, scope="goal_plus_total")
+    unavailable_metrics = [
+        "orchestrator_cost_usd",
+        "hardware_utilization",
+        "semantic_candidate_coverage",
+        "redundant_attempt_rate",
+        "temporal_collision_rate",
+        "research_rollup_quality",
+        "normalized_score",
+        "orchestrator_usage_breakdown",
+        "promotion_attempt_history",
+    ]
+    if orchestrator_observability is None:
+        unavailable_metrics.append("orchestrator_token_usage")
+
     return {
         "ok": True,
         "snapshot_at": utc_timestamp(),
@@ -775,6 +964,13 @@ def goal_plus_monitor_snapshot(
         "search_task_aggregate": search_task_aggregate,
         "run": run_payload,
         "strategy": strategy_payload,
+        "statistics": {
+            "schema_version": 1,
+            "selected_run": selected_run_statistics,
+            "orchestrator": orchestrator_observability,
+            "total_usage": total_usage,
+            "unavailable_metrics": unavailable_metrics,
+        },
         "main_agent": main_agent,
         "candidates": candidates_payload,
         "subagents": subagents,

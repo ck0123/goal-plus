@@ -310,6 +310,56 @@ Goal Plus/Search monitoring:
   transcript details, or verifier log inspection. Do not use manual file tailing
   as the primary monitoring path.
 
+### HTML Report Export
+
+`report.html` is an on-demand rendering of durable `.gp` state, not a live UI
+owned by Pi, Codex, or a worker. `search_report(run_id)` reads the current
+Goal Plus record, every linked Search task, plans, candidates, verifier
+iterations, promotion evidence, and available host observability through the
+same monitor/statistics layer, then writes both canonical artifacts:
+
+- `.gp/runs/<run_id>/report.md`
+- `.gp/runs/<run_id>/report.html`
+
+In the normal Pi or Codex Search completion flow, the main agent must call
+`search_report` after `search_select` and before `search_promote`, return both
+paths to the user, and pass the Markdown path to
+`goal_plus_record_search_result`. `search_promote` refreshes an existing report
+after promotion, and the Goal Plus record stores the canonical HTML path.
+Merely reaching a budget limit, finishing workers, or selecting a candidate
+does not make the runtime generate a report by itself; the normal host skills
+make the explicit `search_report` call.
+
+Reports are reproducible views over saved evidence. To generate a missing
+report or refresh an old one, call the logical MCP tool again with the existing
+run id:
+
+```text
+search_report(run_id="run_...")
+```
+
+This recovery path remains valid after the original Pi/Codex main-agent or
+worker sessions have exited. A later agent does not need the old conversation
+context: it only needs the existing `run_id` and access to the same configured
+`.gp` root. It should call `goal_plus_monitor_snapshot` first when the run id or
+artifact state is uncertain, then call `search_report`. If native host logs or
+observability were never persisted or have since been removed, generate the
+report anyway and leave those metrics unavailable; do not rerun the Goal Plus
+task merely to fill presentation gaps.
+
+When MCP tools are unavailable in Pi, use the local facade:
+
+```bash
+goal-plus-pi-tool search_report \
+  --root .gp \
+  --args-json '{"run_id":"run_..."}' \
+  --pretty
+```
+
+The HTML file is self-contained and opens directly without a web server. Never
+invent absent metrics from transcript text: unavailable persisted evidence must
+remain `Not observed`/unavailable in the report.
+
 Host log sources:
 
 - OpenCode: `~/.local/share/opencode/opencode.db` and

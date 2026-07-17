@@ -187,7 +187,11 @@ class SearchTools:
         return self.runtime.select(run_id, strategy=strategy)
 
     def search_report(self, run_id: str) -> dict[str, str]:
-        return {"report_path": str(self.runtime.report(run_id))}
+        report_path = self.runtime.report(run_id)
+        return {
+            "report_path": str(report_path),
+            "html_report_path": str(report_path.with_suffix(".html")),
+        }
 
     def search_promote(self, run_id: str, candidate_id: str) -> dict[str, str]:
         return {"artifact_path": str(self.runtime.promote(run_id, candidate_id))}
