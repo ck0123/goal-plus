@@ -76,7 +76,7 @@ $$
 
 ### 1.2 当前两种主要范式
 
-#### 1.2.1 范式一：Model-Driven Loop
+#### 范式一：Model-Driven Loop
 
 基本假设是：
 
@@ -109,7 +109,7 @@ $$
 
 ---
 
-#### 1.2.2 范式二：Algorithm-Guided Agent Search
+#### 范式二：Algorithm-Guided Agent Search
 
 这类方法将 LLM 放入显式搜索算法中：
 
@@ -260,11 +260,11 @@ $$
 
 这会产生两类碰撞：
 
-#### 2.2.1 Spatial Collision
+#### Spatial Collision
 
 多个并发 rollout 同时探索相似区域。
 
-#### 2.2.2 Temporal Collision
+#### Temporal Collision
 
 单个 loop 在不同时间反复尝试语义近似的方向。
 
@@ -523,7 +523,7 @@ Search State 不是：
 
 ### 3.3 Search Schema Induction
 
-#### 3.3.1 一套通用 Meta-Grammar
+#### 一套通用 Meta-Grammar
 
 不同场景不应各自拥有完全不同的 meta-template。
 
@@ -557,7 +557,7 @@ $$
 
 ---
 
-#### 3.3.2 Domain Ontology 是场景相关的
+#### Domain Ontology 是场景相关的
 
 不同领域变化的是 ontology，而不是最上层元语法。
 
@@ -603,7 +603,7 @@ $$
 
 ---
 
-#### 3.3.3 Run-Specific Schema 是动态的
+#### Run-Specific Schema 是动态的
 
 即使在同一个领域，不同任务的重要维度也不同。
 
@@ -908,7 +908,7 @@ $$
 
 ### 4.2 核心数据对象
 
-#### 4.2.1 `SearchEvent`
+#### `SearchEvent`
 
 不可修改的执行事实：
 
@@ -926,7 +926,7 @@ provenance
 
 ---
 
-#### 4.2.2 `SearchSchema`
+#### `SearchSchema`
 
 当前任务对空间的解释：
 
@@ -943,7 +943,7 @@ Schema 可以变化，Event 不变。
 
 ---
 
-#### 4.2.3 `SearchState`
+#### `SearchState`
 
 共享的官方状态：
 
@@ -961,7 +961,7 @@ budget
 
 ---
 
-#### 4.2.4 `AtomicPlan`
+#### `AtomicPlan`
 
 一个基于特定 state version 的搜索事务：
 
@@ -981,7 +981,7 @@ budget request
 
 ---
 
-#### 4.2.5 `Reservation`
+#### `Reservation`
 
 AtomicPlan 被接受后，对其搜索区域进行临时占位：
 
@@ -995,7 +995,7 @@ expiry or lifecycle reference
 
 ---
 
-#### 4.2.6 `EvidenceCommit`
+#### `EvidenceCommit`
 
 执行结束后提交：
 
@@ -1064,7 +1064,7 @@ accepted_with_reclassification
 
 Plan admission 至少检查四类问题。
 
-#### 4.4.1 Freshness
+#### Freshness
 
 Plan 是否基于仍然兼容的 Search State？
 
@@ -1076,7 +1076,7 @@ Plan 是否基于仍然兼容的 Search State？
 
 ---
 
-#### 4.4.2 Admissibility
+#### Admissibility
 
 由确定性 runtime 检查：
 
@@ -1090,7 +1090,7 @@ Plan 是否基于仍然兼容的 Search State？
 
 ---
 
-#### 4.4.3 Conflict and Overlap
+#### Conflict and Overlap
 
 根据当前 Search Schema 判断：
 
@@ -1101,7 +1101,7 @@ Plan 是否基于仍然兼容的 Search State？
 
 ---
 
-#### 4.4.4 Marginal Contribution
+#### Marginal Contribution
 
 一个 Plan 至少应当明确带来一种价值：
 
@@ -1126,7 +1126,7 @@ $$
 
 ### 4.5 LLM 与 Runtime 的职责边界
 
-#### 4.5.1 LLM 负责
+#### LLM 负责
 
 * 将自然语言 proposal 编译成 typed Search IR；
 * 初始化 domain ontology；
@@ -1135,7 +1135,7 @@ $$
 * 提议 schema split、merge 或新维度；
 * 根据 Search State 生成下一步 hypothesis。
 
-#### 4.5.2 Runtime 负责
+#### Runtime 负责
 
 * state version；
 * durable storage；
@@ -1164,14 +1164,14 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 更合理的规则是：
 
-#### 4.6.1 私有
+#### 私有
 
 * 未提交 proposal；
 * rollout 内部推理；
 * 临时代码；
 * 未验证结论。
 
-#### 4.6.2 共享
+#### 共享
 
 * 已提交 AtomicPlan；
 * active reservation；
@@ -1218,7 +1218,7 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 ### 4.8 并发与单链的统一
 
-#### 4.8.1 并发模式
+#### 并发模式
 
 多个 Agent 可以并行起草 proposal，但它们必须逐个提交 AtomicPlan。
 
@@ -1238,7 +1238,7 @@ Evidence commits serialize
 
 ---
 
-#### 4.8.2 单链模式
+#### 单链模式
 
 当 `max_parallel = 1` 时，同一个协议仍然成立：
 
@@ -1270,7 +1270,7 @@ read SearchState
 
 Search Schema 不能无限膨胀，也不能永远保持初始粒度。
 
-#### 4.9.1 需要拆分的信号
+#### 需要拆分的信号
 
 * 同一节点内部 outcome 高度多峰；
 * 相同标签下出现相反结果；
@@ -1278,7 +1278,7 @@ Search Schema 不能无限膨胀，也不能永远保持初始粒度。
 * 一个新的 context 变量显著改变结果；
 * 该节点内部仍存在大量搜索碰撞。
 
-#### 4.9.2 可以合并的信号
+#### 可以合并的信号
 
 * 两个节点 outcome 分布接近；
 * 区分它们不能改变下一步决策；
@@ -1403,21 +1403,21 @@ read_search_state
 
 ### 6.2 关键指标
 
-#### 6.2.1 搜索效果
+#### 搜索效果
 
 * best score；
 * best-score AUC；
 * post-stagnation improvement；
 * escape rate。
 
-#### 6.2.2 搜索效率
+#### 搜索效率
 
 * token / evaluator call；
 * 单位计算的 score improvement；
 * 单位计算的 information gain；
 * marginal coverage per rollout。
 
-#### 6.2.3 重复与覆盖
+#### 重复与覆盖
 
 * declared overlap；
 * realized overlap；
@@ -1425,7 +1425,7 @@ read_search_state
 * active plan collision rate；
 * serial repeated-attempt rate。
 
-#### 6.2.4 Schema 质量
+#### Schema 质量
 
 * 对 outcome 的预测能力；
 * 对 plan collision 的预测能力；
@@ -1433,7 +1433,7 @@ read_search_state
 * declared footprint 与 realized footprint 的一致性；
 * schema complexity。
 
-#### 6.2.5 事务化开销
+#### 事务化开销
 
 * Plan rejection rate；
 * rebase rate；
