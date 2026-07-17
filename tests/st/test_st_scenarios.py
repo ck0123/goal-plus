@@ -13,6 +13,7 @@ stdout.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,11 @@ SCENARIO_CASES = [
         "codex_time_advisory",
         marks=(pytest.mark.st, pytest.mark.st_codex),
         id="codex_time_advisory",
+    ),
+    pytest.param(
+        "codex_autoresearch_lease",
+        marks=(pytest.mark.st, pytest.mark.st_codex),
+        id="codex_autoresearch_lease",
     ),
     pytest.param(
         "claude_k_module_smoke",
@@ -264,6 +270,19 @@ def _assert_codex_time_advisory(report: StReport) -> None:
     assert report.extra.get("agent_session_id")
 
 
+def _assert_codex_autoresearch_lease(report: StReport) -> None:
+    assert len(report.candidates) == 1
+    assert report.candidates[0].get("status") == "evaluated"
+    assert int(report.candidates[0].get("iterations") or 0) >= 1
+    extra = report.extra
+    assert extra.get("host") == "codex"
+    assert extra.get("model") == "gpt-5.6-terra"
+    assert extra.get("agent_session_id")
+    assert extra.get("min_runtime_seconds") == 300
+    assert extra.get("max_runtime_seconds") == 420
+    assert extra.get("parent_closeout_after_seconds") == 375
+
+
 def _assert_claude_k_module_smoke(report: StReport) -> None:
     assert len(report.candidates) >= 1, (
         f"claude k_module smoke should have >=1 candidate, got {len(report.candidates)}"
@@ -283,6 +302,7 @@ SCENARIO_ASSERTIONS = {
     "codex_circle_packing_cycle": _assert_codex_circle_packing_cycle,
     "codex_rolling_followup": _assert_codex_rolling_followup,
     "codex_time_advisory": _assert_codex_time_advisory,
+    "codex_autoresearch_lease": _assert_codex_autoresearch_lease,
     "claude_k_module_smoke": _assert_claude_k_module_smoke,
 }
 
@@ -300,7 +320,8 @@ def test_scenario(
             "1970-01-01T00:00:00Z",
         )
     prompt = load_prompt(scenario)
-    result = st_runner.run_streaming(prompt, scenario=scenario, timeout=2400)
+    timeout = 1200 if scenario == "codex_autoresearch_lease" else 2400
+    result = st_runner.run_streaming(prompt, scenario=scenario, timeout=timeout)
 
     # Always print the log path so debugging is one click away
     print(f"\n[{scenario}] log: {result.log_path}")
@@ -343,6 +364,52 @@ def test_scenario(
         assert evidence["remaining_seconds"] == 0
         assert evidence["average_submission_seconds"] > 0
         assert evidence["total_verifier_count"] >= 1
+
+    if scenario == "codex_autoresearch_lease":
+        agent_session_id = report.extra["agent_session_id"]
+        evidence_path = (
+            st_project_root
+            / ".gp"
+            / "host-logs"
+            / "codex-autoresearch-leases"
+            / f"{agent_session_id}.json"
+        )
+        assert evidence_path.is_file(), (
+            "Codex Search candidate did not persist AutoResearch lease evidence "
+            f"for {agent_session_id}"
+        )
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        started_at = datetime.fromisoformat(
+            evidence["started_at"].replace("Z", "+00:00")
+        )
+        first_stop_at = datetime.fromisoformat(
+            evidence["first_stop_attempt_at"].replace("Z", "+00:00")
+        )
+        released_at = datetime.fromisoformat(
+            evidence["released_at"].replace("Z", "+00:00")
+        )
+        lease_deadline_at = datetime.fromisoformat(
+            evidence["lease_deadline_at"].replace("Z", "+00:00")
+        )
+        assert evidence["status"] == "released"
+        assert evidence["release_reason"] == "lease_satisfied"
+        assert evidence["min_runtime_seconds"] == 300
+        assert evidence["max_runtime_seconds"] == 420
+        assert evidence["parent_closeout_after_seconds"] == 375
+        assert evidence["blocked_stop_attempts"] >= 1, (
+            "worker never attempted an early stop, so SubagentStop continuation "
+            "was not exercised"
+        )
+        assert (first_stop_at - started_at).total_seconds() < 300
+        assert (released_at - started_at).total_seconds() >= 300
+        assert evidence["elapsed_seconds"] >= 300
+        assert evidence["elapsed_seconds"] < 375
+        assert lease_deadline_at == started_at + timedelta(seconds=300)
+        assert evidence["lease_precedes_parent_closeout"] is True
+        assert evidence["lease_precedes_parent_hard_deadline"] is True
+        assert evidence["released_within_parent_closeout_budget"] is True
+        assert evidence["released_within_max_runtime"] is True
+        assert 300 < evidence["parent_closeout_after_seconds"] < 420
 
     # Smoke keyword check: run_id must appear somewhere in the raw output
     assert report.run_id in result.stdout, (

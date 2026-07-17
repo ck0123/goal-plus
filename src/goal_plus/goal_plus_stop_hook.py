@@ -7,7 +7,7 @@ import hashlib
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -274,6 +274,114 @@ def _subagent_identity(hook_input: dict[str, Any]) -> str | None:
     return None
 
 
+def _agent_transcript_path(hook_input: dict[str, Any]) -> Path | None:
+    value = hook_input.get("agent_transcript_path") or hook_input.get(
+        "agentTranscriptPath"
+    )
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_file() else None
+
+
+def _agent_transcript_started_at(hook_input: dict[str, Any]) -> datetime | None:
+    path = _agent_transcript_path(hook_input)
+    if path is None:
+        return None
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for _ in range(8):
+                line = handle.readline()
+                if not line:
+                    break
+                payload = json.loads(line)
+                timestamp = payload.get("timestamp")
+                if isinstance(timestamp, str):
+                    parsed = _utc_datetime(timestamp)
+                    if parsed is not None:
+                        return parsed
+    except (OSError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def _candidate_session_from_transcript(
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> Any | None:
+    path = _agent_transcript_path(hook_input)
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for candidate_session_id in _runtime_agent_session_ids(text):
+        session = find_agent_session(search_root, candidate_session_id)
+        if (
+            session is not None
+            and session.host == "codex"
+            and is_search_candidate_session(session)
+        ):
+            return session
+    return None
+
+
+def _candidate_session_from_native_identity(
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> Any | None:
+    identity = _subagent_identity(hook_input)
+    hook_transcript = _agent_transcript_path(hook_input)
+    if identity is None and hook_transcript is None:
+        return None
+
+    from goal_plus.host_observability import discover_codex_session_file
+
+    for path in sorted((search_root / "runs").glob("*/agent_sessions/*.json")):
+        session = find_agent_session(search_root, path.stem)
+        if (
+            session is None
+            or session.host != "codex"
+            or not is_search_candidate_session(session)
+        ):
+            continue
+        native_path = discover_codex_session_file(session)
+        if native_path is None:
+            continue
+        if hook_transcript is not None:
+            try:
+                if native_path.resolve() == hook_transcript.resolve():
+                    return session
+            except OSError:
+                pass
+        if identity in {
+            session.host_handle.external_id,
+            session.host_handle.task_name,
+            session.launch.get("task_name"),
+        }:
+            return session
+        try:
+            with native_path.open(encoding="utf-8") as handle:
+                for _ in range(8):
+                    line = handle.readline()
+                    if not line:
+                        break
+                    payload = json.loads(line)
+                    if payload.get("type") != "session_meta":
+                        continue
+                    meta = payload.get("payload")
+                    if isinstance(meta, dict) and identity in {
+                        meta.get("id"),
+                        meta.get("session_id"),
+                        meta.get("agent_path"),
+                    }:
+                        return session
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
+
+
 def _time_advisory_dir(search_root: Path) -> Path:
     return search_root / "host-logs" / "codex-time-advisory"
 
@@ -299,6 +407,289 @@ def _write_json_object(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
+
+
+def _autoresearch_lease_dir(search_root: Path) -> Path:
+    return search_root / "host-logs" / "codex-autoresearch-leases"
+
+
+def _autoresearch_lease_path(search_root: Path, agent_session_id: str) -> Path:
+    return _autoresearch_lease_dir(search_root) / f"{agent_session_id}.json"
+
+
+def _autoresearch_lease_policy(session: Any) -> dict[str, Any] | None:
+    launch = session.launch if isinstance(session.launch, dict) else {}
+    budget_control = launch.get("budget_control")
+    if not isinstance(budget_control, dict):
+        return None
+    lease = budget_control.get("autoresearch_lease")
+    if not isinstance(lease, dict) or lease.get("mode") != "subagent_stop":
+        return None
+    min_runtime_seconds = lease.get("min_runtime_seconds", 0)
+    min_verifier_runs = lease.get("min_verifier_runs", 1)
+    if not isinstance(min_runtime_seconds, int) or min_runtime_seconds < 0:
+        return None
+    if not isinstance(min_verifier_runs, int) or min_verifier_runs <= 0:
+        return None
+    return {
+        "min_runtime_seconds": min_runtime_seconds,
+        "min_verifier_runs": min_verifier_runs,
+        "max_runtime_seconds": budget_control.get("max_runtime_seconds"),
+        "soft_closeout_seconds": budget_control.get("soft_closeout_seconds"),
+        "initial_wait_timeout_ms": budget_control.get("initial_wait_timeout_ms"),
+    }
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_text(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _utc_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _ensure_autoresearch_lease(
+    search_root: Path,
+    session: Any,
+    hook_input: dict[str, Any],
+) -> dict[str, Any] | None:
+    policy = _autoresearch_lease_policy(session)
+    if policy is None:
+        return None
+    path = _autoresearch_lease_path(search_root, session.agent_session_id)
+    existing = _read_json_object(path)
+    transcript_started_at = _agent_transcript_started_at(hook_input)
+    if transcript_started_at is None:
+        from goal_plus.host_observability import discover_codex_session_file
+
+        native_path = discover_codex_session_file(session)
+        if native_path is not None:
+            transcript_started_at = _agent_transcript_started_at(
+                {"agent_transcript_path": str(native_path)}
+            )
+    if existing is not None:
+        existing_started_at = _utc_datetime(existing.get("started_at"))
+        if transcript_started_at is not None and (
+            existing_started_at is None
+            or transcript_started_at < existing_started_at
+        ):
+            min_runtime_seconds = int(existing.get("min_runtime_seconds") or 0)
+            existing = {
+                **existing,
+                "started_at": _utc_text(transcript_started_at),
+                "start_event": "SubagentStartTranscript",
+                "lease_deadline_at": _utc_text(
+                    transcript_started_at
+                    + timedelta(seconds=min_runtime_seconds)
+                ),
+            }
+            _write_json_object(path, existing)
+        return existing
+
+    now = transcript_started_at or _utc_now()
+    initial_wait_ms = policy.get("initial_wait_timeout_ms")
+    parent_closeout_after_seconds = (
+        int(initial_wait_ms) / 1000
+        if isinstance(initial_wait_ms, int)
+        else None
+    )
+    max_runtime_seconds = policy.get("max_runtime_seconds")
+    lease_precedes_parent_closeout = (
+        policy["min_runtime_seconds"] < parent_closeout_after_seconds
+        if parent_closeout_after_seconds is not None
+        else None
+    )
+    lease_precedes_parent_hard_deadline = (
+        policy["min_runtime_seconds"] < max_runtime_seconds
+        if isinstance(max_runtime_seconds, int)
+        else None
+    )
+    payload = {
+        "agent_session_id": session.agent_session_id,
+        "run_id": session.run_id,
+        "candidate_id": session.candidate_id,
+        "status": "active",
+        "started_at": _utc_text(now),
+        "lease_deadline_at": _utc_text(
+            now + timedelta(seconds=policy["min_runtime_seconds"])
+        ),
+        "start_event": (
+            "SubagentStartTranscript"
+            if transcript_started_at is not None
+            else _hook_event_name(hook_input)
+        ),
+        "start_tool": _tool_name(hook_input) or None,
+        "min_runtime_seconds": policy["min_runtime_seconds"],
+        "min_verifier_runs": policy["min_verifier_runs"],
+        "max_runtime_seconds": policy["max_runtime_seconds"],
+        "soft_closeout_seconds": policy["soft_closeout_seconds"],
+        "parent_closeout_after_seconds": parent_closeout_after_seconds,
+        "lease_precedes_parent_closeout": lease_precedes_parent_closeout,
+        "lease_precedes_parent_hard_deadline": (
+            lease_precedes_parent_hard_deadline
+        ),
+        "stop_attempts": 0,
+        "blocked_stop_attempts": 0,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _read_json_object(path)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True, ensure_ascii=False)
+        handle.write("\n")
+    return payload
+
+
+def _candidate_requires_immediate_stop(search_root: Path, session: Any) -> bool:
+    payload = _read_json_object(
+        search_root
+        / "runs"
+        / session.run_id
+        / "candidates"
+        / session.candidate_id
+        / "candidate.json"
+    )
+    iterations = payload.get("iterations") if payload else None
+    if not isinstance(iterations, list):
+        return False
+    for iteration in reversed(iterations):
+        if not isinstance(iteration, dict):
+            continue
+        owner = iteration.get("agent_session_id")
+        if owner not in {None, session.agent_session_id}:
+            continue
+        if iteration.get("failure_class") == "VerifierWorkspaceSideEffect":
+            return True
+        metrics = iteration.get("metrics")
+        if isinstance(metrics, dict) and (
+            metrics.get("infrastructure_failure") is True
+            or metrics.get("candidate_action") == "stop_and_report"
+        ):
+            return True
+        return False
+    return False
+
+
+def _autoresearch_lease_stop_context(
+    search_root: Path,
+    session: Any,
+    *,
+    verifier_runs: int,
+) -> dict[str, Any] | None:
+    evidence = _ensure_autoresearch_lease(search_root, session, {})
+    if evidence is None:
+        return None
+    started_at = _utc_datetime(evidence.get("started_at"))
+    if started_at is None:
+        return None
+
+    now = _utc_now()
+    elapsed_seconds = max(0.0, (now - started_at).total_seconds())
+    min_runtime_seconds = int(evidence.get("min_runtime_seconds") or 0)
+    min_verifier_runs = int(evidence.get("min_verifier_runs") or 1)
+    remaining_seconds = max(0.0, min_runtime_seconds - elapsed_seconds)
+    infrastructure_stop = _candidate_requires_immediate_stop(search_root, session)
+    verifier_complete = verifier_runs >= min_verifier_runs
+    runtime_complete = remaining_seconds <= 0
+    completion_complete = infrastructure_stop or (
+        verifier_complete and runtime_complete
+    )
+
+    stop_attempts = int(evidence.get("stop_attempts") or 0) + 1
+    blocked_stop_attempts = int(evidence.get("blocked_stop_attempts") or 0)
+    if not completion_complete:
+        blocked_stop_attempts += 1
+
+    updated = {
+        **evidence,
+        "status": "released" if completion_complete else "active",
+        "stop_attempts": stop_attempts,
+        "blocked_stop_attempts": blocked_stop_attempts,
+        "last_stop_attempt_at": _utc_text(now),
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "remaining_seconds": round(remaining_seconds, 3),
+        "verifier_runs": verifier_runs,
+    }
+    if evidence.get("first_stop_attempt_at") is None:
+        updated["first_stop_attempt_at"] = _utc_text(now)
+    if completion_complete:
+        parent_closeout_after_seconds = evidence.get(
+            "parent_closeout_after_seconds"
+        )
+        max_runtime_seconds = evidence.get("max_runtime_seconds")
+        updated.update(
+            {
+                "released_at": _utc_text(now),
+                "released_within_parent_closeout_budget": (
+                    elapsed_seconds < parent_closeout_after_seconds
+                    if isinstance(parent_closeout_after_seconds, (int, float))
+                    else None
+                ),
+                "released_within_max_runtime": (
+                    elapsed_seconds < max_runtime_seconds
+                    if isinstance(max_runtime_seconds, int)
+                    else None
+                ),
+                "release_reason": (
+                    "infrastructure_stop_and_report"
+                    if infrastructure_stop
+                    else "lease_satisfied"
+                ),
+            }
+        )
+    _write_json_object(
+        _autoresearch_lease_path(search_root, session.agent_session_id),
+        updated,
+    )
+
+    reason: str | None = None
+    if not completion_complete:
+        requirements = []
+        if not runtime_complete:
+            requirements.append(
+                f"continue for at least {remaining_seconds:.1f} more seconds"
+            )
+        if not verifier_complete:
+            requirements.append(
+                f"complete {min_verifier_runs - verifier_runs} more "
+                "search_run_verifier iteration(s)"
+            )
+        reason = (
+            f"AutoResearch lease for Search candidate {session.agent_session_id} "
+            f"is still active: {' and '.join(requirements)}. Do not return to "
+            "the parent. Read results.tsv, choose a distinct evidence-backed "
+            "hypothesis, implement it, run search_run_verifier with this "
+            "agent_session_id, compare the result with the incumbent, and "
+            "continue the loop. After each additional verifier iteration, "
+            "immediately attempt to finish again; this hook will either block "
+            "or release that attempt. Do not estimate the clock. Do not sleep "
+            "or busy-wait. The parent watchdog has a separate closeout window "
+            "after this lease."
+        )
+
+    return {
+        "search_candidate_completion_complete": completion_complete,
+        "search_candidate_completion_reason": reason,
+        "search_candidate_min_runtime_seconds": min_runtime_seconds,
+        "search_candidate_elapsed_seconds": elapsed_seconds,
+        "search_candidate_remaining_seconds": remaining_seconds,
+        "search_candidate_required_verifier_runs": min_verifier_runs,
+        "search_candidate_infrastructure_stop": infrastructure_stop,
+    }
 
 
 def _search_candidate_agent_session_id(
@@ -332,7 +723,34 @@ def _search_candidate_agent_session_id(
                     .replace("+00:00", "Z"),
                 },
             )
+        direct_session = find_agent_session(search_root, direct)
+        if direct_session is not None:
+            _ensure_autoresearch_lease(
+                search_root,
+                direct_session,
+                hook_input,
+            )
         return direct
+    transcript_session = _candidate_session_from_transcript(
+        search_root,
+        hook_input,
+    ) or _candidate_session_from_native_identity(search_root, hook_input)
+    if transcript_session is not None:
+        if identity is not None:
+            _write_json_object(
+                _identity_path(search_root, identity),
+                {
+                    "agent_session_id": transcript_session.agent_session_id,
+                    "mapped_at": _utc_text(_utc_now()),
+                    "source": "agent_transcript_path",
+                },
+            )
+        _ensure_autoresearch_lease(
+            search_root,
+            transcript_session,
+            hook_input,
+        )
+        return transcript_session.agent_session_id
     if identity is None:
         return None
     mapping = _read_json_object(_identity_path(search_root, identity))
@@ -346,6 +764,7 @@ def _search_candidate_agent_session_id(
         or not is_search_candidate_session(session)
     ):
         return None
+    _ensure_autoresearch_lease(search_root, session, hook_input)
     return mapped
 
 
@@ -377,12 +796,18 @@ def _search_candidate_stop_context(
     if session is None:
         return None
     verifier_runs = session.counters.get("verifier_runs", 0)
+    lease_context = _autoresearch_lease_stop_context(
+        search_root,
+        session,
+        verifier_runs=verifier_runs,
+    )
     return {
         "goal_plus_subagent_role": "search_candidate",
         "search_candidate_agent_session_id": agent_session_id,
         "search_candidate_id": session.candidate_id,
         "search_candidate_verifier_runs": verifier_runs,
         "search_candidate_verifier_complete": verifier_runs > 0,
+        **(lease_context or {}),
     }
 
 

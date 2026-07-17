@@ -57,6 +57,8 @@ def _additional_context(result: subprocess.CompletedProcess[str], event: str) ->
 
 def _codex_search_worker(
     tmp_path: Path,
+    *,
+    worker_budget: dict | None = None,
 ) -> tuple[FileSearchRuntime, str, str, str]:
     project = make_project(tmp_path)
     payload = spec_with_host(
@@ -65,7 +67,7 @@ def _codex_search_worker(
         strategy_name="random",
         max_candidates=1,
     ).model_dump(mode="json")
-    payload["strategy"]["worker_budget"] = {
+    payload["strategy"]["worker_budget"] = worker_budget or {
         "max_runtime_seconds": 600,
         "max_turns": 8,
         "on_exceed": "interrupt",
@@ -684,6 +686,126 @@ def test_search_candidate_stop_is_owned_by_its_verifier_not_parent_next_action(
     counters = goal_runtime.status(record.goal_plus_id).hook_counters
     assert counters["subagent_stop"] == 2
     assert counters["stop"] == 1
+
+
+def test_search_candidate_autoresearch_lease_blocks_until_runtime_then_releases(
+    tmp_path: Path,
+) -> None:
+    search_runtime, run_id, candidate_id, agent_session_id = _codex_search_worker(
+        tmp_path,
+        worker_budget={
+            "min_runtime_seconds": 300,
+            "min_verifier_runs": 1,
+            "max_runtime_seconds": 420,
+            "on_exceed": "interrupt",
+        },
+    )
+    search_root = search_runtime.root_dir
+    goal_runtime = FileGoalPlusRuntime(search_root)
+    record = goal_runtime.create_goal("Run one sustained AutoResearch worker")
+    goal_runtime.activate_session(
+        record.goal_plus_id,
+        {"host": "codex", "session_id": "session-codex"},
+    )
+    agent_identity = "019f-native-autoresearch-worker"
+    session = search_runtime._load_agent_session_by_id(agent_session_id)
+    transcript_started_at = datetime.now(timezone.utc)
+    transcript_dir = (
+        tmp_path
+        / "codex-home"
+        / "sessions"
+        / f"{transcript_started_at.year:04d}"
+        / f"{transcript_started_at.month:02d}"
+        / f"{transcript_started_at.day:02d}"
+    )
+    transcript_dir.mkdir(parents=True)
+    transcript_path = transcript_dir / "codex-autoresearch-worker.jsonl"
+    transcript_path.write_text(
+        json.dumps(
+            {
+                "timestamp": transcript_started_at.isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                "type": "session_meta",
+                "payload": {
+                    "id": agent_identity,
+                    "session_id": agent_identity,
+                    "agent_path": session.host_handle.task_name,
+                    "message": f"agent_session_id={agent_session_id}",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    search_runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=agent_session_id,
+    )
+
+    early_stop = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "session-codex",
+            "agent_id": agent_identity,
+            "agent_type": "default",
+        },
+        CODEX_HOME=str(tmp_path / "codex-home"),
+    )
+    blocked = json.loads(early_stop.stdout)
+    assert blocked["decision"] == "block"
+    assert "AutoResearch lease" in blocked["reason"]
+    assert "Do not return to the parent" in blocked["reason"]
+    assert "Do not sleep or busy-wait" in blocked["reason"]
+    assert "After each additional verifier iteration" in blocked["reason"]
+
+    evidence_path = (
+        search_root
+        / "host-logs"
+        / "codex-autoresearch-leases"
+        / f"{agent_session_id}.json"
+    )
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["status"] == "active"
+    assert evidence["blocked_stop_attempts"] == 1
+    assert evidence["parent_closeout_after_seconds"] == 375
+    assert evidence["min_runtime_seconds"] == 300
+    assert evidence["max_runtime_seconds"] == 420
+    assert evidence["start_event"] == "SubagentStartTranscript"
+    assert evidence["lease_precedes_parent_closeout"] is True
+    assert evidence["lease_precedes_parent_hard_deadline"] is True
+
+    evidence["started_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=301)
+    ).isoformat().replace("+00:00", "Z")
+    evidence_path.write_text(
+        json.dumps(evidence, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed_stop = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "session-codex",
+            "agent_id": agent_identity,
+            "agent_type": "default",
+        },
+        CODEX_HOME=str(tmp_path / "codex-home"),
+    )
+    assert completed_stop.stdout == ""
+    released = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert released["status"] == "released"
+    assert released["release_reason"] == "lease_satisfied"
+    assert released["elapsed_seconds"] >= 300
+    assert released["released_within_parent_closeout_budget"] is True
+    assert released["released_within_max_runtime"] is True
+    assert released["blocked_stop_attempts"] == 1
+    assert released["stop_attempts"] == 2
 
 
 def test_ordinary_subagent_stop_does_not_inherit_parent_next_action(

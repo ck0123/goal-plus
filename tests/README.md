@@ -43,6 +43,10 @@ pytest -m "st and st_codex" -k codex_rolling_followup -v -s -rs
 # Codex portable 2 x 2 Search cycle
 pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s -rs
 
+# Codex one-worker AutoResearch lease: 5 minute lower bound, 7 minute watchdog
+ST_CODEX_TIMEOUT=1200 \
+  pytest -m "st and st_codex" -k codex_autoresearch_lease -v -s -rs
+
 # Codex revises one goal after result 1, refreezes, and completes result 2
 pytest -m "st and st_codex" -k goal_plus_spec_revision -v -s -rs
 

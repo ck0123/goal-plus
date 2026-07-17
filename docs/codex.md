@@ -106,6 +106,33 @@ window, and interrupts only after the second timeout. `max_turns` is a hint,
 not an enforceable Codex cap. A continuation may receive a larger one-dispatch
 budget without changing the frozen spec.
 
+For a sustained single-worker AutoResearch turn, add
+`worker_budget.min_runtime_seconds` and optionally `min_verifier_runs`. These
+are lower bounds enforced by the project `SubagentStop` hook; an early final
+response receives a continuation prompt inside the same Codex worker turn, so
+the main agent remains in `wait_agent`. Timing is anchored to the native child
+transcript start (discovered no later than its first candidate tool or stop
+event) and is recorded under
+`.gp/host-logs/codex-autoresearch-leases/`. `max_runtime_seconds` remains the
+parent-owned upper bound. The adapter rejects a configuration whose minimum
+would still be active at the watchdog soft-closeout point. For example, a
+five-minute research lease can use:
+
+```json
+{
+  "min_runtime_seconds": 300,
+  "min_verifier_runs": 1,
+  "max_runtime_seconds": 420,
+  "on_exceed": "interrupt"
+}
+```
+
+This reserves 300 seconds for autonomous research, starts parent closeout at
+375 seconds, and keeps the 420-second hard interrupt as a final backstop.
+Workers must continue verifier-backed research rather than sleeping. A durable
+`VerifierWorkspaceSideEffect` or `candidate_action=stop_and_report` releases
+the lease early so infrastructure failures return to the parent immediately.
+
 The `PostToolUse` hook may also inject one informational timing advisory when
 the remaining outer/worker time is below observed verifier-submission time.
 It never stops the worker. Evidence is visible through

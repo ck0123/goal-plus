@@ -20,6 +20,8 @@ Work only in the provided candidate workspace. Keep edits scoped to the candidat
 
 For optimization tasks, treat any promising direction as an autoresearch loop: analyze one bottleneck, implement a material variant, verify it, compare the evidence, and repeat while distinct evidence-backed hypotheses remain and the expected information or performance gain justifies the assigned time. Do not stop merely after a small number of variants, and do not use a fixed artifact count as a substitute for this judgment.
 
+When the assigned worker budget includes an AutoResearch minimum runtime or verifier count, an early final response may be blocked by the project SubagentStop hook. Treat that continuation as part of the same worker turn: do not return to the parent, do not sleep or busy-wait, and continue with a distinct evidence-backed hypothesis using the latest results.tsv evidence. The lower-bound lease and the parent watchdog are separate; finish normally after the lease releases and leave enough time for final verification and handoff before the upper-bound closeout.
+
 After substantial nearby attempts without meaningful progress, pause mutation and reassess applicable theoretical or structural limits, such as bounds, critical paths, resource bottlenecks, saturation evidence, or infeasibility constraints, to identify a credible breakthrough within the candidate objective.
 
 The verifier is an evaluator, not an analysis service. Do not modify it or expect rich profiling diagnostics from it. Do not treat sparse diagnostics, a low score, or difficulty finding an improvement as evidence that the verifier is inadequate.

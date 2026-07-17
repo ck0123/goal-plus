@@ -12,7 +12,7 @@ When the search is complete, output a fenced JSON block tagged `st_report` as th
 LAST thing in your final message. No prose after the block. The JSON MUST conform
 to this schema:
 
-- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | k_module_then_circle_packing | signal_processing_multi | swe_bench_20212 | codex_redispatch | codex_circle_packing_cycle | codex_rolling_followup | claude_k_module_smoke
+- scenario: string         # one of circle_packing_continue | circle_packing_two_batch | circle_packing_random | k_module_smoke | k_module_then_circle_packing | signal_processing_multi | swe_bench_20212 | codex_redispatch | codex_circle_packing_cycle | codex_rolling_followup | codex_autoresearch_lease | claude_k_module_smoke
 - run_id: string           # search runtime run_id
 - candidates: array of { candidate_id: string, score: number|null, iterations: integer, status: string }
 - selected_candidate_id: string | null
@@ -39,4 +39,5 @@ Scenario-specific `extra` fields:
 | codex_redispatch | `host: "codex"`, `model: string`, `candidate_id: string`, `first_agent_session_id: string`, `redispatch_agent_session_id: string`, `same_candidate: boolean`, `redispatch_budget_control_mode: "parent_watchdog"`, `task_names: array<string>`, `verifier_scores: array<number\|null>` |
 | codex_circle_packing_cycle | `host: "codex"`, `model: "gpt-5.6-terra"`, `rounds: 2`, `batch_sizes: [2, 2]`, `agent_session_ids: array of four distinct strings`, `task_names: array<string>`, `round_2_parent_candidate_ids: array<string>` |
 | codex_rolling_followup | `host: "codex"`, `model: "gpt-5.6-terra"`, `wait_mode: "wait_any"`, two initial session ids/task names, first/continued candidate ids, unchanged continued session id, `continue_tool: "followup_task"`, `same_worker_continuation: true` |
+| codex_autoresearch_lease | `host: "codex"`, `model: "gpt-5.6-terra"`, `agent_session_id: string`, `min_runtime_seconds: 300`, `max_runtime_seconds: 420`, `parent_closeout_after_seconds: 375` |
 | claude_k_module_smoke | `host: "claude-code"` |

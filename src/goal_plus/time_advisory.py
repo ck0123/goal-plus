@@ -76,7 +76,7 @@ def is_search_candidate_session(session: AgentSessionRecord) -> bool:
     task_name = str(
         session.host_handle.task_name or session.launch.get("task_name") or ""
     )
-    if task_name.startswith("search_agent_"):
+    if Path(task_name).name.startswith("search_agent_"):
         return True
     # Compatibility for sessions persisted before task_name became part of
     # the Codex host handle.

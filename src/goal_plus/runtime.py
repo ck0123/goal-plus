@@ -2137,6 +2137,11 @@ class FileSearchRuntime:
 
     def _validate_host_strategy(self, strategy: StrategySpec) -> None:
         self._validate_worker_launch_for_host(strategy)
+        self._validate_worker_budget_for_host(
+            worker_host=strategy.worker_host,
+            worker_agent_type=strategy.worker_agent_type,
+            worker_budget=strategy.worker_budget,
+        )
         if strategy.worker_host == "opencode":
             return
         if strategy.driver != "builtin":
@@ -2149,11 +2154,6 @@ class FileSearchRuntime:
                 f"{strategy.worker_host} worker_host does not support strategy "
                 f"{strategy.name}; use default/agent_guided or random"
             )
-        self._validate_worker_budget_for_host(
-            worker_host=strategy.worker_host,
-            worker_agent_type=strategy.worker_agent_type,
-            worker_budget=strategy.worker_budget,
-        )
 
     def _validate_worker_launch_for_host(self, strategy: StrategySpec) -> None:
         if strategy.worker_launch is None:
@@ -2190,6 +2190,18 @@ class FileSearchRuntime:
             )
         if worker_budget is None:
             return
+        if (
+            worker_host != "codex"
+            and (
+                worker_budget.min_runtime_seconds is not None
+                or worker_budget.min_verifier_runs is not None
+            )
+        ):
+            raise ValueError(
+                "worker_budget AutoResearch lease fields "
+                "min_runtime_seconds/min_verifier_runs are currently supported "
+                "only for codex"
+            )
         if worker_host == "codex" and worker_budget.max_runtime_seconds is None:
             raise ValueError(
                 "codex worker_budget requires max_runtime_seconds so the "

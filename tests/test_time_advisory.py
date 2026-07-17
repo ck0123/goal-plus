@@ -7,7 +7,10 @@ import pytest
 
 from goal_plus.models import SearchSpec
 from goal_plus.runtime import FileSearchRuntime
-from goal_plus.time_advisory import build_search_time_advisory
+from goal_plus.time_advisory import (
+    build_search_time_advisory,
+    is_search_candidate_session,
+)
 from tests.test_runtime_unit import make_project, spec_with_host
 
 
@@ -31,6 +34,18 @@ def _codex_candidate(tmp_path: Path) -> tuple[FileSearchRuntime, str, str, str]:
     task = runtime.start_batch(run_id, plan.plan_id)[0]
     session = runtime.start_agent_session(run_id, task.candidate_id, {"goal": "test"})
     return runtime, run_id, task.candidate_id, session.agent_session_id
+
+
+def test_codex_candidate_identity_accepts_canonical_agent_path(tmp_path: Path) -> None:
+    runtime, run_id, _, agent_session_id = _codex_candidate(tmp_path)
+    session = runtime._load_agent_session_by_id(agent_session_id, run_id=run_id)
+    task_name = str(session.host_handle.task_name)
+    rebound = runtime.bind_agent_handle(
+        agent_session_id,
+        {"host": "codex", "task_name": f"/root/{task_name}"},
+    )
+
+    assert is_search_candidate_session(rebound) is True
 
 
 def test_time_advisory_uses_subagent_iterations_and_lists_candidate_timing(

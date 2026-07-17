@@ -138,12 +138,30 @@ class WorkerBudget(SearchModel):
     max_runtime_seconds: int | None = Field(default=None, gt=0)
     max_turns: int | None = Field(default=None, gt=0)
     on_exceed: Literal["interrupt"] = "interrupt"
+    min_runtime_seconds: int | None = Field(default=None, gt=0)
+    min_verifier_runs: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def require_runtime_or_turn_limit(self) -> "WorkerBudget":
         if self.max_runtime_seconds is None and self.max_turns is None:
             raise ValueError(
                 "worker_budget requires max_runtime_seconds or max_turns"
+            )
+        if (
+            self.min_runtime_seconds is not None
+            and self.max_runtime_seconds is None
+        ):
+            raise ValueError(
+                "worker_budget.min_runtime_seconds requires max_runtime_seconds"
+            )
+        if (
+            self.min_runtime_seconds is not None
+            and self.max_runtime_seconds is not None
+            and self.min_runtime_seconds >= self.max_runtime_seconds
+        ):
+            raise ValueError(
+                "worker_budget.min_runtime_seconds must be less than "
+                "max_runtime_seconds"
             )
         return self
 

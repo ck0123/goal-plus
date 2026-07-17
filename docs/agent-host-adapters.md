@@ -72,6 +72,14 @@ a completion barrier.
 distinct candidate workspaces; `max_parallel` limits live workers. None of
 these is a forced round count.
 
+Codex additionally supports a lower-bound single-worker AutoResearch lease
+through `worker_budget.min_runtime_seconds` and `min_verifier_runs`. Its
+`SubagentStop` hook continues the same child turn until the lower bound is
+satisfied, while `max_runtime_seconds` remains the independent parent-watchdog
+upper bound. The adapter requires the lease to release before the parent soft
+closeout, preventing the two controls from racing. This lower-bound lease is
+currently Codex-only.
+
 `strategy.worker_launch` carries optional host launch preferences. Codex maps
 `model`, `reasoning_effort`, and `service_tier` when exposed; Pi maps model and
 thinking level through trusted process configuration. These values do not

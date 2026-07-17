@@ -158,6 +158,17 @@ def _codex_budget_control(
     if max_runtime_seconds is not None and max_runtime_ms is not None:
         soft_closeout_seconds = _soft_closeout_seconds(int(max_runtime_seconds))
         final_wait_timeout_ms = soft_closeout_seconds * 1000
+        min_runtime_seconds = worker_budget.get("min_runtime_seconds")
+        if (
+            min_runtime_seconds is not None
+            and int(min_runtime_seconds)
+            >= int(max_runtime_seconds) - soft_closeout_seconds
+        ):
+            raise ValueError(
+                "codex worker_budget.min_runtime_seconds must end before the "
+                "parent watchdog soft-closeout point; increase "
+                "max_runtime_seconds to reserve worker closeout time"
+            )
         budget_control.update(
             {
                 "initial_wait_timeout_ms": max_runtime_ms - final_wait_timeout_ms,
@@ -168,6 +179,18 @@ def _codex_budget_control(
                 "final_wait_timeout_ms": final_wait_timeout_ms,
             }
         )
+        if min_runtime_seconds is not None or worker_budget.get(
+            "min_verifier_runs"
+        ) is not None:
+            budget_control["autoresearch_lease"] = {
+                "mode": "subagent_stop",
+                "min_runtime_seconds": int(min_runtime_seconds or 0),
+                "min_verifier_runs": int(
+                    worker_budget.get("min_verifier_runs") or 1
+                ),
+                "start_event": "native_child_session",
+                "release_before_parent_closeout": True,
+            }
     if worker_budget.get("max_turns") is not None:
         budget_control["max_turns_hint"] = worker_budget["max_turns"]
     return budget_control

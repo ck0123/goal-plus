@@ -977,18 +977,26 @@ class FileGoalPlusRuntime:
 
             subagent_role = context.get("goal_plus_subagent_role")
             if subagent_role == "search_candidate":
-                if context.get("search_candidate_verifier_complete") is True:
+                completion_complete = context.get(
+                    "search_candidate_completion_complete"
+                )
+                if completion_complete is True or (
+                    completion_complete is None
+                    and context.get("search_candidate_verifier_complete") is True
+                ):
                     return self._record_gate(record, event, "allow")
                 agent_session_id = context.get("search_candidate_agent_session_id")
                 session_detail = (
                     f" {agent_session_id}" if isinstance(agent_session_id, str) else ""
                 )
-                reason = (
-                    f"Search candidate{session_detail} must complete at least one "
-                    "search_run_verifier call with its own agent_session_id before "
-                    "stopping. Selection, reporting, promotion, and final audit remain "
-                    "parent-owned."
-                )
+                reason = context.get("search_candidate_completion_reason")
+                if not isinstance(reason, str) or not reason:
+                    reason = (
+                        f"Search candidate{session_detail} must complete at least one "
+                        "search_run_verifier call with its own agent_session_id before "
+                        "stopping. Selection, reporting, promotion, and final audit remain "
+                        "parent-owned."
+                    )
                 return self._record_gate(
                     record,
                     event,

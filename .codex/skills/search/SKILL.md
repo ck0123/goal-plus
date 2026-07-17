@@ -209,6 +209,24 @@ runtime-owned worker timer. Send the payload's configured `closeout_message`
 exactly once for that worker; completion or continuation resets only that
 worker's dispatch deadline, never the whole pool.
 
+When `worker_budget.min_runtime_seconds` or `min_verifier_runs` is present,
+`budget_control.autoresearch_lease.mode == "subagent_stop"` is a lower-bound
+lease enforced by the candidate's project `SubagentStop` hook. An early final
+response is blocked and the continuation prompt goes back to the same Codex
+worker without returning control to the main agent. The lease is anchored to
+the native child transcript start (discovered no later than the first candidate
+tool or stop event), not when the runtime record is created. After every
+additional verifier iteration, the worker attempts completion again and lets
+the hook decide whether to continue or release.
+Never send the parent closeout message while this lease is active: the adapter
+rejects configurations where `min_runtime_seconds` reaches or overlaps
+`initial_wait_timeout_ms / 1000`. `max_runtime_seconds` remains the upper-bound
+parent watchdog and must include a distinct closeout window after the minimum.
+Do not poll or sleep to satisfy the lower bound; let the worker continue
+hypothesis -> artifact -> verifier cycles. Infrastructure `stop_and_report`
+evidence bypasses the lease so a broken verifier does not waste the full
+research window.
+
 Project `PostToolUse` hooks also provide a separate, advisory-only timing
 signal to Search candidate subagents. After `search_get_agent_context` binds
 the worker identity, each subagent tool completion may compare the available

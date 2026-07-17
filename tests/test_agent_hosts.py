@@ -204,6 +204,56 @@ def test_codex_adapter_builds_watchdog_budget_payload() -> None:
     }
 
 
+@pytest.mark.codex
+def test_codex_adapter_separates_autoresearch_lease_from_parent_watchdog() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    payload = adapter.build_launch_payload(
+        worker_agent_type=None,
+        candidate_id="cand-0001",
+        agent_session_id="agent-0001",
+        short_intent="try",
+        one_paragraph_idea="try",
+        worker_budget={
+            "min_runtime_seconds": 300,
+            "min_verifier_runs": 1,
+            "max_runtime_seconds": 420,
+            "on_exceed": "interrupt",
+        },
+    )
+
+    control = payload["budget_control"]
+    assert control["autoresearch_lease"] == {
+        "mode": "subagent_stop",
+        "min_runtime_seconds": 300,
+        "min_verifier_runs": 1,
+        "start_event": "native_child_session",
+        "release_before_parent_closeout": True,
+    }
+    assert control["initial_wait_timeout_ms"] == 375000
+    assert control["final_wait_timeout_ms"] == 45000
+    assert 300 < control["initial_wait_timeout_ms"] / 1000 < 420
+
+
+@pytest.mark.codex
+def test_codex_adapter_rejects_lease_overlapping_parent_closeout() -> None:
+    adapter = get_agent_host_adapter("codex")
+
+    with pytest.raises(ValueError, match="before the parent watchdog soft-closeout"):
+        adapter.build_launch_payload(
+            worker_agent_type=None,
+            candidate_id="cand-0001",
+            agent_session_id="agent-0001",
+            short_intent="try",
+            one_paragraph_idea="try",
+            worker_budget={
+                "min_runtime_seconds": 360,
+                "max_runtime_seconds": 400,
+                "on_exceed": "interrupt",
+            },
+        )
+
+
 @pytest.mark.pi
 def test_pi_rpc_adapter_builds_worker_payload() -> None:
     adapter = get_agent_host_adapter("pi-rpc")

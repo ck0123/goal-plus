@@ -182,6 +182,10 @@ def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
     assert "advisory-only timing" in text
     assert "GOAL_PLUS_OUTER_DEADLINE_AT" in text
     assert "Main agent, ordinary subagent, and final-checker" in normalized
+    assert "worker_budget.min_runtime_seconds" in text
+    assert "budget_control.autoresearch_lease" in text
+    assert "same Codex worker" in text
+    assert "Never send the parent closeout message while this lease is active" in text
 
 
 def test_codex_worker_records_progress_handoff_before_returning() -> None:
@@ -202,6 +206,8 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert "10-15 distinct verifier-recorded artifacts" not in text
     assert "verifier is an evaluator, not an analysis service" in text
     assert "PostTool time advisory is informational" in text
+    assert "AutoResearch minimum runtime" in text
+    assert "do not sleep or busy-wait" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
     assert "verifier_assessment" in text

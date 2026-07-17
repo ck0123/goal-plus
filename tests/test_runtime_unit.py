@@ -1838,6 +1838,8 @@ def test_codex_worker_budget_flows_to_watchdog_launch_payload(tmp_path: Path) ->
         "max_runtime_seconds": 600,
         "max_turns": 8,
         "on_exceed": "interrupt",
+        "min_runtime_seconds": None,
+        "min_verifier_runs": None,
     }
     assert session.launch["budget_control"] == {
         "mode": "parent_watchdog",
@@ -2018,6 +2020,8 @@ def test_claude_worker_budget_flows_to_turn_limit_launch_payload(tmp_path: Path)
         "max_runtime_seconds": None,
         "max_turns": 16,
         "on_exceed": "interrupt",
+        "min_runtime_seconds": None,
+        "min_verifier_runs": None,
     }
     assert session.launch["agent_type"] == "search-candidate-agent-deep"
     assert session.launch["budget_control"] == {
@@ -2129,6 +2133,28 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
     run_id = pi_runtime.create_run(frozen.frozen_spec_id)
     with pytest.raises(ValueError, match="pi-rpc worker_budget requires max_runtime_seconds"):
         pi_runtime.plan_next(run_id, requested_k=1)
+
+    opencode_runtime = FileSearchRuntime(tmp_path / ".search-opencode-lease")
+    opencode_spec = spec_with_strategy(
+        project,
+        {
+            "name": "random",
+            "worker_mode": "agent-session-pool",
+            "worker_host": "opencode",
+            "worker_budget": {
+                "min_runtime_seconds": 300,
+                "max_runtime_seconds": 420,
+            },
+        },
+        max_candidates=1,
+    )
+    frozen = opencode_runtime.freeze_spec(
+        opencode_spec,
+        [project / "evaluator.py"],
+    )
+    run_id = opencode_runtime.create_run(frozen.frozen_spec_id)
+    with pytest.raises(ValueError, match="currently supported only for codex"):
+        opencode_runtime.plan_next(run_id, requested_k=1)
 
 
 @pytest.mark.codex
