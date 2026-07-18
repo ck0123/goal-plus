@@ -8,8 +8,9 @@ Use `/skill:goal-plus` with this raw user goal:
 $ARGUMENTS
 
 When this Pi prompt opens Search Mode, the SearchSpec strategy must set
-`worker_host: "pi-rpc"` and `worker_mode: "agent-session-pool"` so workers run
-through the Pi RPC driver, not the default OpenCode host.
+`worker_host: "pi-rpc"`, `worker_mode: "agent-session-pool"`, and
+`orchestration_mode: "parallel_loops"` so workers run through the Pi RPC driver
+as a fixed initial set of autonomous candidate loops.
 
 Before freezing, require each `ranking_signal` to print a final JSON object
 with a finite numeric `spec.metric_name`. The command may be inline or call an
@@ -35,8 +36,9 @@ is unavailable. Keep the same frozen spec and run by default. Use
 feature transfer belongs inside the current run. This is reasoning within the
 existing flow, not a new runtime phase or approval step.
 
-If a worker reports a verifier concern, pause slot refill while checking its
-evidence. Do not rebuild for sparse diagnostics, low scores, or slow progress.
+If a worker reports a verifier concern, pause continuation while checking its
+evidence. There is no normal slot refill in `parallel_loops` mode. Do not
+rebuild for sparse diagnostics, low scores, or slow progress.
 If the main agent confirms a real contract/coverage/determinism/target or
 infrastructure defect, call `search_invalidate_run` first, interrupt the entire
 Pi pool and wait for `active_count=0`, then repair/freeze and create the

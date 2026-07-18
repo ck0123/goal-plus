@@ -46,7 +46,10 @@ goal can retain multiple search tasks.
 | `search_plan_next` | persist one planning round |
 | `search_start_batch` | materialize that plan's isolated candidate workspaces |
 
-`search_plan_next(requested_k)` plans:
+`strategy.orchestration_mode` is `rolling_candidates` for backward
+compatibility or `parallel_loops` for the new Pi/Codex flow. In
+`parallel_loops`, `search_plan_next(requested_k)` may be called exactly once;
+later work uses continuation/redispatch of existing candidates. It plans:
 
 ```text
 min(requested_k, remaining max_candidates, max_parallel)

@@ -1,7 +1,8 @@
 # Codex
 
 Codex is the native multi-agent host for Goal Plus. It uses the shared MCP
-runtime and a rolling pool built from Codex collaboration tools.
+runtime and a fixed set of parallel autonomous loops built from Codex
+collaboration tools.
 
 ## Setup
 
@@ -46,7 +47,7 @@ semantics are unchanged.
 
 Use the `goal-plus` skill as the user entry. The `search` skill is internal.
 
-## Rolling Worker Flow
+## Parallel Loop Flow
 
 After planning and materializing candidates, `search_start_agent_session`
 returns a launch payload like:
@@ -71,18 +72,22 @@ by the current tool schema; never synthesize it from the schema alone.
 
 The parent then:
 
-1. launches up to `budget.max_parallel` workers;
+1. freezes `strategy.orchestration_mode="parallel_loops"`, plans once, and
+   launches all initial candidates;
 2. binds returned handles with `search_bind_agent_handle`;
 3. calls targetless `wait_agent` and inspects `list_agents` after each wake;
 4. final-verifies every newly terminal candidate immediately;
-5. refills a free slot or continues a valuable worker with
-   `search_continue_agent_session` followed by `followup_task`;
+5. observes any verifier-backed global-best update, then continues that same
+   native worker with `search_continue_agent_session` followed by
+   `followup_task` unless a global stop condition is true;
 6. drains live agents before selection.
 
-Every launch message says the child is a candidate worker, not the search orchestrator.
-It may read its context, edit its candidate workspace, verify, and return a
-research handoff. It must not plan, select, report, promote, or mutate Goal Plus
-state.
+Every launch message says the child owns one autonomous candidate loop, not
+global initial dispatch or final selection. It reads its context, chooses every
+later hypothesis/pivot/rebase, edits its workspace, verifies, and returns a
+research handoff. It must not create candidates, select, report, promote, or
+mutate Goal Plus state. Main never replaces it because of low score or one
+non-improving completion.
 
 ## Worker Deadline
 
@@ -155,6 +160,9 @@ Prefer native continuation while the Codex worker remains available:
 search_continue_agent_session -> followup_task
 ```
 
+The follow-up directive is neutral: refresh durable context and continue the
+same autonomous loop. Main does not supply a preferred technical direction.
+
 If the worker is gone or a fresh context is intentional, use
 `search_redispatch_candidate`. The new session uses the same workspace, Git
 state, verifier history, and structured `.tmp/handoff.json`.
@@ -177,16 +185,16 @@ Fast contract tests:
 pytest -m codex -q
 ```
 
-Real Codex paths use the CLI model slug `gpt-5.6-terra` by default:
+The dedicated parallel-loop scenario is verified with `gpt-5.6-luna`:
 
 ```bash
-pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s -rs
-pytest -m "st and st_codex" -k codex_rolling_followup -v -s -rs
+ST_CODEX_MODEL=gpt-5.6-luna \
+  pytest -m "st and st_codex" -k codex_parallel_loop_cycle -v -s -rs
 ```
 
-`codex_circle_packing_cycle` proves the portable 2 x 2 Search cycle.
-`codex_rolling_followup` proves wait-any behavior and same-worker follow-up
-while another worker remains live.
+`codex_parallel_loop_cycle` proves one initial plan, wait-any behavior,
+same-worker follow-up on the same candidate, verifier-backed best updates, and
+final selection/report after drain.
 
 ## Logs
 

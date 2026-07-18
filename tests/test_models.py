@@ -223,6 +223,17 @@ def test_strategy_spec_accepts_supported_worker_hosts() -> None:
         StrategySpec(worker_host="unsupported")  # type: ignore[arg-type]
 
 
+def test_strategy_spec_accepts_parallel_loop_orchestration() -> None:
+    legacy = StrategySpec()
+    parallel = StrategySpec(orchestration_mode="parallel_loops")
+
+    assert legacy.orchestration_mode == "rolling_candidates"
+    assert parallel.orchestration_mode == "parallel_loops"
+
+    with pytest.raises(ValidationError):
+        StrategySpec(orchestration_mode="conductor")  # type: ignore[arg-type]
+
+
 def test_strategy_spec_accepts_worker_budget() -> None:
     spec = StrategySpec(
         worker_host="codex",

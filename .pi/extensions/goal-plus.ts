@@ -151,6 +151,9 @@ const StrategySpec = Type.Object(
 		),
 		ref: Type.Optional(NullableString),
 		agent_role: Type.Optional(Type.String()),
+		orchestration_mode: Type.Optional(
+			Type.Union([Type.Literal("rolling_candidates"), Type.Literal("parallel_loops")]),
+		),
 		worker_mode: Type.Optional(Type.Literal("agent-session-pool")),
 		worker_host: Type.Optional(
 			Type.Union([
@@ -545,29 +548,29 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 };
 const RuntimeToolDescriptions: Record<string, string> = {
 	goal_plus_save_spec_draft:
-		"Save the discovered SearchSpec draft. Its budget uses whole-run max_candidates and per-batch max_parallel semantics; do not invent per-round budget fields.",
+		"Save the discovered SearchSpec draft. New Pi specs use orchestration_mode=parallel_loops with max_candidates equal to the initial max_parallel candidate count.",
 	search_freeze_spec:
-		"Freeze an immutable SearchSpec and verifier bundle. Preflight uses a disposable source copy and rejects verifier workspace side effects; verifier temp files belong in the unique GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, never a fixed /tmp path under concurrent Search. budget.max_candidates is the total cap across the whole run and all rounds; budget.max_parallel is the per-batch cap. Equal values normally permit only one full batch.",
+		"Freeze an immutable SearchSpec and verifier bundle. Preflight uses a disposable source copy and rejects verifier workspace side effects; verifier temp files belong in the unique GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, never a fixed /tmp path under concurrent Search. In parallel_loops mode one initial plan creates the long-lived candidates.",
 	search_run_verifier:
 		"Score one candidate and pass a concise hypothesis for the tested design. Every returned verifier report appends exactly one validated row to the runtime-owned, inherited workspace/results.tsv and commits it. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
 	search_invalidate_run:
 		"Atomically fence a run after the main agent confirms verifier contract, coverage, determinism, target-alignment, or infrastructure failure. Then interrupt every host worker, wait for zero active workers, repair/freeze, and create a successor with source_run_id.",
 	search_plan_next:
-		"Plan one candidate batch/round. requested_k applies only to this call; planned_k is min(requested_k, remaining max_candidates, max_parallel). The default request of 4 is not a whole-run budget.",
+		"Plan initial candidates. In parallel_loops mode this may be called exactly once; later work resumes existing candidates. planned_k is min(requested_k, remaining max_candidates, max_parallel).",
 	pi_search_run_candidate:
 		"Run one Pi candidate worker. worker_budget optionally overrides only this dispatch, including an initial dispatch or a long state-level redispatch, without mutating the frozen spec.",
 	pi_search_run_batch:
-		"Compatibility batch runner. It waits for the whole batch; prefer the managed Pi pool tools for rolling wait-any scheduling.",
+		"Compatibility batch runner. It waits for the whole batch; prefer the managed Pi pool for parallel-loop wait-any scheduling.",
 	pi_search_pool_open:
 		"Open a durable Pi candidate pool and optionally submit the initial workers. Returns immediately after launch and enforces the frozen max_parallel limit.",
 	pi_search_pool_submit:
-		"Submit one new candidate into a free Pi pool slot. The call returns after launch, not after the worker finishes.",
+		"Submit an initial or legacy candidate into a free Pi pool slot. Normal parallel_loops flow opens all initial candidates once and does not submit replacements.",
 	pi_search_pool_wait_any:
-		"Wait until any Pi pool worker reaches candidate_ready after handle binding and final verification. Process every returned event before refilling free slots.",
+		"Wait until any Pi pool worker reaches candidate_ready after handle binding and final verification. Validate every event, observe the durable best, then continue that same candidate unless a global stop condition is true.",
 	pi_search_pool_snapshot:
 		"Inspect durable Pi pool state, active workers, terminal results, and free slots without waiting. Pass run_id to rediscover a pool after main-session interruption, or pool_id for one exact pool.",
 	pi_search_pool_continue:
-		"Reinvest in a completed Pi candidate through explicit state redispatch, optionally with a larger one-dispatch worker budget.",
+		"Resume the same autonomous Pi candidate loop through explicit state redispatch in its existing workspace, optionally with another one-dispatch budget.",
 	pi_search_pool_close:
 		"Close a Pi pool by draining active workers or interrupting them. Always close the pool before select/promote.",
 };

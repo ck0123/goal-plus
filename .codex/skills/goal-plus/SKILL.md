@@ -26,7 +26,8 @@ prefix; match by the final logical tool name.
    and do not continue against an older revision. `/goal-plus resume` restores
    the same active revision after a host interruption.
    `/goal-plus mode=autonomous <goal>` (the default) requests substantial
-   initial candidate leases and evidence-driven longer continuation;
+   initial candidate leases and same-candidate continuation while no global
+   stop condition is true;
    `/goal-plus mode=probe <goal>` requests short feasibility, potential, and
    blocker probes. An edit without a mode preserves the current choice. The
    runtime stores it only as a canonical final line in `raw_goal`, not as a
@@ -87,6 +88,9 @@ prefix; match by the final logical tool name.
 9. Before calling Search Mode tools such as `search_freeze_spec`, call
    `goal_plus_gate(event="pre_tool_use", context={"tool_name": "search_freeze_spec"})`.
 10. In Search Mode, use the internal `search` skill:
+   freeze new Codex specs with
+   `strategy.orchestration_mode="parallel_loops"`, create the initial candidate
+   set exactly once, and then validate and resume those same candidate workers;
    `search_freeze_spec`, `search_create`, `search_plan_next`,
    `search_start_batch`, `search_start_agent_session`, final
    `search_run_verifier`, `search_select`, `search_report`, and
@@ -197,10 +201,13 @@ bind Goal Plus ownership, and main/final-checker/ordinary-subagent events are
 ignored. Top-level `Stop` enforces the full raw-goal and elapsed-time audit until
 the main agent records a terminal status.
 `SubagentStop` is ownership-aware: a Search candidate is blocked only until its
-own `search_run_verifier(..., agent_session_id=...)` call is durably recorded,
-then it may return while the parent continues selection, reporting, promotion,
-and final audit. Ordinary subagents do not inherit parent actions; final-check
-reviewers retain their independent-review gate.
+own `search_run_verifier(..., agent_session_id=...)` call is durably recorded.
+After it returns, the parent performs completion verification, observes any
+new verifier-backed global best, and resumes the same candidate worker while
+the global stop policy is false. The parent does not choose its next technical
+direction or create a quality-based replacement. Ordinary subagents do not
+inherit parent actions; final-check reviewers retain their independent-review
+gate.
 
 Keep the explicit workflow calls above as auditable state transitions even
 though the hooks are enforcement backstops. Subagent tool events do not bind

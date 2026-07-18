@@ -2325,6 +2325,39 @@ def test_plan_next_caps_batch_size_to_max_parallel(tmp_path: Path) -> None:
     assert [task.candidate_id for task in next_tasks] == ["c003", "c004"]
 
 
+def test_parallel_loops_rejects_second_plan_and_reuses_initial_candidates(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    spec_data = spec_for(project, max_candidates=4).model_dump(mode="json")
+    spec_data["budget"]["max_parallel"] = 2
+    spec_data["strategy"].update(
+        {
+            "name": "random",
+            "worker_host": "codex",
+            "orchestration_mode": "parallel_loops",
+        }
+    )
+    frozen = runtime.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    assert [task.candidate_id for task in tasks] == ["c001", "c002"]
+    with pytest.raises(RuntimeError, match="one initial SearchPlan"):
+        runtime.plan_next(run_id, requested_k=1)
+
+    session = runtime.start_agent_session(run_id, tasks[0].candidate_id)
+    continued = runtime.continue_agent_session(session.agent_session_id)
+    assert continued.agent_session_id == session.agent_session_id
+    assert continued.candidate_id == tasks[0].candidate_id
+
+
 def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path) -> None:
     """max_parallel sizes batches; the runtime does not supervise live workers."""
     project = make_project(tmp_path)

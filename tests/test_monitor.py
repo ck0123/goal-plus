@@ -117,6 +117,7 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
         "name": "random",
         "driver": "builtin",
         "ref": None,
+        "orchestration_mode": "rolling_candidates",
         "worker_mode": "agent-session-pool",
         "worker_host": "pi-rpc",
         "worker_agent_type": None,
@@ -382,6 +383,7 @@ def test_goal_plus_monitor_snapshot_summarizes_strategy_specific_plan_state(
 
     assert snapshot["strategy"]["name"] == "openevolve"
     assert snapshot["strategy"]["driver"] == "builtin"
+    assert snapshot["strategy"]["orchestration_mode"] == "rolling_candidates"
     assert snapshot["strategy"]["history_policy"]["top_n"] == 3
     assert snapshot["strategy"]["latest_plan"] == {
         "plan_id": plan.plan_id,

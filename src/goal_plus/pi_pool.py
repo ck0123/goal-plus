@@ -287,7 +287,7 @@ def submit_pi_search_pool(
             raise RuntimeError(f"candidate {candidate_id} already has an active pool job")
         if not redispatch and any(job["candidate_id"] == candidate_id for job in jobs):
             raise RuntimeError(
-                f"candidate {candidate_id} was already submitted; use pool_continue for reinvestment"
+                f"candidate {candidate_id} was already submitted; use pool_continue for continuation"
             )
 
         job_id = f"job_{uuid.uuid4().hex[:12]}"

@@ -5,9 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_host_assets_common import assert_common_budget_planning_claims
-
-
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.codex
 
@@ -88,33 +85,32 @@ def test_codex_search_skill_projects_launch_metadata_to_current_tool_schema() ->
     assert "agent_type=launch.agent_type" not in text
 
 
-def test_codex_search_skill_documents_rolling_pool_budget_planning() -> None:
+def test_codex_search_skill_documents_parallel_loop_policy() -> None:
     text = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split())
 
-    assert_common_budget_planning_claims(text)
-    assert "total number of distinct candidate workspaces" in normalized
-    assert "hard cap on live candidate workers" in normalized
-    assert "planning decision epoch, not a worker barrier" in normalized
-    assert "conservative whole-run safety cap" in normalized
-    assert "Never wait for unrelated slow workers" in normalized
-    assert "targetless `wait_agent`" in text
+    assert "orchestration_mode: parallel_loops" in text
+    assert "one candidate workspace is one autonomous search loop" in normalized
+    assert "exactly once" in normalized
+    assert "runtime rejects a second `search_plan_next`" in normalized
+    assert "Use targetless" in text
+    assert "`wait_agent`" in text
     assert "`list_agents`" in text
     assert "`followup_task`" in text
-    assert "deepen_incumbent" in text
-    assert "transfer_feature" in text
-    assert "macro_restart" in text
-    assert "decision event, not run completion" in normalized
+    assert "same native Codex subagent" in normalized
+    assert "Continue the same autonomous search loop" in text
+    assert "low score" in normalized
+    assert "not a reason to stop or replace" in normalized
+    assert "Do not call `search_plan_next` or `search_start_batch` after" in normalized
+    assert "Final selection: run only after all workers have drained" in normalized
     assert "source_run_id" in text
     assert "search_invalidate_run" in text
     assert "interrupt_agent" in text
-    assert "candidate_local" in text
-    assert "feature_family" in text
-    assert "same-candidate continuation" in normalized
-    assert "free slot is not an obligation" in normalized
-    assert "does not require `macro_restart`" in text
+    assert "deepen_incumbent" not in text
+    assert "transfer_feature" not in text
+    assert "macro_restart" not in text
 
 
 def test_codex_search_skill_documents_worker_budget_watchdog() -> None:
@@ -184,14 +180,13 @@ def test_codex_search_skill_documents_state_level_resume() -> None:
     )
 
     assert "History is runtime-owned, not a `plan.md` file" in text
-    assert "State-level resume" in text
+    assert "State-level Resume" in text
     assert "context.history" in text
     assert "context.iterations" in text
     assert "worker_budget.max_runtime_seconds" in text
     assert "search_redispatch_candidate" in text
-    assert "one-dispatch override on initial launch or redispatch" in text
-    assert "research_summary" in text
-    assert "scoped conditional `pitfalls`" in text
+    assert "one-dispatch host limit" in text
+    assert "handoff metadata" in text
     assert "do not rely on chat transcript" in agent
 
 
@@ -206,7 +201,8 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert "workspace root" in text
     assert "exactly one validated row" in text
     assert "hypothesis=" in text
-    assert "not the search orchestrator" in text
+    assert "one autonomous Search loop" in text
+    assert "Do not wait for the parent to choose a direction" in text
     assert "search_select" in text
     assert "search_report" in text
     assert "search_promote" in text
@@ -255,9 +251,9 @@ def test_codex_docs_record_native_parity_contract() -> None:
     assert "closeout_message" in codex
     assert "final_wait_timeout_ms" in codex
     assert "worker_launch" in codex
-    assert "codex_circle_packing_cycle" in codex
-    assert "candidate worker, not the search orchestrator" in codex
-    assert "Codex-native 2 x 2 cycle" in adapters
+    assert "codex_parallel_loop_cycle" in codex
+    assert "autonomous" in codex
+    assert "parallel" in adapters
     assert "current `spawn_agent` schema" in adapters
     for text in (adapters, debugging, readme, agents):
         assert "UserPromptSubmit" in text

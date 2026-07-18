@@ -9,9 +9,9 @@ Use this skill after `/goal-plus` has upgraded a goal to Search Mode, or for
 explicit low-level debugging of an already measurable SearchSpec. The normal
 user-facing entrypoint is `/goal-plus`.
 
-Use the logical `search_*` tools exposed by the `goal-plus` MCP server.
-Codex may display MCP tools with a client-specific prefix; match by the final
-logical tool name.
+Use the logical `search_*` tools exposed by the `goal-plus` MCP server. Codex
+may display MCP tools with a client-specific prefix; match by the final logical
+tool name.
 
 ## Verifier Freeze Contract
 
@@ -23,264 +23,234 @@ verifier file only when needed and materialize it during Spec Discovery before
 freezing, in a source-owned path such as `.goal-plus-verifiers/`, never `.gp/`
 or `.search/`. The freeze tool exposes the complete nested `SearchSpec` schema.
 `expected_outputs` accepts artifact path/glob strings only and does not parse
-stdout. The runtime repeats this preflight and rejects an invalid freeze before
-any candidate starts.
+stdout.
 
 The freeze preflight runs in a disposable source copy and treats the candidate
 workspace as read-only. Verifiers must put compiler products and temporary
 outputs in `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or a
-`tempfile.TemporaryDirectory()`. Never use one fixed `/tmp` pathname: a Search
-batch may verify several isolated candidates concurrently. Any workspace change
-raises `VerifierWorkspaceSideEffect`; repair the verifier and freeze a new spec
-before starting candidates.
+`tempfile.TemporaryDirectory()`. Never use one fixed `/tmp` pathname: parallel
+candidate verification would collide. Any workspace change raises
+`VerifierWorkspaceSideEffect`; repair the verifier and freeze a new spec before
+starting candidates.
 
-If runtime verification still returns `VerifierWorkspaceSideEffect`,
+If runtime verification returns `VerifierWorkspaceSideEffect`,
 `metrics.infrastructure_failure=true`, or
-`metrics.candidate_action=stop_and_report`, the worker must stop immediately.
-It must not delete generated verifier files, edit frozen assets, reset around the
-failure, or retry. The parent must not redispatch that candidate or spend another
-batch on the same `frozen_spec_id`; repair the source-owned verifier, freeze a
-new spec, and create a new run. In a concurrent batch, host lifecycle controls
-remain responsible for closing out siblings that have not already returned.
+`metrics.candidate_action=stop_and_report`, the affected worker must stop
+immediately. It must not delete generated files, modify frozen verifier assets,
+reset around the failure, or retry. The parent invalidates the run, quiesces
+every live worker, repairs the source-owned verifier, freezes a new spec, and
+creates a successor run. Never select or promote an invalidated run.
+Use `search_invalidate_run` before `interrupt_agent` so in-flight verifier
+results cannot enter the old run.
+Create that successor with `source_run_id` so durable research lineage is
+preserved while every inherited artifact is reverified.
+
+## Parallel Loop Contract
+
+New Codex Search runs use:
+
+```yaml
+strategy:
+  orchestration_mode: parallel_loops
+  worker_host: codex
+  worker_mode: agent-session-pool
+```
+
+`parallel_loops` means:
+
+- create the initial candidate set once;
+- one candidate workspace is one autonomous search loop;
+- the candidate subagent owns all later hypothesis, pivot, rebase, and
+  AutoResearch decisions inside that workspace;
+- a terminal worker event causes validation and same-worker continuation, not
+  another planning round;
+- normal execution never creates a replacement candidate or refills a slot;
+- runtime rejects a second `search_plan_next` call for the run;
+- `search_select`, `search_report`, and `search_promote` remain parent-owned
+  final actions.
+
+The parent is a completion validator and continuation trigger, not a search
+conductor. A low score, one non-improving turn, or another candidate leading is
+not a reason to stop or replace a worker.
+
+Legacy frozen specs with `orchestration_mode: rolling_candidates` remain
+readable, but the normal `/goal-plus` Codex flow must freeze
+`parallel_loops`.
 
 ## Search Run Budget Planning
 
-Choose the whole-run candidate budget before `search_freeze_spec`; it is frozen
-and cannot grow inside that run. `budget.max_candidates` is the total number of
-distinct candidate workspaces. `budget.max_parallel` is the hard cap on live
-candidate workers. A persisted Search round is a planning decision epoch, not a
-worker barrier: the next plan may be created as soon as any worker completes and
-a slot is free.
+Choose the whole-run budget before `search_freeze_spec`; it is frozen and
+cannot grow inside that run.
 
-When the user or outer harness supplies a wall-clock, attempt, or token budget:
+1. Reserve time for final drain, selection, parent verification, reporting,
+   and promotion.
+2. Choose the number of initial autonomous loops with `max_parallel`. When no
+   better resource signal exists, recommend 4.
+3. In the normal no-replacement flow, set `max_candidates` equal to
+   `max_parallel`. Extra candidate budget is not permission to create later
+   rounds in `parallel_loops` mode.
+4. Give each initial worker enough uninterrupted runtime to create a real
+   artifact and verifier evidence.
+5. Use only global stop facts to decide whether to resume: explicit target
+   reached, user stop, invalidated run, or insufficient outer time for another
+   worker turn plus final closeout.
 
-1. Reserve time for main-agent final verification, selection, reporting, and
-   promotion.
-2. Choose `max_parallel` that the host can support. When no better
-   resource signal exists, recommend 4; this is a planning recommendation, not
-   a runtime default.
-3. Set `max_candidates` as a conservative whole-run safety cap that fits the
-   outer budget. Do not turn it into a required round count or promise that all
-   candidate slots will be consumed.
-4. Give initial probes enough uninterrupted time to produce real artifacts and
-   verifier evidence. Reinvest more time in valuable directions and stop weak
-   directions based on evidence and remaining time.
-
-After every terminal worker event, refresh remaining time and
-`search_list_history`. Review the current-run `feature_ledger`,
-`verifier_assessments`, and pitfalls. Treat pitfalls as conditional evidence:
-`candidate_local` stays with one candidate, `feature_family` transfers only
-when mechanism and conditions match, and `evaluation_contract` changes run
-policy only after main-agent confirmation. A single observation never forbids
-another candidate. Consider all three search actions without imposing a quota:
-`deepen_incumbent`, `transfer_feature` from any candidate
-(including one outside the visible ranking frontier), and `macro_restart` from
-source or an earlier ancestor. Decide independently whether each free slot
-should continue a promising worker, start a candidate for one of those actions,
-remain idle, or begin final selection. Record the chosen action in
-`proposal.metadata.search_action`. `requested_k` is only the number of new
-candidate workspaces desired at that decision point. Never wait for unrelated
-slow workers merely to preserve a batch boundary.
-
-Before starting another candidate, assess whether recent and active attempts
-cluster around the same underlying mechanism or bottleneck. Different candidate
-ids do not by themselves provide search diversity. When work has concentrated
-in one family, step back and analyze the current bottleneck, then prefer a
-materially different high-potential direction when the evidence supports one.
-This is advisory: it does not require `macro_restart`, impose an action quota,
-or make superficial difference more valuable than a strong hypothesis.
-
-After substantial attempts without meaningful progress, do not keep applying
-nearby mutations by default. Reassess the objective's applicable theoretical or
-structural limits, such as lower or upper bounds, critical paths, resource
-bottlenecks, saturation evidence, or infeasibility constraints. Use that
-analysis to identify a credible breakthrough and decide whether to deepen,
-transfer, or redirect; the analysis does not force any particular action.
-
-When an existing candidate remains promising and further progress benefits from
-its accumulated source and workspace understanding, prefer same-candidate
-continuation with a larger one-dispatch budget over launching near-duplicate
-candidates. Parallel candidates in the same feature family are useful only when
-they test materially distinct hypotheses. A free slot is not an obligation to
-launch more work.
+Different candidate ids do not by themselves provide search diversity. Use
+distinct initial proposals or seeds when useful, then let each subagent choose
+its own evidence-backed next hypothesis. After substantial nearby attempts
+without progress, the subagent, not the parent, reassesses theoretical or
+structural limits and pivots within its candidate loop.
 
 ## Main Workflow
 
 1. Call `search_freeze_spec` for the Goal Plus spec draft, or `search_create`
-   when a frozen spec already exists.
-2. Fill up to `budget.max_parallel` initial slots with `search_plan_next` and
-   `search_start_batch`.
-3. For each new candidate, call `search_start_agent_session`. Its optional
-   `worker_budget` is a one-dispatch override for a direction that deserves a
-   longer uninterrupted initial exploration; it does not mutate the frozen
-   spec.
+   when a suitable frozen spec already exists. New specs must set
+   `strategy.orchestration_mode="parallel_loops"` and `worker_host="codex"`.
+2. Call `search_plan_next(requested_k=budget.max_parallel)` exactly once, then
+   call `search_start_batch` exactly once to create the initial candidates.
+3. For every candidate, call `search_start_agent_session`. Its optional
+   `worker_budget` is a one-dispatch host limit; it does not change the
+   candidate's technical direction.
 4. Launch a Codex subagent with the returned launch payload:
-   - Project the payload onto the current `spawn_agent` tool schema. Always pass
-     `task_name`, `message`, and `fork_turns` when those fields are exposed.
-   - Pass optional `agent_type`, `model`, `reasoning_effort`, or `service_tier`
-     metadata only when the returned launch payload contains that key and the
-     current tool schema exposes the corresponding field. Never synthesize
-     optional launch metadata merely because the tool schema offers it. The
-     adapter may deliberately select the built-in `default` role so the worker
-     inherits the parent model without reloading a project role.
-   - Do not fail merely because optional launch metadata is hidden. When no
-     model override can be passed, the worker inherits the parent Codex model.
-5. If `spawn_agent` returns a task name or nickname, call `search_bind_agent_handle` with:
-   - `host: "codex"`
-   - `task_name`
-   - `nickname` when present
-6. Track every live worker and its own absolute watchdog deadline. Call
-   targetless `wait_agent` so the parent wakes when any worker produces a
-   mailbox update; then call `list_agents` and process every worker that is now
-   terminal. A progress-only wakeup is not a completion event, so keep waiting
-   when no worker is terminal.
-7. For each terminal worker, call `search_bind_agent_handle` again with its
-   final summary/timeout metadata, then run
-   `search_run_verifier(hypothesis="main final verification")` from the main
-   agent. The terminal bind automatically harvests a bounded
-   `.tmp/handoff.json` from that candidate workspace into durable runtime
-   history; a missing or malformed handoff does not make handle binding fail
-   and is exposed as metadata for diagnosis. Use
-   `search_get_agent_observability(agent_session_id)` when model, token,
-   duration, context, terminal, or native session evidence is needed; it is
-   read-only and does not replace `list_agents` for host liveness. Every
-   returned report appends
-   exactly one validated row to the
-   runtime-owned inherited workspace-root `results.tsv` and commits it. Only
-   after that verifier returns is
-   the pool event `candidate_ready`. Refresh history immediately; do not wait
-   for the other live workers. `candidate_ready` is a decision event, not run
-   completion. Inspect its `verifier_assessment`: sparse diagnostics, a low
-   score, or lack of progress are not grounds to refreeze, while demonstrated
-   evaluation-contract misalignment must be investigated before spending more
-   candidate budget. Pause refill while investigating. If the concern is not
-   confirmed, record why the spec remains adequate and resume. If the main
-   agent confirms contract, coverage, determinism, target-alignment, or
-   infrastructure failure, call `search_invalidate_run` first so no later
-   verifier result can enter the run; then `interrupt_agent` every live worker
-   and use `list_agents`/`wait_agent` until all are terminal. Preserve their
-   handoffs, repair or regenerate the verifier only after quiescence, freeze a
-   new spec, and call
-   `search_create(new_frozen_spec_id, source_run_id=old_run_id)`. Never
-   select/promote the invalidated run. Inherited features must be re-verified;
-   inherited scores are historical only.
-8. Unless verifier investigation has paused refill, choose one action for each
-   newly free slot:
-   - call `search_continue_agent_session(..., worker_budget?)`, then project its
-     launch payload onto `followup_task`, to give the same Codex worker a deeper
-     turn on the same candidate;
-   - call `search_plan_next(requested_k=<new direction count>)`,
-     `search_start_batch`, and launch a new candidate;
-   - leave the slot idle because no useful work fits the remaining time; or
-   - begin final drain and selection.
-9. If a worker stops before useful verifier evidence and native continuation is
-   no longer available, call
-   `search_redispatch_candidate(run_id, candidate_id, directive?,
-   worker_agent_type?, worker_budget={"max_runtime_seconds": <larger seconds>, ...})`
-   and launch the returned payload as a new worker for the same
-   candidate.
-10. Before each wait, compare the nearest live-worker deadline with the current
-    time. At soft closeout send exactly one `send_message`; at the hard deadline
-    call `interrupt_agent`, observe the terminal state, and process it like any
-    other completion. Do not apply one worker's timeout to the whole pool.
-11. Drain or interrupt every live worker before `search_select`. Then use
-    `search_select`, `search_report`, and `search_promote` when appropriate.
-    Do not select/promote merely to checkpoint a new incumbent;
-    verifier-recorded Git iterations already preserve it. Keep the same run
-    while the evaluation/edit contract is adequate and candidate budget remains.
-    If a new run is unavoidable because the contract/subproblem changed or the
-    immutable run budget is exhausted, read the old run history and pass
-    `source_run_id` to `search_create`. The successor's `inherited_research`
-    explicitly snapshots the old frontier, scoped pitfalls, feature ledger, and
-    non-winning portable innovations. It never imports old scores as current
-    evidence.
+   - project it onto the current `spawn_agent` tool schema;
+   - always pass `task_name`, `message`, and `fork_turns` when exposed;
+   - pass `agent_type`, `model`, `reasoning_effort`, or `service_tier` only when
+     both the launch payload and current tool schema expose that field;
+   - Never synthesize optional launch metadata;
+   - when no model override can be passed, the worker inherits the parent Codex
+     model; in other words, it inherits the parent Codex model.
+5. Bind the returned task name/nickname with `search_bind_agent_handle` using
+   `host="codex"`.
+6. Track every live worker and its own watchdog deadline. Use targetless
+   `wait_agent`, then `list_agents`, and process every worker that is terminal.
+   A progress-only wakeup is not a completion event.
+7. For each terminal worker:
+   - read the current run best from `search_list_history` or
+     `goal_plus_monitor_snapshot`;
+   - bind the terminal handle and summary with `search_bind_agent_handle`; the
+     terminal bind automatically harvests bounded `.tmp/handoff.json` data;
+   - use `search_get_agent_observability(agent_session_id)` when native model,
+     token, duration, context, or terminal evidence is needed; this is read-only
+     and does not replace `list_agents` for liveness;
+   - call `search_run_verifier(hypothesis="main completion verification")`
+     without `agent_session_id`;
+   - refresh history/monitor and record whether the verifier-backed global best
+     candidate/score changed;
+   - inspect `verifier_assessment` only for a concrete evaluation-contract or
+     infrastructure failure. Sparse diagnostics, low score, or no improvement
+     are not verifier inadequacy and do not block continuation.
+8. Apply the global stop policy after validation:
+   - stop resuming when an explicit success criterion is satisfied;
+   - stop when the run is invalidated or the user stopped it;
+   - stop when remaining outer time cannot fit another worker turn plus final
+     closeout;
+   - otherwise resume the same native Codex subagent on the same candidate.
+9. To resume, first call `search_continue_agent_session(agent_session_id)` with
+   no new technical directive, then project the returned continuation payload
+   onto `followup_task` for the existing task. Use this exact neutral message:
+
+   ```text
+   Continue the same autonomous search loop from the latest committed evidence.
+   Refresh runtime context, choose the next evidence-backed hypothesis yourself,
+   verify every material change, and keep working while the assigned budget remains.
+   ```
+
+   Do not mention a parent-preferred direction, feature transfer, macro restart,
+   or ranking-based judgment. The resumed worker owns that decision.
+10. Do not call `search_plan_next` or `search_start_batch` after the initial
+    candidates exist. Do not leave a slot idle because its candidate is weak;
+    either resume the same worker under the global stop policy or stop the whole
+    search for a global reason.
+11. Before each wait, compare the nearest worker deadline with the current
+    time. At soft closeout use `send_message` exactly once with the configured
+    closeout message; at the hard
+    deadline call `interrupt_agent`, observe the terminal state, and validate
+    it like any other completion. One worker timeout does not stop siblings.
+12. When the global stop policy is true, drain or interrupt every live worker,
+    then call `search_select`, `search_report`, and `search_promote` when
+    requested. Selection uses verifier-backed Git iterations; do not promote
+    merely to checkpoint a temporary best.
+
+## Best-So-Far Contract
+
+`search_run_verifier` is metric-direction aware and updates the durable
+`run.best_score` and `run.best_candidate_id` when a passing result is better.
+The parent must observe this after every completion verification, but it must
+not turn the comparison into a continuation decision.
+
+- Better result: keep it as the latest verifier-backed answer, then resume the
+  same worker if the global stop policy is false.
+- Worse or equal result: preserve the earlier best, then still resume the same
+  worker if the global stop policy is false.
+- Final selection: run only after all workers have drained.
 
 ## Worker Budget Control
 
-`budget_control.mode == "parent_watchdog"` means the runtime expects the parent
-Codex agent to enforce elapsed worker time. Codex `spawn_agent` does not accept
-a timeout argument, so the parent must combine `wait_agent` with an interrupt.
+`budget_control.mode == "parent_watchdog"` means the parent Codex agent enforces
+elapsed worker time. `spawn_agent` has no timeout argument, so combine
+`wait_agent` with closeout and `interrupt_agent`.
 
-Treat `budget_control.max_turns_hint` as a prompt-level hint only. The hard
-control for Codex is the sum of `budget_control.initial_wait_timeout_ms` and
-`budget_control.final_wait_timeout_ms`, followed by interruption. The
-`soft_closeout_seconds` field records the closeout window; it is not a
-runtime-owned worker timer. Send the payload's configured `closeout_message`
-exactly once for that worker; completion or continuation resets only that
-worker's dispatch deadline, never the whole pool.
+`worker_budget.max_runtime_seconds` is the enforceable upper bound for one
+dispatch. A continuation may receive another one-dispatch host limit derived
+from the remaining outer time.
+
+Treat `budget_control.max_turns_hint` as prompt guidance only. The hard limit is
+the sum of `initial_wait_timeout_ms` and `final_wait_timeout_ms`, followed by
+interruption. `soft_closeout_seconds` is the closeout window. Send the configured
+`closeout_message` exactly once for that dispatch. Continuation resets only the
+same worker's dispatch deadline.
 
 When `worker_budget.min_runtime_seconds` or `min_verifier_runs` is present,
 `budget_control.autoresearch_lease.mode == "subagent_stop"` is a lower-bound
-lease enforced by the candidate's project `SubagentStop` hook. An early final
-response is blocked and the continuation prompt goes back to the same Codex
-worker without returning control to the main agent. The lease is anchored to
-the native child transcript start (discovered no later than the first candidate
-tool or stop event), not when the runtime record is created. After every
-additional verifier iteration, the worker attempts completion again and lets
-the hook decide whether to continue or release.
-Never send the parent closeout message while this lease is active: the adapter
-rejects configurations where `min_runtime_seconds` reaches or overlaps
-`initial_wait_timeout_ms / 1000`. `max_runtime_seconds` remains the upper-bound
-parent watchdog and must include a distinct closeout window after the minimum.
-Do not poll or sleep to satisfy the lower bound; let the worker continue
-hypothesis -> artifact -> verifier cycles. Infrastructure `stop_and_report`
-evidence bypasses the lease so a broken verifier does not waste the full
-research window.
+lease enforced by the candidate's `SubagentStop` hook. An early final response
+is blocked and the continuation returns to the same Codex worker without
+returning control to main. Never send the parent closeout message while this lease is active.
+Do not poll or sleep; continue hypothesis -> artifact ->
+verifier cycles. Infrastructure `stop_and_report` evidence bypasses the lease.
 
-Project `PostToolUse` hooks also provide a separate, advisory-only timing
-signal to Search candidate subagents. After `search_get_agent_context` binds
-the worker identity, each subagent tool completion may compare the available
-worker/outer-task time with the observed average verifier-submission time. The
-hook injects at most one message per `agent_session_id`, lists each sampled
-candidate's elapsed time and verifier count, and never stops the worker. Main
-agent, ordinary subagent, and final-checker PostTool events must not trigger it.
-An outer harness may set `GOAL_PLUS_OUTER_DEADLINE_AT` to an RFC 3339 timestamp
-or Unix epoch; otherwise the worker budget is used when available.
+Project `PostToolUse` hooks may also provide an advisory-only timing message to
+the bound candidate worker. It may use `GOAL_PLUS_OUTER_DEADLINE_AT` when
+available. It never stops the worker and must not trigger for the main agent,
+ordinary subagents, or final checker.
 
-Choose the worker budget before freezing the spec. Codex does not expose a
-hard per-subagent step tier like OpenCode, so the enforceable escalation is a
-larger `worker_budget.max_runtime_seconds` for the next search run or a
-one-dispatch override on initial launch or redispatch. Treat the frozen budget
-as a baseline, not a requirement to give every direction equal depth. When a
-direction is promising, allocate a larger budget that fits the outer remaining
-time and let the worker continue hypothesis -> artifact -> verifier cycles
-while distinct evidence-backed hypotheses remain and the expected information
-or performance gain justifies the time. You may also override
-`worker_agent_type` when local Codex agent
-variants exist, but that is prompt/agent selection, not a hard step cap. If a
-watchdog stops a worker before it records any verifier iteration or usable
-final score, do not repeat the same underpowered budget unless the user
-explicitly wants a cheap probe.
+Main agent, ordinary subagent, and final-checker PostTool events must not
+trigger this candidate advisory.
 
-## Runtime History And Resume
+Continuation budgets are derived from outer remaining time and final closeout
+reserve, not from whether the parent likes the candidate. Do not give a weak
+candidate an intentionally unusable budget or a strong candidate a new
+technical directive.
 
-History is runtime-owned, not a `plan.md` file. The main agent reads prior
-candidate results through `search_list_history`; workers recover state through
-`search_get_agent_context`, which returns `context.history` and
-`context.iterations`. When a worker provides `.tmp/handoff.json`, the terminal
-handle bind harvests it automatically and later history includes its structured
-`research_summary`. Use the verifier-backed
-feature ledger in `key_results`, scoped conditional `pitfalls`, `blockers`,
-`next_steps`, and `verifier_assessment` to design later candidate proposals; do
-not carry only the best score or raw transcript text. Each feature records its
-code surface, artifact/git head, portability, dependencies, measured effect,
-and relation to the incumbent. The run-level ledger deliberately retains
-features from candidates outside the visible score frontier.
+## Runtime History And State-level Resume
 
-When `inherited_research` is present, use it only to seed hypotheses and
-feature-transfer probes. Candidate ids are qualified by `source_run_id`, and
-source scores are non-reusable until the successor verifier records them again.
+History is runtime-owned, not a `plan.md` file. Workers recover through
+`search_get_agent_context`, including `context.history`, `context.iterations`,
+`context.results`, `context.results_tsv`, workspace Git state, and bounded
+handoff metadata. Host transcript is useful context but is not authoritative
+Search state.
 
-Codex supports same-worker continuation through `followup_task`. First call
-`search_continue_agent_session` so the runtime records the directive and
-one-dispatch budget, then invoke the returned follow-up payload. The worker must
-still refresh `search_get_agent_context`; host transcript is useful context but
-is not authoritative Search state. Use `search_redispatch_candidate` only when
-the original worker cannot be continued or a fresh context is intentional.
+Codex same-worker continuation uses `search_continue_agent_session` followed by
+`followup_task` on the existing task. The worker must refresh context at the
+start of every resumed turn.
 
-## Continuation
+Use `search_redispatch_candidate` only when the original native worker cannot be
+continued. Redispatch must keep the same candidate/workspace. It is recovery,
+not a normal way to introduce another search direction.
 
-Same-worker continuation uses `search_continue_agent_session` followed by
-Codex `followup_task`. State-level resume remains available through
-`search_redispatch_candidate`, which creates a new `agent_session_id` for the
-same candidate workspace and relies on MCP history/iterations.
+## Contamination Recovery
+
+Normal low performance never creates a new candidate. A replacement/fork is
+allowed only after objective recovery evidence such as unrecoverable Git or
+ledger corruption, an unusable native session plus failed same-candidate
+redispatch, or a verifier/spec invalidation that requires a successor run.
+
+Recovery order:
+
+1. same native worker continuation;
+2. same-candidate state redispatch;
+3. restore the same candidate from its latest verifier-backed Git revision;
+4. only through an explicit future recovery contract, fork a replacement with
+   durable lineage.
+
+Do not use ordinary `search_plan_next` as that recovery contract in
+`parallel_loops` mode.

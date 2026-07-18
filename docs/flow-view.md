@@ -8,8 +8,8 @@ and [API](api.md) owns tool reference.
 
 | Role | Owns |
 |---|---|
-| Main agent | goal interpretation, triage, search policy, slot allocation, final verification, selection, reporting, promotion |
-| Candidate worker | one candidate workspace, iterative edits, self-verification, concise research handoff |
+| Main agent | goal interpretation, triage, one-time initial dispatch, completion validation, global-best observation, global stop, final verification, selection, reporting, promotion |
+| Candidate worker | one autonomous candidate loop: hypotheses, pivots, rebases, iterative edits, self-verification, concise research handoff |
 | Search runtime | frozen specs, isolated workspaces, plans, verifier records, ranking, reports, patches |
 | Host pool | worker launch, wait-any events, deadlines, interrupts, native transcripts |
 
@@ -28,7 +28,7 @@ user request
             -> search_freeze_spec
             -> search_create
             -> goal_plus_link_search_run
-            -> rolling search loop
+            -> parallel candidate loops
                  -> verifier concern? audit evidence
                       -> unconfirmed: keep current run
                       -> confirmed: invalidate -> stop all workers
@@ -41,33 +41,34 @@ user request
 ```
 
 A Goal Plus record may contain multiple search tasks. Each task is one
-`run_id` over one frozen spec. Keep one run across asynchronous planning
-decisions while its evaluation/edit contract is valid and its immutable budget
-is usable. A successor run exists only for a revised contract/subproblem or an
-exhausted immutable budget; Search tasks are not nested.
+`run_id` over one frozen spec. A new Pi/Codex `parallel_loops` task has one
+initial planning decision and many same-candidate continuations. Keep one run
+while its evaluation/edit contract is valid. A successor run exists only for a
+revised contract or measurable subproblem; Search tasks are not nested.
 
 ## Exploration Guidance
 
 `/goal-plus mode=autonomous <goal>` and `/goal-plus mode=probe <goal>` select
-how the main agent initially spends worker leases. `autonomous` is the default:
-initial workers should receive a meaningful window (about 15 minutes when the
-host supports elapsed-time leases), and promising candidates may receive much
-longer follow-up leases, up to about one hour when evidence justifies it.
-`probe` uses short leases or turn budgets to establish feasibility, potential,
-and blockers before the main agent decides whether to deepen or redirect.
+the outer exploration budget. `autonomous` is the default: initial workers
+receive a meaningful window (about 15 minutes when the host supports elapsed
+time leases), and every active loop may receive renewable continuation up to
+about one hour while outer time remains. `probe` uses short leases to establish
+feasibility, potential, and blockers. Candidate subagents, not main, choose
+technical directions.
 
 This is prompt guidance, not a Goal/Search phase or runtime scheduler field.
 The runtime removes the command prefix and appends one canonical exploration
 line to `raw_goal`. Editing a goal preserves the current mode unless the edit
 supplies another `mode=...` prefix.
 
-## Rolling Search Loop
+## Parallel Search Loops
 
 ### 1. Plan and materialize
 
-The main agent calls `search_plan_next`, then `search_start_batch`. A round is
-the persisted plan created by that decision. It does not require all candidates
-from the round to finish together.
+New Pi/Codex specs set `strategy.orchestration_mode="parallel_loops"`. The main
+agent calls `search_plan_next`, then `search_start_batch`, exactly once. This
+creates all long-lived candidate workspaces. Runtime rejects a second planning
+round for the run.
 
 `planned_k` is:
 
@@ -75,17 +76,20 @@ from the round to finish together.
 min(requested_k, remaining max_candidates, max_parallel)
 ```
 
-`max_candidates` caps distinct candidate workspaces for the whole run.
-`max_parallel` caps live workers.
+Normally `max_candidates == max_parallel`: the first number caps distinct
+candidate workspaces, and the second caps concurrently live workers.
 
-### 2. Fill free slots
+### 2. Launch each autonomous loop
 
 For each selected candidate, the main agent creates a session with
 `search_start_agent_session` and launches the returned host-native payload.
 The worker must begin with `search_get_agent_context`; prompt ids are labels,
 while returned context is authoritative.
 
-The worker edits only its assigned workspace and records real iterations with:
+The worker owns all later hypothesis, pivot, feature-transfer, structural
+restart, and rebase decisions within that candidate. It never waits for main to
+choose a direction. It edits only its assigned workspace and records real
+iterations with:
 
 ```text
 search_run_verifier(
@@ -143,40 +147,32 @@ The host wait-any primitive wakes the main agent when at least one worker is
 terminal. The main agent processes every new terminal event and runs a final
 verifier without `agent_session_id` against that exact candidate state.
 
-It then considers three search actions without fixed counts:
+After validation, main reads the verifier-backed best before/after the event.
+If the result improved the run, runtime updates `best_score` and
+`best_candidate_id`; if not, the prior best remains. This comparison never
+controls continuation.
 
-| Search action | Meaning |
-|---|---|
-| `deepen_incumbent` | continue a strong artifact or candidate |
-| `transfer_feature` | probe a portable, orthogonal feature from another candidate against the incumbent |
-| `macro_restart` | begin a structurally different direction from source or an earlier ancestor |
+Main applies only global stop conditions: explicit success reached, user stop,
+run invalidation, or insufficient outer time for another dispatch plus final
+closeout. Otherwise it resumes the exact same candidate:
 
-The chosen action is recorded in `proposal.metadata.search_action`. The main
-agent then makes one evidence-based pool choice for the free slot:
+- Codex: `search_continue_agent_session` then `followup_task` on the same native
+  worker and candidate.
+- Pi: `pi_search_pool_continue`, which creates a fresh stateless Pi session in
+  the same candidate workspace.
 
-| Choice | When |
-|---|---|
-| Continue the same worker | the direction is valuable and the host supports native continuation |
-| Redispatch the same candidate | workspace/history are useful but a fresh worker is safer |
-| Launch a new candidate | another distinct hypothesis is worth the remaining candidate budget |
-| Leave idle | remaining time cannot support a useful attempt |
-| Drain | current evidence is sufficient for selection |
+The continuation is neutral and tells the subagent to refresh evidence and
+choose its own next hypothesis. Low score, no improvement, or another candidate
+leading never causes replacement, a new candidate, or an idle slot. Main never
+calls `search_plan_next`, `search_start_batch`, or Pi pool submit after initial
+creation. It processes each completion immediately without waiting for slower
+siblings.
 
-The pool is normally refilled immediately. The only exception is an active
-verifier concern audit: the main agent pauses refill while checking concrete
-evidence, but leaves existing workers alone until the concern is confirmed.
-The main agent never waits for the slowest member of an artificial batch before
-evaluating ordinary completed work.
-
-`candidate_ready` is a decision event, not run completion. A new incumbent does
-not require select/promote/new-run checkpointing because verifier-recorded Git
-iterations are already durable. Keep one run while its evaluation/edit contract
-is adequate and immutable candidate budget remains. If a contract or measurable
-subproblem revision (or exhausted run budget) makes another run unavoidable,
-the main agent calls `search_create(..., source_run_id=<old run>)`. The runtime
-snapshots the old frontier, scoped pitfalls, feature ledger, and non-winning
-portable innovations into `inherited_research`. Old scores are explicitly
-non-reusable and every imported feature must be verified again.
+A new incumbent does not require select/promote/new-run checkpointing because
+verifier-recorded Git iterations are already durable. If a contract or
+measurable subproblem revision makes another run unavoidable, main calls
+`search_create(..., source_run_id=<old run>)`; inherited scores are historical
+until reverified.
 
 ### 4. Confirmed verifier invalidation
 
@@ -214,9 +210,9 @@ The control loop is shared; only the pool adapter changes.
 
 | Operation | Codex | Pi |
 |---|---|---|
-| Launch | `spawn_agent` from runtime launch payload | `pi_search_pool_open` / `pi_search_pool_submit` |
+| Initial launch | `spawn_agent` from runtime launch payload | `pi_search_pool_open` |
 | Wait any | targetless `wait_agent`, then `list_agents` | `pi_search_pool_wait_any` |
-| Continue valuable work | `search_continue_agent_session`, then `followup_task` | `pi_search_pool_continue` state-level redispatch |
+| Continue same loop | `search_continue_agent_session`, then `followup_task` | `pi_search_pool_continue` state-level redispatch |
 | Recover after interruption | live Codex agent registry plus `.gp` history | `pi_search_pool_snapshot(run_id=...)` plus `.gp` history |
 | Confirmed verifier invalidation | `search_invalidate_run`, interrupt every live agent, wait until terminal | `search_invalidate_run`, `pi_search_pool_close(mode="interrupt")`, wait for `active_count=0` |
 | Close | drain/interrupt native agents | `pi_search_pool_close` |

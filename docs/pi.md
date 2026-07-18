@@ -54,6 +54,7 @@ Use `worker_host="pi-rpc"` and a wall-clock budget:
 {
   "strategy": {
     "name": "random",
+    "orchestration_mode": "parallel_loops",
     "worker_host": "pi-rpc",
     "worker_budget": {
       "max_runtime_seconds": 600,
@@ -69,19 +70,23 @@ Before the hard limit, the runner sends one closeout steer. `max_turns` is only
 a prompt hint. A separate informational advisory may fire after a worker tool
 completion when observed verifier time no longer fits the remaining window.
 
-## Rolling Pool
+## Parallel Loops
 
 Normal Pi Search follows the shared [Flow](flow-view.md):
 
-1. plan and materialize candidates;
+1. set `orchestration_mode="parallel_loops"`, then plan and materialize the
+   initial candidates exactly once;
 2. `pi_search_pool_open(..., max_parallel=<frozen limit>)`;
 3. `pi_search_pool_wait_any` for the first candidate-ready event;
-4. inspect evidence and call `pi_search_pool_continue`,
-   `pi_search_pool_submit`, leave idle, or start draining;
+4. observe any verifier-backed best update and call
+   `pi_search_pool_continue` for that exact candidate unless a global stop
+   condition is true;
 5. recover interrupted main turns with `pi_search_pool_snapshot(run_id=...)`;
 6. `pi_search_pool_close`, then select, report, and promote.
 
-The supervisor enforces `max_parallel` and never auto-refills. A terminal event
+The supervisor enforces `max_parallel` and never auto-refills. Main never calls
+submit after initial pool creation and never replaces a candidate because of
+low score or lack of improvement. A terminal event
 is published only after the driver has completed the worker, bound its handle,
 and run final verification.
 
@@ -100,6 +105,10 @@ iterations, and writes a bounded `.tmp/handoff.json`.
 
 The handoff plus candidate Git state and `.gp` verifier history are the recovery
 surface. Pi workers do not need a persisted chat session.
+
+Every redispatched worker owns the next hypothesis, pivot, and rebase within
+the same candidate workspace. Main sends a neutral continuation directive and
+does not act as a technical conductor.
 
 ## Tool Facade
 

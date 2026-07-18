@@ -58,6 +58,8 @@ def test_create_goal_plus_record_writes_state_and_event(tmp_path) -> None:
         "Improve the README examples\n\n"
         + EXPLORATION_MODE_LINES["autonomous"]
     )
+    assert "resume every completed candidate in its existing workspace" in record.raw_goal
+    assert "score or rank must not cause replacement" in record.raw_goal
     assert record.status == "active"
     assert record.phase == "intake"
     assert not hasattr(record, "mode_hint")
@@ -77,6 +79,8 @@ def test_create_goal_normalizes_explicit_exploration_mode(tmp_path) -> None:
         "Determine whether approach A is viable\n\n"
         + EXPLORATION_MODE_LINES["probe"]
     )
+    assert "resume the same candidate" in record.raw_goal
+    assert "score or rank must not cause a replacement" in record.raw_goal
     with pytest.raises(ValueError, match="unsupported Goal Plus exploration mode"):
         runtime.create_goal("mode=fast Try approach A")
 

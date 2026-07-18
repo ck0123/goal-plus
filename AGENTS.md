@@ -172,9 +172,12 @@ Current host expectations:
   verifier-submission time; this does not stop the worker. Codex 0.144.1+ ships
   `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, and
   `SubagentStop` hooks with session ownership binding and terminal stats.
-  Candidate orchestration uses targetless `wait_agent` plus `list_agents`,
-  refills free slots without a batch barrier, and continues valuable workers
-  through `search_continue_agent_session` plus `followup_task`.
+  New Codex specs use `orchestration_mode="parallel_loops"`: create initial
+  candidates once, validate each completion, observe the verifier-backed best,
+  and continue the same native worker through
+  `search_continue_agent_session` plus `followup_task` while no global stop
+  condition is true. Main must not choose later technical directions or create
+  quality-based replacements.
 - Claude Code supports the portable builtin strategy subset. `worker_budget`
   requires `max_turns` and maps known budgets to `.claude/agents/*.md`
   `maxTurns` definitions. Claude Code ships `PostToolUse(goal_plus_create)`
@@ -187,8 +190,12 @@ Current host expectations:
   `.pi/extensions/goal-plus.ts`. The runner may send one advisory `steer` after
   a Search candidate tool completes when available time is below the observed
   average verifier-submission time. Pi RPC does not support same-worker
-  continuation; recover with `search_redispatch_candidate`, MCP history,
-  verifier evidence, Git state, and bounded progress handoff metadata. Pi has
+  continuation; `pi_search_pool_continue` performs logical same-candidate
+  continuation through `search_redispatch_candidate`, MCP history, verifier
+  evidence, Git state, and bounded progress handoff metadata. New Pi specs use
+  `orchestration_mode="parallel_loops"`; a fresh Pi session resumes the same
+  workspace after each validated completion while no global stop condition is
+  true. Pi has
   extension pre-tool guarding and skill stop gates, but no Codex Stop hook
   parity. Its main-agent pool is a durable host supervisor under
   `.gp/host-pools/pi/` with explicit open/submit/wait-any/snapshot/continue/

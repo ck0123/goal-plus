@@ -861,6 +861,7 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
         **task_summary,
         "is_report_run": run_id == report_run_id,
         "run": run.model_dump(mode="json"),
+        "strategy": frozen.spec.strategy.model_dump(mode="json", exclude_none=True),
         "frozen_spec": {
             "frozen_spec_id": frozen.frozen_spec_id,
             "spec_hash": frozen.spec_hash,
@@ -1708,6 +1709,7 @@ def _render_task(task: dict[str, Any], index: int) -> str:
         '<div class="task-metrics">'
         f'<div class="task-metric"><span class="kpi-label">Goal revision</span><strong>{_html(task.get("goal_revision"))}</strong></div>'
         f'<div class="task-metric"><span class="kpi-label">Strategy</span><strong>{_html((task.get("strategy") or {}).get("name"))}</strong></div>'
+        f'<div class="task-metric"><span class="kpi-label">Orchestration</span><strong>{_html((task.get("strategy") or {}).get("orchestration_mode"))}</strong></div>'
         f'<div class="task-metric"><span class="kpi-label">Baseline</span><strong class="mono">{_html(_number(scores.get("baseline")))}</strong></div>'
         f'<div class="task-metric"><span class="kpi-label">Score target</span><strong class="mono">{escape(score_target_text)}</strong></div>'
         f'<div class="task-metric"><span class="kpi-label">Best / selected</span><strong class="mono">{_html(_number(scores.get("best")))} / {_html(_number(scores.get("selected")))}</strong></div>'

@@ -46,7 +46,7 @@ Codex and Pi also expose:
 One request starts an autonomous run. The agent decides whether Goal Mode is
 enough or a frozen verifier makes parallel Search useful; entering Search does
 not require an extra approval step. `mode=autonomous` (the default) gives
-promising candidate workers substantial, renewable exploration leases;
+every initial candidate substantial, renewable same-workspace exploration leases;
 `mode=probe` asks for short feasibility probes first. This exploration mode is
 stored as guidance in the final line of `raw_goal`, not as a scheduler state.
 
@@ -55,7 +55,7 @@ stored as guidance in the final line of `raw_goal`, not as a scheduler state.
 | Host | Project assets | Entry | Search worker path |
 |---|---|---|---|
 | Pi | `.pi/` | `/goal-plus` or `pi -p "/goal-plus ..."` | durable Pi RPC pool; see [Pi](docs/pi.md) |
-| Codex | `.codex/` | `goal-plus` skill or `/goal-plus` prompt | native rolling `spawn_agent` pool; Codex 0.144.1+ hooks cover `UserPromptSubmit`, `PreToolUse`, and `SubagentStop`; see [Codex](docs/codex.md) |
+| Codex | `.codex/` | `goal-plus` skill or `/goal-plus` prompt | fixed parallel loops with native same-worker continuation; Codex 0.144.1+ hooks cover `UserPromptSubmit`, `PreToolUse`, and `SubagentStop`; see [Codex](docs/codex.md) |
 | Claude Code | `.mcp.json`, `.claude/` | `goal-plus` skill | foreground Agent compatibility path; see [Claude Code](docs/claude-code.md) |
 | OpenCode | `opencode.json`, `.opencode/` | `/goal-plus` | broadest legacy strategy coverage; see [OpenCode](docs/opencode.md) |
 
@@ -68,18 +68,22 @@ For Codex, copy `.codex/config.example.toml` to the ignored local
 - A **Goal Plus record** is the complete user task.
 - A **search task** is one `run_id` over one frozen spec. A goal may link more
   than one search task.
-- A **round** is a persisted planning decision, not a synchronization barrier.
-- A **candidate** is an isolated workspace with verifier history.
+- A **round** is a persisted planning decision. New Pi/Codex
+  `parallel_loops` runs have exactly one initial round.
+- A **candidate** is a long-lived autonomous loop in one isolated workspace
+  with verifier history.
 - A **worker session** is a host context/provenance handle. Worker lifecycle
   belongs to the host, not the Search runtime.
 - A **verifier concern** is worker advice. Only the main agent can confirm it;
   confirmation fences the run before all host workers are stopped and a
   successor spec/run is created.
 
-Search uses a rolling pool: fill up to `budget.max_parallel`, react whenever
-any worker finishes, and immediately continue that direction, launch another
-candidate, leave the slot idle, or drain for selection. Slower workers do not
-block completed work from being evaluated. See [Flow](docs/flow-view.md).
+New Pi/Codex Search uses fixed parallel loops: create the initial candidates
+once, validate every completion, update the verifier-backed global best, and
+resume that same candidate while no global stop condition is true. Main does
+not choose later technical directions or replace low-scoring candidates.
+Slower workers do not block completed work from being evaluated. Legacy frozen
+specs with `rolling_candidates` remain readable. See [Flow](docs/flow-view.md).
 
 Keep one run for one valid evaluation/edit contract. If a successor is
 unavoidable, `source_run_id` preserves bounded frontier/features/scoped
@@ -99,7 +103,7 @@ promotion stays retryable in `ready_to_promote` and emits no patch.
 
 | Need | Read |
 |---|---|
-| End-to-end ownership and rolling pool flow | [Flow](docs/flow-view.md) |
+| End-to-end ownership and parallel-loop flow | [Flow](docs/flow-view.md) |
 | Architecture, state, and invariants | [Design](docs/design.md) |
 | Current MCP and Pi-local tools | [API](docs/api.md) |
 | Host capability comparison | [Agent Host Adapters](docs/agent-host-adapters.md) |

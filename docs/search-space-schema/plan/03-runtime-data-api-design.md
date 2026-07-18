@@ -319,11 +319,11 @@ Evidence 以最新 state 提交，但 event 同时保存 admission 时的 declar
 
 | View | 内容 | 使用者 |
 |---|---|---|
-| audit | 完整 state/schema/event refs、版本父链 | 调试、研究复现 |
-| planning | incumbent、coverage、active reservations、open questions、budget | main agent |
-| worker-local | admitted plan、相关历史事件、局部 coverage、expected observation | candidate worker |
+| audit | 完整 state/schema/event refs、版本父链 | 调试、恢复与重放 |
+| planning | incumbent、coverage、active reservations、open questions、budget | loop agent / AtomicPlan Agent |
+| worker-local | admitted plan、相关历史事件、局部 coverage、expected observation | loop agent |
 | monitor | 一屏 state/schema version、coverage、reservations、recent commits/warnings | 操作者 |
-| experiment | 标准化指标、collision、schema revision、cost | benchmark harness |
+| report | event/state/admission/reservation 汇总、可用指标和缺失项 | Markdown/HTML 报告 |
 
 `get_agent_context` 应嵌入 worker-local view；不要要求 worker 先后读取多套互相可能漂移的 memory 文件。
 
@@ -348,8 +348,8 @@ P1 可先把 prepare 作为 runtime 内部 helper；P3 再暴露正式 tool。
 | `search_get_admission` | read-only | 幂等恢复与解释 |
 | `search_explain_overlap` | read-only | 返回各 view 证据和合法 relation 提示，不改变状态 |
 | `search_propose_schema_revision` | proposal write | 保存 revision candidate，不直接 apply |
-| `search_apply_schema_revision` | main/runtime write | 基于已验证 revision decision 创建新 schema/state version |
-| `search_close_reservation` | main-owned recovery write | 在 host 已提供终态证据后释放/取消悬挂 reservation |
+| `search_apply_schema_revision` | runtime write | 基于已验证 revision decision 创建新 schema/state version |
+| `search_close_reservation` | recovery/finalize write | 在 host 已提供终态证据后释放/取消悬挂 reservation |
 
 首轮不建议增加 public `search_submit_evidence`：worker 不能自称 evidence verified。继续由 `search_run_verifier` 生成事实并内部执行 VerifiedEvidenceCommit。
 
@@ -363,7 +363,7 @@ P1 可先把 prepare 作为 runtime 内部 helper；P3 再暴露正式 tool。
 - `search_run_verifier`：保持 worker 入口；新增 plan/invocation/event refs，自动 evidence commit。
 - `search_list_history`：保留兼容视图，并增加 state/event refs；不再作为唯一搜索知识来源。
 - `search_get_agent_context`：加入 worker-local state，不改变其权威入口地位。
-- `search_select/report/promote`：继续基于 verifier-backed immutable artifact；report 增加 event/schema/admission 研究证据。
+- `search_select/report/promote`：继续基于 verifier-backed immutable artifact；report 增加 event/schema/admission 运行证据。
 
 ## Feature mode 与兼容迁移
 
@@ -382,7 +382,7 @@ search_state_policy:
 
 - 旧 spec 缺少字段时等同 `disabled`；
 - 旧 run 不自动原地迁移；
-- 离线 importer 生成 `legacy_inferred` event/state 供研究和查看，不可伪装成当时预注册的 declared plan；
+- 离线 importer 生成 `legacy_inferred` event/state 供查看和迁移，不可伪装成原 run 已声明的 plan；
 - 新 run 可逐级选择 shadow/advisory/enforced，策略进入 frozen spec/hash。
 
 ## 代码落点
@@ -405,17 +405,23 @@ search_state_policy:
 
 ### Pi
 
-- `.pi/prompts/search-candidate-worker.md`：要求读取 admitted plan 和 worker-local state；
-- `.pi/skills/goal-plus/SKILL.md`：main 负责 prepare/admit/rebase/补槽；
+- 新增 long-lived loop prompt：每轮读取 state，自行调用 AtomicPlan Agent、admit、
+  verifier/evidence，再进入下一轮；
+- `.pi/skills/goal-plus/SKILL.md`：main 创建 initial candidates；每次 completion
+  只验收、更新 best，并在全局 stop 为 false 时 continue 相同 candidate；
 - `.pi/extensions/goal-plus.ts`：镜像新工具 schema 和 compact output；
-- `pi_pool.py`：仅接受已 materialized/admitted CandidateTask，不持有 SearchState；
-- Pi RPC 不支持同 worker continuation 的事实不变，redispatch 依靠 committed state/event/workspace。
+- `pi_pool.py`：管理 candidate process 和 deadline，不持有 SearchState 或搜索策略；
+- 当前 `pi_search_pool_continue` 通过新 `--no-session` 进程恢复相同
+  candidate/workspace；若要求 native same-session resume，需要新增 Pi host 能力。
 
 ### Codex
 
-- `.codex/skills/search/SKILL.md`：main 在 `spawn_agent` 前完成 admission，wait-any 后提交 evidence 并重规划；
-- `.codex/agents/search_candidate_agent.toml`：worker 从 `get_agent_context` 读取 admitted plan；
-- native continuation 不改变 host ownership；同一 candidate 的新 iteration 仍产生新 event；
+- `.codex/skills/search/SKILL.md`：main 一次性 spawn initial candidates；每次
+  completion 验收并在全局 stop 为 false 时 resume 相同 task，不再重规划或补槽；
+- Candidate asset 从 agent context 读取 SearchState，并在同一 child turn 内完成
+  多轮 AtomicPlan/admission/verifier；
+- `followup_task` 用于 resume 相同 native subagent，但只能发送 neutral continuation，
+  不承担方向选择；
 - Codex hooks 继续负责 Goal Plus session binding/stop/pre-tool gate，不承担 reservation lease 或 SearchState 更新。
 
 ### 暂不支持的 hosts
@@ -437,4 +443,4 @@ OpenCode/Claude 的 spec 可以继续 `disabled`；runtime 新记录必须保持
 
 ---
 
-[上一页：分阶段实施路线](02-phased-roadmap.md) | [下一页：关键实验矩阵](04-experiment-matrix.md)
+[上一页：分阶段实施路线](02-phased-roadmap.md) | [下一页：交付拆分](05-delivery-and-gates.md)

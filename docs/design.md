@@ -2,7 +2,8 @@
 
 Goal Plus is a durable goal state machine with a verifier-backed Search engine.
 It is deliberately not a general agent scheduler: the runtime owns evidence and
-artifacts; hosts own live workers; the main agent owns policy.
+artifacts; hosts own live workers; candidate subagents own their loop strategy;
+the main agent owns initial dispatch, validation, global stop, and finalization.
 
 ## Architecture
 
@@ -32,7 +33,7 @@ product flow with extension events and a durable local worker supervisor.
 | Runtime owns | Host owns | Main agent owns |
 |---|---|---|
 | goal records and revisions | worker launch and termination | triage and spec discovery |
-| frozen specs and hashes | wait-any and live status | candidate/continuation policy |
+| frozen specs and hashes | wait-any and live status | initial candidate dispatch and global stop policy |
 | workspace materialization | time, turn, or step enforcement | final verification and drain |
 | verifier execution and history | native logs/transcripts | selection, report, promotion |
 | run invalidation fence and inherited research | stopping every live worker | verifier concern confirmation |
@@ -194,8 +195,10 @@ Candidate input into that scratch directory for build and evaluation.
 | `recovery_mode` | where live-pool discovery survives interruption |
 | `completion_stage` | point at which a candidate-ready event is valid |
 
-The main agent interprets events and chooses the next action. A host supervisor
-may persist jobs, but it must not plan candidates or auto-refill slots.
+The main agent interprets terminal events, validates evidence, observes best,
+and either resumes the same candidate or applies a global stop condition. A host
+supervisor may persist jobs, but it must not plan candidates or auto-refill
+slots. The candidate subagent chooses every later technical action.
 
 ## Strategy And Budget
 
@@ -204,14 +207,22 @@ may persist jobs, but it must not plan candidates or auto-refill slots.
 strategies for Pi, Codex, and Claude Code. Existing advanced strategies and
 trace export remain OpenCode compatibility paths.
 
-`search_plan_next` persists a round and plans:
+`StrategySpec.orchestration_mode` controls planning policy:
+
+- `parallel_loops`: one initial `search_plan_next`; each candidate is resumed in
+  place and a second plan is rejected.
+- `rolling_candidates`: backward-compatible legacy behavior for existing specs
+  and hosts.
+
+The initial `search_plan_next` plans:
 
 ```text
 min(requested_k, remaining max_candidates, max_parallel)
 ```
 
-Rolling execution means this planned set is not a completion barrier. A newly
-free slot can be used as soon as policy and remaining budget justify it.
+Parallel-loop execution is not a completion barrier. When one candidate
+returns, main validates it and resumes that same loop without waiting for
+siblings, unless a global stop condition is true.
 
 ## Scope Boundary
 

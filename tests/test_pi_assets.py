@@ -4,9 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_host_assets_common import assert_common_budget_planning_claims
-
-
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.pi
 
@@ -42,6 +39,7 @@ def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
     assert 'goal_plus_create(raw_goal="$ARGUMENTS")' in text
     assert 'worker_host: "pi-rpc"' in text
     assert 'worker_mode: "agent-session-pool"' in text
+    assert 'orchestration_mode: "parallel_loops"' in text
     assert 'numeric `spec.metric_name`' in text
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs` lists artifact paths/globs only" in text
@@ -78,7 +76,7 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "goal_plus_link_search_run" in text
     assert 'worker_host: "pi-rpc"' in text
     assert 'worker_mode: "agent-session-pool"' in text
-    assert "runtime default is OpenCode and is wrong for Pi" in text
+    assert 'orchestration_mode: "parallel_loops"' in text
     assert "Pi-supported strategy names" in text
     assert "`agent_guided`, `agent`, or `default`" in text
     assert "`random` or `random_mode`" in text
@@ -123,41 +121,35 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
 
 
-def test_pi_goal_plus_skill_documents_rolling_pool_budget_planning() -> None:
+def test_pi_goal_plus_skill_documents_parallel_loop_policy() -> None:
     text = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split())
 
-    assert_common_budget_planning_claims(text)
-    assert "total number of distinct candidate workspaces" in normalized
-    assert "hard cap on live Pi candidate workers" in normalized
-    assert "planning decision epoch, not a barrier" in normalized
-    assert "conservative whole-run safety cap" in normalized
-    assert "Never wait for unrelated slow workers" in normalized
-    assert "main agent owns reinvestment decisions" in normalized
+    assert 'orchestration_mode: "parallel_loops"' in text
+    assert "one long-lived autonomous loop" in normalized
+    assert "exactly once" in normalized
+    assert "Runtime rejects a second plan" in normalized
     assert "pi_search_pool_wait_any" in text
     assert "pi_search_pool_continue" in text
     assert "pi_search_pool_submit" in text
     assert "pi_search_pool_close" in text
     assert "worker_budgets" in text
-    assert "research_summary" in text
-    assert "not the depth policy" in normalized
-    assert "deepen_incumbent" in text
-    assert "transfer_feature" in text
-    assert "macro_restart" in text
+    assert "Continue the same autonomous search loop" in text
     assert "candidate_ready" in text
-    assert "decision event, not run completion" in normalized
-    assert "Keep the same `run_id`" in normalized
+    assert "same workspace" in normalized
+    assert "new `agent_session_id` but never a new candidate" in normalized
+    assert "Do not call `search_plan_next`, `search_start_batch`, or" in normalized
+    assert "Do not vary continuation based on rank or improvement" in normalized
+    assert "low score" in normalized
+    assert "not a stop or replacement" in normalized
     assert "source_run_id" in text
     assert "search_invalidate_run" in text
     assert "active_count=0" in text
-    assert "candidate_local" in text
-    assert "feature_family" in text
-    assert "single_observation" in text
-    assert "free slot is not an obligation" in normalized
-    assert "prefer `pi_search_pool_continue`" in normalized
-    assert "does not require `macro_restart`" in text
+    assert "deepen_incumbent" not in text
+    assert "transfer_feature" not in text
+    assert "macro_restart" not in text
 
 
 def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
@@ -172,6 +164,8 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "hypothesis=" in text
     assert "complete candidate artifact early" in text
     assert "before any long optimization loop" in text
+    assert "one autonomous Pi Search loop" in text
+    assert "Do not wait for the main agent" in text
     assert ".tmp/handoff.json" in text
     assert "key_results" in text
     assert "pitfalls" in text
@@ -318,6 +312,7 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "parameters: JsonArgs" not in text
     assert "goal_plus_record_triage: Type.Object" in text
     assert "const SearchSpecSchema = Type.Object" in text
+    assert 'Type.Literal("parallel_loops")' in text
     assert "search_invalidate_run: Type.Object" in text
     assert "source_run_id: Type.Optional(Type.String())" in text
     assert "const SearchSpecDraftSchema = Type.Partial(SearchSpecSchema)" in text

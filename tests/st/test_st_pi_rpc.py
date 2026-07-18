@@ -10,6 +10,7 @@ from goal_plus.models import CandidateProposal, SearchSpec
 from goal_plus.pi_driver import run_pi_search_candidate
 from goal_plus.pi_pool import (
     close_pi_search_pool,
+    continue_pi_search_pool,
     open_pi_search_pool,
     snapshot_pi_search_pool,
     wait_any_pi_search_pool,
@@ -337,6 +338,143 @@ def test_pi_rpc_managed_pool_wait_any(st_project_root: Path) -> None:
     )
     assert closed["state"] == "closed"
     assert closed["active_count"] == 0
+
+
+@pytest.mark.st
+@pytest.mark.st_pi_rpc
+def test_pi_rpc_parallel_loop_cycle(st_project_root: Path) -> None:
+    runtime = FileSearchRuntime(st_project_root / ".search")
+    spec_data = _circle_packing_pi_spec(
+        max_runtime_seconds=int(os.environ.get("ST_PI_CYCLE_WORKER_SECONDS", "90"))
+    ).model_dump(mode="json")
+    spec_data["budget"] = {"max_candidates": 2, "max_parallel": 2}
+    spec_data["strategy"]["orchestration_mode"] = "parallel_loops"
+    worker_launch = {
+        key: value
+        for key, value in {
+            "model": os.environ.get("ST_PI_MODEL"),
+            "reasoning_effort": os.environ.get("ST_PI_THINKING"),
+        }.items()
+        if value
+    }
+    if worker_launch:
+        spec_data["strategy"]["worker_launch"] = worker_launch
+    spec = SearchSpec.model_validate(spec_data)
+    frozen = runtime.freeze_spec(spec, [CIRCLE_PACKING / "evaluator.py"])
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=2)
+    tasks = runtime.start_batch(run_id, plan.plan_id)
+
+    opened = open_pi_search_pool(
+        root_dir=runtime.root_dir,
+        run_id=run_id,
+        candidate_ids=[task.candidate_id for task in tasks],
+        directive={
+            "goal": (
+                "Run this autonomous circle-packing loop, choose evidence-backed "
+                "hypotheses yourself, verify material changes, and return a handoff."
+            )
+        },
+        max_parallel=2,
+    )
+    pool_id = opened["pool_id"]
+
+    initial_events: list[dict] = []
+    for _ in range(8):
+        waited = wait_any_pi_search_pool(
+            root_dir=runtime.root_dir,
+            pool_id=pool_id,
+            timeout_seconds=60,
+        )
+        initial_events.extend(waited["events"])
+        if initial_events:
+            break
+    assert initial_events
+    first = initial_events[0]
+    first_candidate_id = first["candidate_id"]
+    first_session_id = first["result"]["agent_session_id"]
+    best_after_first = runtime.status(run_id).best_score
+    assert best_after_first is not None
+
+    continued = continue_pi_search_pool(
+        root_dir=runtime.root_dir,
+        pool_id=pool_id,
+        candidate_id=first_candidate_id,
+        directive=(
+            "Continue the same autonomous search loop from the latest committed "
+            "evidence. Refresh runtime context, choose the next evidence-backed "
+            "hypothesis yourself, verify every material change, and keep working "
+            "while the assigned budget remains."
+        ),
+        worker_budget={
+            "max_runtime_seconds": int(
+                os.environ.get("ST_PI_CYCLE_WORKER_SECONDS", "90")
+            ),
+            "max_turns": 4,
+            "on_exceed": "interrupt",
+        },
+    )
+    assert continued["candidate_id"] == first_candidate_id
+    assert continued["redispatch"] is True
+
+    events = list(initial_events)
+    for _ in range(12):
+        waited = wait_any_pi_search_pool(
+            root_dir=runtime.root_dir,
+            pool_id=pool_id,
+            timeout_seconds=60,
+        )
+        events.extend(waited["events"])
+        if waited["active_count"] == 0:
+            break
+    closed = close_pi_search_pool(
+        root_dir=runtime.root_dir,
+        pool_id=pool_id,
+        mode="drain",
+        timeout_seconds=30,
+    )
+    assert closed["active_count"] == 0
+
+    candidate_events = [event for event in events if event["kind"] == "candidate_ready"]
+    continued_events = [
+        event
+        for event in candidate_events
+        if event["candidate_id"] == first_candidate_id
+        and event["result"]["agent_session_id"] != first_session_id
+    ]
+    assert len(candidate_events) == 3
+    assert len(continued_events) == 1
+    assert continued_events[0]["result"]["candidate_id"] == first_candidate_id
+
+    assert len(runtime._load_plans(run_id)) == 1
+    assert len(runtime._load_candidate_records(run_id)) == 2
+    sessions = runtime._load_agent_sessions(run_id)
+    assert len(sessions) == 3
+    first_candidate_sessions = [
+        session for session in sessions if session.candidate_id == first_candidate_id
+    ]
+    assert len(first_candidate_sessions) == 2
+    assert len({session.agent_session_id for session in first_candidate_sessions}) == 2
+    assert len({Path(session.workspace).resolve() for session in first_candidate_sessions}) == 1
+    with pytest.raises(RuntimeError, match="one initial SearchPlan"):
+        runtime.plan_next(run_id, requested_k=1)
+
+    configured_model = os.environ.get("ST_PI_MODEL")
+    if configured_model:
+        observed_models = {
+            event["result"]["handle"]["metadata"]["pi_metrics"]["model"]
+            for event in candidate_events
+        }
+        assert all(
+            model in configured_model or configured_model in model
+            for model in observed_models
+        )
+
+    selection = runtime.select(run_id)
+    report_path = runtime.report(run_id)
+    assert selection["selected_candidate_id"]
+    assert runtime.status(run_id).best_score is not None
+    assert report_path.exists()
 
 
 @pytest.mark.st

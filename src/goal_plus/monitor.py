@@ -263,6 +263,7 @@ def _strategy_payload(
         "name": strategy.name,
         "driver": strategy.driver,
         "ref": strategy.ref,
+        "orchestration_mode": strategy.orchestration_mode,
         "worker_mode": strategy.worker_mode,
         "worker_host": strategy.worker_host,
         "worker_agent_type": strategy.worker_agent_type,

@@ -220,3 +220,13 @@ def test_pi_rpc_circle_packing_cycle_is_selectable_by_marker() -> None:
     marker_names = {mark.name for mark in getattr(test_func, "pytestmark", [])}
 
     assert {"st", "st_pi_rpc"} <= marker_names
+
+
+@pytest.mark.pi
+def test_pi_rpc_parallel_loop_cycle_is_selectable_by_marker() -> None:
+    from tests.st import test_st_pi_rpc
+
+    test_func = test_st_pi_rpc.test_pi_rpc_parallel_loop_cycle
+    marker_names = {mark.name for mark in getattr(test_func, "pytestmark", [])}
+
+    assert {"st", "st_pi_rpc"} <= marker_names

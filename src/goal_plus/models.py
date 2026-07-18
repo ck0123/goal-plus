@@ -184,6 +184,9 @@ class StrategySpec(SearchModel):
     driver: Literal["builtin", "python", "external_mcp"] = "builtin"
     ref: str | None = None
     agent_role: str = "planner_and_mutator"
+    orchestration_mode: Literal["rolling_candidates", "parallel_loops"] = (
+        "rolling_candidates"
+    )
     worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
     worker_host: AgentHostKind = "opencode"
     worker_agent_type: str | None = None

@@ -41,12 +41,10 @@ visible.
 ## Common Real-Host Checks
 
 ```bash
-# Codex state redispatch and rolling same-worker continuation
+# Codex state redispatch and fixed parallel-loop continuation
 pytest -m "st and st_codex" -k codex_redispatch -v -s -rs
-pytest -m "st and st_codex" -k codex_rolling_followup -v -s -rs
-
-# Codex portable 2 x 2 Search cycle
-pytest -m "st and st_codex" -k codex_circle_packing_cycle -v -s -rs
+ST_CODEX_MODEL=gpt-5.6-luna \
+  pytest -m "st and st_codex" -k codex_parallel_loop_cycle -v -s -rs
 
 # Codex one-worker AutoResearch lease: 5 minute lower bound, 7 minute watchdog
 ST_CODEX_TIMEOUT=1200 \
@@ -59,6 +57,8 @@ pytest -m "st and st_codex" -k goal_plus_spec_revision -v -s -rs
 pytest -m "st and st_pi_rpc" -k pi_rpc_k_module -v -s -rs
 ST_PI_CYCLE_WORKER_SECONDS=120 \
   pytest -m "st and st_pi_rpc" -k managed_pool_wait_any -v -s -rs
+ST_PI_MODEL=openai-codex/gpt-5.6-luna ST_PI_CYCLE_WORKER_SECONDS=90 \
+  pytest -m "st and st_pi_rpc" -k parallel_loop_cycle -v -s -rs
 
 # Native Pi Goal Plus lifecycle
 pytest -m st_pi -v -s -rs
@@ -77,8 +77,8 @@ pytest -m "st or st_pi" -v -s -rs
 Useful overrides:
 
 ```bash
-ST_CODEX_MODEL=gpt-5.6-terra pytest -m "st and st_codex" -v -s
-ST_PI_MODEL=openai-codex/gpt-5.4-mini ST_PI_THINKING=high \
+ST_CODEX_MODEL=gpt-5.6-luna pytest -m "st and st_codex" -v -s
+ST_PI_MODEL=openai-codex/gpt-5.6-luna ST_PI_THINKING=high \
   pytest -m "st and st_pi_rpc" -v -s
 ST_CODEX_TIMEOUT=3600 pytest -m "st and st_codex" -v -s
 ```

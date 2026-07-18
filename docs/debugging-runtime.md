@@ -28,8 +28,9 @@ goal/search state belongs in `.gp/`.
 
 Goal-plus records live under `.gp/goal-plus/<goal_plus_id>/`. One Goal Plus
 record may append multiple search tasks; each task points to one Search run
-under `.gp/runs/<run_id>/`, and each run may contain multiple planning/search
-rounds under `plans/`.
+under `.gp/runs/<run_id>/`. New Pi/Codex `parallel_loops` runs contain one
+initial plan under `plans/` and may contain many same-candidate sessions and
+verifier iterations. Legacy runs may contain multiple plans.
 
 For Codex, Claude Code, and Pi RPC, substitute the host-native JSONL/debug files below
 for the OpenCode process layer. The same rule still applies: host logs explain

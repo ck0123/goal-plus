@@ -10,8 +10,8 @@ description: Use when Pi receives a /goal-plus, /goal-plus edit, or /goal-plus-w
 The native Pi `/goal-plus` command creates the Goal Plus record before the model turn starts. `/goal-plus-with-final-check` creates it with `policy.final_check.mode="required"`. `/goal-plus edit <full revised goal>` calls `goal_plus_update_goal` for the active record and increments `goal_revision`; the latest raw goal supersedes older revisions. `/goal-plus resume` continues the same durable active revision after an interrupted Pi turn. If a compatibility prompt path is used and no active `goal_plus_id` is already present, the first tool call must be `goal_plus_create(raw_goal=...)`. Do not triage, search, or edit before the goal record exists. Except for loading the goal-plus skill, do not read or audit target files before `goal_plus_record_triage`.
 
 `/goal-plus mode=autonomous <goal>` selects substantial initial exploration
-(about 15 minutes when elapsed-time leases are available) and longer
-evidence-driven reinvestment, potentially up to about one hour.
+(about 15 minutes when elapsed-time leases are available) and renewable
+same-candidate continuation, potentially up to about one hour.
 `/goal-plus mode=probe <goal>` selects short feasibility, potential, and
 blocker probes. Omitted mode defaults to `autonomous`; an edit without a mode
 preserves the current choice. The runtime stores it only as a canonical final
@@ -90,9 +90,10 @@ the same autonomous admission rule. The legacy
 they are optional audit evidence and must never pause `/goal-plus`.
 
 Before `search_freeze_spec`, ensure the SearchSpec strategy sets
-`worker_host: "pi-rpc"` and `worker_mode: "agent-session-pool"`. Pi Search Mode
-must run workers through the Pi RPC driver. Do not omit `worker_host`; the
-runtime default is OpenCode and is wrong for Pi.
+`worker_host: "pi-rpc"`, `worker_mode: "agent-session-pool"`, and
+`orchestration_mode: "parallel_loops"`. Pi Search Mode must run a fixed initial
+set of autonomous candidate loops through the Pi RPC driver. Do not omit these
+fields; legacy runtime defaults do not express this policy.
 
 Pi-supported strategy names are limited to the portable builtin subset:
 
@@ -106,92 +107,43 @@ it and create a corrected draft before freezing instead.
 ### Search Run Budget Planning
 
 Choose the whole-run candidate budget before `search_freeze_spec`; it is frozen
-and cannot grow inside that run. `budget.max_candidates` is the total number of
-distinct candidate workspaces. `budget.max_parallel` is the hard cap on live Pi
-candidate workers. A persisted Search round is a planning decision epoch, not a
-barrier: the main agent may plan again as soon as any worker completes and a
-pool slot becomes free.
+and cannot grow inside that run. In normal `parallel_loops` execution, set
+`budget.max_candidates` equal to `budget.max_parallel`: every initial candidate
+workspace is one long-lived autonomous loop, and no later planning round or
+quality-based replacement is created.
 
 When the user or outer harness supplies a wall-clock, attempt, or token budget:
 
 1. Reserve time for main-agent final verification, selection, reporting, and
    promotion.
-2. Choose `max_parallel` that the host can support. When no better
-   resource signal exists, recommend 4; this is a planning recommendation, not
-   a runtime default.
-3. Set `max_candidates` as a conservative whole-run safety cap that fits the
-   outer budget. It is not a required round count and need not be exhausted.
-4. Give initial probes enough uninterrupted time to create real artifacts and
-   verifier evidence. Reinvest more time in valuable directions and stop weak
-   directions based on evidence and remaining time.
+2. Choose `max_parallel` that the host can support. When no better resource
+   signal exists, recommend 4.
+3. Give every initial loop enough uninterrupted time to create a real artifact
+   and verifier evidence.
+4. Derive each continuation budget from outer remaining time and final closeout
+   reserve, never from whether the main agent likes that candidate.
+5. Resume while no global stop fact is true. Global stop facts are an explicit
+   success criterion, user stop, invalidated run, or insufficient remaining
+   time for another worker turn plus closeout.
 
-After every `candidate_ready`, failed, or interrupted pool event, refresh
-remaining time and `search_list_history`. Review the current-run
-`feature_ledger`, `verifier_assessments`, and pitfalls before deciding how to
-use each free slot. Treat pitfalls as conditional observations, not global
-prohibitions: `candidate_local` stays with that candidate; `feature_family`
-applies only when the target uses the same mechanism and conditions; and
-`evaluation_contract` affects the run only after main-agent confirmation. One
-`single_observation` never rules out another candidate. Consider all three
-search actions without imposing a quota:
+The subagent owns bottleneck analysis, hypothesis choice, feature transfer,
+structural restart, and rebase decisions within its candidate workspace. The
+main agent never sends a preferred technical direction. A low score, one
+non-improving turn, or another candidate leading is not a stop or replacement
+condition.
 
-- `deepen_incumbent`: continue a high-performing artifact or its candidate;
-- `transfer_feature`: probe a portable, orthogonal feature from any candidate,
-  including one outside the visible ranking frontier, against the incumbent;
-- `macro_restart`: start a structurally different direction from source or an
-  earlier ancestor.
-
-Then decide independently whether to continue a candidate, start a new
-candidate for one of those actions, stay idle, or begin final selection.
-`requested_k` is only the number of new candidate workspaces desired at that
-decision point. Record the chosen action in
-`proposal.metadata.search_action`. Never wait for unrelated slow workers merely
-to preserve a batch boundary.
-
-Before starting another candidate, assess whether recent and active attempts
-cluster around the same underlying mechanism or bottleneck. Different candidate
-ids do not by themselves provide search diversity. When work has concentrated
-in one family, step back and analyze the current bottleneck, then prefer a
-materially different high-potential direction when the evidence supports one.
-This is advisory: it does not require `macro_restart`, impose an action quota,
-or make superficial difference more valuable than a strong hypothesis.
-
-After substantial attempts without meaningful progress, do not keep applying
-nearby mutations by default. Reassess the objective's applicable theoretical or
-structural limits, such as lower or upper bounds, critical paths, resource
-bottlenecks, saturation evidence, or infeasibility constraints. Use that
-analysis to identify a credible breakthrough and decide whether to deepen,
-transfer, or redirect; the analysis does not force any particular action.
-
-When an existing candidate remains promising and further progress benefits from
-its accumulated source and workspace understanding, prefer
-`pi_search_pool_continue` with a larger one-dispatch budget over launching
-near-duplicate candidates. Parallel candidates in the same feature family are
-useful only when they test materially distinct hypotheses. A free slot is not
-an obligation to launch more work.
-
-Treat the frozen `strategy.worker_budget` as the normal per-worker budget, not
-as a rule that every direction deserves identical depth. The main agent owns
-reinvestment decisions. When a proposal is unusually promising, assign a
-larger one-dispatch `worker_budget` that still fits the outer remaining time. Do
-not encode a fixed number of worker iterations or Search rounds as a substitute
-for this judgment.
-Let a valuable worker continue while distinct evidence-backed hypotheses remain
-and the expected information or performance gain justifies the assigned time;
-stop an unpromising direction earlier on evidence. Preserve final-verification
-and closeout reserve in either case.
-
-Follow the exploration line in `raw_goal`. In `probe` mode, return once
-feasibility, potential, and blockers are credible, then decide whether to
-deepen or redirect. In `autonomous` mode, give valuable directions substantial
-renewable leases rather than cutting every worker into equal short attempts.
-No worker lease ending completes the Goal Plus record.
+Follow the exploration line in `raw_goal`. In `probe` mode, the global policy
+may stop after feasibility, potential, and blockers are credible. In
+`autonomous` mode, give every active candidate renewable leases while outer
+time remains. No worker lease ending completes the Goal Plus record.
 
 1. `search_freeze_spec`, or reuse an existing `frozen_spec_id` when the later
    cycle keeps the same verifier and edit contract
 2. `search_create`
 3. `goal_plus_link_search_run`
-4. Fill the initial slots with `search_plan_next` and `search_start_batch`.
+4. Call `search_plan_next(requested_k=budget.max_parallel)` exactly once and
+   `search_start_batch` exactly once to create all initial candidates. Runtime
+   rejects a second plan in `parallel_loops` mode.
 5. Call `pi_search_pool_open(run_id, candidate_ids, directive?,
    worker_budgets?, final_verify=true, max_parallel=<budget.max_parallel>)`.
    This starts detached managed workers and returns a durable `pool_id`
@@ -200,20 +152,15 @@ No worker lease ending completes the Goal Plus record.
    returned event. `candidate_ready` means the driver has started/bound the
    agent session and completed the main-agent final verifier; raw process exit
    alone is not success.
-7. Review each event's `result.steps`, `handle.metadata.pi_metrics`, and
-   `final_score_report`. Also inspect every
-   `handle.metadata.progress_handoff.model_handoff`: carry its feature-ledger
-   `key_results`, scenario-specific `pitfalls`, `blockers`, `next_steps`, and
-   `verifier_assessment` into the next decision's candidate proposals. A feature
-   entry identifies its code surface, artifact/git head, portability,
-   dependencies, measured effect, and relation to the incumbent. Do not reduce
-   the next decision to only the best score or copy raw transcripts.
-   Treat `candidate_ready` as a decision event, not run completion. When a
-   worker reports verifier `concern`, assess its concrete evidence before
-   acting. While investigating, do not refill newly free slots. Sparse
-   diagnostics, a low score, or lack of progress are not enough to refreeze. If
-   the concern is not confirmed, record the `keep_spec` justification and
-   resume normal refill. If the main agent confirms verifier contract,
+7. For every `candidate_ready`, read the prior and current best from
+   `search_list_history` or `goal_plus_monitor_snapshot`. The pool's
+   `final_verify=true` path has already run the parent completion verifier, so
+   the durable best candidate/score is current. Inspect
+   `handle.metadata.progress_handoff.model_handoff` and `verifier_assessment`
+   for recovery or a concrete verifier failure, but do not use them to choose a
+   next technical direction. Sparse diagnostics, a low score, or lack of
+   improvement are not grounds to refreeze, stop, or replace the candidate. If
+   the main agent confirms verifier contract,
    coverage, determinism, target-alignment, or infrastructure failure, execute
    this mandatory quiesce/refreeze sequence before any other search action:
    1. call `search_invalidate_run` with a concrete reason, summary, and evidence;
@@ -225,18 +172,24 @@ No worker lease ending completes the Goal Plus record.
    Never select or promote the invalidated run. Its artifacts, scoped pitfalls,
    and features remain research input, but every old score is historical and
    every imported feature must be re-verified under the successor contract.
-8. Unless step 7 has paused refill for verifier investigation, reassess each
-   free slot promptly. A free slot is not an obligation to launch another
-   candidate; choose one deliberate action:
-   - `pi_search_pool_continue` for state-level reinvestment in a promising
-     candidate, optionally with a larger one-dispatch budget;
-   - `search_plan_next(requested_k=<new direction count>)`,
-     `search_start_batch`, then one `pi_search_pool_submit` per new candidate;
-   - leave the slot idle; or
-   - begin final drain.
+8. After each validated terminal event, apply only the global stop policy. If it
+   is false, call `pi_search_pool_continue` for that exact `candidate_id` with a
+   budget that fits remaining time and this neutral directive:
+
+   ```text
+   Continue the same autonomous search loop from the latest committed evidence.
+   Refresh runtime context, choose the next evidence-backed hypothesis yourself,
+   verify every material change, and keep working while the assigned budget remains.
+   ```
+
+   Pi continuation is logical same-candidate continuation: the supervisor uses
+   `search_redispatch_candidate` and launches a fresh stateless Pi process in
+   the same workspace. It therefore creates a new `agent_session_id` but never
+   a new candidate. Do not call `search_plan_next`, `search_start_batch`, or
+   `pi_search_pool_submit` after initial pool creation. Do not vary continuation
+   based on rank or improvement.
    `pi_search_pool_snapshot(run_id=...)` rediscovers the pool after an
-   interrupted main Pi turn; use `pool_id` for later exact snapshots. The
-   supervisor never auto-refills because the main agent owns policy.
+   interrupted main Pi turn; use `pool_id` for later exact snapshots.
 9. Call `pi_search_pool_close(mode="drain")` before selection, or
    `mode="interrupt"` when remaining work should be stopped. Then call
    `search_select`, `search_report`, and `search_promote` when promotion is
@@ -244,17 +197,11 @@ No worker lease ending completes the Goal Plus record.
    best committed candidate `git_head`, and runs a main-agent final verifier on
    that exact commit before recording the selected candidate.
 10. Call `goal_plus_record_search_result`.
-11. Run the raw-goal audit. A checkpoint, meaningful gain, or newly preferred
-    artifact does not by itself justify selecting/promoting and opening another
-    run: verifier-recorded iterations already preserve those states. Keep the
-    same `run_id` while its evaluation/edit contract remains adequate and its
-    candidate budget remains usable. Create another run only for a concrete
-    contract/spec revision, a distinct measurable subproblem, or exhausted
-    immutable run budget. If another run is unavoidable, read the prior run's
-    history first, then call `search_create` with `source_run_id`. The runtime
-    snapshots its frontier candidates, scoped pitfalls, feature ledger, and
-    non-winning portable innovations into `inherited_research`; do not silently
-    restart from only the prior winner. Inherited scores are never reusable.
+11. Run the raw-goal audit. Keep the same run while its evaluation/edit contract
+    remains adequate. A new incumbent or low-performing route never opens a
+    replacement run. Create a successor only for a concrete spec/contract
+    revision or distinct measurable subproblem, using `source_run_id`; inherited
+    scores remain historical until reverified.
 12. Run the final raw-goal audit. For a normal record, finish with
     `goal_plus_set_status`. If `policy.final_check.mode="required"`, instead:
     - call `goal_plus_prepare_final_check(checker_host="pi")`
@@ -295,8 +242,8 @@ require a new frozen spec.
   scores, slow progress, or a better search idea are not sufficient evidence.
 - `keep_spec_with_justification`: the current spec remains a credible proxy for
   the raw goal. State the evidence for keeping it and direct subsequent Search
-  toward deeper or structurally different approaches rather than assuming that
-  the current best-so-far neighborhood is sufficient.
+  remains available to every candidate loop; each subagent decides whether to
+  pursue deeper or structurally different approaches.
 - `revise_goal`: the effective scope, deliverables, or success criteria need to
   change. Call `goal_plus_update_goal` with the complete revised raw goal and
   current `expected_revision`, re-triage, then discover and freeze the spec for
@@ -308,7 +255,7 @@ approval checkpoint.
 
 Every asynchronous completion may add a `verifier_assessment`. The main agent
 must review reported `concern` evidence promptly because one worker can discover
-an evaluation-contract defect while other workers remain live. Pause refill
+an evaluation-contract defect while other workers remain live. Pause continuation
 while checking, but do not interrupt siblings on an unconfirmed worker opinion.
 Once confirmed, `search_invalidate_run` fences new plans, sessions, verifier
 records, selection, and promotion; then the main agent must interrupt and wait
@@ -321,7 +268,8 @@ same run.
 One Goal Plus record is the complete user task. `search_tasks` is its
 append-only search-task history; each item is one `run_id` over one frozen
 spec. `linked_search` is only the current-task compatibility view. A search
-task may contain multiple planning/search rounds.
+task has one initial planning round in `parallel_loops` mode and may contain
+many same-candidate worker sessions and verifier iterations.
 
 `goal_revisions` and `final_checks` are append-only histories. An interrupted
 Pi turn keeps the active Goal Plus id; the next session/turn restores it from
@@ -359,12 +307,12 @@ RPC child and its cleanup. `worker_budget.max_runtime_seconds` is required and
 maps to the Pi RPC process watchdog. `worker_budget.max_turns` is only a prompt
 hint. `pi_search_run_batch` and `pi_search_run_candidate` remain compatibility
 and debugging helpers, but the batch helper intentionally waits for the slowest
-worker and must not be used for rolling orchestration.
+worker and must not be used for the normal parallel-loop orchestration.
 
 Pi workers run with `--no-session`, so same-worker continuation is unsupported.
 If a worker times out, fails, or exits before producing useful verifier
-evidence, use state-level resume by calling
-`pi_search_pool_continue`. The driver uses
+evidence, or simply completes while the global stop policy is false, use
+state-level resume by calling `pi_search_pool_continue`. The driver uses
 `search_redispatch_candidate` internally, creates a new
 `agent_session_id` for the same candidate workspace, and recovers prior work
 from MCP history, verifier iterations, and Git state.
@@ -372,10 +320,10 @@ from MCP history, verifier iterations, and Git state.
 Exception: never redispatch after `failure_class=VerifierWorkspaceSideEffect`,
 `metrics.infrastructure_failure=true`, or
 `metrics.candidate_action=stop_and_report`. The worker must stop without
-cleaning or retrying, and the main agent must not spend another batch on the
+cleaning or retrying, and the main agent must not resume candidates on the
 same `frozen_spec_id`. Repair the source-owned verifier, freeze a new spec, and
 create a new run. The host driver, not the MCP runtime, owns closing out any
-siblings that are still executing in a concurrent batch.
+siblings that are still executing in the pool.
 
 Each worker also leaves a bounded `progress_handoff` in its bound handle. It
 combines the optional `.tmp/handoff.json` recovery note with a runner-owned Git

@@ -43,21 +43,25 @@ into a supervisor.
 
 Portable builtins are `agent_guided`/`agent`/`default` and
 `random`/`random_mode`. Other strategies remain OpenCode-only until a host has
-contract tests and a real multi-round smoke.
+contract tests and a real parallel-loop smoke.
 
-## Rolling Pools
+## Parallel Loops
 
 Codex and Pi both satisfy asynchronous wait-any semantics:
 
-- **Codex** launches up to `max_parallel`, waits for any mailbox update, then
-  uses `list_agents` to discover all newly terminal workers. A valuable worker
-  can continue through `search_continue_agent_session` plus `followup_task`.
+- **Codex** launches the initial candidate set once, waits for any mailbox
+  update, then uses `list_agents` to discover all newly terminal workers. After
+  parent completion verification it continues that same worker through
+  `search_continue_agent_session` plus `followup_task` unless a global stop
+  condition is true.
 - **Pi** persists pool/job state, returns candidate-ready only after the full
-  Pi driver chain and final verification, and never auto-refills. The main
-  agent calls open/submit/wait-any/snapshot/continue/close explicitly.
+  Pi driver chain and final verification, and never auto-refills. After each
+  terminal event main calls `continue` for that same candidate unless a global
+  stop condition is true. Pi uses a fresh native session in the same workspace.
 
-Rounds remain persisted planning decisions. Neither adapter turns a round into
-a completion barrier.
+New Pi/Codex specs set `orchestration_mode="parallel_loops"`; one initial round
+creates the durable candidate loops. Neither adapter turns that round into a
+completion barrier. Low score or no improvement never causes replacement.
 
 ## Worker Budgets
 
@@ -95,8 +99,9 @@ State-level redispatch is the portable recovery path:
 4. Git state, verifier iterations, ranked history, and `research_summary`
    replace dependence on a previous transcript.
 
-Same-worker continuation is an optional optimization. Codex and OpenCode
-support it; Pi intentionally performs state-level redispatch.
+Same-worker continuation is native on Codex and OpenCode. Pi intentionally
+performs logical same-candidate continuation through state-level redispatch.
+Both preserve candidate identity and workspace.
 
 Every worker handoff should state the most important work, verifier-backed
 feature entries, blockers, next steps, and at most five scoped conditional
@@ -125,10 +130,9 @@ scores cannot be promoted or reused by the successor.
 
 | Path | Repository evidence |
 |---|---|
-| Codex-native 2 x 2 cycle | `codex_circle_packing_cycle`: four distinct sessions, two plans, runtime selection/report |
-| Codex rolling continuation | `codex_rolling_followup`: one worker completed while another stayed live; the same task continued with a larger dispatch budget |
+| Codex parallel-loop cycle | `codex_parallel_loop_cycle`: two initial candidates, one plan, same native worker continuation, best update, final selection/report |
 | Pi managed pool | `pi_rpc_managed_pool_wait_any`: two detached real Pi workers, pool rediscovery, candidate-ready events, drain |
-| Pi compatibility cycle | `pi_rpc_circle_packing_two_batch`: synchronous 2 x 2 path |
+| Pi parallel-loop cycle | `pi_rpc_parallel_loop_cycle`: one initial plan, same-candidate redispatch with a new session, best update, final selection/report |
 | OpenCode | broad existing unit/assets and opt-in system scenarios |
 
 Fast tests prove schemas and adapter mappings. Only the opt-in real-host tests

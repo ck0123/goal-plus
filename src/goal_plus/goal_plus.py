@@ -35,16 +35,18 @@ EXPLORATION_MODE_LINES = {
     "autonomous": (
         "Goal Plus exploration mode: autonomous. Give each initial candidate worker "
         "a meaningful exploration window (about 15 minutes when the host supports "
-        "elapsed-time leases); reinvest longer leases in promising candidates, up to "
-        "about 1 hour when evidence justifies it; a worker lease ending never completes "
-        "or stops the Goal Plus task."
+        "elapsed-time leases); while the global stop policy is false, resume every "
+        "completed candidate in its existing workspace and let that candidate choose "
+        "its next evidence-backed direction, up to about 1 hour when outer time permits; "
+        "score or rank must not cause replacement, and a worker lease ending never "
+        "completes or stops the Goal Plus task."
     ),
     "probe": (
-        "Goal Plus exploration mode: probe. Use short worker leases or turn budgets only "
-        "to establish feasibility, potential, and key blockers; after each probe the main "
-        "agent must choose whether to deepen the same candidate, try another direction, "
-        "or continue investigation; a probe ending never completes or stops the Goal Plus "
-        "task."
+        "Goal Plus exploration mode: probe. Use short worker leases or turn budgets to "
+        "establish feasibility, potential, and key blockers; if the overall probe "
+        "objective remains unfinished and time remains, resume the same candidate and "
+        "let it choose the next evidence-backed step; score or rank must not cause a "
+        "replacement, and a probe ending never completes or stops the Goal Plus task."
     ),
 }
 _EXPLORATION_MODE_ARGUMENT_RE = re.compile(

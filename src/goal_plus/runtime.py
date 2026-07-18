@@ -862,6 +862,14 @@ class FileSearchRuntime:
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         spec = frozen.spec
+        if (
+            spec.strategy.orchestration_mode == "parallel_loops"
+            and self._load_plans(run_id)
+        ):
+            raise RuntimeError(
+                "parallel_loops permits one initial SearchPlan; resume or "
+                "redispatch the existing candidates instead of planning a new batch"
+            )
         remaining = max(0, spec.budget.max_candidates - run.candidates_total)
         planned_k = min(requested_k, remaining, spec.budget.max_parallel)
         strategy = spec.strategy

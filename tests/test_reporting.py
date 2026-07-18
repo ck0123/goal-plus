@@ -53,6 +53,8 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     assert second_run in html
     assert "Search Task 01" in html
     assert "Search Task 02" in html
+    assert "Orchestration" in html
+    assert "rolling_candidates" in html
     assert session.agent_session_id in html
     assert html.count("<h2>Search Execution Timeline</h2>") == 2
     assert "Goal Plus Summary" in html
@@ -90,6 +92,10 @@ def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path)
 
     assert data["goal_plus_id"] == goal.goal_plus_id
     assert [task["run_id"] for task in data["search_tasks"]] == runs
+    assert all(
+        task["strategy"]["orchestration_mode"] == "rolling_candidates"
+        for task in data["search_tasks"]
+    )
     assert [len(task["plans"]) for task in data["search_tasks"]] == [2, 2]
     assert all(task["timeline"]["duration_seconds"] for task in data["search_tasks"])
     assert data["snapshot"]["search_task_aggregate"]["search_tasks_total"] == 2

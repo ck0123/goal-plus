@@ -57,6 +57,11 @@ SCENARIO_CASES = [
         id="codex_rolling_followup",
     ),
     pytest.param(
+        "codex_parallel_loop_cycle",
+        marks=(pytest.mark.st, pytest.mark.st_codex),
+        id="codex_parallel_loop_cycle",
+    ),
+    pytest.param(
         "codex_time_advisory",
         marks=(pytest.mark.st, pytest.mark.st_codex),
         id="codex_time_advisory",
@@ -261,6 +266,38 @@ def _assert_codex_rolling_followup(report: StReport) -> None:
     assert extra.get("same_worker_continuation") is True
 
 
+def _assert_codex_parallel_loop_cycle(report: StReport) -> None:
+    assert [candidate.get("candidate_id") for candidate in report.candidates] == [
+        "c001",
+        "c002",
+    ]
+    assert all(
+        candidate.get("status") == "evaluated"
+        and int(candidate.get("iterations") or 0) >= 1
+        for candidate in report.candidates
+    )
+    extra = report.extra
+    assert extra.get("host") == "codex"
+    assert extra.get("model") == "gpt-5.6-luna"
+    assert extra.get("orchestration_mode") == "parallel_loops"
+    assert extra.get("plans_count") == 1
+    session_ids = extra.get("initial_agent_session_ids") or []
+    assert len(session_ids) == 2 and len(set(session_ids)) == 2
+    assert len(extra.get("task_names") or []) == 2
+    assert extra.get("continued_candidate_id") == extra.get(
+        "first_completed_candidate_id"
+    )
+    assert extra.get("continued_agent_session_id") in session_ids
+    assert extra.get("same_worker_continuation") is True
+    assert isinstance(extra.get("best_observed_after_first_completion"), (int, float))
+    assert extra.get("best_candidate_observed_after_first_completion") in {
+        "c001",
+        "c002",
+    }
+    assert extra.get("new_candidates_after_initial") == 0
+    assert extra.get("observed_worker_models") == ["gpt-5.6-luna"]
+
+
 def _assert_codex_time_advisory(report: StReport) -> None:
     assert len(report.candidates) == 1
     assert report.candidates[0].get("status") == "evaluated"
@@ -301,6 +338,7 @@ SCENARIO_ASSERTIONS = {
     "codex_redispatch": _assert_codex_redispatch,
     "codex_circle_packing_cycle": _assert_codex_circle_packing_cycle,
     "codex_rolling_followup": _assert_codex_rolling_followup,
+    "codex_parallel_loop_cycle": _assert_codex_parallel_loop_cycle,
     "codex_time_advisory": _assert_codex_time_advisory,
     "codex_autoresearch_lease": _assert_codex_autoresearch_lease,
     "claude_k_module_smoke": _assert_claude_k_module_smoke,
@@ -342,6 +380,39 @@ def test_scenario(
 
     _assert_common_contract(report, scenario)
     SCENARIO_ASSERTIONS[scenario](report)
+
+    if scenario == "codex_parallel_loop_cycle":
+        run_dir = st_project_root / ".gp" / "runs" / report.run_id
+        run_payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        spec_payload = json.loads(
+            (
+                st_project_root
+                / ".gp"
+                / "specs"
+                / run_payload["frozen_spec_id"]
+                / "frozen_spec.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert spec_payload["spec"]["strategy"]["orchestration_mode"] == "parallel_loops"
+        assert len(list((run_dir / "plans").glob("*.json"))) == 1
+        assert len(list((run_dir / "candidates").glob("*/candidate.json"))) == 2
+        session_paths = list((run_dir / "agent_sessions").glob("*.json"))
+        assert len(session_paths) == 2
+        sessions = {
+            payload["agent_session_id"]: payload
+            for payload in (
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in session_paths
+            )
+        }
+        continued_id = report.extra["continued_agent_session_id"]
+        assert (
+            sessions[continued_id]["candidate_id"]
+            == report.extra["continued_candidate_id"]
+        )
+        assert sessions[continued_id]["launch"]["tool"] == "followup_task"
+        assert run_payload["best_candidate_id"] == report.selected_candidate_id
+        assert run_payload["best_score"] == pytest.approx(report.best_score)
 
     if scenario == "codex_time_advisory":
         agent_session_id = report.extra["agent_session_id"]
