@@ -397,10 +397,9 @@ Then:
 ```text
 goal-plus_search_list_history(run_id, top_n=5, sort_by="score")
 goal-plus_search_select(run_id)
-goal-plus_search_report(run_id)
 ```
 
-Show the user the selected candidate, score table summary, and report path.
+Show the user the selected candidate and score table summary.
 
 ### Step 8: Promote
 
@@ -409,6 +408,10 @@ Only after selection and user review:
 ```text
 goal-plus_search_promote(run_id, selected_candidate_id)
 ```
+
+When invoked by Goal Plus, return control without generating a report. The
+Goal Plus skill calls `goal-plus_search_report` exactly once after its parent
+record is terminal. For standalone Search, call it only after promotion.
 
 Promotion exports a patch and should not directly mutate the main source workspace.
 

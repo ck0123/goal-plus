@@ -15,7 +15,7 @@ index and ownership guide.
 | `goal_plus_save_spec_draft` | persist the typed candidate Search spec |
 | `goal_plus_confirm_frozen_verifier` | record optional verifier-approval evidence |
 | `goal_plus_link_search_run` | append a frozen Search run to the goal |
-| `goal_plus_record_search_result` | attach selected/report/promotion evidence |
+| `goal_plus_record_search_result` | attach selected/promotion evidence and reserve canonical final report paths |
 | `goal_plus_prepare_final_check` | create a required independent-review request |
 | `goal_plus_submit_final_check` | record reviewer verdict for an exact revision |
 | `goal_plus_set_status` | set evidence-backed terminal or paused state |
@@ -139,8 +139,8 @@ and `confidence`. Missing scope defaults to candidate-local. A worker's
 |---|---|
 | `search_run_verifier` | record a worker iteration, validate the existing inherited `workspace/results.tsv`, append exactly one row, and commit the ledger; workers pass `agent_session_id` plus a concise `hypothesis`, while parent final verification omits the session id |
 | `search_select` | restore ranked commits and select the first final-verifier passing state |
-| `search_report` | generate `report.md` and the self-contained `report.html`, returning both paths |
-| `search_promote` | export the selected commit as a patch and refresh an existing report to the promoted state |
+| `search_report` | generate final `report.md` and self-contained `report.html`; linked Goal Plus records must already be terminal |
+| `search_promote` | export the selected commit as a patch; normal Goal Plus flow has no report to refresh yet |
 
 `report.html` is the complete Goal Plus audit view for the run passed to
 `search_report`. When that run belongs to a Goal Plus record, the page keeps
@@ -155,8 +155,10 @@ worker-session observability, verifier iterations, and promotion evidence.
 Worker bars use observed host start/end timestamps. Configured maximum or
 minimum budgets are not rendered as actual duration. The file has inline
 CSS/JavaScript only and is readable without a web server. `report.md` remains
-the stable text artifact. A recorded Goal Plus Search result persists both
-`report_path` and `html_report_path` when the HTML artifact exists.
+the stable text artifact. A recorded Goal Plus Search result reserves both
+canonical paths before the files exist. Normal Goal Plus order is select,
+promote, record result, final audit, terminal status, then one report generation
+per recorded run. Intermediate Goal Plus reports are rejected.
 
 ## Pi Local Tools
 

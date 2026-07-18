@@ -82,7 +82,9 @@ Normal Pi Search follows the shared [Flow](flow-view.md):
    `pi_search_pool_continue` for that exact candidate unless a global stop
    condition is true;
 5. recover interrupted main turns with `pi_search_pool_snapshot(run_id=...)`;
-6. `pi_search_pool_close`, then select, report, and promote.
+6. `pi_search_pool_close`, then select and promote;
+7. record the Search result, finish the raw-goal audit, set a terminal Goal Plus
+   status, then generate the final report exactly once per recorded run.
 
 The supervisor enforces `max_parallel` and never auto-refills. Main never calls
 submit after initial pool creation and never replaces a candidate because of

@@ -192,11 +192,13 @@ time remains. No worker lease ending completes the Goal Plus record.
    interrupted main Pi turn; use `pool_id` for later exact snapshots.
 9. Call `pi_search_pool_close(mode="drain")` before selection, or
    `mode="interrupt"` when remaining work should be stopped. Then call
-   `search_select`, `search_report`, and `search_promote` when promotion is
-   requested. `search_select` ranks verifier-recorded iterations, checks out the
-   best committed candidate `git_head`, and runs a main-agent final verifier on
-   that exact commit before recording the selected candidate.
-10. Call `goal_plus_record_search_result`.
+   `search_select` and `search_promote` when promotion is requested.
+   `search_select` ranks verifier-recorded iterations, checks out the best
+   committed candidate `git_head`, and runs a main-agent final verifier on that
+   exact commit before recording the selected candidate.
+10. Call `goal_plus_record_search_result`. Do not call `search_report` yet;
+    result recording reserves the canonical report paths without generating
+    Markdown or HTML.
 11. Run the raw-goal audit. Keep the same run while its evaluation/edit contract
     remains adequate. A new incumbent or low-performing route never opens a
     replacement run. Create a successor only for a concrete spec/contract
@@ -211,6 +213,10 @@ time remains. No worker lease ending completes the Goal Plus record.
       `goal_plus_submit_final_check` itself
     - address failed findings and prepare a fresh check
     A passing required check atomically marks the record complete.
+13. Only after the Goal Plus record reaches a terminal status (`complete`,
+    `blocked`, or `abandoned`), call `search_report` exactly once for every
+    successfully recorded `run_id`. Never generate an intermediate Goal Plus
+    report. Return the final Markdown and HTML paths to the user.
 
 The top-level stop gate blocks every still-active Goal Plus record and returns
 the full current raw goal plus creation/check timestamps and elapsed time. Use

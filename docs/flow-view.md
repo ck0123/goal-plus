@@ -33,11 +33,12 @@ user request
                       -> unconfirmed: keep current run
                       -> confirmed: invalidate -> stop all workers
                            -> repair/freeze -> successor run
-            -> search_select -> search_report -> search_promote
-            -> goal_plus_record_search_result
+            -> search_select -> search_promote
+            -> goal_plus_record_search_result (reserve final report paths)
   -> audit the full current goal revision
   -> optional independent final check
   -> terminal goal status
+  -> search_report once per recorded run
 ```
 
 A Goal Plus record may contain multiple search tasks. Each task is one
@@ -201,8 +202,10 @@ Once confirmed, ordering is mandatory:
 Before selection, the main agent stops adding work and drains or closes every
 live host worker. `search_select` ranks committed verifier iterations and
 re-verifies exact commits. The first passing ranked commit becomes the selected
-result. `search_report` writes evidence; `search_promote` exports a patch and
-does not mutate the source workspace.
+result. `search_promote` exports a patch and does not mutate the source
+workspace. `goal_plus_record_search_result` then reserves the canonical report
+paths without writing files. Only after final audit and terminal Goal Plus
+status does `search_report` write the final Markdown and HTML evidence.
 
 ## Host Mapping
 

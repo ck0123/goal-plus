@@ -208,6 +208,22 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert "search_promote" in text
 
 
+def test_codex_goal_plus_defers_report_until_terminal_state() -> None:
+    goal_skill = (
+        ROOT / ".codex" / "skills" / "goal-plus" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    search_skill = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_goal_skill = " ".join(goal_skill.split())
+
+    assert "Do not call `search_report` yet" in goal_skill
+    assert "Never generate an intermediate Goal Plus report" in normalized_goal_skill
+    assert "Only after the Goal Plus record reaches a terminal status" in goal_skill
+    assert "For standalone Search, call" in search_skill
+    assert "`search_report` only after promotion" in search_skill
+
+
 def test_codex_final_checker_and_with_check_alias_are_read_only_and_independent() -> None:
     checker = (ROOT / ".codex" / "agents" / "goal_plus_final_checker.toml").read_text(
         encoding="utf-8"

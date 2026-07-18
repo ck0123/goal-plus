@@ -331,8 +331,10 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     └── promotion/                                # selected patch outputs
 ```
 
-Calling `search_report` writes both report files. Open `report.html` directly
-for the coverage-aware statistical view, multi-Search breakdown,
+Calling `search_report` writes both report files. For a linked Goal Plus run,
+the record must already be terminal; active and needs-user records are rejected
+so a static report cannot capture an in-progress status. Open `report.html`
+directly for the coverage-aware statistical view, multi-Search breakdown,
 candidate/session tables, and timelines. Planning-round counts remain available
 in normalized data but are not rendered as a separate panel. The Goal Plus
 state appears in the report summary; there is no separate lifecycle panel.

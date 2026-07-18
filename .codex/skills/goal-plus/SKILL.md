@@ -93,10 +93,11 @@ prefix; match by the final logical tool name.
    set exactly once, and then validate and resume those same candidate workers;
    `search_freeze_spec`, `search_create`, `search_plan_next`,
    `search_start_batch`, `search_start_agent_session`, final
-   `search_run_verifier`, `search_select`, `search_report`, and
-   `search_promote`.
+   `search_run_verifier`, `search_select`, and `search_promote`.
 11. After `search_create`, call `goal_plus_link_search_run`.
-12. After selection/report/promotion, call `goal_plus_record_search_result`.
+12. After selection and promotion, call `goal_plus_record_search_result`.
+    Do not call `search_report` yet. Result recording reserves the canonical
+    Markdown and HTML paths without creating either report.
 13. Run the raw-goal audit. If another verifier-backed search is required,
     freeze/create a new run and repeat steps 9-12 with the same
     `goal_plus_id`. Each distinct `run_id` is appended as another search task;
@@ -114,7 +115,13 @@ prefix; match by the final logical tool name.
     - on failure, address its findings and prepare a fresh check; never submit
       a reviewer verdict on the reviewer's behalf
     A passing required check atomically marks the Goal Plus record complete.
-15. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
+15. Only after the Goal Plus record reaches a terminal status (`complete`,
+    `blocked`, or `abandoned`), call `search_report` exactly once for every
+    successfully recorded `run_id`. Never generate an intermediate Goal Plus
+    report. Return the final Markdown and HTML paths to the user. A passing
+    required final check counts as terminal because it atomically marks the
+    record complete.
+16. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
 
 The top-level Stop gate blocks every still-active record and returns the full

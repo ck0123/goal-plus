@@ -34,7 +34,10 @@ Rules:
 10. Wait for the OpenCode Task to return. There is no MCP wait loop.
 11. When a Task returns, run `search_run_verifier(run_id, candidate_id, "process")` yourself (without `agent_session_id`) to confirm the final score against the best-so-far workspace state.
 12. Reassess available capacity when budget remains. A free slot or remaining candidate budget is not an obligation to launch another candidate. Before planning new work, check whether recent attempts cluster around the same mechanism or bottleneck; different candidate ids do not by themselves provide diversity. If an existing candidate remains promising and benefits from accumulated context, prefer continuation or a larger-tier redispatch over near-duplicate candidates. Start parallel candidates in one feature family only when they test materially distinct hypotheses. When work is concentrated, step back and analyze the bottleneck and prefer a materially different high-potential direction when evidence supports one; this does not require a macro restart. After substantial attempts without meaningful progress, reassess applicable theoretical or structural limits, such as bounds, critical paths, resource bottlenecks, saturation evidence, or infeasibility constraints, before proposing more nearby mutations.
-13. Select, report, and promote only through runtime APIs (`search_select`, `search_report`, `search_promote`).
+13. Select and promote only through runtime APIs (`search_select`,
+    `search_promote`). When this run belongs to Goal Plus, return without
+    reporting; the Goal Plus workflow calls `search_report` only after its
+    parent record is terminal. Standalone Search reports after promotion.
 14. OpenCode managed subagents run as foreground Task calls. `max_parallel` is a planning hint, not an MCP lifecycle feature.
 15. Do not pass a Task-level `timeout`. Subagents run until their OpenCode step cap hits or the user interrupts the run. Stopping a running subagent is an OpenCode/user interruption concern — there is no MCP abort.
 16. Keep updates concise. Always report `run_id`, selected candidate, score, and report path.

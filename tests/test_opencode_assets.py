@@ -127,6 +127,8 @@ def test_opencode_goal_plus_skill_documents_progressive_modes() -> None:
     assert "Do not create a SearchSpec in Goal Mode" in combined
     assert "call the internal `search` skill" in combined
     assert "final raw-goal audit" in combined
+    assert "Never generate an intermediate Goal Plus report" in combined
+    assert "Only after the Goal Plus record is terminal" in combined
     assert "mode=autonomous" in skill
     assert "mode=probe" in skill
     assert "canonical final line in `raw_goal`" in skill

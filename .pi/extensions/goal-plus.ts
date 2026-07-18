@@ -555,6 +555,8 @@ const RuntimeToolDescriptions: Record<string, string> = {
 		"Score one candidate and pass a concise hypothesis for the tested design. Every returned verifier report appends exactly one validated row to the runtime-owned, inherited workspace/results.tsv and commits it. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
 	search_invalidate_run:
 		"Atomically fence a run after the main agent confirms verifier contract, coverage, determinism, target-alignment, or infrastructure failure. Then interrupt every host worker, wait for zero active workers, repair/freeze, and create a successor with source_run_id.",
+	search_report:
+		"Generate final report.md and report.html. For a linked Goal Plus run, call this exactly once only after the Goal Plus record is terminal; standalone Search calls it after promotion. Active linked Goal Plus records are rejected.",
 	search_plan_next:
 		"Plan initial candidates. In parallel_loops mode this may be called exactly once; later work resumes existing candidates. planned_k is min(requested_k, remaining max_candidates, max_parallel).",
 	pi_search_run_candidate:

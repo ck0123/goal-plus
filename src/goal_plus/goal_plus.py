@@ -651,8 +651,6 @@ class FileGoalPlusRuntime:
             selected_candidate_id,
             promotion_artifact_path,
         )
-        if report_path is None or not Path(report_path).is_file():
-            raise RuntimeError("Search report artifact does not exist.")
         if promotion_artifact_path is None or not Path(promotion_artifact_path).is_file():
             raise RuntimeError("Search promotion artifact does not exist.")
         now = utc_timestamp()
@@ -701,17 +699,17 @@ class FileGoalPlusRuntime:
         )
         return updated
 
-    def _canonical_report_path(self, run_id: str, fallback: str | None) -> str | None:
+    def _canonical_report_path(self, run_id: str, fallback: str | None) -> str:
         report_path = self.root_dir / "runs" / run_id / "report.md"
         if report_path.exists():
             return str(report_path.resolve())
-        return fallback
+        if fallback is not None and Path(fallback).is_file():
+            return str(Path(fallback).resolve())
+        return str(report_path.resolve())
 
-    def _canonical_html_report_path(self, run_id: str) -> str | None:
+    def _canonical_html_report_path(self, run_id: str) -> str:
         report_path = self.root_dir / "runs" / run_id / "report.html"
-        if report_path.exists():
-            return str(report_path.resolve())
-        return None
+        return str(report_path.resolve())
 
     def _canonical_promotion_artifact_path(
         self,

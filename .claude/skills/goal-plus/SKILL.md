@@ -69,10 +69,11 @@ prefix; match by the final logical tool name.
 10. In Search Mode, use the internal `search` skill:
    `search_freeze_spec`, `search_create`, `search_plan_next`,
    `search_start_batch`, `search_start_agent_session`, final
-   `search_run_verifier`, `search_select`, `search_report`, and
-   `search_promote`.
+   `search_run_verifier`, `search_select`, and `search_promote`.
 11. After `search_create`, call `goal_plus_link_search_run`.
-12. After selection/report/promotion, call `goal_plus_record_search_result`.
+12. After selection and promotion, call `goal_plus_record_search_result`.
+    This reserves the canonical report paths without generating report files;
+    do not call `search_report` yet.
 13. If the raw-goal audit requires another verifier-backed search, create and
     link a new `run_id` under the same `goal_plus_id`, then repeat the Search
     Mode flow. `search_tasks` is append-only; `linked_search` is the current
@@ -80,7 +81,10 @@ prefix; match by the final logical tool name.
 14. Finish with a final raw-goal audit, then call
     `goal_plus_set_status(status="complete", evidence=[...])` only when the
     original objective is satisfied.
-15. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
+15. Only after the Goal Plus record is terminal, call `search_report` exactly
+    once for every successfully recorded `run_id`. Never generate an
+    intermediate Goal Plus report; return both final report paths.
+16. Before stopping, call `goal_plus_gate(event="stop", context={})`; continue
     if it returns a continuation prompt.
 
 ## Triage Schema

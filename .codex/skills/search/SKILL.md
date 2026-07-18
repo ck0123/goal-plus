@@ -66,8 +66,9 @@ strategy:
   another planning round;
 - normal execution never creates a replacement candidate or refills a slot;
 - runtime rejects a second `search_plan_next` call for the run;
-- `search_select`, `search_report`, and `search_promote` remain parent-owned
-  final actions.
+- `search_select` and `search_promote` remain parent-owned final Search actions;
+  for Goal Plus, `search_report` is deferred until the parent Goal Plus record
+  is terminal.
 
 The parent is a completion validator and continuation trigger, not a search
 conductor. A low score, one non-improving turn, or another candidate leading is
@@ -167,9 +168,12 @@ structural limits and pivots within its candidate loop.
     deadline call `interrupt_agent`, observe the terminal state, and validate
     it like any other completion. One worker timeout does not stop siblings.
 12. When the global stop policy is true, drain or interrupt every live worker,
-    then call `search_select`, `search_report`, and `search_promote` when
-    requested. Selection uses verifier-backed Git iterations; do not promote
-    merely to checkpoint a temporary best.
+    then call `search_select` and `search_promote` when requested. Selection
+    uses verifier-backed Git iterations; do not promote merely to checkpoint a
+    temporary best. When this Search belongs to Goal Plus, return control
+    without calling `search_report`; the Goal Plus skill generates it exactly
+    once after the parent record is terminal. For standalone Search, call
+    `search_report` only after promotion.
 
 ## Best-So-Far Contract
 

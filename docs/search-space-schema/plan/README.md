@@ -65,7 +65,9 @@ on each subagent completion
   -> if global task remains and time allows, resume the same subagent
 
 main agent after global stop
-  -> select / parent verify / report / promote
+  -> select / parent verify / promote
+  -> record Search result / final raw-goal audit / terminal Goal Plus status
+  -> generate the final report once
 ```
 
 Runtime 拥有官方状态、workspace、verifier、事件、版本提交和 promotion；host
@@ -73,7 +75,9 @@ Runtime 拥有官方状态、workspace、verifier、事件、版本提交和 pro
 
 ## 报告规则
 
-`report.html` 是 `.gp` 持久化状态的离线视图，不是独立状态源。新增
+`report.html` 是 `.gp` 持久化状态的最终离线视图，不是独立状态源。Goal
+Plus 运行中不生成中间报告；只有记录进入终态后才调用一次
+`search_report`。新增
 event/schema/state/admission/reservation 字段时，必须同时更新：
 
 - `goal_plus_monitor_snapshot`；

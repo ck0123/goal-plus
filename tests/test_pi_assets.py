@@ -110,6 +110,8 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "goal_plus_prepare_final_check" in text
     assert "pi_goal_plus_run_final_check" in text
     assert "goal_plus_submit_final_check" in text
+    assert "Never generate an intermediate Goal Plus" in text
+    assert "Only after the Goal Plus record reaches a terminal status" in text
     assert "native Pi `/goal-plus` command creates" in text
     assert "/goal-plus mode=autonomous" in text
     assert "/goal-plus mode=probe" in text
@@ -119,6 +121,19 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "queues" in text
     assert "the continuation prompt" in text
     assert "do not read or audit target files before `goal_plus_record_triage`" in text
+
+
+def test_pi_prompt_and_extension_defer_report_until_terminal_state() -> None:
+    prompt = (ROOT / ".pi" / "prompts" / "goal-plus.md").read_text(
+        encoding="utf-8"
+    )
+    extension = (ROOT / ".pi" / "extensions" / "goal-plus.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Never call `search_report` during Search execution" in prompt
+    assert "terminal status, call `search_report` exactly once" in prompt
+    assert "Active linked Goal Plus records are rejected" in extension
 
 
 def test_pi_goal_plus_skill_documents_parallel_loop_policy() -> None:

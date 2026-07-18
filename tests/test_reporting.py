@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.models import GoalPlusRecord
 from goal_plus.reporting import (
@@ -42,6 +44,17 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     goals.link_search_run(goal.goal_plus_id, frozen.frozen_spec_id, first_run)
     goals.link_search_run(goal.goal_plus_id, frozen.frozen_spec_id, second_run)
 
+    with pytest.raises(RuntimeError, match="before every linked Goal Plus record"):
+        search.report(second_run)
+    assert not (root / "runs" / second_run / "report.md").exists()
+    assert not (root / "runs" / second_run / "report.html").exists()
+
+    goals.set_status(
+        goal.goal_plus_id,
+        "complete",
+        reason="synthetic reporting fixture is ready",
+        evidence=[{"kind": "unit_test"}],
+    )
     markdown_path = search.report(second_run)
     html_path = markdown_path.with_suffix(".html")
     html = html_path.read_text(encoding="utf-8")

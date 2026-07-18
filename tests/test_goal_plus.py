@@ -811,6 +811,40 @@ def test_record_search_result_prefers_existing_runtime_artifact_paths(tmp_path) 
     assert final.linked_search.promotion_artifact_path == str(promotion_path.resolve())
 
 
+def test_record_search_result_reserves_final_report_paths_without_generating_files(
+    tmp_path,
+) -> None:
+    root = tmp_path / ".search"
+    runtime = FileGoalPlusRuntime(root)
+    record = runtime.create_goal("Optimize model")
+    _write_search_run(root, "run_001", "spec_abc")
+    runtime.link_search_run(record.goal_plus_id, "spec_abc", "run_001")
+    run_dir = root / "runs" / "run_001"
+    promotion_path = run_dir / "promotion" / "c001.patch"
+    promotion_path.parent.mkdir(parents=True)
+    promotion_path.write_text("patch\n", encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps({"state": "promoted", "selected_candidate_id": "c001"}),
+        encoding="utf-8",
+    )
+
+    final = runtime.record_search_result(
+        record.goal_plus_id,
+        run_id="run_001",
+        selected_candidate_id="c001",
+        report_path="/tmp/nonexistent-intermediate-report.md",
+        summary="c001 won",
+    )
+
+    report_path = run_dir / "report.md"
+    html_report_path = run_dir / "report.html"
+    assert final.linked_search is not None
+    assert final.linked_search.report_path == str(report_path.resolve())
+    assert final.linked_search.html_report_path == str(html_report_path.resolve())
+    assert not report_path.exists()
+    assert not html_report_path.exists()
+
+
 def test_record_search_result_rejects_unpromoted_run(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize model")

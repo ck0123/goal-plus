@@ -170,3 +170,6 @@ def test_claude_goal_plus_skill_documents_multiple_search_tasks() -> None:
     assert "same `goal_plus_id`" in text
     assert "`search_tasks` is append-only" in text
     assert "`linked_search` is the current" in text
+    assert "do not call `search_report` yet" in text
+    assert "Only after the Goal Plus record is terminal" in text
+    assert "Never generate an" in text

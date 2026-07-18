@@ -43,3 +43,8 @@ If the main agent confirms a real contract/coverage/determinism/target or
 infrastructure defect, call `search_invalidate_run` first, interrupt the entire
 Pi pool and wait for `active_count=0`, then repair/freeze and create the
 successor with `source_run_id`. Never select or promote the invalidated run.
+
+Never call `search_report` during Search execution, promotion, result
+recording, or the final raw-goal audit. After the Goal Plus record reaches a
+terminal status, call `search_report` exactly once for each successfully
+recorded `run_id` and return the final Markdown and HTML paths.

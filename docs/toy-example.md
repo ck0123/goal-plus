@@ -123,9 +123,9 @@ The skill should guide the host agent through this sequence:
 12. Subagents edit only `initial_program.py` inside each candidate workspace and self-score with `goal-plus_search_run_verifier(..., agent_session_id=...)`. The only required MCP calls are `search_get_agent_context` and `search_run_verifier`.
 13. After OpenCode Task return, call `goal-plus_search_run_verifier` for each candidate from the main agent (without `agent_session_id`) to confirm final scores.
 14. Call `goal-plus_search_select`.
-15. Call `goal-plus_search_report`.
-16. Ask before promotion, or call `goal-plus_search_promote` if you requested full promotion.
-17. Call `goal-plus_goal_plus_record_search_result`, then perform the final raw-goal audit.
+15. Ask before promotion, or call `goal-plus_search_promote` if you requested full promotion.
+16. Call `goal-plus_goal_plus_record_search_result`, then perform the final raw-goal audit and record a terminal Goal Plus status.
+17. Call `goal-plus_search_report` once to generate the final Markdown and HTML reports.
 
 There is no batch-shortcut tool. Call `search_plan_next` followed by `search_start_batch`.
 
@@ -137,10 +137,12 @@ You can trigger the same skill from the command line:
 opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Decide autonomously whether the verifier-backed spec is search-ready. Keep all edits inside candidate workspaces. Report the selected candidate, score, report path, and promotion patch path if promoted."
 ```
 
-If you want to inspect before promotion, use:
+If you do not want promotion, use a standalone Search run. Linked Goal Plus
+reports are generated only after promotion, result recording, final audit, and
+terminal status.
 
 ```bash
-opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Decide autonomously whether the verifier-backed spec is search-ready. Stop after report generation and do not promote."
+opencode run --command goal-plus "Run the k_module smoke test with 4 candidates. Use examples/k_module_search_spec.json and freeze tests/fixtures/k_module_problem/evaluator.py. Decide autonomously whether the verifier-backed spec is search-ready. Promote the selected result, complete the final audit, then generate the final report once."
 ```
 
 ## 7. Expected Runtime Artifacts

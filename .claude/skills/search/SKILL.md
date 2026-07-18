@@ -126,7 +126,10 @@ an obligation to launch more work.
    the main agent before selecting. Every returned report appends exactly one
    validated row to the runtime-owned inherited workspace-root `results.tsv`
    and commits it.
-10. Use `search_select`, `search_report`, and `search_promote` when appropriate.
+10. Use `search_select` and `search_promote` when appropriate. For Goal Plus,
+    return without reporting; its parent skill calls `search_report` exactly
+    once after the Goal Plus record is terminal. Standalone Search calls
+    `search_report` only after promotion.
 
 ## Worker Budget Control
 

@@ -316,7 +316,7 @@ def create_mcp(
 
     @mcp.tool()
     def search_report(run_id: str) -> dict[str, str]:
-        """Generate the run report markdown. Returns the report path."""
+        """Generate final Markdown/HTML reports; linked Goal Plus must be terminal."""
         return tools.search_report(run_id)
 
     @mcp.tool()

@@ -1824,7 +1824,37 @@ class FileSearchRuntime:
         run.budget_used["selection_blocked_reason"] = reason
         self._write_run(run)
 
+    def _blocking_goal_report_records(self, run_id: str) -> list[tuple[str, str]]:
+        blocking: list[tuple[str, str]] = []
+        for path in sorted((self.root_dir / "goal-plus").glob("*/goal.json")):
+            try:
+                payload = load_json(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            search_tasks = payload.get("search_tasks")
+            if not isinstance(search_tasks, list) or not any(
+                isinstance(task, dict) and task.get("run_id") == run_id
+                for task in search_tasks
+            ):
+                continue
+            status = str(payload.get("status") or "active")
+            if status not in {"blocked", "complete", "abandoned"}:
+                blocking.append(
+                    (str(payload.get("goal_plus_id") or path.parent.name), status)
+                )
+        return blocking
+
     def report(self, run_id: str) -> Path:
+        blocking = self._blocking_goal_report_records(run_id)
+        if blocking:
+            details = ", ".join(
+                f"{goal_plus_id}={status}" for goal_plus_id, status in blocking
+            )
+            raise RuntimeError(
+                "cannot generate a report before every linked Goal Plus record "
+                "reaches a terminal status (complete, blocked, or abandoned); "
+                f"current: {details}"
+            )
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
@@ -2134,7 +2164,7 @@ class FileSearchRuntime:
             run.selected_candidate_id = candidate_id
             self._write_run(run)
         report_path = self._run_dir(run_id) / "report.md"
-        if report_path.exists():
+        if report_path.exists() and not self._blocking_goal_report_records(run_id):
             self.report(run_id)
         return patch_path
 

@@ -350,14 +350,20 @@ same monitor/statistics layer, then writes both canonical artifacts:
 - `.gp/runs/<run_id>/report.md`
 - `.gp/runs/<run_id>/report.html`
 
-In the normal Pi or Codex Search completion flow, the main agent must call
-`search_report` after `search_select` and before `search_promote`, return both
-paths to the user, and pass the Markdown path to
-`goal_plus_record_search_result`. `search_promote` refreshes an existing report
-after promotion, and the Goal Plus record stores the canonical HTML path.
-Merely reaching a budget limit, finishing workers, or selecting a candidate
-does not make the runtime generate a report by itself; the normal host skills
-make the explicit `search_report` call.
+The normal Goal Plus completion flow must not generate an intermediate report.
+The required order is `search_select`, `search_promote`,
+`goal_plus_record_search_result`, final raw-goal audit, terminal Goal Plus
+status, then one `search_report` call for every successfully recorded run. The
+result-recording call reserves the canonical Markdown and HTML paths even
+though neither file exists yet. A linked Goal Plus run rejects `search_report`
+while its record is still `active` or `needs_user`.
+
+`search_promote` refreshes a legacy report only when no linked Goal Plus record
+is still active. Standalone Search may call `search_report` after promotion.
+Merely reaching a budget limit, finishing workers, selecting a candidate,
+promoting it, or recording the result does not generate a report. The report is
+a final static view and must reflect a terminal Goal Plus status (`complete`,
+`blocked`, or `abandoned`).
 
 Reports are reproducible views over saved evidence. To generate a missing
 report or refresh an old one, call the logical MCP tool again with the existing
@@ -371,10 +377,11 @@ This recovery path remains valid after the original Pi/Codex main-agent or
 worker sessions have exited. A later agent does not need the old conversation
 context: it only needs the existing `run_id` and access to the same configured
 `.gp` root. It should call `goal_plus_monitor_snapshot` first when the run id or
-artifact state is uncertain, then call `search_report`. If native host logs or
-observability were never persisted or have since been removed, generate the
-report anyway and leave those metrics unavailable; do not rerun the Goal Plus
-task merely to fill presentation gaps.
+artifact state is uncertain, confirm the linked Goal Plus record is terminal,
+then call `search_report`. If native host logs or observability were never
+persisted or have since been removed, generate the report anyway and leave
+those metrics unavailable; do not rerun the Goal Plus task merely to fill
+presentation gaps.
 
 When MCP tools are unavailable in Pi, use the local facade:
 

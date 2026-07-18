@@ -182,12 +182,13 @@ If allowed, call the internal `search` skill and follow its workflow exactly:
 ```text
 search_freeze_spec -> search_create -> search_plan_next -> search_start_batch
 -> search_start_agent_session -> host foreground workers -> search_run_verifier
--> search_select -> search_report -> search_promote
+-> search_select -> search_promote
 ```
 
 After `search_create`, call `goal-plus_goal_plus_link_search_run`.
-After selection/report/promotion, call
-`goal-plus_goal_plus_record_search_result`.
+After selection and promotion, call `goal-plus_goal_plus_record_search_result`.
+This reserves the canonical report paths without creating report files. Do not
+call `goal-plus_search_report` while Goal Plus is still active.
 
 One Goal Plus record is the complete user task. If the raw-goal audit needs
 another verifier-backed search, create and link another `run_id` under the same
@@ -204,6 +205,10 @@ any integration work.
 If yes, call `goal-plus_goal_plus_set_status(status="complete",
 evidence=[...])`. If not, continue in Goal Mode with the remaining integration
 work or mark the goal blocked with clear evidence.
+
+Only after the Goal Plus record is terminal, call `goal-plus_search_report`
+exactly once for every successfully recorded `run_id` and return both final
+report paths. Never generate an intermediate Goal Plus report.
 
 ## Hook Compatibility
 

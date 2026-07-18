@@ -194,7 +194,8 @@ ST_CODEX_MODEL=gpt-5.6-luna \
 
 `codex_parallel_loop_cycle` proves one initial plan, wait-any behavior,
 same-worker follow-up on the same candidate, verifier-backed best updates, and
-final selection/report after drain.
+final selection/promotion after drain. Goal Plus report generation happens once
+after the parent record reaches a terminal status.
 
 ## Logs
 
