@@ -248,12 +248,31 @@ observation, submit, abort, and host-sync APIs must not reappear in host assets.
 
 ## Testing
 
+`pytest.ini` registers markers and defaults to `-n 4 --dist=load`. The default
+gate runs fast unit tests in parallel; `integration`, `example`, `st`, and
+`st_pi` tests are skipped unless named in `-m`. See [tests/README.md](tests/README.md)
+for the full marker matrix.
+
 Default verification:
 
 ```bash
-python -m pytest -q
+python -m pytest -q          # parallel fast gate (default: -n 4 --dist=load)
 git diff --check
 ```
+
+Parallelism policy: use at most 50% of available CPUs for the default gate,
+capped at `--numprocesses 16`. `pytest.ini` sets `-n 4` as a conservative
+default for laptops; on large servers override upward:
+
+```bash
+python -m pytest -n 8 -q              # 16-core+ server
+python -m pytest -n 16 -q             # 32-core+ server (do not exceed)
+python -m pytest -p no:xdist -q       # disable parallelism entirely
+```
+
+When `python -c "import os; print(os.cpu_count())"` returns N, pick
+`-n min(N // 2, 16)`. Larger values cause git lock contention inside the
+runtime tests and stop scaling.
 
 Focused tests:
 
@@ -261,13 +280,16 @@ Focused tests:
 python -m pytest tests/test_runtime_unit.py -q
 python -m pytest tests/test_agent_hosts.py tests/test_models.py -q
 python -m pytest tests/test_opencode_assets.py tests/test_codex_assets.py tests/test_claude_assets.py -q
+python -m pytest -m codex -q          # all codex-slice tests
+python -m pytest -m pi -q             # all pi-slice tests
 ```
 
-Opt-in system tests drive real OpenCode and are skipped by default:
+Opt-in slices:
 
 ```bash
-python -m pytest -m st -k k_module_smoke -v -s
-python -m pytest -m st -v -s
+python -m pytest -m integration -q   # multi-round search end-to-end
+python -m pytest -m example -q         # examples/* fixtures drive real assets
+python -m pytest -m "st or st_pi" -v -s  # real-host system tests
 ```
 
 Run ST only when host credentials, `opencode`, and the `goal-plus` MCP
