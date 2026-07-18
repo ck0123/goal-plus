@@ -9,6 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.example
 BENCHMARK_PATH = ROOT / "examples" / "kernel-optimize" / "verifier" / "benchmark.py"
 
 

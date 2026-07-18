@@ -8,7 +8,7 @@ import pytest
 from goal_plus.pi_tool import call_pi_tool
 from goal_plus.runtime import FileSearchRuntime
 
-from tests.test_runtime_unit import make_project, spec_for
+from tests._runtime_helpers import make_project, spec_for
 
 
 pytestmark = pytest.mark.pi

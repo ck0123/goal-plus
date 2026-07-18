@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_host_assets_common import assert_common_budget_planning_claims
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,18 +63,15 @@ def test_opencode_search_skill_documents_whole_run_budget_planning() -> None:
     )
     normalized = " ".join(skill.split())
 
-    assert "### Search Run Budget Planning" in skill
+    assert_common_budget_planning_claims(skill)
     assert "immutable total candidate-workspace cap" in normalized
     assert "`ceil(max_candidates / max_parallel)`" in skill
-    assert "recommend 4" in skill
     assert "`max_candidates = rounds * max_parallel`" in skill
     assert "set `max_candidates=15`" in skill
     assert "default value 4 as the whole-run budget" in normalized
     assert "Do not call `search_select` while" in normalized
-    assert "Different candidate ids do not by themselves provide search diversity" in normalized
     assert "same-candidate" in normalized
     assert "not an obligation to launch more work" in normalized
-    assert "theoretical or structural limits" in normalized
 
 
 def test_goal_any_optimize_command_is_goal_plus_alias() -> None:

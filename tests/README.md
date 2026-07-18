@@ -7,7 +7,9 @@ the only evidence that a real host can complete the user-visible workflow.
 
 | Layer | Command | Proves |
 |---|---|---|
-| Full default gate | `pytest -q` | models, runtimes, workspaces, verifiers, APIs, assets, examples |
+| Default fast gate | `pytest -q` | models, runtimes, workspaces, verifiers, APIs, host assets |
+| Integration slice | `pytest -m integration -q` | multi-round search, freeze+plan+batch+verify end-to-end |
+| Example slice | `pytest -m example -q` | `examples/*` fixtures drive real generated assets |
 | Codex fast slice | `pytest -m codex -q` | Codex adapter, hooks, assets, pool contract |
 | Pi fast slice | `pytest -m pi -q` | Pi extension, driver, supervisor, assets |
 | Runtime-focused | `pytest tests/test_runtime_unit.py` | Search state machine without a host |
@@ -18,6 +20,9 @@ behavior claim requires the matching ST; if it cannot run, report that gap.
 With the `dev` extra installed, `pytest -n 2 --dist=load -q` runs the default
 gate with two workers. Keep real-host ST serial so host processes, model calls,
 and machine resources do not interfere with one another.
+
+`integration` and `example` tests are skipped by default via
+`tests/conftest.py`. Add the marker name to `-m` to opt in.
 
 ## System-Test Markers
 
@@ -132,6 +137,7 @@ correlate `run_id`, `candidate_id`, and `agent_session_id`.
 
 ## Pytest Configuration
 
-`pyproject.toml` defines markers and excludes opt-in ST by default. Keep marker
-registration, this page, and scenario files in sync whenever an ST is added,
-renamed, or removed.
+`pytest.ini` defines markers. `tests/conftest.py` skips `integration`,
+`example`, `st`, and `st_pi` tests unless their marker name appears in `-m`.
+Keep marker registration, this page, and scenario files in sync whenever an
+ST is added, renamed, or removed.

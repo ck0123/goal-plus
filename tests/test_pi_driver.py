@@ -11,7 +11,7 @@ from goal_plus.monitor import goal_plus_monitor_snapshot
 from goal_plus.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.tools import SearchTools
-from tests.test_runtime_unit import spec_for
+from tests._runtime_helpers import spec_for
 
 
 pytestmark = pytest.mark.pi

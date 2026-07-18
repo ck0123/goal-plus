@@ -11,7 +11,7 @@ from goal_plus.time_advisory import (
     build_search_time_advisory,
     is_search_candidate_session,
 )
-from tests.test_runtime_unit import make_project, spec_with_host
+from tests._runtime_helpers import make_project, spec_with_host
 
 
 def _codex_candidate(tmp_path: Path) -> tuple[FileSearchRuntime, str, str, str]:

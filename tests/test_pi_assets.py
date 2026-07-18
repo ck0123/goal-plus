@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_host_assets_common import assert_common_budget_planning_claims
+
 
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.pi
@@ -127,11 +129,10 @@ def test_pi_goal_plus_skill_documents_rolling_pool_budget_planning() -> None:
     )
     normalized = " ".join(text.split())
 
-    assert "### Search Run Budget Planning" in text
+    assert_common_budget_planning_claims(text)
     assert "total number of distinct candidate workspaces" in normalized
     assert "hard cap on live Pi candidate workers" in normalized
     assert "planning decision epoch, not a barrier" in normalized
-    assert "recommend 4" in text
     assert "conservative whole-run safety cap" in normalized
     assert "Never wait for unrelated slow workers" in normalized
     assert "main agent owns reinvestment decisions" in normalized
@@ -154,10 +155,8 @@ def test_pi_goal_plus_skill_documents_rolling_pool_budget_planning() -> None:
     assert "candidate_local" in text
     assert "feature_family" in text
     assert "single_observation" in text
-    assert "Different candidate ids do not by themselves provide search diversity" in normalized
     assert "free slot is not an obligation" in normalized
     assert "prefer `pi_search_pool_continue`" in normalized
-    assert "theoretical or structural limits" in normalized
     assert "does not require `macro_restart`" in text
 
 

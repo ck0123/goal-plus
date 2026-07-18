@@ -134,6 +134,7 @@ def test_two_round_example_specs_are_valid(
     assert all((ROOT / verifier_path).exists() for verifier_path in verifier_paths)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("spec_name", "verifier_paths", "metric_name", "expected"),
     RUNTIME_EXAMPLE_SPECS,
@@ -243,6 +244,7 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert status["candidates_evaluated"] == 2
 
 
+@pytest.mark.integration
 def test_git_worktree_workspace_demo_runs_end_to_end(tmp_path: Path) -> None:
     completed = subprocess.run(
         [

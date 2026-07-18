@@ -169,6 +169,7 @@ def submit(tools: SearchTools, run_id: str, candidate_id: str) -> None:
     tools.search_start_agent_session(run_id, candidate_id, {"goal": f"{candidate_id} ready"})
 
 
+@pytest.mark.integration
 def test_k_module_end_to_end_selects_best_without_changing_main_workspace(
     tools: SearchTools,
     project_dir: Path,
@@ -245,6 +246,7 @@ def test_k_module_end_to_end_selects_best_without_changing_main_workspace(
     assert status["state"] == RunState.PROMOTED
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("worker_host", ["opencode", "codex", "claude-code"])
 def test_k_module_two_rounds_record_host_sessions_and_redispatch(
     tools: SearchTools,

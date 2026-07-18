@@ -10,13 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 pytestmark = [pytest.mark.codex, pytest.mark.pi]
 
 
-def test_fast_host_markers_are_registered() -> None:
-    pytest_config = (ROOT / "pytest.ini").read_text(encoding="utf-8")
-
-    assert "    codex: Codex-specific unit, integration, asset, or parity test" in pytest_config
-    assert "    pi: Pi-specific unit, integration, asset, or parity test" in pytest_config
-
-
 @pytest.mark.parametrize(
     ("relative_path", "marker"),
     [
@@ -100,14 +93,6 @@ def test_mixed_modules_mark_named_codex_and_pi_fast_tests(relative_path: str) ->
             relative_path,
             test_name,
         )
-
-
-def test_test_readme_documents_fast_markers_and_terra_st_model() -> None:
-    text = (ROOT / "tests" / "README.md").read_text(encoding="utf-8")
-
-    assert "pytest -m codex" in text
-    assert "pytest -m pi" in text
-    assert "gpt-5.6-terra" in text
 
 
 @pytest.mark.parametrize(

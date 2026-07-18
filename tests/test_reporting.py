@@ -12,7 +12,7 @@ from goal_plus.reporting import (
 )
 from goal_plus.runtime import FileSearchRuntime
 
-from tests.test_runtime_unit import make_project, spec_for
+from tests._runtime_helpers import make_project, spec_for
 
 
 def test_search_report_generates_self_contained_html_with_multi_search_timeline(

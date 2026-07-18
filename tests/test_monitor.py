@@ -9,7 +9,7 @@ from goal_plus.pi_tool import call_pi_tool
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.server import create_mcp
 
-from tests.test_runtime_unit import make_project, spec_with_strategy
+from tests._runtime_helpers import make_project, spec_with_strategy
 
 
 def _pi_rpc_spec(project: Path):

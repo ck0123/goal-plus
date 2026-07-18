@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_host_assets_common import assert_common_budget_planning_claims
+
 
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.codex
@@ -92,11 +94,10 @@ def test_codex_search_skill_documents_rolling_pool_budget_planning() -> None:
     )
     normalized = " ".join(text.split())
 
-    assert "## Search Run Budget Planning" in text
+    assert_common_budget_planning_claims(text)
     assert "total number of distinct candidate workspaces" in normalized
     assert "hard cap on live candidate workers" in normalized
     assert "planning decision epoch, not a worker barrier" in normalized
-    assert "recommend 4" in text
     assert "conservative whole-run safety cap" in normalized
     assert "Never wait for unrelated slow workers" in normalized
     assert "targetless `wait_agent`" in text
@@ -105,63 +106,15 @@ def test_codex_search_skill_documents_rolling_pool_budget_planning() -> None:
     assert "deepen_incumbent" in text
     assert "transfer_feature" in text
     assert "macro_restart" in text
-    assert "decision event, not run completion" in " ".join(text.split())
+    assert "decision event, not run completion" in normalized
     assert "source_run_id" in text
     assert "search_invalidate_run" in text
     assert "interrupt_agent" in text
     assert "candidate_local" in text
     assert "feature_family" in text
-    assert "Different candidate ids do not by themselves provide search diversity" in normalized
     assert "same-candidate continuation" in normalized
     assert "free slot is not an obligation" in normalized
-    assert "theoretical or structural limits" in normalized
     assert "does not require `macro_restart`" in text
-
-
-def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
-    text = (ROOT / ".codex" / "skills" / "goal-plus" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
-
-    assert "name: goal-plus" in text
-    assert "goal_plus_create" in text
-    assert "goal_plus_record_triage" in text
-    assert "goal_plus_save_spec_draft" in text
-    assert "goal_plus_confirm_frozen_verifier" in text
-    assert "goal_plus_gate" in text
-    assert "mode_hint" not in text
-    assert "Goal Mode" in text
-    assert "Spec Discovery Mode" in text
-    assert "Search Mode" in text
-    assert '"recommended_phase": "goal"' in text
-    assert "goal_mode" in text
-    assert "Do not send fields named `mode` or `reason`" in text
-    assert "Search is an autonomous upgrade" in text
-    assert "without asking the user" in text
-    assert "optional audit evidence" in text
-    assert "Never pause or ask the user" in text
-    assert "Do not create a SearchSpec in Goal Mode" in text
-    assert "search_freeze_spec" in text
-    assert "final raw-goal audit" in text
-    assert "/goal-plus-with-final-check" in text
-    assert "/goal-plus edit" in text
-    assert "/goal-plus mode=autonomous" in text
-    assert "/goal-plus mode=probe" in text
-    assert "canonical final line in `raw_goal`" in text
-    assert "A candidate lease ending never completes" in text
-    assert "stores no separate task deadline" in text
-    assert "treat the latest user message as" in text
-    assert "scope, deliverables, or success criteria" in text
-    assert "goal_plus_update_goal" in text
-    assert "clarify before revising or resuming" in text
-    assert "merely because the Goal Plus record is active" in text
-    assert "goal_plus_prepare_final_check" in text
-    assert "goal_plus_submit_final_check" in text
-    assert "spawn_agent" in text
-    assert 'fork_turns="none"' in text
-    assert "never submit" in text
-    assert ".goal-plus-verifiers/" in text
-    assert "`expected_outputs`" in text
 
 
 def test_codex_search_skill_documents_worker_budget_watchdog() -> None:

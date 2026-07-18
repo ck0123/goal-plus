@@ -13,7 +13,7 @@ from goal_plus.goal_plus import EXPLORATION_MODE_LINES, FileGoalPlusRuntime
 from goal_plus.models import SearchSpec
 from goal_plus.monitor import goal_plus_monitor_snapshot
 from goal_plus.runtime import FileSearchRuntime
-from tests.test_runtime_unit import make_project, spec_with_host
+from tests._runtime_helpers import make_project, spec_with_host
 
 
 HOOK_CLI = [

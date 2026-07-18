@@ -13,6 +13,7 @@ from goal_plus.models import SearchSpec
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.example
 WORKSPACE = ROOT / "examples" / "edgebench-ad-placement" / "workspace"
 GENERATOR = WORKSPACE / "tools" / "bin" / "gen"
 TESTER = WORKSPACE / "tools" / "bin" / "tester"

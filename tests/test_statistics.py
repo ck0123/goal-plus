@@ -5,7 +5,7 @@ from pathlib import Path
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.statistics import build_run_statistics
 
-from tests.test_runtime_unit import make_project, spec_for
+from tests._runtime_helpers import make_project, spec_for
 
 
 def _observation(

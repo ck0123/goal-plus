@@ -6,10 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from goal_plus.models import SearchSpec
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.example
 EXAMPLE_DIR = ROOT / "examples" / "cannbench-tilelang-ascend"
 
 

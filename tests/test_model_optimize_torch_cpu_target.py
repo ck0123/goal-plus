@@ -10,6 +10,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.example
 EXAMPLE_DIR = ROOT / "examples" / "model-optimize"
 TARGET = EXAMPLE_DIR / "torch-cpu-target"
 
