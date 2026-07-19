@@ -31,6 +31,7 @@ Strategy-specific docs:
 Recent implementation evidence:
 
 - [docs/worker-budget-smoke.md](docs/worker-budget-smoke.md)
+- [docs/pi-native-session-smoke.md](docs/pi-native-session-smoke.md)
 
 ## Code Discovery
 
@@ -186,20 +187,23 @@ Current host expectations:
 - Pi RPC supports the portable builtin strategy subset. `worker_budget`
   requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
   `goal-plus-pi-worker` to launch foreground `pi --mode rpc` workers
-  with `--no-session` from candidate workspaces and explicitly loads
-  `.pi/extensions/goal-plus.ts`. The runner may send one advisory `steer` after
+  from candidate workspaces, persists native sessions under
+  `.gp/host-sessions/pi/`, and explicitly loads `.pi/extensions/goal-plus.ts`.
+  The runner may send one advisory `steer` after
   a Search candidate tool completes when available time is below the observed
-  average verifier-submission time. Pi RPC does not support same-worker
-  continuation; `pi_search_pool_continue` performs logical same-candidate
-  continuation through `search_redispatch_candidate`, MCP history, verifier
-  evidence, Git state, and bounded progress handoff metadata. New Pi specs use
-  `orchestration_mode="parallel_loops"`; a fresh Pi session resumes the same
-  workspace after each validated completion while no global stop condition is
-  true. Pi has
+  average verifier-submission time. `pi_search_pool_continue` starts a new Pi
+  process that resumes the same native session and the same candidate/workspace;
+  incremental `get_entries(since=...)` metrics avoid retransferring the prior
+  transcript. New Pi specs use `orchestration_mode="parallel_loops"`; the same
+  native session resumes after each validated completion while no global stop
+  condition is true. Pi has
   extension pre-tool guarding and skill stop gates, but no Codex Stop hook
   parity. Its main-agent pool is a durable host supervisor under
   `.gp/host-pools/pi/` with explicit open/submit/wait-any/snapshot/continue/
   close tools; it never plans or auto-refills candidates.
+  This is cross-process native-session continuation, not a promise that one Pi
+  OS process remains resident for the full run. Add a persistent same-PID host
+  supervisor only if process identity itself becomes a requirement.
 
 Portable strategy names for non-OpenCode hosts are currently:
 

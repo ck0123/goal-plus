@@ -213,7 +213,7 @@ def test_run_pi_search_candidate_skips_duplicate_final_verify_for_infrastructure
     assert record.iterations[0].agent_session_id == result["agent_session_id"]
 
 
-def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
+def test_run_pi_search_candidate_resumes_same_native_session_across_processes(
     tmp_path: Path,
 ) -> None:
     project = _make_project(tmp_path)
@@ -223,11 +223,27 @@ def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
     plan = runtime.plan_next(run_id, requested_k=1)
     candidate = runtime.start_batch(run_id, plan.plan_id)[0]
 
+    launches: list[dict[str, Any]] = []
+
     def fake_worker(launch: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        launches.append(dict(launch))
+        dispatch = len(launches)
         return {
             "host": "pi-rpc",
             "external_id": launch["session_id"],
-            "metadata": {"continuation": "state_redispatch"},
+            "metadata": {
+                "continuation": "native_session",
+                "process_pid": 1000 + dispatch,
+                "pi_metrics": {
+                    "final_last_entry_id": f"entry_{dispatch}",
+                    "final_entry_count": dispatch,
+                    "usage_total": {"input": dispatch * 10},
+                    "usage_delta": {"input": 10},
+                    "duration_seconds": float(dispatch),
+                    "dispatch_duration_seconds": 1.0,
+                    "started_at": "2026-07-19T00:00:00Z",
+                },
+            },
         }
 
     first = run_pi_search_candidate(
@@ -248,12 +264,20 @@ def test_run_pi_search_candidate_redispatches_with_fresh_runtime_session(
         worker_runner=fake_worker,
     )
 
-    assert first["agent_session_id"] != resumed["agent_session_id"]
-    assert resumed["steps"][0]["tool"] == "search_redispatch_candidate"
-    assert resumed["launch"]["continuation"] == "state_redispatch"
+    assert first["agent_session_id"] == resumed["agent_session_id"]
+    assert resumed["steps"][0]["tool"] == "search_continue_agent_session"
+    assert resumed["launch"]["continuation"] == "native_session"
+    assert resumed["launch"]["session_id"] == first["launch"]["session_id"]
+    assert resumed["launch"]["metrics_baseline"]["last_entry_id"] == "entry_1"
     assert resumed["launch"]["budget_control"]["max_runtime_seconds"] == 900
     assert resumed["steps"][0]["runtime_multiplier"] == 1.5
-    assert len(runtime._load_agent_sessions(run_id)) == 2
+    assert len(runtime._load_agent_sessions(run_id)) == 1
+    stored = runtime._load_agent_session_by_id(first["agent_session_id"], run_id=run_id)
+    assert stored.host_handle.metadata["dispatch_count"] == 2
+    assert [
+        dispatch["process_pid"]
+        for dispatch in stored.host_handle.metadata["dispatches"]
+    ] == [1001, 1002]
 
 
 def test_run_pi_search_candidate_accepts_explicit_long_worker_budget(

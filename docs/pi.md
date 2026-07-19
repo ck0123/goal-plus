@@ -37,14 +37,22 @@ LLM message and does not trigger another assistant turn.
 ## How Pi Differs From Other Hosts
 
 The main agent uses extension events rather than project hook files. Candidate
-workers are stateless Pi RPC processes supervised by a durable host-local pool.
-Each detached wrapper owns one foreground `pi --mode rpc` child launched by
-`goal-plus-pi-worker` with `--no-session`.
+workers are Pi RPC processes supervised by a durable host-local pool. Each
+detached wrapper owns one foreground `pi --mode rpc` child launched by
+`goal-plus-pi-worker`; native session JSONL lives under
+`.gp/host-sessions/pi/`.
 
 Pool state lives under `.gp/host-pools/pi/`; Search records remain host-neutral.
-Pi has no same-worker continuation. `pi_search_pool_continue` performs
-state-level redispatch into the same candidate workspace with a fresh
-`agent_session_id`.
+`pi_search_pool_continue` starts a new process that reloads the same native Pi
+session in the same candidate workspace and preserves `agent_session_id`.
+Metrics use `get_entries(since=<last_entry_id>)`, so each dispatch transfers
+only new entries while cumulative usage remains available in the bound handle.
+This does not keep one OS process resident across completions.
+The resume launch explicitly resets dispatch-scoped deadline semantics: a
+closeout or time advisory persisted by an earlier process is historical, and
+only warnings delivered after the latest launch apply to the new budget.
+The real-host comparison and the decision not to add a persistent supervisor
+yet are recorded in [Pi Native Session Resume Smoke](pi-native-session-smoke.md).
 
 ## Worker Spec
 
@@ -105,8 +113,9 @@ Worker-role extension tools are limited to `search_get_agent_context`,
 inside the returned workspace, creates an early real artifact, runs verifier
 iterations, and writes a bounded `.tmp/handoff.json`.
 
-The handoff plus candidate Git state and `.gp` verifier history are the recovery
-surface. Pi workers do not need a persisted chat session.
+The persisted native session is the normal continuation surface. The handoff,
+candidate Git state, and `.gp` verifier history remain the durable recovery
+surface when native session loading is unavailable.
 
 Every redispatched worker owns the next hypothesis, pivot, and rebase within
 the same candidate workspace. Main sends a neutral continuation directive and

@@ -85,6 +85,7 @@ class AgentHostAdapter(Protocol):
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
         worker_launch: dict[str, Any] | None = None,
+        host_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -246,6 +247,7 @@ class OpenCodeAdapter:
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
         worker_launch: dict[str, Any] | None = None,
+        host_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not external_id:
             raise UnsupportedHostCapability(
@@ -363,6 +365,7 @@ class CodexAdapter:
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
         worker_launch: dict[str, Any] | None = None,
+        host_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         target = task_name or external_id
         if not target:
@@ -449,6 +452,7 @@ class ClaudeCodeAdapter:
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
         worker_launch: dict[str, Any] | None = None,
+        host_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         target = external_id or task_name
         if not target:
@@ -471,10 +475,10 @@ class PiRpcAdapter:
     name: AgentHostKind = "pi-rpc"
     capabilities = HostCapabilities(
         supports_bind_handle=True,
-        supports_same_worker_continue=False,
+        supports_same_worker_continue=True,
         supports_trace_export=False,
         uses_background_workers=False,
-        continuation="state_redispatch",
+        continuation="native_session",
         supports_soft_closeout=True,
         supports_model_override=True,
         supports_reasoning_effort=True,
@@ -483,7 +487,7 @@ class PiRpcAdapter:
         pool=HostPoolContract(
             launch_mode="async",
             wait_mode="wait_any",
-            continuation_mode="state_redispatch",
+            continuation_mode="native_session",
             deadline_mode="worker_watchdog",
             recovery_mode="supervisor_persisted",
             completion_stage="candidate_ready",
@@ -509,7 +513,7 @@ class PiRpcAdapter:
         max_runtime_seconds = worker_budget.get("max_runtime_seconds")
         budget_control: dict[str, Any] = {
             "mode": "pi_rpc_process_watchdog",
-            "continuation": "state_redispatch",
+            "continuation": "native_session",
             "max_runtime_seconds": max_runtime_seconds,
             "on_exceed": worker_budget.get("on_exceed", "interrupt"),
         }
@@ -540,6 +544,12 @@ class PiRpcAdapter:
         )
         if resume:
             labels = "continue_existing_agent_session=true; " + labels
+            header += (
+                "\n\nA new host dispatch starts with this launch message. Any "
+                "deadline, closeout, or time-advisory message earlier in the "
+                "native conversation belongs to a previous dispatch and is no "
+                "longer active. Only warnings delivered after this launch apply."
+            )
         return f"{header}\n\nLaunch labels: {labels}"
 
     def build_launch_payload(
@@ -564,7 +574,8 @@ class PiRpcAdapter:
             "root": root or DEFAULT_RUNTIME_ROOT,
             "cwd": cwd or ".",
             "description": f"{candidate_id} {short_intent}",
-            "continuation": "state_redispatch",
+            "continuation": "native_session",
+            "session_persistence": "cross_process",
             "prompt": self._base_prompt(
                 worker_prompt=worker_prompt,
                 agent_session_id=agent_session_id,
@@ -600,11 +611,52 @@ class PiRpcAdapter:
         worker_prompt: str | None = None,
         worker_budget: dict[str, Any] | None = None,
         worker_launch: dict[str, Any] | None = None,
+        host_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        raise UnsupportedHostCapability(
-            "pi-rpc workers do not persist full session JSONL; use "
-            "search_redispatch_candidate for state-level resume"
-        )
+        session_id = (external_id or "").strip()
+        if not session_id:
+            raise UnsupportedHostCapability(
+                "pi-rpc continuation requires a bound native session id"
+            )
+        payload: dict[str, Any] = {
+            "tool": "pi_rpc_worker",
+            "agent_session_id": agent_session_id,
+            "candidate_id": candidate_id,
+            "session_id": session_id,
+            "root": root or DEFAULT_RUNTIME_ROOT,
+            "cwd": cwd or ".",
+            "description": f"{candidate_id} {short_intent}",
+            "continuation": "native_session",
+            "session_persistence": "cross_process",
+            "prompt": self._base_prompt(
+                worker_prompt=worker_prompt,
+                agent_session_id=agent_session_id,
+                candidate_id=candidate_id,
+                one_paragraph_idea=one_paragraph_idea,
+                worker_budget=worker_budget,
+                resume=True,
+            ),
+        }
+        if worker_agent_type:
+            payload["worker_agent_type"] = worker_agent_type
+        if worker_launch:
+            if worker_launch.get("model") is not None:
+                payload["model_pattern"] = worker_launch["model"]
+            if worker_launch.get("reasoning_effort") is not None:
+                payload["thinking_level"] = worker_launch["reasoning_effort"]
+        metrics = (host_metadata or {}).get("pi_metrics")
+        if isinstance(metrics, dict):
+            payload["metrics_baseline"] = {
+                "last_entry_id": metrics.get("final_last_entry_id"),
+                "entry_count": metrics.get("final_entry_count"),
+                "usage_total": metrics.get("usage_total"),
+                "duration_seconds": metrics.get("duration_seconds"),
+                "started_at": metrics.get("started_at"),
+            }
+        budget_control = self._budget_control(worker_budget)
+        if budget_control:
+            payload["budget_control"] = budget_control
+        return payload
 
 
 _ADAPTERS: dict[AgentHostKind, AgentHostAdapter] = {

@@ -560,7 +560,7 @@ const RuntimeToolDescriptions: Record<string, string> = {
 	search_plan_next:
 		"Plan initial candidates. In parallel_loops mode this may be called exactly once; later work resumes existing candidates. planned_k is min(requested_k, remaining max_candidates, max_parallel).",
 	pi_search_run_candidate:
-		"Run one Pi candidate worker. worker_budget optionally overrides only this dispatch, including an initial dispatch or a long state-level redispatch, without mutating the frozen spec.",
+		"Run one Pi candidate worker. worker_budget optionally overrides only this dispatch, including an initial dispatch or a cross-process native-session continuation, without mutating the frozen spec.",
 	pi_search_run_batch:
 		"Compatibility batch runner. It waits for the whole batch; prefer the managed Pi pool for parallel-loop wait-any scheduling.",
 	pi_search_pool_open:

@@ -182,10 +182,11 @@ time remains. No worker lease ending completes the Goal Plus record.
    verify every material change, and keep working while the assigned budget remains.
    ```
 
-   Pi continuation is logical same-candidate continuation: the supervisor uses
-   `search_redispatch_candidate` and launches a fresh stateless Pi process in
-   the same workspace. It therefore creates a new `agent_session_id` but never
-   a new candidate. Do not call `search_plan_next`, `search_start_batch`, or
+   Pi continuation is cross-process native-session continuation: the supervisor
+   launches a fresh Pi process in the same workspace, but it calls
+   `search_continue_agent_session` and reloads the same persisted Pi session.
+   It preserves both `agent_session_id` and candidate identity. Do not call
+   `search_plan_next`, `search_start_batch`, or
    `pi_search_pool_submit` after initial pool creation. Do not vary continuation
    based on rank or improvement.
    `pi_search_pool_snapshot(run_id=...)` rediscovers the pool after an
@@ -305,8 +306,8 @@ Do not call `search_start_agent_session`, `search_bind_agent_handle`, or
 `search_continue_agent_session` from the Pi main agent; the managed pool owns
 those mechanical steps. For another attempt on an existing candidate, call
 `pi_search_pool_continue`. The supervisor then uses
-`search_redispatch_candidate` internally and records that step before launching
-the fresh stateless worker.
+`search_continue_agent_session` internally and records that step before
+launching the next process against the same native session.
 
 Pool submission is non-blocking; the detached wrapper owns the foreground Pi
 RPC child and its cleanup. `worker_budget.max_runtime_seconds` is required and
@@ -315,13 +316,17 @@ hint. `pi_search_run_batch` and `pi_search_run_candidate` remain compatibility
 and debugging helpers, but the batch helper intentionally waits for the slowest
 worker and must not be used for the normal parallel-loop orchestration.
 
-Pi workers run with `--no-session`, so same-worker continuation is unsupported.
-If a worker times out, fails, or exits before producing useful verifier
-evidence, or simply completes while the global stop policy is false, use
-state-level resume by calling `pi_search_pool_continue`. The driver uses
-`search_redispatch_candidate` internally, creates a new
-`agent_session_id` for the same candidate workspace, and recovers prior work
-from MCP history, verifier iterations, and Git state.
+Pi workers persist native session JSONL under `.gp/host-sessions/pi/`. If a
+worker times out, fails, or simply completes while the global stop policy is
+false, call `pi_search_pool_continue`. The driver starts another Pi process,
+reloads the same native session, preserves `agent_session_id`, and requests only
+entries after the last persisted metrics cursor. MCP history, verifier
+iterations, Git state, and bounded handoff remain authoritative recovery
+evidence if native session loading fails.
+
+Each continuation launch starts a new dispatch-scoped budget. A deadline,
+closeout, or time advisory persisted in the native conversation from an earlier
+dispatch is historical; only warnings delivered after the latest launch apply.
 
 Exception: never redispatch after `failure_class=VerifierWorkspaceSideEffect`,
 `metrics.infrastructure_failure=true`, or
@@ -334,14 +339,15 @@ siblings that are still executing in the pool.
 Each worker also leaves a bounded `progress_handoff` in its bound handle. It
 combines the optional `.tmp/handoff.json` recovery note with a runner-owned Git
 and verifier snapshot. `search_get_agent_context` exposes it under
-`context.resume`; use this explicit resume object instead of relying on a Pi
-transcript or on whether the candidate appears in top-N history.
+`context.resume`; use this explicit resume object for artifact and verifier
+facts. Native Pi conversation may preserve reasoning and continuation
+instructions, but it must never override durable evidence or top-N history.
 
 When a candidate remains valuable after its first attempt, the main agent may
 redispatch it with an explicit larger `worker_budget`, for example
 `pi_search_run_candidate(..., redispatch=true,
 worker_budget={"max_runtime_seconds": <larger seconds>, ...})`. This creates a
-fresh Pi process in the same candidate workspace with an uninterrupted budget
+fresh Pi process for the same native session and candidate workspace with an uninterrupted budget
 chosen from evidence and outer remaining time; it does not mutate the frozen
 spec. `runtime_multiplier` remains a compatibility shortcut for a redispatch
 between 1x and 2x, but it is not the depth policy and must not cap a justified

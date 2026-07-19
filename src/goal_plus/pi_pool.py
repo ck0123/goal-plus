@@ -136,6 +136,38 @@ def _validate_candidate(root_dir: Path | str, run_id: str, candidate_id: str) ->
         )
 
 
+def _resume_agent_session_id(
+    root_dir: Path | str,
+    *,
+    run_id: str,
+    candidate_id: str,
+    jobs: list[dict[str, Any]],
+    pool_id: str,
+) -> str:
+    for job in reversed(jobs):
+        if job.get("candidate_id") != candidate_id:
+            continue
+        result_path = _job_dir(root_dir, pool_id, str(job["job_id"])) / "result.json"
+        if not result_path.exists():
+            continue
+        result = load_json(result_path)
+        agent_session_id = result.get("agent_session_id")
+        if isinstance(agent_session_id, str) and agent_session_id:
+            return agent_session_id
+
+    runtime = FileSearchRuntime(root_dir)
+    sessions = [
+        session
+        for session in runtime._load_agent_sessions(run_id)
+        if session.candidate_id == candidate_id and session.host == "pi-rpc"
+    ]
+    if sessions:
+        return sessions[-1].agent_session_id
+    raise RuntimeError(
+        f"candidate {candidate_id} has no Pi native session to continue"
+    )
+
+
 def _launch_pool_job(
     *,
     root_dir: Path | str,
@@ -289,6 +321,17 @@ def submit_pi_search_pool(
             raise RuntimeError(
                 f"candidate {candidate_id} was already submitted; use pool_continue for continuation"
             )
+        resume_agent_session_id = (
+            _resume_agent_session_id(
+                root_dir,
+                run_id=str(pool["run_id"]),
+                candidate_id=candidate_id,
+                jobs=jobs,
+                pool_id=pool_id,
+            )
+            if redispatch
+            else None
+        )
 
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         now = utc_timestamp()
@@ -298,6 +341,7 @@ def submit_pi_search_pool(
             "run_id": pool["run_id"],
             "candidate_id": candidate_id,
             "redispatch": bool(redispatch),
+            "continuation": "native_session" if redispatch else "new_session",
             "status": "starting",
             "pid": None,
             "created_at": now,
@@ -313,6 +357,7 @@ def submit_pi_search_pool(
             "candidate_id": candidate_id,
             "directive": directive,
             "redispatch": bool(redispatch),
+            "resume_agent_session_id": resume_agent_session_id,
             "runtime_multiplier": runtime_multiplier,
             "worker_budget": worker_budget,
             "final_verify": bool(final_verify),
@@ -352,6 +397,7 @@ def submit_pi_search_pool(
         "job_id": job_id,
         "candidate_id": candidate_id,
         "redispatch": bool(redispatch),
+        "continuation": "native_session" if redispatch else "new_session",
         "status": "running",
         "pid": pid,
     }

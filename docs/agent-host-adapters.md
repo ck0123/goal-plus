@@ -28,7 +28,7 @@ current `spawn_agent` schema rather than assumed optional metadata.
 |---|---|---|---|---|
 | Launch | foreground `Task` | async `spawn_agent` | foreground `Agent` | detached local supervisor + foreground Pi child |
 | Wait mode | Task return | `wait_agent` any-event wake + `list_agents` | Agent return | `pi_search_pool_wait_any` |
-| Continuation | same Task via `task_id` | same worker via `followup_task` | conditional host support | fresh worker in same candidate |
+| Continuation | same Task via `task_id` | same worker via `followup_task` | conditional host support | same native session in a new process |
 | Deadline | step-tiered agent | per-dispatch parent watchdog | `maxTurns` agent | Pi process watchdog |
 | Recovery | Task handle + `.gp` | native agent registry + `.gp` | handle when exposed + `.gp` | persisted `.gp/host-pools/pi/` + `.gp` |
 | Goal gate | instruction-driven | `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop` | PostToolUse binding + Stop backstop | extension input/tool/turn events |
@@ -57,7 +57,7 @@ Codex and Pi both satisfy asynchronous wait-any semantics:
 - **Pi** persists pool/job state, returns candidate-ready only after the full
   Pi driver chain and final verification, and never auto-refills. After each
   terminal event main calls `continue` for that same candidate unless a global
-  stop condition is true. Pi uses a fresh native session in the same workspace.
+  stop condition is true. Pi reloads the same native session in a new process.
 
 New Pi/Codex specs set `orchestration_mode="parallel_loops"`; one initial round
 creates the durable candidate loops. Neither adapter turns that round into a
@@ -99,9 +99,11 @@ State-level redispatch is the portable recovery path:
 4. Git state, verifier iterations, ranked history, and `research_summary`
    replace dependence on a previous transcript.
 
-Same-worker continuation is native on Codex and OpenCode. Pi intentionally
-performs logical same-candidate continuation through state-level redispatch.
-Both preserve candidate identity and workspace.
+Same-worker continuation is native on Codex and OpenCode. Pi provides native
+session continuation across process boundaries: each dispatch has a new PID,
+but retains the same native session, runtime `agent_session_id`, candidate, and
+workspace. State-level redispatch remains the portable fallback for hosts or
+legacy records without a resumable native session.
 
 Every worker handoff should state the most important work, verifier-backed
 feature entries, blockers, next steps, and at most five scoped conditional

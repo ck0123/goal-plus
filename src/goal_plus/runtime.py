@@ -1164,7 +1164,7 @@ class FileSearchRuntime:
                 host_handle = host_handle.model_copy(
                     update={
                         "external_id": launch.get("session_id", agent_session_id),
-                        "metadata": {"continuation": "state_redispatch"},
+                        "metadata": {"continuation": "native_session"},
                     }
                 )
             session = AgentSessionRecord(
@@ -1228,6 +1228,32 @@ class FileSearchRuntime:
             **session.host_handle.metadata,
             **dict(handle.get("metadata") or {}),
         }
+        if session.host == "pi-rpc":
+            prior_dispatches = session.host_handle.metadata.get("dispatches")
+            dispatches = (
+                list(prior_dispatches) if isinstance(prior_dispatches, list) else []
+            )
+            handle_metadata = dict(handle.get("metadata") or {})
+            metrics = handle_metadata.get("pi_metrics")
+            metrics = metrics if isinstance(metrics, dict) else {}
+            dispatches.append(
+                {
+                    "process_pid": handle_metadata.get("process_pid"),
+                    "started_at": metrics.get("dispatch_started_at")
+                    or metrics.get("started_at"),
+                    "ended_at": metrics.get("dispatch_ended_at")
+                    or metrics.get("ended_at"),
+                    "duration_seconds": metrics.get("dispatch_duration_seconds")
+                    or metrics.get("duration_seconds"),
+                    "usage": metrics.get("usage_delta"),
+                    "baseline_last_entry_id": metrics.get("baseline_last_entry_id"),
+                    "final_last_entry_id": metrics.get("final_last_entry_id"),
+                    "timed_out": bool(handle_metadata.get("timed_out")),
+                    "runner_failed": bool(handle_metadata.get("runner_failed")),
+                }
+            )
+            metadata["dispatches"] = dispatches
+            metadata["dispatch_count"] = len(dispatches)
         progress = metadata.get("progress_handoff")
         if isinstance(progress, dict) and not isinstance(progress.get("model_handoff"), dict):
             model_keys = {
@@ -1430,6 +1456,12 @@ class FileSearchRuntime:
         if not results_were_initialized:
             self._write_candidate_record(session.run_id, candidate_record)
         workspace_status = self._git_status(candidate_record.task.workspace)
+        dispatch_count = session.host_handle.metadata.get("dispatch_count")
+        dispatch_count = dispatch_count if isinstance(dispatch_count, int) else 0
+        continuation_mode = session.launch.get("continuation")
+        is_native_session_resume = (
+            continuation_mode == "native_session" and dispatch_count > 0
+        )
         return {
             "agent_session_id": session.agent_session_id,
             "run_id": session.run_id,
@@ -1450,6 +1482,9 @@ class FileSearchRuntime:
             ],
             "resume": {
                 "is_redispatch": bool(session.directive.get("state_level_resume")),
+                "is_native_session_resume": is_native_session_resume,
+                "mode": continuation_mode if is_native_session_resume else None,
+                "dispatch_count": dispatch_count,
                 "previous_sessions": previous_sessions,
                 "latest_handoff": latest_handoff,
                 "workspace": {
@@ -2537,6 +2572,8 @@ class FileSearchRuntime:
                 if worker_budget_override is not None
                 else self._candidate_worker_budget(frozen, candidate_record)
             ),
+            worker_launch=self._candidate_worker_launch(frozen, candidate_record),
+            host_metadata=session.host_handle.metadata,
         )
 
     def _worker_prompt_for_host(self, host: str) -> str | None:

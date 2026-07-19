@@ -159,8 +159,8 @@ closeout. Otherwise it resumes the exact same candidate:
 
 - Codex: `search_continue_agent_session` then `followup_task` on the same native
   worker and candidate.
-- Pi: `pi_search_pool_continue`, which creates a fresh stateless Pi session in
-  the same candidate workspace.
+- Pi: `pi_search_pool_continue`, which starts a new process for the same native
+  Pi session and candidate workspace.
 
 The continuation is neutral and tells the subagent to refresh evidence and
 choose its own next hypothesis. Low score, no improvement, or another candidate
@@ -215,7 +215,7 @@ The control loop is shared; only the pool adapter changes.
 |---|---|---|
 | Initial launch | `spawn_agent` from runtime launch payload | `pi_search_pool_open` |
 | Wait any | targetless `wait_agent`, then `list_agents` | `pi_search_pool_wait_any` |
-| Continue same loop | `search_continue_agent_session`, then `followup_task` | `pi_search_pool_continue` state-level redispatch |
+| Continue same loop | `search_continue_agent_session`, then `followup_task` | `pi_search_pool_continue` cross-process native-session resume |
 | Recover after interruption | live Codex agent registry plus `.gp` history | `pi_search_pool_snapshot(run_id=...)` plus `.gp` history |
 | Confirmed verifier invalidation | `search_invalidate_run`, interrupt every live agent, wait until terminal | `search_invalidate_run`, `pi_search_pool_close(mode="interrupt")`, wait for `active_count=0` |
 | Close | drain/interrupt native agents | `pi_search_pool_close` |
@@ -224,13 +224,16 @@ See [Agent Host Adapters](agent-host-adapters.md) for all hosts.
 
 ## Resume Semantics
 
-There are two distinct operations:
+There are three distinct execution shapes:
 
 - **Same-worker continuation** keeps native conversational context. It is an
   optional host capability and may apply a larger one-dispatch budget.
 - **State-level redispatch** creates a fresh `agent_session_id` in the same
   candidate workspace. It recovers from Git state, runtime iterations,
   history, and the structured handoff. This is the portable fallback.
+- **Cross-process native-session continuation** starts a new OS process while
+  reloading the same native session and preserving `agent_session_id`. Pi uses
+  this shape. It is not a persistent same-PID supervisor.
 
 Neither operation changes the frozen spec or creates another candidate.
 

@@ -66,7 +66,7 @@ def test_codex_and_pi_publish_native_parity_capabilities() -> None:
     assert pi.supports_process_kill is True
     assert pi.pool.launch_mode == "async"
     assert pi.pool.wait_mode == "wait_any"
-    assert pi.pool.continuation_mode == "state_redispatch"
+    assert pi.pool.continuation_mode == "native_session"
     assert pi.pool.recovery_mode == "supervisor_persisted"
 
 

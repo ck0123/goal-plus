@@ -510,8 +510,16 @@ def _rpc_data(
     return dict((response or {}).get("data") or {})
 
 
-def _rpc_entries(rpc: Any, *, timeout: float) -> list[dict[str, Any]]:
-    data = _rpc_data(rpc, {"type": "get_entries"}, timeout=timeout)
+def _rpc_entries(
+    rpc: Any,
+    *,
+    timeout: float,
+    since: str | None = None,
+) -> list[dict[str, Any]]:
+    payload: dict[str, Any] = {"type": "get_entries"}
+    if since:
+        payload["since"] = since
+    data = _rpc_data(rpc, payload, timeout=timeout)
     entries = data.get("entries")
     return entries if isinstance(entries, list) else []
 
@@ -523,20 +531,45 @@ def _last_entry_id(entries: list[dict[str, Any]]) -> str | None:
     return str(value) if value is not None else None
 
 
+def _combine_pi_usage(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    previous = previous or {}
+    combined = {
+        field: _number(previous.get(field)) + _number(current.get(field))
+        for field in (
+            "assistantMessages",
+            "input",
+            "output",
+            "cacheRead",
+            "cacheWrite",
+            "costTotal",
+        )
+    }
+    combined["assistantMessages"] = int(combined["assistantMessages"])
+    for field in ("input", "output", "cacheRead", "cacheWrite"):
+        combined[field] = int(combined[field])
+    combined["costTotal"] = round(float(combined["costTotal"]), 12)
+    combined["latestCacheHitRate"] = (
+        current.get("latestCacheHitRate")
+        if current.get("latestCacheHitRate") is not None
+        else previous.get("latestCacheHitRate")
+    )
+    return combined
+
+
 def _collect_pi_metrics(
     rpc: Any,
     *,
     session_id: str,
-    baseline_entries: list[dict[str, Any]],
-    baseline_error: str | None,
+    metrics_baseline: dict[str, Any],
     last_state_data: dict[str, Any],
     started_at: str,
     ended_at: str,
     duration_seconds: float,
 ) -> dict[str, Any]:
     errors: list[str] = []
-    if baseline_error:
-        errors.append(f"baseline_entries: {baseline_error}")
 
     state_data = dict(last_state_data)
     try:
@@ -545,10 +578,18 @@ def _collect_pi_metrics(
         errors.append(f"get_state: {exc}")
 
     try:
-        final_entries = _rpc_entries(rpc, timeout=10)
+        delta_entries = _rpc_entries(
+            rpc,
+            timeout=10,
+            since=(
+                str(metrics_baseline["last_entry_id"])
+                if metrics_baseline.get("last_entry_id")
+                else None
+            ),
+        )
     except Exception as exc:
         errors.append(f"get_entries: {exc}")
-        final_entries = []
+        delta_entries = []
 
     try:
         session_stats: dict[str, Any] | None = _rpc_data(
@@ -560,9 +601,24 @@ def _collect_pi_metrics(
         errors.append(f"get_session_stats: {exc}")
         session_stats = None
 
-    baseline_count = len(baseline_entries)
-    delta_entries = final_entries[baseline_count:] if len(final_entries) >= baseline_count else []
-    scope = "run_delta" if not baseline_error and final_entries else "session_total_fallback"
+    baseline_count = int(_number(metrics_baseline.get("entry_count")))
+    final_count = baseline_count + len(delta_entries)
+    baseline_last_entry_id = metrics_baseline.get("last_entry_id")
+    final_last_entry_id = _last_entry_id(delta_entries) or (
+        str(baseline_last_entry_id) if baseline_last_entry_id else None
+    )
+    usage_delta = summarize_pi_entries(delta_entries)
+    previous_usage = metrics_baseline.get("usage_total")
+    previous_usage = previous_usage if isinstance(previous_usage, dict) else None
+    usage_total = _combine_pi_usage(previous_usage, usage_delta)
+    prior_duration = float(_number(metrics_baseline.get("duration_seconds")))
+    cumulative_duration = prior_duration + duration_seconds
+    original_started_at = metrics_baseline.get("started_at") or started_at
+    scope = (
+        "session_cumulative_incremental"
+        if baseline_last_entry_id
+        else "session_total_incremental"
+    )
     state_model = state_data.get("model")
     model = (
         state_model.get("id") or state_model.get("modelId")
@@ -581,15 +637,18 @@ def _collect_pi_metrics(
         "model": model,
         "provider": provider,
         "thinking_level": state_data.get("thinkingLevel") or state_data.get("thinking_level"),
-        "started_at": started_at,
+        "started_at": original_started_at,
         "ended_at": ended_at,
-        "duration_seconds": duration_seconds,
+        "duration_seconds": cumulative_duration,
+        "dispatch_started_at": started_at,
+        "dispatch_ended_at": ended_at,
+        "dispatch_duration_seconds": duration_seconds,
         "baseline_entry_count": baseline_count,
-        "final_entry_count": len(final_entries),
-        "baseline_last_entry_id": _last_entry_id(baseline_entries),
-        "final_last_entry_id": _last_entry_id(final_entries),
-        "usage_delta": summarize_pi_entries(delta_entries),
-        "usage_total": summarize_pi_entries(final_entries),
+        "final_entry_count": final_count,
+        "baseline_last_entry_id": baseline_last_entry_id,
+        "final_last_entry_id": final_last_entry_id,
+        "usage_delta": usage_delta,
+        "usage_total": usage_total,
         "session_stats": session_stats,
     }
     if errors:
@@ -624,6 +683,9 @@ def run_pi_rpc_worker(
     )
 
     host_logs = root / "host-logs"
+    session_dir = Path(
+        str(launch.get("session_dir") or root / "host-sessions" / "pi")
+    ).resolve()
     event_log = host_logs / f"pi-rpc-{session_id}.jsonl"
     raw_logging = os.environ.get("GOAL_PLUS_PI_RAW_LOG") == "1"
     text_log = host_logs / f"pi-rpc-{session_id}.txt" if raw_logging else None
@@ -632,6 +694,7 @@ def run_pi_rpc_worker(
         raise FileNotFoundError(f"Pi extension not found: {extension}")
 
     host_logs.mkdir(parents=True, exist_ok=True)
+    session_dir.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "GOAL_PLUS_ROOT": str(root),
@@ -652,7 +715,8 @@ def run_pi_rpc_worker(
             "--mode",
             "rpc",
             "--approve",
-            "--no-session",
+            "--session-dir",
+            str(session_dir),
             "--session-id",
             session_id,
             "-e",
@@ -687,8 +751,7 @@ def run_pi_rpc_worker(
     started_at = _utc_timestamp()
     started_monotonic = time.monotonic()
     deadline = started_monotonic + timeout_seconds
-    baseline_entries: list[dict[str, Any]] = []
-    baseline_error: str | None = None
+    metrics_baseline = dict(launch.get("metrics_baseline") or {})
     last_state_data: dict[str, Any] = {}
     pi_metrics: dict[str, Any] | None = None
 
@@ -711,10 +774,6 @@ def run_pi_rpc_worker(
                 {"type": "set_thinking_level", "level": selected_thinking},
                 timeout=min(30, timeout_seconds),
             )
-        try:
-            baseline_entries = _rpc_entries(rpc, timeout=min(10, timeout_seconds))
-        except Exception as exc:
-            baseline_error = str(exc)
         rpc.command(
             {"type": "prompt", "message": str(launch["prompt"])},
             timeout=min(60, timeout_seconds),
@@ -826,8 +885,7 @@ def run_pi_rpc_worker(
             pi_metrics = _collect_pi_metrics(
                 rpc,
                 session_id=session_id,
-                baseline_entries=baseline_entries,
-                baseline_error=baseline_error,
+                metrics_baseline=metrics_baseline,
                 last_state_data=last_state_data,
                 started_at=started_at,
                 ended_at=ended_at,
@@ -861,6 +919,7 @@ def run_pi_rpc_worker(
             "event_log": str(event_log),
             "text_log": str(text_log) if text_log is not None else None,
             "raw_logging": raw_logging,
+            "process_pid": getattr(proc, "pid", None),
             "session_file": pi_metrics.get("session_file") if pi_metrics else None,
             "pi_metrics": pi_metrics,
             "assistant_text": assistant_text,
@@ -871,7 +930,7 @@ def run_pi_rpc_worker(
             "time_advisory_sent": time_advisory_sent,
             "time_advisory": time_advisory,
             "exit_code": proc.returncode,
-            "continuation": "state_redispatch",
+            "continuation": str(launch.get("continuation") or "native_session"),
         },
     }
 

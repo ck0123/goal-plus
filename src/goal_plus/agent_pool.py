@@ -6,7 +6,12 @@ from typing import Any, Literal
 
 PoolLaunchMode = Literal["async", "blocking"]
 PoolWaitMode = Literal["wait_any", "host_return", "batch_barrier"]
-PoolContinuationMode = Literal["same_worker", "state_redispatch", "none"]
+PoolContinuationMode = Literal[
+    "same_worker",
+    "native_session",
+    "state_redispatch",
+    "none",
+]
 PoolDeadlineMode = Literal["parent_watchdog", "worker_watchdog", "host_limit"]
 PoolRecoveryMode = Literal["host_resident", "supervisor_persisted", "none"]
 PoolCompletionStage = Literal["worker_return", "candidate_ready"]

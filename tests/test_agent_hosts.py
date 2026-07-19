@@ -280,13 +280,14 @@ def test_pi_rpc_adapter_builds_worker_payload() -> None:
     assert payload["root"] == "/tmp/project/.search"
     assert payload["cwd"].endswith("/c001/workspace")
     assert "session_dir" not in payload
-    assert payload["continuation"] == "state_redispatch"
+    assert payload["continuation"] == "native_session"
+    assert payload["session_persistence"] == "cross_process"
     assert "search_get_agent_context" in payload["prompt"]
     assert "agent_session_id=agent_0001" in payload["prompt"]
     assert "assigned_worker_budget={'max_runtime_seconds': 600" in payload["prompt"]
     assert payload["budget_control"] == {
         "mode": "pi_rpc_process_watchdog",
-        "continuation": "state_redispatch",
+        "continuation": "native_session",
         "max_runtime_seconds": 600,
         "max_turns_hint": 8,
         "soft_closeout_seconds": 45,
@@ -315,22 +316,45 @@ def test_pi_rpc_adapter_maps_native_worker_launch_options() -> None:
 
 
 @pytest.mark.pi
-def test_pi_rpc_adapter_rejects_same_session_continuation() -> None:
+def test_pi_rpc_adapter_builds_cross_process_native_session_continuation() -> None:
     adapter = get_agent_host_adapter("pi-rpc")
 
-    with pytest.raises(UnsupportedHostCapability, match="search_redispatch_candidate"):
-        adapter.build_continue_payload(
-            worker_agent_type=None,
-            candidate_id="c001",
-            agent_session_id="agent_0001",
-            external_id="agent_0001",
-            task_name=None,
-            short_intent="continue",
-            one_paragraph_idea="continue from runtime context",
-            root="/tmp/project/.search",
-            cwd="/tmp/project/.search/runs/run_1/candidates/c001/workspace",
-            worker_prompt="first call search_get_agent_context",
-        )
+    payload = adapter.build_continue_payload(
+        worker_agent_type=None,
+        candidate_id="c001",
+        agent_session_id="agent_0001",
+        external_id="agent_0001",
+        task_name=None,
+        short_intent="continue",
+        one_paragraph_idea="continue from runtime context",
+        root="/tmp/project/.search",
+        cwd="/tmp/project/.search/runs/run_1/candidates/c001/workspace",
+        worker_prompt="first call search_get_agent_context",
+        host_metadata={
+            "pi_metrics": {
+                "final_last_entry_id": "entry_7",
+                "final_entry_count": 7,
+                "usage_total": {"input": 120},
+                "duration_seconds": 3.5,
+                "started_at": "2026-07-19T00:00:00Z",
+            }
+        },
+    )
+
+    assert payload["agent_session_id"] == "agent_0001"
+    assert payload["session_id"] == "agent_0001"
+    assert payload["continuation"] == "native_session"
+    assert payload["session_persistence"] == "cross_process"
+    assert payload["metrics_baseline"] == {
+        "last_entry_id": "entry_7",
+        "entry_count": 7,
+        "usage_total": {"input": 120},
+        "duration_seconds": 3.5,
+        "started_at": "2026-07-19T00:00:00Z",
+    }
+    assert "continue_existing_agent_session=true" in payload["prompt"]
+    assert "A new host dispatch starts with this launch message" in payload["prompt"]
+    assert "previous dispatch and is no longer active" in payload["prompt"]
 
 
 def test_claude_adapter_builds_foreground_agent_payload() -> None:

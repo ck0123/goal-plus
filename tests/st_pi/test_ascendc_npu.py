@@ -450,7 +450,7 @@ def test_pi_goal_plus_ascendc_cannbench_gelu_end_to_end(
     for session in sessions:
         metadata = session.host_handle.metadata
         assert metadata.get("runner_failed") is not True
-        assert metadata.get("continuation") == "state_redispatch"
+        assert metadata.get("continuation") == "native_session"
         assert Path(metadata["event_log"]).is_file()
 
     source = Path(run.source_path)

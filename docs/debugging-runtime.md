@@ -211,7 +211,7 @@ The runner starts:
 
 ```bash
 pi --mode rpc --approve \
-  --no-session \
+  --session-dir <root>/.gp/host-sessions/pi \
   --session-id <agent_session_id> \
   -e <repo>/.pi/extensions/goal-plus.ts
 ```
@@ -297,9 +297,10 @@ paths omit prompt, reasoning, and tool payload bodies.
 `subagents[].verifier_count` and `session_verifier_count` are session-scoped;
 `candidate_verifier_count` is the candidate-wide total.
 
-Pi RPC workers use `--no-session` and do not support same-worker continuation.
-Normal Pi main-agent flow uses `pi_search_pool_continue`; the supervisor calls
-`search_redispatch_candidate` for state-level redispatch. Search MCP
+Pi RPC workers persist native sessions under `.gp/host-sessions/pi/`. Normal Pi
+main-agent flow uses `pi_search_pool_continue`; the supervisor calls
+`search_continue_agent_session`, launches a new process for the same native
+session, and reads metrics with incremental `get_entries(since=...)`. Search MCP
 `.gp/runs/...`, verifier iterations, candidate Git commits, and workspace files
 remain authoritative. Runner failures are bound as synthetic failure handles,
 so monitor warnings include `subagent_runner_failed` and bounded failure

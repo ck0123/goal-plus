@@ -440,21 +440,26 @@ def test_pi_rpc_parallel_loop_cycle(st_project_root: Path) -> None:
         event
         for event in candidate_events
         if event["candidate_id"] == first_candidate_id
-        and event["result"]["agent_session_id"] != first_session_id
+        and event["job_id"] != first["job_id"]
     ]
     assert len(candidate_events) == 3
     assert len(continued_events) == 1
     assert continued_events[0]["result"]["candidate_id"] == first_candidate_id
+    assert continued_events[0]["result"]["agent_session_id"] == first_session_id
+    assert (
+        continued_events[0]["result"]["handle"]["metadata"]["process_pid"]
+        != first["result"]["handle"]["metadata"]["process_pid"]
+    )
 
     assert len(runtime._load_plans(run_id)) == 1
     assert len(runtime._load_candidate_records(run_id)) == 2
     sessions = runtime._load_agent_sessions(run_id)
-    assert len(sessions) == 3
+    assert len(sessions) == 2
     first_candidate_sessions = [
         session for session in sessions if session.candidate_id == first_candidate_id
     ]
-    assert len(first_candidate_sessions) == 2
-    assert len({session.agent_session_id for session in first_candidate_sessions}) == 2
+    assert len(first_candidate_sessions) == 1
+    assert first_candidate_sessions[0].host_handle.metadata["dispatch_count"] == 2
     assert len({Path(session.workspace).resolve() for session in first_candidate_sessions}) == 1
     with pytest.raises(RuntimeError, match="one initial SearchPlan"):
         runtime.plan_next(run_id, requested_k=1)
@@ -606,7 +611,7 @@ def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
             "metadata": {
                 "timed_out": True,
                 "runner_failed": False,
-                "continuation": "state_redispatch",
+                "continuation": "native_session",
                 "progress_handoff": _workspace_progress_handoff(
                     workspace,
                     root=Path(launch["root"]),
@@ -650,8 +655,9 @@ def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
     handle = resumed["handle"]
     context = runtime.get_agent_context(resumed["agent_session_id"])
 
-    assert resumed["agent_session_id"] != first["agent_session_id"]
+    assert resumed["agent_session_id"] == first["agent_session_id"]
     assert resumed["launch"]["budget_control"]["max_runtime_seconds"] == 300
+    assert resumed["launch"]["continuation"] == "native_session"
     assert context["resume"]["latest_handoff"]["summary"] == (
         "matched loader; three modules remain"
     )

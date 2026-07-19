@@ -152,23 +152,25 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     cwd = tmp_path / "workspace"
     cwd.mkdir()
 
-    baseline_entries = [
+    prior_entries = [
         _assistant_usage(input_tokens=100, output_tokens=10, cache_read=50, cost_total=0.01)
     ]
-    final_entries = [
-        *baseline_entries,
+    delta_entries = [
         _assistant_usage(input_tokens=25, output_tokens=5, cache_read=75, cost_total=0.02),
     ]
+    delta_entries[0]["id"] = "entry_2"
     commands: list[str] = []
+    entries_payloads: list[dict[str, Any]] = []
     popen_cmd: list[str] = []
     popen_env: dict[str, str] = {}
 
     class FakeProc:
+        pid = 4321
         returncode = None
 
     class FakeRpcClient:
         def __init__(self, **_kwargs: Any) -> None:
-            self.entries_calls = 0
+            pass
 
         def start(self) -> None:
             return None
@@ -177,9 +179,8 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
             command_type = str(payload["type"])
             commands.append(command_type)
             if command_type == "get_entries":
-                self.entries_calls += 1
-                entries = baseline_entries if self.entries_calls == 1 else final_entries
-                return {"data": {"entries": entries, "leafId": None}}
+                entries_payloads.append(dict(payload))
+                return {"data": {"entries": delta_entries, "leafId": "entry_2"}}
             if command_type == "prompt":
                 return {"data": {}}
             if command_type == "set_thinking_level":
@@ -215,13 +216,20 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
         {
             "agent_session_id": "agent_1",
             "session_id": "agent_1",
-            "session_dir": str(session_dir),
             "root": str(tmp_path / ".search"),
             "cwd": str(cwd),
             "prompt": "do work",
             "budget_control": {"max_runtime_seconds": 30},
             "model_pattern": "gpt-5.4-mini",
             "thinking_level": "high",
+            "continuation": "native_session",
+            "metrics_baseline": {
+                "last_entry_id": "entry_1",
+                "entry_count": 1,
+                "usage_total": pi_worker.summarize_pi_entries(prior_entries),
+                "duration_seconds": 2.0,
+                "started_at": "2026-07-19T00:00:00Z",
+            },
         },
         extension_path=extension,
     )
@@ -232,7 +240,10 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
     assert metrics["thinking_level"] == "high"
     assert metrics["baseline_entry_count"] == 1
     assert metrics["final_entry_count"] == 2
-    assert metrics["duration_seconds"] >= 0
+    assert metrics["duration_seconds"] >= 2.0
+    assert metrics["dispatch_duration_seconds"] >= 0
+    assert metrics["baseline_last_entry_id"] == "entry_1"
+    assert metrics["final_last_entry_id"] == "entry_2"
     assert metrics["usage_delta"] == {
         "assistantMessages": 1,
         "input": 25,
@@ -252,17 +263,21 @@ def test_run_pi_rpc_worker_returns_run_delta_metrics(
         "latestCacheHitRate": 75.0,
     }
     assert metrics["session_stats"] == {"tokens": {"input": 125}}
-    assert commands.count("get_entries") == 2
+    assert commands.count("get_entries") == 1
+    assert entries_payloads == [{"type": "get_entries", "since": "entry_1"}]
     assert "set_thinking_level" in commands
     assert popen_cmd[0:3] == ["pi", "--model", "gpt-5.4-mini"]
-    assert "--no-session" in popen_cmd
-    assert "--session-dir" not in popen_cmd
+    assert "--no-session" not in popen_cmd
+    assert popen_cmd[popen_cmd.index("--session-dir") + 1] == str(
+        tmp_path / ".search" / "host-sessions" / "pi"
+    )
     assert popen_env["GOAL_PLUS_SOURCE_PATH"] == str(pi_worker.default_extension_path().parents[2])
     assert popen_env["GOAL_PLUS_PI_ROLE"] == "worker"
     assert handle["metadata"]["raw_logging"] is False
     assert handle["metadata"]["text_log"] is None
     assert handle["metadata"]["session_file"] == str(session_dir / "2026_agent_1.jsonl")
-    assert handle["metadata"]["continuation"] == "state_redispatch"
+    assert handle["metadata"]["continuation"] == "native_session"
+    assert handle["metadata"]["process_pid"] == 4321
     assert handle["metadata"]["progress_handoff"]["status"] == "completed"
     assert handle["metadata"]["progress_handoff"]["summary"] == "done"
 

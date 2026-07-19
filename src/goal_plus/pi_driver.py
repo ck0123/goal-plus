@@ -103,6 +103,35 @@ def _verifier_infrastructure_report(
     return None
 
 
+def _pi_resume_agent_session_id(
+    tools: SearchTools,
+    *,
+    run_id: str,
+    candidate_id: str,
+    requested_id: str | None,
+) -> str:
+    sessions = [
+        session
+        for session in tools.runtime._load_agent_sessions(run_id)
+        if session.candidate_id == candidate_id and session.host == "pi-rpc"
+    ]
+    if requested_id is not None:
+        matching = [
+            session for session in sessions if session.agent_session_id == requested_id
+        ]
+        if not matching:
+            raise ValueError(
+                f"agent session {requested_id!r} does not belong to Pi candidate "
+                f"{candidate_id!r}"
+            )
+        return requested_id
+    if not sessions:
+        raise RuntimeError(
+            f"Pi candidate {candidate_id!r} has no native session to continue"
+        )
+    return sessions[-1].agent_session_id
+
+
 def run_pi_search_candidate(
     *,
     root_dir: Path | str,
@@ -110,6 +139,7 @@ def run_pi_search_candidate(
     candidate_id: str,
     directive: dict[str, Any] | str | None = None,
     redispatch: bool = False,
+    resume_agent_session_id: str | None = None,
     runtime_multiplier: float | None = None,
     worker_budget: dict[str, Any] | None = None,
     final_verify: bool = True,
@@ -146,27 +176,33 @@ def run_pi_search_candidate(
             float(base_budget["max_runtime_seconds"]) * runtime_multiplier
         )
 
-    session = (
-        tools.search_redispatch_candidate(
+    if redispatch:
+        resumed_session_id = _pi_resume_agent_session_id(
+            tools,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            requested_id=resume_agent_session_id,
+        )
+        session = tools.search_continue_agent_session(
+            agent_session_id=resumed_session_id,
+            directive=directive,
+            worker_budget=worker_budget_override,
+        )
+    else:
+        if resume_agent_session_id is not None:
+            raise ValueError("resume_agent_session_id requires redispatch=true")
+        session = tools.search_start_agent_session(
             run_id=run_id,
             candidate_id=candidate_id,
             directive=directive,
             worker_budget=worker_budget_override,
         )
-        if redispatch
-        else tools.search_start_agent_session(
-            run_id=run_id,
-            candidate_id=candidate_id,
-            directive=directive,
-            worker_budget=worker_budget_override,
-        )
-    )
     agent_session_id = str(session["agent_session_id"])
     launch = dict(session["launch"])
     steps.append(
         {
             "tool": (
-                "search_redispatch_candidate"
+                "search_continue_agent_session"
                 if redispatch
                 else "search_start_agent_session"
             ),
@@ -211,7 +247,9 @@ def run_pi_search_candidate(
                 "error": failure["message"],
                 "progress_handoff": progress_handoff,
                 "timed_out": False,
-                "continuation": "state_redispatch",
+                "continuation": str(
+                    launch.get("continuation") or "native_session"
+                ),
             },
         }
         steps.append(

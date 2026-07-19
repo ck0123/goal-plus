@@ -581,6 +581,50 @@ def _session_scores(task: dict[str, Any], direction: str) -> dict[str, float]:
     return scores
 
 
+def _timeline_score_baseline(
+    task: dict[str, Any],
+) -> tuple[float | None, str | None]:
+    scores = (task.get("statistics") or {}).get("scores") or {}
+    configured = _finite_float(scores.get("baseline"))
+    if configured is not None:
+        return configured, "configured"
+
+    observed: list[tuple[float, int, float]] = []
+    sequence = 0
+    for candidate in task.get("candidates", []):
+        for iteration in candidate.get("iterations", []):
+            score = _finite_float(iteration.get("score"))
+            if score is None:
+                continue
+            created_epoch = _epoch(iteration.get("created_at"))
+            observed.append(
+                (
+                    created_epoch if created_epoch is not None else float("inf"),
+                    sequence,
+                    score,
+                )
+            )
+            sequence += 1
+    if not observed:
+        return None, None
+    return min(observed, key=lambda item: (item[0], item[1]))[2], "first_observed"
+
+
+def _pi_dispatch_usage(usage: Any) -> tuple[float | None, float | None]:
+    if not isinstance(usage, dict):
+        return None, None
+    token_parts = [
+        _finite_float(usage.get(field))
+        for field in ("input", "output", "cacheRead", "cacheWrite")
+    ]
+    processed_tokens = (
+        sum(value for value in token_parts if value is not None)
+        if any(value is not None for value in token_parts)
+        else None
+    )
+    return processed_tokens, _finite_float(usage.get("costTotal"))
+
+
 def _timeline_performance(task: dict[str, Any], timeline: dict[str, Any]) -> dict[str, Any]:
     start_epoch = _epoch(timeline.get("start_at"))
     duration = _finite_float(timeline.get("duration_seconds"))
@@ -590,7 +634,7 @@ def _timeline_performance(task: dict[str, Any], timeline: dict[str, Any]) -> dic
     statistics = task.get("statistics") or {}
     scores = statistics.get("scores") or {}
     direction = str(scores.get("direction") or (task.get("frozen_spec") or {}).get("metric_direction") or "maximize")
-    baseline = _finite_float(scores.get("baseline"))
+    baseline, baseline_source = _timeline_score_baseline(task)
     selected = _finite_float(scores.get("selected"))
     checkpoints: list[dict[str, Any]] = []
     for candidate in task.get("candidates", []):
@@ -669,6 +713,7 @@ def _timeline_performance(task: dict[str, Any], timeline: dict[str, Any]) -> dic
         "metric_direction": direction,
         "score": {
             "baseline": baseline,
+            "baseline_source": baseline_source,
             "selected": selected,
             "points": best_points,
         },
@@ -797,6 +842,9 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
             }
         )
 
+    candidate_iterations_by_id = {
+        candidate.candidate_id: list(candidate.iterations) for candidate in candidates
+    }
     session_payloads: list[dict[str, Any]] = []
     for session in sessions:
         observation = observations[session.agent_session_id]
@@ -806,35 +854,126 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
         usage = usage if isinstance(usage, dict) else {}
         context = observation.get("context")
         context = context if isinstance(context, dict) else {}
-        session_payloads.append(
-            {
-                "agent_session_id": session.agent_session_id,
-                "candidate_id": session.candidate_id,
-                "host": session.host,
-                "created_at": session.created_at,
-                "updated_at": session.updated_at,
-                "provider": execution.get("provider"),
-                "model": execution.get("model"),
-                "terminal_state": execution.get("terminal_state"),
-                "started_at": execution.get("started_at") or session.created_at,
-                "ended_at": execution.get("ended_at"),
-                "duration_seconds": execution.get("duration_seconds"),
-                "timed_out": bool(execution.get("timed_out")),
-                "runner_failed": bool(execution.get("runner_failed")),
-                "processed_tokens": usage.get("processed_tokens"),
-                "cost_usd": usage.get("cost_usd"),
-                "tool_calls": usage.get("tool_calls"),
-                "context_tokens": context.get("tokens"),
-                "context_percent": context.get("percent"),
-                "verifier_runs": sum(
-                    iteration.agent_session_id == session.agent_session_id
-                    for candidate in candidates
-                    for iteration in candidate.iterations
-                ),
-                "observability_source": observation.get("source"),
-                "errors": observation.get("errors") or [],
-            }
+        session_iterations = [
+            iteration
+            for candidate in candidates
+            for iteration in candidate.iterations
+            if iteration.agent_session_id == session.agent_session_id
+        ]
+        base_payload = {
+            "agent_session_id": session.agent_session_id,
+            "candidate_id": session.candidate_id,
+            "host": session.host,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "provider": execution.get("provider"),
+            "model": execution.get("model"),
+            "terminal_state": execution.get("terminal_state"),
+            "started_at": execution.get("started_at") or session.created_at,
+            "ended_at": execution.get("ended_at"),
+            "duration_seconds": execution.get("duration_seconds"),
+            "timed_out": bool(execution.get("timed_out")),
+            "runner_failed": bool(execution.get("runner_failed")),
+            "processed_tokens": usage.get("processed_tokens"),
+            "cost_usd": usage.get("cost_usd"),
+            "tool_calls": usage.get("tool_calls"),
+            "context_tokens": context.get("tokens"),
+            "context_percent": context.get("percent"),
+            "verifier_runs": len(session_iterations),
+            "observability_source": observation.get("source"),
+            "errors": observation.get("errors") or [],
+        }
+        raw_dispatches = session.host_handle.metadata.get("dispatches")
+        dispatches = raw_dispatches if isinstance(raw_dispatches, list) else []
+        if not dispatches:
+            session_payloads.append(
+                {
+                    **base_payload,
+                    "timeline_session_id": session.agent_session_id,
+                    "dispatch_index": 1,
+                    "dispatch_count": 1,
+                    "process_pid": session.host_handle.metadata.get("process_pid"),
+                }
+            )
+            continue
+
+        candidate_iterations = candidate_iterations_by_id.get(
+            session.candidate_id, []
         )
+        for index, raw_dispatch in enumerate(dispatches, start=1):
+            dispatch = raw_dispatch if isinstance(raw_dispatch, dict) else {}
+            start_at = dispatch.get("started_at")
+            end_at = dispatch.get("ended_at")
+            start_epoch = _epoch(start_at)
+            end_epoch = _epoch(end_at)
+            next_start_epoch = (
+                _epoch(dispatches[index].get("started_at"))
+                if index < len(dispatches) and isinstance(dispatches[index], dict)
+                else None
+            )
+            score_end_epoch = next_start_epoch
+            if score_end_epoch is None and end_epoch is not None:
+                score_end_epoch = end_epoch + 5.0
+            attributed_iterations = []
+            for iteration in candidate_iterations:
+                if iteration.agent_session_id not in {
+                    None,
+                    session.agent_session_id,
+                }:
+                    continue
+                iteration_epoch = _epoch(iteration.created_at)
+                if iteration_epoch is None:
+                    continue
+                if start_epoch is not None and iteration_epoch < start_epoch - 1.0:
+                    continue
+                if score_end_epoch is not None and iteration_epoch > score_end_epoch:
+                    continue
+                attributed_iterations.append(iteration)
+            scored = [
+                iteration.score
+                for iteration in attributed_iterations
+                if iteration.score is not None
+            ]
+            dispatch_score = None
+            if scored:
+                dispatch_score = (
+                    min(scored)
+                    if frozen.spec.metric_direction == "minimize"
+                    else max(scored)
+                )
+            processed_tokens, cost_usd = _pi_dispatch_usage(dispatch.get("usage"))
+            timed_out = bool(dispatch.get("timed_out"))
+            runner_failed = bool(dispatch.get("runner_failed"))
+            terminal_state = (
+                "failed"
+                if runner_failed
+                else "timed_out" if timed_out else "completed"
+            )
+            session_payloads.append(
+                {
+                    **base_payload,
+                    "timeline_session_id": (
+                        f"{session.agent_session_id} / dispatch {index}"
+                    ),
+                    "dispatch_index": index,
+                    "dispatch_count": len(dispatches),
+                    "process_pid": dispatch.get("process_pid"),
+                    "terminal_state": terminal_state,
+                    "started_at": start_at or base_payload["started_at"],
+                    "ended_at": end_at or base_payload["ended_at"],
+                    "duration_seconds": dispatch.get("duration_seconds"),
+                    "timed_out": timed_out,
+                    "runner_failed": runner_failed,
+                    "processed_tokens": processed_tokens,
+                    "cost_usd": cost_usd,
+                    "tool_calls": None,
+                    "verifier_runs": sum(
+                        iteration.agent_session_id == session.agent_session_id
+                        for iteration in attributed_iterations
+                    ),
+                    "score": dispatch_score,
+                }
+            )
 
     plan_payloads = [
         {
@@ -952,12 +1091,18 @@ def _build_timeline(
             or (task.get("frozen_spec") or {}).get("metric_direction")
             or "maximize"
         )
-        baseline_score = _finite_float(task_scores.get("baseline"))
+        baseline_score, _ = _timeline_score_baseline(task)
         session_scores = _session_scores(task, metric_direction)
         sessions_by_candidate: dict[str, list[str]] = {}
         for session in task.get("sessions", []):
-            sessions_by_candidate.setdefault(str(session.get("candidate_id") or "unknown"), []).append(
-                str(session.get("agent_session_id") or "unknown")
+            sessions_by_candidate.setdefault(
+                str(session.get("candidate_id") or "unknown"), []
+            ).append(
+                str(
+                    session.get("timeline_session_id")
+                    or session.get("agent_session_id")
+                    or "unknown"
+                )
             )
         for session in task.get("sessions", []):
             start_at = session.get("started_at") or session.get("created_at")
@@ -979,10 +1124,17 @@ def _build_timeline(
                     duration_seconds = end_epoch - start_epoch
             terminal = session.get("terminal_state") or "unknown"
             session_id = str(session["agent_session_id"])
+            timeline_session_id = str(
+                session.get("timeline_session_id") or session_id
+            )
             candidate_id = str(session.get("candidate_id") or "unknown")
-            candidate_sessions = sessions_by_candidate.get(candidate_id, [session_id])
-            attempt_index = candidate_sessions.index(session_id) + 1
-            score = session_scores.get(session_id)
+            candidate_sessions = sessions_by_candidate.get(
+                candidate_id, [timeline_session_id]
+            )
+            attempt_index = candidate_sessions.index(timeline_session_id) + 1
+            score = _finite_float(session.get("score"))
+            if score is None and "score" not in session:
+                score = session_scores.get(session_id)
             score_improvement = None
             if score is not None and baseline_score is not None:
                 score_improvement = (
@@ -994,12 +1146,16 @@ def _build_timeline(
                 {
                     "lane": "worker",
                     "kind": "worker_session",
-                    "label": f"{session_id} / {terminal}",
+                    "label": f"{timeline_session_id} / {terminal}",
                     "start_at": start_at,
                     "end_at": end_at,
                     "inferred_end": inferred,
                     "run_id": run_id,
                     "session_id": session_id,
+                    "track_label": timeline_session_id,
+                    "dispatch_index": session.get("dispatch_index"),
+                    "dispatch_count": session.get("dispatch_count"),
+                    "process_pid": session.get("process_pid"),
                     "candidate_id": candidate_id,
                     "terminal_state": terminal,
                     "duration_seconds": duration_seconds,
@@ -1305,6 +1461,11 @@ def _render_score_chart(
 ) -> str:
     score_data = performance.get("score") or {}
     baseline = _finite_float(score_data.get("baseline"))
+    baseline_label = (
+        "Observed baseline"
+        if score_data.get("baseline_source") == "first_observed"
+        else "Baseline"
+    )
     selected = _finite_float(score_data.get("selected"))
     points = [
         point
@@ -1347,7 +1508,7 @@ def _render_score_chart(
     path_parts.append("H 1000")
     reference_lines = []
     reference_labels = []
-    for label, value in (("Baseline", baseline), ("Selected", selected)):
+    for label, value in ((baseline_label, baseline), ("Selected", selected)):
         if value is None:
             continue
         y = y_position(value)
@@ -1434,7 +1595,12 @@ def _render_timeline(
         ("Main Agent", "main", main_events),
     ]
     for event in worker_events:
-        tracks.append((str(event.get("session_id") or "Worker session"), "worker", [event]))
+        label = str(
+            event.get("track_label")
+            or event.get("session_id")
+            or "Worker session"
+        )
+        tracks.append((label, "worker", [event]))
     if verifier_events:
         tracks.append(("Verifier activity", "parent", verifier_events))
     timeline_width = _timeline_width(float(duration))
@@ -1628,9 +1794,13 @@ def _render_sessions(task: dict[str, Any]) -> str:
         terminal = session.get("terminal_state") or (
             "timed_out" if session.get("timed_out") else "unknown"
         )
+        dispatch_label = "{} / {}".format(
+            session.get("dispatch_index"), session.get("dispatch_count")
+        )
         rows.append(
             "<tr>"
             f'<td class="mono"><strong>{_html(session.get("agent_session_id"))}</strong></td>'
+            f'<td class="mono">{_html(dispatch_label)}</td>'
             f'<td class="mono">{_html(session.get("candidate_id"))}</td>'
             f'<td>{_html(session.get("host"))}</td>'
             f'<td>{_html(session.get("provider"))}</td>'
@@ -1644,7 +1814,7 @@ def _render_sessions(task: dict[str, Any]) -> str:
         )
     return (
         '<div class="table-scroll"><table><thead><tr>'
-        "<th>Session</th><th>Candidate</th><th>Host</th><th>Provider</th><th>Model</th>"
+        "<th>Session</th><th>Dispatch</th><th>Candidate</th><th>Host</th><th>Provider</th><th>Model</th>"
         "<th>Terminal state</th><th>Duration</th><th>Processed tokens</th><th>Known cost</th><th>Verifier runs</th>"
         f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
     )

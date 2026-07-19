@@ -11,6 +11,7 @@ import pytest
 import goal_plus.pi_pool as pi_pool
 from goal_plus.pi_pool import (
     close_pi_search_pool,
+    continue_pi_search_pool,
     open_pi_search_pool,
     snapshot_pi_search_pool,
     submit_pi_search_pool,
@@ -163,6 +164,41 @@ def test_pi_pool_enforces_frozen_parallel_limit(tmp_path: Path) -> None:
             run_id=run_id,
             max_parallel=2,
         )
+
+
+def test_pi_pool_continue_pins_existing_native_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(
+        _pi_rpc_spec_with_budget(project, max_candidates=1, max_parallel=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    candidate_id = _planned_candidates(runtime, run_id, 1)[0]
+    session = runtime.start_agent_session(run_id, candidate_id)
+    opened = open_pi_search_pool(root_dir=runtime.root_dir, run_id=run_id)
+    monkeypatch.setattr(pi_pool, "_launch_pool_job", lambda **_kwargs: 999999)
+
+    submitted = continue_pi_search_pool(
+        root_dir=runtime.root_dir,
+        pool_id=opened["pool_id"],
+        candidate_id=candidate_id,
+    )
+
+    request = load_json(
+        pi_pool._job_dir(
+            runtime.root_dir,
+            opened["pool_id"],
+            submitted["job_id"],
+        )
+        / "request.json"
+    )
+    assert submitted["continuation"] == "native_session"
+    assert request["redispatch"] is True
+    assert request["resume_agent_session_id"] == session.agent_session_id
 
 
 def test_pi_pool_rejects_work_after_run_invalidation(tmp_path: Path) -> None:

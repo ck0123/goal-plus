@@ -411,8 +411,9 @@ search_state_policy:
   只验收、更新 best，并在全局 stop 为 false 时 continue 相同 candidate；
 - `.pi/extensions/goal-plus.ts`：镜像新工具 schema 和 compact output；
 - `pi_pool.py`：管理 candidate process 和 deadline，不持有 SearchState 或搜索策略；
-- 当前 `pi_search_pool_continue` 通过新 `--no-session` 进程恢复相同
-  candidate/workspace；若要求 native same-session resume，需要新增 Pi host 能力。
+- `pi_search_pool_continue` 通过新进程恢复相同 native session、`agent_session_id`、
+  candidate/workspace，并用 `get_entries(since=...)` 增量采集 dispatch 指标；
+- persistent same-PID supervisor 不属于当前合同；只有明确要求 OS 进程身份连续时才新增。
 
 ### Codex
 

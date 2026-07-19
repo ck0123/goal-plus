@@ -674,6 +674,7 @@ def goal_plus_monitor_snapshot(
         "observed_duration_seconds": None,
         "estimated_cost_total": 0.0,
         "subagent_count": 0,
+        "worker_dispatch_count": 0,
         "verifier_count": 0,
         "context_tokens_max": None,
         "context_percent_max": None,
@@ -768,6 +769,10 @@ def goal_plus_monitor_snapshot(
                 "parent_candidate_ids": candidate.task.parent_candidate_ids,
                 "base_candidate_id": candidate.task.base_candidate_id,
                 "agent_session_count": len(candidate_sessions),
+                "process_dispatch_count": sum(
+                    int(session.host_handle.metadata.get("dispatch_count") or 1)
+                    for session in candidate_sessions
+                ),
                 "verifier_count": len(candidate.iterations),
                 "last_score": last_iteration.score if last_iteration else None,
                 "last_verifier_at": last_iteration.created_at if last_iteration else None,
@@ -824,6 +829,9 @@ def goal_plus_monitor_snapshot(
                 for iteration in (candidate.iterations if candidate else [])
                 if iteration.agent_session_id == session.agent_session_id
             ]
+            raw_dispatches = metadata.get("dispatches")
+            dispatches = raw_dispatches if isinstance(raw_dispatches, list) else []
+            dispatch_count = int(metadata.get("dispatch_count") or len(dispatches) or 1)
             liveness = _session_liveness(
                 candidate,
                 latest_output_mtime=latest_output_mtime,
@@ -876,7 +884,9 @@ def goal_plus_monitor_snapshot(
                     "host": session.host,
                     "created_at": session.created_at,
                     "updated_at": session.updated_at,
-                    "attempt_count": len(sessions_by_candidate.get(session.candidate_id, [])),
+                    "attempt_count": dispatch_count,
+                    "dispatch_count": dispatch_count,
+                    "dispatches": dispatches,
                     "verifier_count": len(session_iterations),
                     "session_verifier_count": len(session_iterations),
                     "candidate_verifier_count": len(candidate.iterations) if candidate else 0,
@@ -912,6 +922,10 @@ def goal_plus_monitor_snapshot(
             )
 
         main_agent["subagent_count"] = len(sessions)
+        main_agent["worker_dispatch_count"] = sum(
+            int(session.host_handle.metadata.get("dispatch_count") or 1)
+            for session in sessions
+        )
         main_agent["verifier_count"] = sum(len(candidate.iterations) for candidate in candidates)
 
     orchestrator_observability: dict[str, Any] | None = None

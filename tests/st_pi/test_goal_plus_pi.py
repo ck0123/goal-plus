@@ -371,13 +371,14 @@ def test_goal_plus_print_autonomously_enters_search(
     for session_path in worker_sessions:
         session = json.loads(session_path.read_text(encoding="utf-8"))
         metadata = session["host_handle"]["metadata"]
-        assert metadata["continuation"] == "state_redispatch"
+        assert metadata["continuation"] == "native_session"
         assert metadata.get("runner_failed") is not True
         assert metadata["raw_logging"] is False
-        assert metadata["session_file"] is None
+        assert metadata["session_file"]
+        assert Path(metadata["session_file"]).is_file()
         assert metadata["text_log"] is None
         assert Path(metadata["event_log"]).exists()
-    assert not (search_root / "host-logs" / "pi-rpc-sessions").exists()
+    assert (search_root / "host-sessions" / "pi").is_dir()
     _assert_goal_plus_jsonl_is_clean(_session_file(session_dir))
 
 

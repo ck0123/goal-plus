@@ -92,8 +92,8 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "search_select" in text
     assert "search_report" in text
     assert "search_promote" in text
-    assert "state-level resume" in text
-    assert "search_redispatch_candidate" in text
+    assert "cross-process native-session continuation" in text
+    assert "search_continue_agent_session" in text
     assert "session_jsonl_restart" not in text
     assert "early `search_run_verifier`" in text
     assert "verification of the unmodified starting point" in text
@@ -154,7 +154,7 @@ def test_pi_goal_plus_skill_documents_parallel_loop_policy() -> None:
     assert "Continue the same autonomous search loop" in text
     assert "candidate_ready" in text
     assert "same workspace" in normalized
-    assert "new `agent_session_id` but never a new candidate" in normalized
+    assert "preserves both `agent_session_id` and candidate identity" in normalized
     assert "Do not call `search_plan_next`, `search_start_batch`, or" in normalized
     assert "Do not vary continuation based on rank or improvement" in normalized
     assert "low score" in normalized
@@ -192,6 +192,10 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "theoretical or structural limits" in text
     assert "10-15 distinct verifier-recorded artifacts" not in text
     assert "verifier is an evaluator, not an analysis service" in text
+    assert (
+        "Deadline, closeout, and time-advisory messages from an earlier dispatch "
+        "are historical"
+    ) in text
     assert "next_steps" in text
     assert "verifier_assessment" in text
     assert "code_surface" in text
@@ -212,7 +216,8 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "trust direct reads and the runtime context" in text
     assert "workspace only" in text
     assert "runtime history" in text
-    assert "do not rely on transcript" in text
+    assert "Native conversation context may preserve reasoning" in text
+    assert "must never override durable runtime evidence" in text
     assert "VerifierWorkspaceSideEffect" in text
     assert "candidate_action=stop_and_report" in text
     assert "return immediately" in text
@@ -399,6 +404,7 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     examples = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
 
     combined = "\n".join([pi_doc, adapters, debug, examples])
+    normalized = " ".join(combined.split())
     assert "worker_host=\"pi-rpc\"" in combined
     assert "goal-plus-pi-worker" in combined
     assert "goal-plus-pi-tool" in combined
@@ -418,9 +424,10 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "Pi currently supports the portable builtin strategies only" in combined
     assert "pre-model `/goal-plus` creation" in combined
     assert "pi -p" in combined
-    assert "--no-session" in combined
+    assert "--session-dir" in combined
+    assert ".gp/host-sessions/pi/" in combined
     assert "metadata-only" in combined
-    assert "state-level redispatch" in combined
+    assert "native session continuation across process boundaries" in normalized
     assert "session_jsonl_restart" not in combined
     assert ".gp/host-logs/pi-rpc-" in combined
     assert "metadata-only event log" in combined

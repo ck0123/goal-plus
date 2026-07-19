@@ -1345,7 +1345,7 @@ def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> N
 
 
 @pytest.mark.pi
-def test_worker_policy_uses_pi_rpc_state_redispatch(tmp_path: Path) -> None:
+def test_worker_policy_uses_pi_rpc_native_session_resume(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
@@ -1368,12 +1368,12 @@ def test_worker_policy_uses_pi_rpc_state_redispatch(tmp_path: Path) -> None:
     plan = runtime.plan_next(run_id, requested_k=1)
 
     assert plan.worker_policy["host"] == "pi-rpc"
-    assert plan.worker_policy["supports_same_worker_continue"] is False
-    assert plan.worker_policy["continuation"] == "state_redispatch"
+    assert plan.worker_policy["supports_same_worker_continue"] is True
+    assert plan.worker_policy["continuation"] == "native_session"
     assert plan.worker_policy["uses_background_workers"] is False
     assert plan.worker_policy["pool"]["launch_mode"] == "async"
     assert plan.worker_policy["pool"]["wait_mode"] == "wait_any"
-    assert plan.worker_policy["pool"]["continuation_mode"] == "state_redispatch"
+    assert plan.worker_policy["pool"]["continuation_mode"] == "native_session"
     assert plan.worker_policy["pool"]["recovery_mode"] == "supervisor_persisted"
     assert plan.worker_policy["pool"]["wait_tool"] == "pi_search_pool_wait_any"
 
@@ -2179,7 +2179,7 @@ def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path)
 
 
 @pytest.mark.pi
-def test_pi_rpc_continue_agent_session_requires_redispatch(tmp_path: Path) -> None:
+def test_pi_rpc_continue_agent_session_reuses_native_session(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
@@ -2205,15 +2205,34 @@ def test_pi_rpc_continue_agent_session_requires_redispatch(tmp_path: Path) -> No
         {
             "host": "pi-rpc",
             "external_id": session.agent_session_id,
-            "metadata": {"event_log": "/tmp/pi-rpc-agent_0001.jsonl"},
+            "metadata": {
+                "event_log": "/tmp/pi-rpc-agent_0001.jsonl",
+                "pi_metrics": {
+                    "final_last_entry_id": "entry_3",
+                    "final_entry_count": 3,
+                    "usage_total": {"input": 25},
+                    "duration_seconds": 1.5,
+                    "started_at": "2026-07-19T00:00:00Z",
+                },
+            },
         },
     )
 
-    with pytest.raises(RuntimeError, match="search_redispatch_candidate"):
-        runtime.continue_agent_session(
-            session.agent_session_id,
-            {"goal": "continue"},
-        )
+    continued = runtime.continue_agent_session(
+        session.agent_session_id,
+        {"goal": "continue"},
+    )
+
+    assert continued.agent_session_id == session.agent_session_id
+    assert continued.launch["session_id"] == session.agent_session_id
+    assert continued.launch["continuation"] == "native_session"
+    assert continued.launch["metrics_baseline"]["last_entry_id"] == "entry_3"
+    assert "continue_existing_agent_session=true" in continued.launch["prompt"]
+    context = runtime.get_agent_context(session.agent_session_id)
+    assert context["resume"]["is_redispatch"] is False
+    assert context["resume"]["is_native_session_resume"] is True
+    assert context["resume"]["mode"] == "native_session"
+    assert context["resume"]["dispatch_count"] == 1
 
     report = runtime.report(run_id).read_text(encoding="utf-8")
     assert "| Session | Host | Candidate | Verifier Runs |" in report

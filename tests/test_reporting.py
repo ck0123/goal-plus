@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
-from goal_plus.models import GoalPlusRecord
+from goal_plus.models import GoalPlusRecord, IterationRecord, SearchSpec
 from goal_plus.reporting import (
     _build_timeline,
     _epoch,
@@ -113,6 +113,151 @@ def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path)
     assert all(task["timeline"]["duration_seconds"] for task in data["search_tasks"])
     assert data["snapshot"]["search_task_aggregate"]["search_tasks_total"] == 2
     assert data["snapshot"]["search_task_aggregate"]["planning_rounds_total"] == 4
+
+
+def test_pi_native_session_resume_renders_distinct_process_dispatches(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    root = tmp_path / ".search"
+    search = FileSearchRuntime(root)
+    spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    spec_data["strategy"] = {
+        "name": "random",
+        "worker_mode": "agent-session-pool",
+        "worker_host": "pi-rpc",
+        "worker_budget": {
+            "max_runtime_seconds": 60,
+            "on_exceed": "interrupt",
+        },
+    }
+    frozen = search.freeze_spec(
+        SearchSpec.model_validate(spec_data),
+        [project / "evaluator.py"],
+    )
+    run_id = search.create_run(frozen.frozen_spec_id)
+    plan = search.plan_next(run_id, requested_k=1)
+    candidate = search.start_batch(run_id, plan.plan_id)[0]
+    session = search.start_agent_session(run_id, candidate.candidate_id)
+
+    def bind_dispatch(
+        *,
+        pid: int,
+        start_at: str,
+        end_at: str,
+        last_entry_id: str,
+        entry_count: int,
+        cumulative_input: int,
+    ) -> None:
+        search.bind_agent_handle(
+            session.agent_session_id,
+            {
+                "host": "pi-rpc",
+                "external_id": session.agent_session_id,
+                "metadata": {
+                    "process_pid": pid,
+                    "continuation": "native_session",
+                    "pi_metrics": {
+                        "scope": "session_cumulative_incremental",
+                        "dispatch_started_at": start_at,
+                        "dispatch_ended_at": end_at,
+                        "dispatch_duration_seconds": 10.0,
+                        "started_at": "2026-07-19T00:00:00Z",
+                        "ended_at": end_at,
+                        "duration_seconds": entry_count * 10.0,
+                        "final_last_entry_id": last_entry_id,
+                        "final_entry_count": entry_count,
+                        "usage_delta": {
+                            "assistantMessages": 1,
+                            "input": 10,
+                            "output": 2,
+                            "cacheRead": 3,
+                            "cacheWrite": 0,
+                            "costTotal": 0.01,
+                        },
+                        "usage_total": {
+                            "assistantMessages": entry_count,
+                            "input": cumulative_input,
+                            "output": entry_count * 2,
+                            "cacheRead": entry_count * 3,
+                            "cacheWrite": 0,
+                            "costTotal": entry_count * 0.01,
+                        },
+                    },
+                },
+            },
+        )
+
+    bind_dispatch(
+        pid=111,
+        start_at="2026-07-19T00:00:00Z",
+        end_at="2026-07-19T00:00:10Z",
+        last_entry_id="entry_1",
+        entry_count=1,
+        cumulative_input=10,
+    )
+    continued = search.continue_agent_session(session.agent_session_id)
+    assert continued.launch["metrics_baseline"]["last_entry_id"] == "entry_1"
+    bind_dispatch(
+        pid=222,
+        start_at="2026-07-19T00:00:20Z",
+        end_at="2026-07-19T00:00:30Z",
+        last_entry_id="entry_2",
+        entry_count=2,
+        cumulative_input=20,
+    )
+    record = search._load_candidate_record(run_id, candidate.candidate_id)
+    record.iterations = [
+        IterationRecord(
+            iteration=1,
+            score=0.0,
+            process_passed=True,
+            hypothesis="parent baseline",
+            summary="parent baseline",
+            created_at="2026-07-19T00:00:10Z",
+        ),
+        IterationRecord(
+            iteration=2,
+            agent_session_id=session.agent_session_id,
+            score=9.0,
+            process_passed=True,
+            hypothesis="worker improvement",
+            summary="worker improvement",
+            created_at="2026-07-19T00:00:25Z",
+        ),
+    ]
+    search._write_candidate_record(run_id, record)
+
+    data = build_html_report_data(root, run_id)
+    task = data["search_tasks"][0]
+    assert len(task["sessions"]) == 2
+    assert [item["dispatch_index"] for item in task["sessions"]] == [1, 2]
+    assert {item["agent_session_id"] for item in task["sessions"]} == {
+        session.agent_session_id
+    }
+    assert [item["score"] for item in task["sessions"]] == [0.0, 9.0]
+    worker_events = [
+        event
+        for event in task["timeline"]["events"]
+        if event["kind"] == "worker_session"
+    ]
+    assert [event["process_pid"] for event in worker_events] == [111, 222]
+    assert [event["attempt_index"] for event in worker_events] == [1, 2]
+    assert all(event["attempt_count"] == 2 for event in worker_events)
+    assert [event["score"] for event in worker_events] == [0.0, 9.0]
+    assert [event["score_gain"] for event in worker_events] == [0.0, 9.0]
+    performance = task["timeline"]["performance"]
+    assert performance["score"]["baseline"] == 0.0
+    assert performance["score"]["baseline_source"] == "first_observed"
+    assert performance["metric_ranges"]["score_gain"] == {
+        "min": 0.0,
+        "max": 9.0,
+        "observed": 2,
+    }
+    html = _render_timeline(task["timeline"], title="Pi dispatch score gain")
+    assert "Observed baseline 0" in html
+    assert 'data-metric-score-gain="0.000000000"' in html
+    assert 'data-metric-score-gain="9.000000000"' in html
 
 
 def test_worker_duration_uses_search_scale_not_goal_record_lifecycle() -> None:
