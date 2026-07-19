@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from html import escape
 import json
-from math import isclose, isfinite
+from math import floor, isclose, isfinite, log10
 from pathlib import Path
 from typing import Any
 
@@ -401,6 +401,59 @@ _REPORT_SCRIPT = """
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
+  function axisRef(prefix, index) {
+    return index === 0 ? prefix : prefix + String(index + 1);
+  }
+
+  function layoutAxisKey(prefix, index) {
+    return prefix + 'axis' + (index === 0 ? '' : String(index + 1));
+  }
+
+  function windowSeries(calls, values, details, start, end) {
+    var result = {calls: [], values: [], details: []};
+    calls.forEach(function (call, index) {
+      if (call < start || call > end) return;
+      result.calls.push(call);
+      result.values.push(values[index]);
+      result.details.push(details[index]);
+    });
+    return result;
+  }
+
+  function windowStep(calls, values, start, end) {
+    var result = {calls: [], values: []};
+    var priorIndex = null;
+    calls.forEach(function (call, index) {
+      if (call <= start) priorIndex = index;
+      if (call >= start && call <= end) {
+        result.calls.push(call);
+        result.values.push(values[index]);
+      }
+    });
+    if (priorIndex !== null && (result.calls.length === 0 || result.calls[0] > start)) {
+      result.calls.unshift(start);
+      result.values.unshift(values[priorIndex]);
+    }
+    return result;
+  }
+
+  function failureBand(axisSpec) {
+    var range = axisSpec.range || [0, 1];
+    var span = Math.max(range[1] - range[0], 0.1);
+    if (axisSpec.type === 'log') {
+      return {
+        low: Math.pow(10, range[0]),
+        marker: Math.pow(10, range[0] + span * 0.035),
+        high: Math.pow(10, range[0] + span * 0.075)
+      };
+    }
+    return {
+      low: range[0],
+      marker: range[0] + span * 0.035,
+      high: range[0] + span * 0.075
+    };
+  }
+
   function renderTrajectory(node) {
     if (!window.Plotly || node.dataset.plotlyRendered === 'true') return;
     var payload;
@@ -410,6 +463,15 @@ _REPORT_SCRIPT = """
       node.textContent = 'Search trajectory data could not be decoded.';
       return;
     }
+    var windows = payload.call_window
+      ? [payload.call_window]
+      : [{
+          start: 0,
+          end: payload.evaluations,
+          tick: Math.max(1, Math.ceil(payload.evaluations / 12)),
+          marker_size: 5
+        }];
+    var axisSpec = payload.score_axis || {type: 'linear', range: null};
     var palette = [
       reportColor('--accent'),
       reportColor('--worker'),
@@ -419,71 +481,17 @@ _REPORT_SCRIPT = """
       reportColor('--failure')
     ];
     var symbols = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross'];
-    var traces = payload.trajectories.map(function (trajectory, index) {
-      var color = palette[index % palette.length];
-      return {
-        type: 'scatter',
-        mode: 'lines+markers',
-        name: trajectory.candidate_id + (trajectory.selected ? ' · selected' : ''),
-        x: trajectory.calls,
-        y: trajectory.scores,
-        customdata: trajectory.details,
-        line: {color: color, width: trajectory.selected ? 3 : 2},
-        marker: {
-          color: color,
-          size: trajectory.selected ? 9 : 7,
-          symbol: symbols[index % symbols.length],
-          line: {color: reportColor('--surface'), width: 1}
-        },
-        hovertemplate:
-          '<b>' + trajectory.candidate_id + '</b><br>' +
-          'Verifier call %{x}<br>' +
-          payload.metric_name + ' %{y:.4f}<br>' +
-          'Iteration %{customdata[0]} · %{customdata[1]}<br>' +
-          '%{customdata[2]}<extra></extra>'
-      };
-    });
-    if (payload.global_best.calls.length) {
-      traces.push({
-        type: 'scatter',
-        mode: 'lines',
-        name: 'Global best',
-        x: payload.global_best.calls,
-        y: payload.global_best.scores,
-        line: {color: reportColor('--text'), width: 4, shape: 'hv'},
-        hovertemplate: 'Verifier call %{x}<br>Best-so-far %{y:.4f}<extra></extra>'
-      });
-    }
-    if (payload.selected_point) {
-      traces.push({
-        type: 'scatter',
-        mode: 'markers',
-        name: 'Selected point',
-        x: [payload.selected_point.call],
-        y: [payload.selected_point.score],
-        marker: {
-          color: reportColor('--success'),
-          size: 15,
-          symbol: 'star',
-          line: {color: reportColor('--text'), width: 2}
-        },
-        hovertemplate:
-          '<b>Selected · ' + payload.selected_point.candidate_id + '</b><br>' +
-          'Verifier call %{x}<br>' + payload.metric_name + ' %{y:.4f}<extra></extra>'
-      });
-    }
+    var traces = [];
     var shapes = [];
-    if (Number.isFinite(payload.baseline)) {
-      shapes.push({
-        type: 'line', x0: 0, x1: payload.evaluations, y0: payload.baseline, y1: payload.baseline,
-        line: {color: reportColor('--muted'), width: 1, dash: 'dot'}
-      });
-    }
-    node.dataset.plotlyRendered = 'true';
-    window.Plotly.newPlot(node, traces, {
+    var annotations = [];
+    var candidateLegendSeen = {};
+    var globalLegendSeen = false;
+    var selectedLegendSeen = false;
+    var failureLegendSeen = false;
+    var layout = {
       autosize: true,
-      height: 380,
-      margin: {l: 66, r: 24, t: 62, b: 58},
+      height: windows.length === 1 ? 500 : 170 + windows.length * 230,
+      margin: {l: 74, r: 24, t: 92, b: 56},
       paper_bgcolor: reportColor('--surface'),
       plot_bgcolor: reportColor('--surface'),
       font: {family: 'Inter, ui-sans-serif, system-ui, sans-serif', color: reportColor('--text')},
@@ -497,18 +505,198 @@ _REPORT_SCRIPT = """
         orientation: 'h', x: 0, y: 1.04, xanchor: 'left', yanchor: 'bottom',
         font: {color: reportColor('--muted')}
       },
-      xaxis: {
-        title: {text: 'Verifier call'}, rangemode: 'tozero', dtick: payload.call_tick,
-        color: reportColor('--muted'), gridcolor: reportColor('--border'), zerolinecolor: reportColor('--border')
-      },
-      yaxis: {
-        title: {text: payload.metric_name},
-        color: reportColor('--muted'), gridcolor: reportColor('--border'), zerolinecolor: reportColor('--border')
-      },
-      shapes: shapes
-    }, {
+      shapes: shapes,
+      annotations: annotations
+    };
+    var verticalGap = windows.length === 1 ? 0 : 0.065;
+    var panelHeight = (1 - verticalGap * (windows.length - 1)) / windows.length;
+    var failurePosition = failureBand(axisSpec);
+
+    windows.forEach(function (windowSpec, windowIndex) {
+      var xRef = axisRef('x', windowIndex);
+      var yRef = axisRef('y', windowIndex);
+      var xKey = layoutAxisKey('x', windowIndex);
+      var yKey = layoutAxisKey('y', windowIndex);
+      var domainTop = 1 - windowIndex * (panelHeight + verticalGap);
+      var domainBottom = Math.max(0, domainTop - panelHeight);
+      var failureCalls = [];
+      var failureValues = [];
+      var failureDetails = [];
+
+      layout[xKey] = {
+        domain: [0, 1],
+        anchor: yRef,
+        range: [windowSpec.start - 0.5, windowSpec.end + 0.5],
+        dtick: windowSpec.tick,
+        title: {text: windowIndex === windows.length - 1 ? 'Verifier call' : ''},
+        color: reportColor('--muted'),
+        gridcolor: reportColor('--border'),
+        zerolinecolor: reportColor('--border'),
+        automargin: true
+      };
+      layout[yKey] = {
+        domain: [domainBottom, domainTop],
+        anchor: xRef,
+        type: axisSpec.type || 'linear',
+        title: {text: payload.metric_name + (axisSpec.type === 'log' ? ' · log' : '')},
+        color: reportColor('--muted'),
+        gridcolor: reportColor('--border'),
+        zerolinecolor: reportColor('--border'),
+        tickformat: '~s',
+        automargin: true
+      };
+      if (axisSpec.type === 'log') layout[yKey].dtick = 'D2';
+      if (axisSpec.range) layout[yKey].range = axisSpec.range;
+
+      if (windows.length > 1) {
+        annotations.push({
+          xref: 'paper', yref: 'paper', x: 0.995, y: domainTop,
+          text: 'Calls ' + windowSpec.start + '–' + windowSpec.end,
+          showarrow: false, xanchor: 'right', yanchor: 'top', yshift: -4,
+          bgcolor: reportColor('--surface'), borderpad: 2,
+          font: {size: 10, color: reportColor('--muted')}
+        });
+      }
+
+      payload.trajectories.forEach(function (trajectory, trajectoryIndex) {
+        var color = palette[trajectoryIndex % palette.length];
+        var series = windowSeries(
+          trajectory.calls, trajectory.scores, trajectory.details,
+          windowSpec.start, windowSpec.end
+        );
+        if (series.calls.length) {
+          traces.push({
+            type: 'scatter',
+            mode: 'lines+markers',
+            name: trajectory.candidate_id + (trajectory.selected ? ' · selected' : ''),
+            x: series.calls,
+            y: series.values,
+            customdata: series.details,
+            xaxis: xRef,
+            yaxis: yRef,
+            showlegend: !candidateLegendSeen[trajectory.candidate_id],
+            line: {color: color, width: trajectory.selected ? 2.6 : 1.8},
+            marker: {
+              color: color,
+              size: (windowSpec.marker_size || 5) + (trajectory.selected ? 1.5 : 0),
+              symbol: symbols[trajectoryIndex % symbols.length],
+              line: {color: reportColor('--surface'), width: 0.8}
+            },
+            hovertemplate:
+              '<b>' + trajectory.candidate_id + '</b><br>' +
+              'Verifier call %{x}<br>' +
+              payload.metric_name + ' %{y:.4f}<br>' +
+              'Iteration %{customdata[0]} · %{customdata[1]}<br>' +
+              '%{customdata[2]}<extra></extra>'
+          });
+          candidateLegendSeen[trajectory.candidate_id] = true;
+        }
+        (trajectory.failed_calls || []).forEach(function (call, failureIndex) {
+          if (call < windowSpec.start || call > windowSpec.end) return;
+          failureCalls.push(call);
+          failureValues.push(failurePosition.marker);
+          failureDetails.push([
+            trajectory.candidate_id,
+            (trajectory.failed_details[failureIndex] || [])[0],
+            (trajectory.failed_details[failureIndex] || [])[1],
+            (trajectory.failed_details[failureIndex] || [])[2],
+            (trajectory.failed_scores || [])[failureIndex]
+          ]);
+        });
+      });
+
+      var globalSeries = windowStep(
+        payload.global_best.calls, payload.global_best.scores,
+        windowSpec.start, windowSpec.end
+      );
+      if (globalSeries.calls.length) {
+        traces.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: 'Global best',
+          x: globalSeries.calls,
+          y: globalSeries.values,
+          xaxis: xRef,
+          yaxis: yRef,
+          showlegend: !globalLegendSeen,
+          line: {color: reportColor('--text'), width: 3, shape: 'hv'},
+          hovertemplate: 'Verifier call %{x}<br>Best-so-far %{y:.4f}<extra></extra>'
+        });
+        globalLegendSeen = true;
+      }
+
+      if (payload.selected_point && payload.selected_point.call >= windowSpec.start &&
+          payload.selected_point.call <= windowSpec.end) {
+        traces.push({
+          type: 'scatter',
+          mode: 'markers',
+          name: 'Selected point',
+          x: [payload.selected_point.call],
+          y: [payload.selected_point.score],
+          xaxis: xRef,
+          yaxis: yRef,
+          showlegend: !selectedLegendSeen,
+          marker: {
+            color: reportColor('--success'),
+            size: 15,
+            symbol: 'star',
+            line: {color: reportColor('--text'), width: 2}
+          },
+          hovertemplate:
+            '<b>Selected · ' + payload.selected_point.candidate_id + '</b><br>' +
+            'Verifier call %{x}<br>' + payload.metric_name + ' %{y:.4f}<extra></extra>'
+        });
+        selectedLegendSeen = true;
+      }
+
+      if (failureCalls.length) {
+        shapes.push({
+          type: 'rect', xref: xRef, yref: yRef,
+          x0: windowSpec.start, x1: windowSpec.end,
+          y0: failurePosition.low, y1: failurePosition.high,
+          fillcolor: reportColor('--failure'), opacity: 0.055, line: {width: 0}, layer: 'below'
+        });
+        traces.push({
+          type: 'scatter',
+          mode: 'markers',
+          name: 'Failed verifier · not scored',
+          x: failureCalls,
+          y: failureValues,
+          customdata: failureDetails,
+          xaxis: xRef,
+          yaxis: yRef,
+          showlegend: !failureLegendSeen,
+          marker: {
+            color: reportColor('--failure'),
+            size: (windowSpec.marker_size || 5) + 3,
+            symbol: 'x',
+            line: {width: 1}
+          },
+          hovertemplate:
+            '<b>%{customdata[0]} · verifier failed</b><br>' +
+            'Verifier call %{x}<br>Iteration %{customdata[1]} · %{customdata[2]}<br>' +
+            '%{customdata[3]}<br>Raw score %{customdata[4]} · excluded from ranking<extra></extra>'
+        });
+        failureLegendSeen = true;
+      }
+
+      if (Number.isFinite(payload.baseline) && (axisSpec.type !== 'log' || payload.baseline > 0)) {
+        shapes.push({
+          type: 'line', xref: xRef, yref: yRef,
+          x0: windowSpec.start, x1: windowSpec.end,
+          y0: payload.baseline, y1: payload.baseline,
+          line: {color: reportColor('--muted'), width: 1, dash: 'dot'}
+        });
+      }
+    });
+
+    node.style.minHeight = String(layout.height) + 'px';
+    node.style.height = String(layout.height) + 'px';
+    node.dataset.plotlyRendered = 'true';
+    window.Plotly.newPlot(node, traces, layout, {
       displaylogo: false,
       responsive: true,
+      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       toImageButtonOptions: {format: 'svg', filename: 'complete-search-trajectory'}
     });
   }
@@ -1674,6 +1862,61 @@ def _load_plotly_javascript() -> str | None:
     return str(get_plotlyjs())
 
 
+def _nice_trajectory_tick(raw_step: float) -> int:
+    if raw_step <= 1:
+        return 1
+    magnitude = 10 ** floor(log10(raw_step))
+    fraction = raw_step / magnitude
+    nice_fraction = (
+        1 if fraction <= 1 else 2 if fraction <= 2 else 5 if fraction <= 5 else 10
+    )
+    return max(1, int(nice_fraction * magnitude))
+
+
+def _trajectory_call_window(evaluations: int) -> dict[str, int]:
+    if evaluations <= 0:
+        return {"start": 0, "end": 0, "tick": 1, "marker_size": 7}
+    marker_size = 7 if evaluations <= 80 else 5 if evaluations <= 250 else 4
+    return {
+        "start": 0,
+        "end": evaluations,
+        "tick": _nice_trajectory_tick(max(1.0, evaluations / 12)),
+        "marker_size": marker_size,
+    }
+
+
+def _trajectory_score_axis(scores: list[float]) -> dict[str, Any]:
+    if not scores:
+        return {
+            "type": "linear",
+            "range": None,
+            "minimum": None,
+            "maximum": None,
+            "ratio": None,
+        }
+    minimum = min(scores)
+    maximum = max(scores)
+    ratio = maximum / minimum if minimum > 0 else None
+    use_log = ratio is not None and ratio >= 20
+    if use_log:
+        low = log10(minimum)
+        high = log10(maximum)
+        span = max(high - low, 0.1)
+        padding = max(0.06, span * 0.08)
+        axis_range = [low - padding, high + padding]
+    else:
+        span = maximum - minimum
+        padding = max(span * 0.08, abs(maximum) * 0.04, 1e-9)
+        axis_range = [minimum - padding, maximum + padding]
+    return {
+        "type": "log" if use_log else "linear",
+        "range": axis_range,
+        "minimum": minimum,
+        "maximum": maximum,
+        "ratio": ratio,
+    }
+
+
 def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
     statistics = task.get("statistics") or {}
     scores = statistics.get("scores") or {}
@@ -1701,6 +1944,7 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
                     "selected": bool(candidate.get("selected")),
                     "iteration": iteration.get("iteration") or iteration_index + 1,
                     "score": score,
+                    "process_passed": iteration.get("process_passed") is not False,
                     "created_at": created_at,
                     "created_epoch": created_epoch,
                     "source": "worker verifier" if session_id is not None else "parent verifier",
@@ -1731,19 +1975,31 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
         ]
         if not points:
             continue
+        passing_points = [point for point in points if point["process_passed"]]
+        failed_points = [point for point in points if not point["process_passed"]]
         trajectories.append(
             {
                 "candidate_id": candidate_id,
                 "selected": bool(candidate.get("selected")),
-                "calls": [point["call"] for point in points],
-                "scores": [point["score"] for point in points],
+                "calls": [point["call"] for point in passing_points],
+                "scores": [point["score"] for point in passing_points],
                 "details": [
                     [
                         point["iteration"],
                         point["source"],
                         str(point.get("created_at") or "timestamp unavailable"),
                     ]
-                    for point in points
+                    for point in passing_points
+                ],
+                "failed_calls": [point["call"] for point in failed_points],
+                "failed_scores": [point["score"] for point in failed_points],
+                "failed_details": [
+                    [
+                        point["iteration"],
+                        point["source"],
+                        str(point.get("created_at") or "timestamp unavailable"),
+                    ]
+                    for point in failed_points
                 ],
             }
         )
@@ -1753,12 +2009,17 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
     current = baseline
     for evaluation in evaluations:
         score = float(evaluation["score"])
-        if current is None or _is_better_score(score, current, direction):
+        if evaluation["process_passed"] and (
+            current is None or _is_better_score(score, current, direction)
+        ):
             current = score
-        global_calls.append(int(evaluation["call"]))
-        global_scores.append(float(current))
+        if current is not None:
+            global_calls.append(int(evaluation["call"]))
+            global_scores.append(float(current))
 
-    selected_evaluations = [item for item in evaluations if item["selected"]]
+    selected_evaluations = [
+        item for item in evaluations if item["selected"] and item["process_passed"]
+    ]
     selected_point = None
     if selected_evaluations:
         if selected_score is not None:
@@ -1781,13 +2042,24 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
             "score": selected_evaluation["score"],
         }
 
+    passing_scores = [
+        float(evaluation["score"])
+        for evaluation in evaluations
+        if evaluation["process_passed"]
+    ]
+    if baseline is not None:
+        passing_scores.append(float(baseline))
+    passing_count = sum(1 for evaluation in evaluations if evaluation["process_passed"])
     return {
         "metric_name": metric_name,
         "metric_direction": direction,
         "baseline": baseline,
         "selected": selected_score,
         "evaluations": len(evaluations),
-        "call_tick": max(1, (len(evaluations) + 19) // 20),
+        "passing_evaluations": passing_count,
+        "failed_evaluations": len(evaluations) - passing_count,
+        "call_window": _trajectory_call_window(len(evaluations)),
+        "score_axis": _trajectory_score_axis(passing_scores),
         "trajectories": trajectories,
         "global_best": {"calls": global_calls, "scores": global_scores},
         "selected_point": selected_point,
@@ -1800,7 +2072,10 @@ def _render_search_trajectory(payload: dict[str, Any]) -> str:
         quote=True,
     )
     evaluations = int(payload.get("evaluations") or 0)
+    passing = int(payload.get("passing_evaluations") or 0)
+    failed = int(payload.get("failed_evaluations") or 0)
     trajectories = len(payload.get("trajectories") or [])
+    axis_type = str((payload.get("score_axis") or {}).get("type") or "linear")
     metric_name = str(payload.get("metric_name") or "score")
     aria_label = (
         f"Complete search trajectory with {evaluations} verifier calls across "
@@ -1809,7 +2084,8 @@ def _render_search_trajectory(payload: dict[str, Any]) -> str:
     return (
         '<div class="trajectory-shell">'
         '<div class="trajectory-head"><h3>Complete Search Trajectory</h3>'
-        f'<span>{evaluations} verifier calls / {trajectories} candidate loops</span></div>'
+        f'<span>{evaluations} calls / {trajectories} loops · {passing} scored / {failed} failed · '
+        f'{axis_type} score axis</span></div>'
         f'<div class="trajectory-plot" role="img" aria-label="{escape(aria_label, quote=True)}" '
         f'data-search-trajectory="{encoded}"></div></div>'
     )

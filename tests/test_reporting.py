@@ -91,6 +91,9 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     assert "Complete Search Trajectory" in html
     assert "data-search-trajectory=" in html
     assert "window.Plotly={newPlot" in html
+    assert "payload.call_window" in html
+    assert "Failed verifier · not scored" in html
+    assert "linear score axis" in html
     assert 'class="score-step"' not in html
     assert "&lt;script&gt;alert(&#x27;unsafe&#x27;)&lt;/script&gt;" in html
     assert "<script>alert('unsafe')</script>" not in html
@@ -148,6 +151,15 @@ def test_search_trajectory_payload_keeps_parallel_candidate_loops() -> None:
 
     assert payload is not None
     assert payload["evaluations"] == 5
+    assert payload["passing_evaluations"] == 5
+    assert payload["failed_evaluations"] == 0
+    assert payload["call_window"] == {
+        "start": 0,
+        "end": 5,
+        "tick": 1,
+        "marker_size": 7,
+    }
+    assert payload["score_axis"]["type"] == "linear"
     assert [trace["calls"] for trace in payload["trajectories"]] == [[1, 3], [2, 4, 5]]
     assert payload["global_best"] == {
         "calls": [0, 1, 2, 3, 4, 5],
@@ -159,6 +171,58 @@ def test_search_trajectory_payload_keeps_parallel_candidate_loops() -> None:
         "score": 3.0,
     }
     assert payload["trajectories"][1]["details"][1][1] == "worker verifier"
+
+
+def test_search_trajectory_payload_adapts_axes_and_excludes_failed_scores() -> None:
+    iterations = [
+        {
+            "iteration": iteration,
+            "score": 0.0 if iteration == 1 else 1000.0 / (iteration + 1),
+            "process_passed": iteration != 1,
+        }
+        for iteration in range(1, 131)
+    ]
+    task = {
+        "frozen_spec": {"metric_name": "cycles", "metric_direction": "minimize"},
+        "statistics": {
+            "scores": {
+                "metric_name": "cycles",
+                "direction": "minimize",
+                "baseline": 1000.0,
+                "selected": 1000.0 / 131,
+            }
+        },
+        "candidates": [
+            {
+                "candidate_id": "c001",
+                "selected": True,
+                "iterations": iterations,
+            }
+        ],
+    }
+
+    payload = _search_trajectory_payload(task)
+
+    assert payload is not None
+    assert payload["evaluations"] == 130
+    assert payload["passing_evaluations"] == 129
+    assert payload["failed_evaluations"] == 1
+    assert payload["call_window"] == {
+        "start": 0,
+        "end": 130,
+        "tick": 20,
+        "marker_size": 5,
+    }
+    assert payload["score_axis"]["type"] == "log"
+    assert payload["trajectories"][0]["calls"][0] == 2
+    assert payload["trajectories"][0]["failed_calls"] == [1]
+    assert payload["global_best"]["scores"][:2] == [1000.0, 1000.0]
+    assert min(payload["global_best"]["scores"]) > 0
+    assert payload["selected_point"] == {
+        "candidate_id": "c001",
+        "call": 130,
+        "score": 1000.0 / 131,
+    }
 
 
 def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path) -> None:
