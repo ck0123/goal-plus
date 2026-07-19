@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from functools import lru_cache
 from html import escape
 import json
 from math import isclose, isfinite
@@ -189,6 +190,11 @@ main { padding-top: 30px; padding-bottom: 72px; }
 .coverage-bar { height: 5px; margin-top: 7px; overflow: hidden; border-radius: 3px; background: var(--border); }
 .coverage-bar > span { display: block; height: 100%; background: var(--accent); }
 .timeline-shell { overflow: hidden; }
+.trajectory-shell { margin-bottom: 18px; }
+.trajectory-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.trajectory-head h3 { margin: 0; }
+.trajectory-head span { color: var(--muted); font-size: 11px; }
+.trajectory-plot { width: 100%; min-height: 380px; }
 .timeline-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; border-bottom: 1px solid var(--border); }
 .timeline-head h2 { margin: 0; }
 .metric-lens-toolbar {
@@ -355,6 +361,8 @@ pre { max-height: 600px; overflow: auto; white-space: pre-wrap; overflow-wrap: a
   .event-list li { grid-template-columns: 1fr; gap: 2px; }
   .metric-gap-list li { grid-template-columns: 1fr; gap: 2px; }
   .timeline-head, .metric-lens-toolbar { align-items: flex-start; flex-direction: column; }
+  .trajectory-head { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .trajectory-plot { min-height: 340px; }
   .metric-control { width: 100%; }
   .metric-control button { min-width: 0; flex: 1 1 0; padding-right: 4px; padding-left: 4px; font-size: 10px; }
 }
@@ -374,7 +382,7 @@ pre { max-height: 600px; overflow: auto; white-space: pre-wrap; overflow-wrap: a
   main { padding: 16px 0 0; }
   .report-section { margin-bottom: 22px; padding-bottom: 22px; }
   .js .task-panel[hidden], .task-panel { display: block !important; }
-  .panel, .table-scroll, .stats-table, .timeline-shell { break-inside: avoid; }
+  .panel, .table-scroll, .stats-table, .timeline-shell, .trajectory-shell { break-inside: avoid; }
   details > * { display: block !important; }
   .timeline-scroll, .timeline-rows { max-height: none; overflow: visible; }
   .timeline { width: 100% !important; min-width: 0; }
@@ -389,6 +397,133 @@ pre { max-height: 600px; overflow: auto; white-space: pre-wrap; overflow-wrap: a
 
 _REPORT_SCRIPT = """
 (function () {
+  function reportColor(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function renderTrajectory(node) {
+    if (!window.Plotly || node.dataset.plotlyRendered === 'true') return;
+    var payload;
+    try {
+      payload = JSON.parse(node.dataset.searchTrajectory || '{}');
+    } catch (error) {
+      node.textContent = 'Search trajectory data could not be decoded.';
+      return;
+    }
+    var palette = [
+      reportColor('--accent'),
+      reportColor('--worker'),
+      reportColor('--parent'),
+      reportColor('--success'),
+      reportColor('--warning'),
+      reportColor('--failure')
+    ];
+    var symbols = ['circle', 'square', 'diamond', 'triangle-up', 'triangle-down', 'cross'];
+    var traces = payload.trajectories.map(function (trajectory, index) {
+      var color = palette[index % palette.length];
+      return {
+        type: 'scatter',
+        mode: 'lines+markers',
+        name: trajectory.candidate_id + (trajectory.selected ? ' · selected' : ''),
+        x: trajectory.calls,
+        y: trajectory.scores,
+        customdata: trajectory.details,
+        line: {color: color, width: trajectory.selected ? 3 : 2},
+        marker: {
+          color: color,
+          size: trajectory.selected ? 9 : 7,
+          symbol: symbols[index % symbols.length],
+          line: {color: reportColor('--surface'), width: 1}
+        },
+        hovertemplate:
+          '<b>' + trajectory.candidate_id + '</b><br>' +
+          'Verifier call %{x}<br>' +
+          payload.metric_name + ' %{y:.4f}<br>' +
+          'Iteration %{customdata[0]} · %{customdata[1]}<br>' +
+          '%{customdata[2]}<extra></extra>'
+      };
+    });
+    if (payload.global_best.calls.length) {
+      traces.push({
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Global best',
+        x: payload.global_best.calls,
+        y: payload.global_best.scores,
+        line: {color: reportColor('--text'), width: 4, shape: 'hv'},
+        hovertemplate: 'Verifier call %{x}<br>Best-so-far %{y:.4f}<extra></extra>'
+      });
+    }
+    if (payload.selected_point) {
+      traces.push({
+        type: 'scatter',
+        mode: 'markers',
+        name: 'Selected point',
+        x: [payload.selected_point.call],
+        y: [payload.selected_point.score],
+        marker: {
+          color: reportColor('--success'),
+          size: 15,
+          symbol: 'star',
+          line: {color: reportColor('--text'), width: 2}
+        },
+        hovertemplate:
+          '<b>Selected · ' + payload.selected_point.candidate_id + '</b><br>' +
+          'Verifier call %{x}<br>' + payload.metric_name + ' %{y:.4f}<extra></extra>'
+      });
+    }
+    var shapes = [];
+    if (Number.isFinite(payload.baseline)) {
+      shapes.push({
+        type: 'line', x0: 0, x1: payload.evaluations, y0: payload.baseline, y1: payload.baseline,
+        line: {color: reportColor('--muted'), width: 1, dash: 'dot'}
+      });
+    }
+    node.dataset.plotlyRendered = 'true';
+    window.Plotly.newPlot(node, traces, {
+      autosize: true,
+      height: 380,
+      margin: {l: 66, r: 24, t: 62, b: 58},
+      paper_bgcolor: reportColor('--surface'),
+      plot_bgcolor: reportColor('--surface'),
+      font: {family: 'Inter, ui-sans-serif, system-ui, sans-serif', color: reportColor('--text')},
+      hoverlabel: {
+        bgcolor: reportColor('--surface'),
+        bordercolor: reportColor('--border-strong'),
+        font: {color: reportColor('--text')}
+      },
+      hovermode: 'closest',
+      legend: {
+        orientation: 'h', x: 0, y: 1.04, xanchor: 'left', yanchor: 'bottom',
+        font: {color: reportColor('--muted')}
+      },
+      xaxis: {
+        title: {text: 'Verifier call'}, rangemode: 'tozero', dtick: payload.call_tick,
+        color: reportColor('--muted'), gridcolor: reportColor('--border'), zerolinecolor: reportColor('--border')
+      },
+      yaxis: {
+        title: {text: payload.metric_name},
+        color: reportColor('--muted'), gridcolor: reportColor('--border'), zerolinecolor: reportColor('--border')
+      },
+      shapes: shapes
+    }, {
+      displaylogo: false,
+      responsive: true,
+      toImageButtonOptions: {format: 'svg', filename: 'complete-search-trajectory'}
+    });
+  }
+
+  function renderVisibleTrajectories() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-search-trajectory]'), function (node) {
+      if (node.closest('.task-panel[hidden]')) return;
+      if (node.dataset.plotlyRendered === 'true') {
+        window.Plotly.Plots.resize(node);
+      } else {
+        renderTrajectory(node);
+      }
+    });
+  }
+
   var buttons = Array.prototype.slice.call(document.querySelectorAll('[data-task-target]'));
   var panels = Array.prototype.slice.call(document.querySelectorAll('.task-panel'));
   function activate(runId, updateHash) {
@@ -396,6 +531,7 @@ _REPORT_SCRIPT = """
       button.setAttribute('aria-selected', button.dataset.taskTarget === runId ? 'true' : 'false');
     });
     panels.forEach(function (panel) { panel.hidden = panel.dataset.runId !== runId; });
+    renderVisibleTrajectories();
     if (updateHash && history.replaceState) history.replaceState(null, '', '#task-' + runId);
   }
   buttons.forEach(function (button) {
@@ -408,8 +544,13 @@ _REPORT_SCRIPT = """
     activate(initial, false);
   }
 
+  window.addEventListener('beforeprint', function () {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-search-trajectory]'), renderTrajectory);
+  });
+
   var metricFormatters = {
     'score-gain': function (value) { return (value >= 0 ? '+' : '') + value.toFixed(4); },
+    'score-raw': function (value) { return value.toFixed(4); },
     'tokens-per-minute': function (value) { return Math.round(value).toLocaleString() + '/min'; },
     'cost-per-minute': function (value) { return '$' + value.toFixed(4) + '/min'; },
     'verifier-density': function (value) { return value.toFixed(1) + '/min'; }
@@ -420,6 +561,11 @@ _REPORT_SCRIPT = """
     var lowLabel = lens.querySelector('[data-metric-low]');
     var highLabel = lens.querySelector('[data-metric-high]');
     var scaleBar = lens.querySelector('.metric-scale-bar');
+
+    function missingLabel(mode) {
+      return mode === 'score-gain' && lens.dataset.scoreGainBaseline === 'false'
+        ? 'No baseline' : 'Not observed';
+    }
 
     function setMode(mode) {
       var values = workerEvents.map(function (event) {
@@ -442,7 +588,7 @@ _REPORT_SCRIPT = """
         var raw = event.getAttribute('data-metric-' + mode);
         var value = raw === null || raw === '' ? NaN : Number(raw);
         if (!Number.isFinite(value)) {
-          if (readout) readout.textContent = 'Not observed';
+          if (readout) readout.textContent = missingLabel(mode);
           return;
         }
         var ratio = high === low ? 0.5 : (value - low) / (high - low);
@@ -455,8 +601,8 @@ _REPORT_SCRIPT = """
         if (highLabel) highLabel.textContent = 'Timed out';
         if (scaleBar) scaleBar.hidden = true;
       } else {
-        if (lowLabel) lowLabel.textContent = low === null ? 'Not observed' : metricFormatters[mode](low);
-        if (highLabel) highLabel.textContent = high === null ? 'Not observed' : metricFormatters[mode](high);
+        if (lowLabel) lowLabel.textContent = low === null ? missingLabel(mode) : metricFormatters[mode](low);
+        if (highLabel) highLabel.textContent = high === null ? missingLabel(mode) : metricFormatters[mode](high);
         if (scaleBar) scaleBar.hidden = false;
       }
     }
@@ -588,26 +734,7 @@ def _timeline_score_baseline(
     configured = _finite_float(scores.get("baseline"))
     if configured is not None:
         return configured, "configured"
-
-    observed: list[tuple[float, int, float]] = []
-    sequence = 0
-    for candidate in task.get("candidates", []):
-        for iteration in candidate.get("iterations", []):
-            score = _finite_float(iteration.get("score"))
-            if score is None:
-                continue
-            created_epoch = _epoch(iteration.get("created_at"))
-            observed.append(
-                (
-                    created_epoch if created_epoch is not None else float("inf"),
-                    sequence,
-                    score,
-                )
-            )
-            sequence += 1
-    if not observed:
-        return None, None
-    return min(observed, key=lambda item: (item[0], item[1]))[2], "first_observed"
+    return None, None
 
 
 def _pi_dispatch_usage(usage: Any) -> tuple[float | None, float | None]:
@@ -667,6 +794,7 @@ def _timeline_performance(task: dict[str, Any], timeline: dict[str, Any]) -> dic
     ]
     metric_keys = (
         "score_gain",
+        "score_raw",
         "tokens_per_minute",
         "cost_per_minute",
         "verifier_density",
@@ -1166,6 +1294,7 @@ def _build_timeline(
                     "cost_per_minute": _per_minute(session.get("cost_usd"), duration_seconds),
                     "verifier_density": _per_minute(session.get("verifier_runs"), duration_seconds),
                     "score": score,
+                    "score_raw": score,
                     "score_gain": score_improvement,
                     "attempt_index": attempt_index,
                     "attempt_count": len(candidate_sessions),
@@ -1444,6 +1573,8 @@ def _metric_readout(metric: str, value: Any) -> str:
         return "Not observed"
     if metric == "score_gain":
         return f"{number:+.4f}".rstrip("0").rstrip(".")
+    if metric == "score_raw":
+        return _number(number, digits=4)
     if metric == "tokens_per_minute":
         return f"{_number(number, digits=0)}/min"
     if metric == "cost_per_minute":
@@ -1460,11 +1591,6 @@ def _render_score_chart(
 ) -> str:
     score_data = performance.get("score") or {}
     baseline = _finite_float(score_data.get("baseline"))
-    baseline_label = (
-        "Observed baseline"
-        if score_data.get("baseline_source") == "first_observed"
-        else "Baseline"
-    )
     selected = _finite_float(score_data.get("selected"))
     points = [
         point
@@ -1507,7 +1633,7 @@ def _render_score_chart(
     path_parts.append("H 1000")
     reference_lines = []
     reference_labels = []
-    for label, value in ((baseline_label, baseline), ("Selected", selected)):
+    for label, value in (("Baseline", baseline), ("Selected", selected)):
         if value is None:
             continue
         y = y_position(value)
@@ -1520,7 +1646,10 @@ def _render_score_chart(
             f'{escape(label)} {_html(_number(value, digits=4))}</span>'
         )
     metric_name = str(performance.get("metric_name") or "score")
-    summary = f"{_number(baseline, digits=4)} to {_number(selected, digits=4)}"
+    baseline_summary = (
+        _number(baseline, digits=4) if baseline is not None else "No baseline"
+    )
+    summary = f"{baseline_summary} to {_number(selected, digits=4)}"
     return (
         '<div class="score-row">'
         '<div class="score-label">'
@@ -1536,13 +1665,174 @@ def _render_score_chart(
     )
 
 
+@lru_cache(maxsize=1)
+def _load_plotly_javascript() -> str | None:
+    try:
+        from plotly.offline import get_plotlyjs
+    except ImportError:
+        return None
+    return str(get_plotlyjs())
+
+
+def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
+    statistics = task.get("statistics") or {}
+    scores = statistics.get("scores") or {}
+    frozen = task.get("frozen_spec") or {}
+    metric_name = str(scores.get("metric_name") or frozen.get("metric_name") or "score")
+    metric_name = metric_name.replace("<", "").replace(">", "")
+    direction = str(scores.get("direction") or frozen.get("metric_direction") or "maximize")
+    baseline = _finite_float(scores.get("baseline"))
+    selected_score = _finite_float(scores.get("selected"))
+    evaluations: list[dict[str, Any]] = []
+    candidates = task.get("candidates") or []
+    for candidate_index, candidate in enumerate(candidates):
+        candidate_id = str(candidate.get("candidate_id") or f"candidate-{candidate_index + 1}")
+        for iteration_index, iteration in enumerate(candidate.get("iterations") or []):
+            score = _finite_float(iteration.get("score"))
+            if score is None:
+                continue
+            created_at = iteration.get("created_at")
+            created_epoch = _epoch(created_at)
+            session_id = iteration.get("agent_session_id")
+            evaluations.append(
+                {
+                    "candidate_id": candidate_id,
+                    "candidate_index": candidate_index,
+                    "selected": bool(candidate.get("selected")),
+                    "iteration": iteration.get("iteration") or iteration_index + 1,
+                    "score": score,
+                    "created_at": created_at,
+                    "created_epoch": created_epoch,
+                    "source": "worker verifier" if session_id is not None else "parent verifier",
+                    "fallback_order": iteration_index,
+                }
+            )
+    if not evaluations:
+        return None
+
+    evaluations.sort(
+        key=lambda item: (
+            item["created_epoch"] is None,
+            item["created_epoch"] if item["created_epoch"] is not None else 0.0,
+            item["candidate_index"],
+            item["fallback_order"],
+        )
+    )
+    for call, evaluation in enumerate(evaluations, start=1):
+        evaluation["call"] = call
+
+    trajectories: list[dict[str, Any]] = []
+    for candidate_index, candidate in enumerate(candidates):
+        candidate_id = str(candidate.get("candidate_id") or f"candidate-{candidate_index + 1}")
+        points = [
+            evaluation
+            for evaluation in evaluations
+            if evaluation["candidate_id"] == candidate_id
+        ]
+        if not points:
+            continue
+        trajectories.append(
+            {
+                "candidate_id": candidate_id,
+                "selected": bool(candidate.get("selected")),
+                "calls": [point["call"] for point in points],
+                "scores": [point["score"] for point in points],
+                "details": [
+                    [
+                        point["iteration"],
+                        point["source"],
+                        str(point.get("created_at") or "timestamp unavailable"),
+                    ]
+                    for point in points
+                ],
+            }
+        )
+
+    global_calls: list[int] = [0] if baseline is not None else []
+    global_scores: list[float] = [baseline] if baseline is not None else []
+    current = baseline
+    for evaluation in evaluations:
+        score = float(evaluation["score"])
+        if current is None or _is_better_score(score, current, direction):
+            current = score
+        global_calls.append(int(evaluation["call"]))
+        global_scores.append(float(current))
+
+    selected_evaluations = [item for item in evaluations if item["selected"]]
+    selected_point = None
+    if selected_evaluations:
+        if selected_score is not None:
+            selected_evaluation = min(
+                selected_evaluations,
+                key=lambda item: (
+                    abs(float(item["score"]) - selected_score),
+                    -int(item["call"]),
+                ),
+            )
+        else:
+            selected_evaluation = sorted(
+                selected_evaluations,
+                key=lambda item: float(item["score"]),
+                reverse=direction == "maximize",
+            )[0]
+        selected_point = {
+            "candidate_id": selected_evaluation["candidate_id"],
+            "call": selected_evaluation["call"],
+            "score": selected_evaluation["score"],
+        }
+
+    return {
+        "metric_name": metric_name,
+        "metric_direction": direction,
+        "baseline": baseline,
+        "selected": selected_score,
+        "evaluations": len(evaluations),
+        "call_tick": max(1, (len(evaluations) + 19) // 20),
+        "trajectories": trajectories,
+        "global_best": {"calls": global_calls, "scores": global_scores},
+        "selected_point": selected_point,
+    }
+
+
+def _render_search_trajectory(payload: dict[str, Any]) -> str:
+    encoded = escape(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        quote=True,
+    )
+    evaluations = int(payload.get("evaluations") or 0)
+    trajectories = len(payload.get("trajectories") or [])
+    metric_name = str(payload.get("metric_name") or "score")
+    aria_label = (
+        f"Complete search trajectory with {evaluations} verifier calls across "
+        f"{trajectories} candidate loops for {metric_name}."
+    )
+    return (
+        '<div class="trajectory-shell">'
+        '<div class="trajectory-head"><h3>Complete Search Trajectory</h3>'
+        f'<span>{evaluations} verifier calls / {trajectories} candidate loops</span></div>'
+        f'<div class="trajectory-plot" role="img" aria-label="{escape(aria_label, quote=True)}" '
+        f'data-search-trajectory="{encoded}"></div></div>'
+    )
+
+
 def _render_metric_toolbar(performance: dict[str, Any], default_metric: str) -> str:
     metric_ranges = performance.get("metric_ranges") or {}
     selected_range = metric_ranges.get(default_metric) or {}
-    low = _metric_readout(default_metric, selected_range.get("min"))
-    high = _metric_readout(default_metric, selected_range.get("max"))
+    score_baseline = _finite_float((performance.get("score") or {}).get("baseline"))
+    no_score_baseline = default_metric == "score_gain" and score_baseline is None
+    low = (
+        "No baseline"
+        if no_score_baseline
+        else _metric_readout(default_metric, selected_range.get("min"))
+    )
+    high = (
+        "No baseline"
+        if no_score_baseline
+        else _metric_readout(default_metric, selected_range.get("max"))
+    )
     options = (
         ("score-gain", "Score gain"),
+        ("score-raw", "Score raw"),
         ("tokens-per-minute", "Tokens/min"),
         ("cost-per-minute", "Cost/min"),
         ("verifier-density", "Verifier/min"),
@@ -1575,6 +1865,7 @@ def _render_timeline(
     *,
     title: str,
     span_label: str = "Observed span",
+    include_score_chart: bool = True,
 ) -> str:
     events = timeline.get("events") or []
     start_epoch = _epoch(timeline.get("start_at"))
@@ -1587,7 +1878,12 @@ def _render_timeline(
     worker_events = [event for event in events if event.get("lane") == "worker"]
     performance = timeline.get("performance") or {}
     metric_ranges = performance.get("metric_ranges") or {}
-    default_metric = "score_gain" if "score_gain" in metric_ranges else (
+    score_gain_has_baseline = (
+        _finite_float((performance.get("score") or {}).get("baseline")) is not None
+    )
+    default_metric = "score_gain" if (
+        "score_gain" in metric_ranges or "score_raw" in metric_ranges
+    ) else (
         "tokens_per_minute" if "tokens_per_minute" in metric_ranges else next(iter(metric_ranges), "status")
     )
     tracks: list[tuple[str, str, list[dict[str, Any]]]] = [
@@ -1651,6 +1947,7 @@ def _render_timeline(
                 metric_attributes = []
                 for metric_name in (
                     "score_gain",
+                    "score_raw",
                     "tokens_per_minute",
                     "cost_per_minute",
                     "verifier_density",
@@ -1666,14 +1963,25 @@ def _render_timeline(
                     + " "
                 )
                 metric_value = event.get(default_metric)
+                default_readout = (
+                    "No baseline"
+                    if default_metric == "score_gain" and not score_gain_has_baseline
+                    else _metric_readout(default_metric, metric_value)
+                )
+                score_gain_readout = (
+                    "No baseline"
+                    if not score_gain_has_baseline
+                    else _metric_readout("score_gain", event.get("score_gain"))
+                )
                 label_html = (
                     (_SESSION_ALERT_ICON if failed else "")
-                    + f'<span class="metric-readout">{escape(_metric_readout(default_metric, metric_value))}</span>'
+                    + f'<span class="metric-readout">{escape(default_readout)}</span>'
                 )
                 details = [
                     f"candidate {event.get('candidate_id')}",
                     f"duration {_duration(event.get('duration_seconds'))}",
-                    f"score gain {_metric_readout('score_gain', event.get('score_gain'))}",
+                    f"score gain {score_gain_readout}",
+                    f"score raw {_metric_readout('score_raw', event.get('score_raw'))}",
                     f"tokens/min {_metric_readout('tokens_per_minute', event.get('tokens_per_minute'))}",
                     f"cost/min {_metric_readout('cost_per_minute', event.get('cost_per_minute'))}",
                     f"verifier density {_metric_readout('verifier_density', event.get('verifier_density'))}",
@@ -1726,11 +2034,16 @@ def _render_timeline(
             "</li>"
         )
     metric_lens = bool(worker_events and metric_ranges)
-    score_chart = _render_score_chart(performance, start_epoch, float(duration)) if worker_events else ""
+    score_chart = (
+        _render_score_chart(performance, start_epoch, float(duration))
+        if worker_events and include_score_chart
+        else ""
+    )
     toolbar = _render_metric_toolbar(performance, default_metric) if metric_lens else ""
     default_mode = default_metric.replace("_", "-") if metric_lens else "status"
     return (
         f'<div class="panel timeline-shell" data-metric-mode="{default_mode}"'
+        f' data-score-gain-baseline="{str(score_gain_has_baseline).lower()}"'
         f'{" data-metric-lens" if metric_lens else ""}>'
         '<div class="timeline-head">'
         f'<h2>{escape(title)}</h2>'
@@ -1853,7 +2166,12 @@ def _render_statistics(task: dict[str, Any]) -> str:
     ) + "</div>"
 
 
-def _render_task(task: dict[str, Any], index: int) -> str:
+def _render_task(
+    task: dict[str, Any],
+    index: int,
+    *,
+    trajectory_payload: dict[str, Any] | None = None,
+) -> str:
     run = task.get("run") or {}
     frozen = task.get("frozen_spec") or {}
     stats = task.get("statistics") or {}
@@ -1865,6 +2183,11 @@ def _render_task(task: dict[str, Any], index: int) -> str:
     )
     run_id = str(task.get("run_id") or f"task-{index}")
     selected = task.get("is_report_run")
+    trajectory = (
+        _render_search_trajectory(trajectory_payload)
+        if trajectory_payload is not None
+        else ""
+    )
     return (
         f'<article class="panel task-panel" data-run-id="{escape(run_id, quote=True)}" '
         f'id="task-{escape(run_id, quote=True)}" {"" if selected else "hidden"}>'
@@ -1885,7 +2208,8 @@ def _render_task(task: dict[str, Any], index: int) -> str:
         f'<div class="task-metric"><span class="kpi-label">First improvement</span><strong class="mono">{_html(_duration(timing.get("time_to_first_improvement_seconds")))}</strong></div>'
         "</div>"
         '<section class="subsection">'
-        f'{_render_timeline(task.get("timeline") or {}, title="Search Execution Timeline")}'
+        f'{trajectory}'
+        f'{_render_timeline(task.get("timeline") or {}, title="Search Execution Timeline", include_score_chart=not bool(trajectory))}'
         '<p class="footnote">This axis is scoped to this Search run. Worker bars show actual host execution, not the configured maximum or an aspirational exploration window.</p>'
         "</section>"
         '<section class="subsection"><h3>Candidate Evidence</h3>'
@@ -1929,8 +2253,11 @@ def render_html_report(data: dict[str, Any]) -> str:
     run_state = (selected_task.get("run") or {}).get("state") or selected_task.get("state")
     score_target = selected_scores.get("target")
     score_gain = selected_scores.get("selected_improvement_from_baseline")
+    score_baseline = _finite_float(selected_scores.get("baseline"))
     score_detail = (
-        f"baseline {_number(selected_scores.get('baseline'), digits=4)} / "
+        "No baseline / gain No baseline"
+        if score_baseline is None
+        else f"baseline {_number(score_baseline, digits=4)} / "
         f"gain {_metric_readout('score_gain', score_gain)}"
     )
     completion_detail = f"run {str(run_state or 'unknown').lower()}"
@@ -1971,6 +2298,18 @@ def render_html_report(data: dict[str, Any]) -> str:
         ]
     )
 
+    trajectory_payloads = {
+        str(task.get("run_id")): payload
+        for task in tasks
+        if (payload := _search_trajectory_payload(task)) is not None
+    }
+    plotly_javascript = (
+        _load_plotly_javascript() if trajectory_payloads else None
+    )
+    plotly_script = (
+        f"<script>{plotly_javascript}</script>" if plotly_javascript else ""
+    )
+
     task_tabs = "".join(
         f'<button class="task-tab" type="button" data-task-target="{escape(str(task.get("run_id")), quote=True)}" '
         f'aria-selected="{"true" if task.get("is_report_run") else "false"}">'
@@ -1979,7 +2318,16 @@ def render_html_report(data: dict[str, Any]) -> str:
         for index, task in enumerate(tasks, start=1)
     )
     task_panels = "".join(
-        _render_task(task, index) for index, task in enumerate(tasks, start=1)
+        _render_task(
+            task,
+            index,
+            trajectory_payload=(
+                trajectory_payloads.get(str(task.get("run_id")))
+                if plotly_javascript
+                else None
+            ),
+        )
+        for index, task in enumerate(tasks, start=1)
     )
     warning_items = "".join(
         f'<li><span class="mono">{_html(item.get("kind") if isinstance(item, dict) else "warning")}</span>: '
@@ -2090,6 +2438,7 @@ def render_html_report(data: dict[str, Any]) -> str:
       <p class="footnote">Schema goal-plus-report/v{REPORT_SCHEMA_VERSION}. This file is self-contained and generated from durable Goal Plus/Search state. Host-native transcripts remain external evidence and are summarized only through normalized observability.</p>
     </section>
   </main>
+  {plotly_script}
   <script>{_REPORT_SCRIPT}</script>
 </body>
 </html>

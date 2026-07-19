@@ -10,7 +10,9 @@ from goal_plus.reporting import (
     _build_timeline,
     _epoch,
     _render_timeline,
+    _search_trajectory_payload,
     build_html_report_data,
+    render_html_report,
 )
 from goal_plus.runtime import FileSearchRuntime
 
@@ -19,7 +21,12 @@ from tests._runtime_helpers import make_project, spec_for
 
 def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "goal_plus.reporting._load_plotly_javascript",
+        lambda: "window.Plotly={newPlot:function(){},Plots:{resize:function(){}}};",
+    )
     project = make_project(tmp_path)
     root = tmp_path / ".search"
     search = FileSearchRuntime(root)
@@ -81,9 +88,77 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     assert "Unavailable Metrics Audit" not in html
     assert "Verifier activity" in html
     assert "Complete normalized report data" in html
+    assert "Complete Search Trajectory" in html
+    assert "data-search-trajectory=" in html
+    assert "window.Plotly={newPlot" in html
+    assert 'class="score-step"' not in html
     assert "&lt;script&gt;alert(&#x27;unsafe&#x27;)&lt;/script&gt;" in html
     assert "<script>alert('unsafe')</script>" not in html
-    assert "https://" not in html
+    assert "<script src=" not in html
+
+    monkeypatch.setattr("goal_plus.reporting._load_plotly_javascript", lambda: None)
+    fallback_html = render_html_report(build_html_report_data(root, second_run))
+    assert "data-search-trajectory=" not in fallback_html
+    assert 'class="score-step"' in fallback_html
+
+
+def test_search_trajectory_payload_keeps_parallel_candidate_loops() -> None:
+    task = {
+        "frozen_spec": {"metric_name": "quality", "metric_direction": "maximize"},
+        "statistics": {
+            "scores": {
+                "metric_name": "quality",
+                "direction": "maximize",
+                "baseline": 0.0,
+                "selected": 3.0,
+            }
+        },
+        "candidates": [
+            {
+                "candidate_id": "c001",
+                "selected": False,
+                "iterations": [
+                    {"iteration": 1, "score": 1.0, "created_at": "2026-01-01T00:00:01Z"},
+                    {"iteration": 2, "score": 2.0, "created_at": "2026-01-01T00:00:03Z"},
+                ],
+            },
+            {
+                "candidate_id": "c002",
+                "selected": True,
+                "iterations": [
+                    {"iteration": 1, "score": 0.5, "created_at": "2026-01-01T00:00:02Z"},
+                    {
+                        "iteration": 2,
+                        "agent_session_id": "agent_002",
+                        "score": 3.0,
+                        "created_at": "2026-01-01T00:00:04Z",
+                    },
+                    {
+                        "iteration": 3,
+                        "agent_session_id": "agent_002",
+                        "score": 3.0,
+                        "created_at": "2026-01-01T00:00:05Z",
+                    },
+                ],
+            },
+        ],
+    }
+
+    payload = _search_trajectory_payload(task)
+
+    assert payload is not None
+    assert payload["evaluations"] == 5
+    assert [trace["calls"] for trace in payload["trajectories"]] == [[1, 3], [2, 4, 5]]
+    assert payload["global_best"] == {
+        "calls": [0, 1, 2, 3, 4, 5],
+        "scores": [0.0, 1.0, 1.0, 2.0, 3.0, 3.0],
+    }
+    assert payload["selected_point"] == {
+        "candidate_id": "c002",
+        "call": 5,
+        "score": 3.0,
+    }
+    assert payload["trajectories"][1]["details"][1][1] == "worker verifier"
 
 
 def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path) -> None:
@@ -243,19 +318,25 @@ def test_pi_native_session_resume_renders_distinct_process_dispatches(
     assert [event["attempt_index"] for event in worker_events] == [1, 2]
     assert all(event["attempt_count"] == 2 for event in worker_events)
     assert [event["score"] for event in worker_events] == [0.0, 9.0]
-    assert [event["score_gain"] for event in worker_events] == [0.0, 9.0]
+    assert [event["score_raw"] for event in worker_events] == [0.0, 9.0]
+    assert [event["score_gain"] for event in worker_events] == [None, None]
     performance = task["timeline"]["performance"]
-    assert performance["score"]["baseline"] == 0.0
-    assert performance["score"]["baseline_source"] == "first_observed"
-    assert performance["metric_ranges"]["score_gain"] == {
+    assert performance["score"]["baseline"] is None
+    assert performance["score"]["baseline_source"] is None
+    assert "score_gain" not in performance["metric_ranges"]
+    assert performance["metric_ranges"]["score_raw"] == {
         "min": 0.0,
         "max": 9.0,
         "observed": 2,
     }
     html = _render_timeline(task["timeline"], title="Pi dispatch score gain")
-    assert "Observed baseline 0" in html
-    assert 'data-metric-score-gain="0.000000000"' in html
-    assert 'data-metric-score-gain="9.000000000"' in html
+    assert "No baseline" in html
+    assert "Score gain</button><button" in html
+    assert ">Score raw</button>" in html
+    assert 'data-score-gain-baseline="false"' in html
+    assert "data-metric-score-gain=" not in html
+    assert 'data-metric-score-raw="0.000000000"' in html
+    assert 'data-metric-score-raw="9.000000000"' in html
 
 
 def test_worker_duration_uses_search_scale_not_goal_record_lifecycle() -> None:
@@ -392,6 +473,11 @@ def test_metric_lens_combines_score_progression_and_session_efficiency() -> None
         "max": 0.30000000000000004,
         "observed": 2,
     }
+    assert performance["metric_ranges"]["score_raw"] == {
+        "min": 0.6,
+        "max": 0.8,
+        "observed": 2,
+    }
     assert performance["idle_intervals"][0]["duration_seconds"] == 480.0
 
     html = _render_timeline(timeline, title="Metric Lens Timeline")
@@ -399,6 +485,10 @@ def test_metric_lens_combines_score_progression_and_session_efficiency() -> None
     assert "data-metric-lens" in html
     assert 'data-metric-mode="score-gain"' in html
     assert 'data-metric-score-gain="0.100000000"' in html
+    assert 'data-metric-score-raw="0.600000000"' in html
+    assert 'data-score-gain-baseline="true"' in html
+    assert "Score gain</button><button" in html
+    assert ">Score raw</button>" in html
     assert 'data-metric-tokens-per-minute="600.000000000"' in html
     assert 'data-metric-verifier-density="2.000000000" style=' in html
     assert 'class="score-step"' in html

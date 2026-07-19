@@ -17,6 +17,8 @@ Pi 和 Codex 是当前维护的宿主路径。仓库仍保留 OpenCode 和 Claud
 python -m pip install --user "git+https://github.com/ck0123/goal-plus.git"
 # 或
 python -m pip install -e ".[dev]"
+# 让 HTML 报告额外包含自包含的 Plotly 搜索轨迹图
+python -m pip install -e ".[dev,report]"
 ```
 
 所有宿主都启动同一个 stdio MCP 服务：

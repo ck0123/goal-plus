@@ -22,6 +22,9 @@ dev = [
 bench = [
   "datasets>=2.18",
 ]
+report = [
+  "plotly>=6.5,<7.0",
+]
 
 [project.scripts]
 goal-plus = "goal_plus.server:main"

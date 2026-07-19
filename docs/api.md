@@ -147,7 +147,13 @@ lifecycle panel. Each Search timeline is assembled from run creation,
 worker-session observability, verifier iterations, and promotion evidence.
 Worker bars use observed host start/end timestamps. Configured maximum or
 minimum budgets are not rendered as actual duration. The file has inline
-CSS/JavaScript only and is readable without a web server. `report.md` remains
+CSS/JavaScript only and is readable without a web server. When the optional
+`report` extra is installed, the generator embeds Plotly.js in the file and
+replaces the compact best-score strip with a complete per-candidate trajectory
+over verifier-call order plus a global best-so-far trace. Without Plotly, the
+existing inline SVG score strip remains the deterministic fallback. Search-space
+contour and surface plots are intentionally omitted until durable Search state
+contains explicit coordinates or embeddings for those axes. `report.md` remains
 the stable text artifact. A recorded Goal Plus Search result reserves both
 canonical paths before the files exist. Normal Goal Plus order is select,
 promote, record result, final audit, terminal status, then one report generation

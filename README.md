@@ -19,6 +19,8 @@ Install from Git or an existing checkout:
 python -m pip install --user "git+https://github.com/ck0123/goal-plus.git"
 # or
 python -m pip install -e ".[dev]"
+# add the optional self-contained Plotly trajectory to HTML reports
+python -m pip install -e ".[dev,report]"
 ```
 
 Every host launches the same stdio MCP server:
