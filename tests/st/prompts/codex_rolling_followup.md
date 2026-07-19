@@ -9,8 +9,7 @@ exact changes before freezing it:
 
 - `source_path={{PROJECT_ROOT}}/tests/st/fixtures/circle_packing`
 - `budget={"max_candidates": 2, "max_parallel": 2}`
-- `strategy.name="random"`, `strategy.driver="builtin"`
-- `strategy.worker_mode="agent-session-pool"`
+- `strategy.name="random"`
 - `strategy.worker_host="codex"`
 - `strategy.worker_agent_type="search_candidate_agent"`
 - `strategy.worker_budget={"max_runtime_seconds": 90, "max_turns": 4, "on_exceed": "interrupt"}`
@@ -24,7 +23,7 @@ Freeze the fixture evaluator, create the run, plan two candidates, and start the
 batch. Start one agent session for each candidate with distinct macro
 directions, then launch and bind both workers before waiting.
 
-Manage them as a rolling pool:
+Manage them as parallel persistent loops:
 
 1. Call targetless `wait_agent` so any worker can wake the main agent. After
    every wake, call `list_agents`; a progress-only wake is not terminal.
@@ -34,10 +33,11 @@ Manage them as a rolling pool:
 3. When the first worker becomes terminal, immediately bind final metadata and
    call the main-agent `search_run_verifier` for that candidate. Do not wait for
    the other initial worker merely because both came from one Search plan.
-4. Reinvest in that first completed direction: call
-   `search_continue_agent_session` with the same `agent_session_id`, a directive
-   to perform deeper structural improvement using its verifier/history evidence,
-   and `worker_budget={"max_runtime_seconds": 180, "max_turns": 8, "on_exceed": "interrupt"}`.
+4. Resume that first completed loop: call `search_continue_agent_session` with
+   the same `agent_session_id` and
+   `worker_budget={"max_runtime_seconds": 180, "max_turns": 8, "on_exceed": "interrupt"}`.
+   Do not provide a new technical directive; the returned neutral continuation
+   tells the worker to choose its next action from current evidence.
    Require `launch.tool="followup_task"`, then call `followup_task` with the
    returned target/message. This must reuse the original Codex worker, runtime
    agent session, candidate, and workspace.

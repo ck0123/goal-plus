@@ -164,13 +164,10 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
             "host_handle": AgentHostHandle(host="codex", task_name="search_agent_001"),
         }
     )
-    bound_session = agent_session.model_copy(
-        update={"opencode_session_id": "opencode_session_001"}
-    )
-    continued_session = bound_session.model_copy(
+    continued_session = generic_bound_session.model_copy(
         update={
             "launch": {
-                "task_id": "opencode_session_001",
+                "task_name": "search_agent_001",
                 "subagent_type": "SearchCandidateAgent",
                 "description": "c001 continue try one",
                 "prompt": "continue_existing_agent_session=true; agent_session_id=agent_001",
@@ -178,7 +175,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         }
     )
     runtime.bind_agent_handle.return_value = generic_bound_session
-    runtime.bind_opencode_session.return_value = bound_session
     runtime.continue_agent_session.return_value = continued_session
     runtime.get_agent_context.return_value = {"agent_session_id": "agent_001"}
     runtime.get_agent_observability.return_value = {
@@ -228,7 +224,7 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     assert tools.search_start_batch(
         "run_1",
         "plan_001",
-        [{"intent": "derive from official history", "parent_candidate_ids": ["c001"]}],
+        [{"intent": "try an independent approach"}],
     )[0]["candidate_id"] == "c001"
     assert tools.search_start_agent_session(
         "run_1",
@@ -238,7 +234,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     redispatched = tools.search_redispatch_candidate(
         "run_1",
         "c001",
-        {"goal": "resume same candidate"},
         worker_agent_type="SearchCandidateAgentDeep",
         worker_budget={"max_turns": 16},
     )
@@ -248,15 +243,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         "agent_001",
         {"host": "codex", "task_name": "search_agent_001"},
     )["host_handle"]["task_name"] == "search_agent_001"
-    assert tools.search_bind_opencode_session(
-        "agent_001",
-        "opencode_session_001",
-    )["opencode_session_id"] == "opencode_session_001"
-    continued = tools.search_continue_agent_session(
-        "agent_001",
-        {"goal": "continue same node"},
-    )
-    assert continued["launch"]["task_id"] == "opencode_session_001"
+    continued = tools.search_continue_agent_session("agent_001")
+    assert continued["launch"]["task_name"] == "search_agent_001"
     assert tools.search_get_agent_context("agent_001") == {"agent_session_id": "agent_001"}
     assert tools.search_get_agent_observability("agent_001") == {
         "agent_session_id": "agent_001",
@@ -315,13 +303,8 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     runtime.redispatch_candidate.assert_called_once_with(
         run_id="run_1",
         candidate_id="c001",
-        directive={"goal": "resume same candidate"},
         worker_agent_type="SearchCandidateAgentDeep",
         worker_budget={"max_turns": 16},
-    )
-    runtime.bind_opencode_session.assert_called_once_with(
-        agent_session_id="agent_001",
-        opencode_session_id="opencode_session_001",
     )
     runtime.bind_agent_handle.assert_called_once_with(
         agent_session_id="agent_001",
@@ -329,7 +312,6 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     )
     runtime.continue_agent_session.assert_called_once_with(
         agent_session_id="agent_001",
-        directive={"goal": "continue same node"},
         worker_budget=None,
     )
     runtime.get_agent_observability.assert_called_once_with("agent_001")
@@ -361,7 +343,6 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     runtime.list_events.return_value = [{"event_type": "created"}]
     runtime.record_triage.return_value = record
     runtime.save_spec_draft.return_value = record
-    runtime.confirm_frozen_verifier.return_value = record
     runtime.link_search_run.return_value = record
     runtime.record_search_result.return_value = record
     runtime.prepare_final_check.return_value = {
@@ -416,11 +397,6 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
             "confidence": "high",
         },
     )["goal_plus_id"] == "gp_0001"
-    assert tools.goal_plus_confirm_frozen_verifier(
-        "gp_0001",
-        confirmed_by="user",
-        evidence={"message": "freeze it"},
-    )["goal_plus_id"] == "gp_0001"
     assert tools.goal_plus_link_search_run("gp_0001", "spec_1", "run_1")["goal_plus_id"] == "gp_0001"
     assert tools.goal_plus_record_search_result(
         "gp_0001",
@@ -462,10 +438,5 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
         raw_goal="Revised objective",
         expected_revision=1,
         reason="user edit",
-    )
-    runtime.confirm_frozen_verifier.assert_called_once_with(
-        "gp_0001",
-        confirmed_by="user",
-        evidence={"message": "freeze it"},
     )
     runtime.link_search_run.assert_called_once_with("gp_0001", "spec_1", "run_1")

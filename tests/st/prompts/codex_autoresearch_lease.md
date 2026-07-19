@@ -10,8 +10,7 @@ changes before freezing it:
 
 - Set `source_path` to the absolute fixture path.
 - Set `budget={"max_candidates": 1, "max_parallel": 1}`.
-- Set `strategy.name="random"` and `strategy.driver="builtin"`.
-- Set `strategy.worker_mode="agent-session-pool"`.
+- Set `strategy.name="random"`.
 - Set `strategy.worker_host="codex"`.
 - Set `strategy.worker_agent_type="search_candidate_agent"`.
 - Set `strategy.worker_budget={"min_runtime_seconds": 300,

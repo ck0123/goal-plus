@@ -25,7 +25,6 @@ bench = [
 
 [project.scripts]
 goal-plus = "goal_plus.server:main"
-goal-plus-trace = "goal_plus.trace_export:main"
 goal-plus-pi-tool = "goal_plus.pi_tool:main"
 goal-plus-pi-worker = "goal_plus.pi_worker:main"
 goal-plus-pi-pool = "goal_plus.pi_pool:main"

@@ -1,363 +1,113 @@
-# Goal Plus Search Examples
+# Examples
 
-These examples are small local workloads and templates for exercising `/goal-plus` after it
-upgrades a measurable task into Search Mode.
+The checked-in examples use the maintained parallel-loop contract. A Search
+run creates one initial plan, materializes a fixed set of candidate workspaces,
+and resumes those same candidates until the global stop condition is true.
 
-## Automated ST Coverage
+## SearchSpec Files
 
-Each scenario prompt below has a paired system test under `tests/st/`. The tests
-drive a real host code agent in a temporary project root and parse a
-machine-readable JSON report from the main agent's final message. Most example
-scenarios run through OpenCode; host-specific smoke paths also cover Codex
-redispatch, Claude Code launch wiring, and Pi RPC worker wiring.
-
-- Prompts: `tests/st/prompts/<scenario>.md`
-- Tests: `tests/st/test_st_scenarios.py`
-- Output contract: `tests/st/prompts/_schema.md`
-
-Run them with:
-
-```bash
-pytest -m st                                      # all configured host ST cases
-pytest -m "st and st_opencode" -k k_module_smoke # single OpenCode scenario
-pytest -m "st and st_codex" -k codex_redispatch  # Codex redispatch smoke
-pytest -m "st and st_codex" -k codex_circle_packing_cycle # Codex 2x2 cycle
-pytest -m "st and st_pi_rpc" -k pi_rpc_k_module  # Pi RPC worker smoke
-```
-
-Tests are skipped by default. They require the selected host binary on PATH and
-the `goal-plus` MCP server configured for that host, or Pi installed for
-Pi RPC. See
-`tests/README.md` for the full host marker matrix and pre-flight checks.
-
-
-| Spec | Fixture | Worker | Layout |
-|---|---|---|---|
-| `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | `SearchCandidateAgentFlash` (15 steps) | 2 candidates, pool=2, single batch |
-| `search-mode/k_module_adaptevolve_search_spec.json` | `tests/fixtures/k_module_problem` | AdaptEvolve dynamic tier (starts with `SearchCandidateAgentFlash`) | 1 candidate, pool=1, smoke test |
-| `search-mode/k_module_openevolve_search_spec.json` | `tests/fixtures/k_module_problem` | OpenEvolve-style sampling with `SearchCandidateAgentFlash` | 2 candidates, pool=1, two sequential batches |
-| `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | `SearchCandidateAgentFlash` (15 steps) | 4 candidates, pool=2, two batches |
-| `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | `SearchCandidateAgent` (50 steps) | 8 candidates, pool=4, two batches |
-| `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | Pi RPC (240-second watchdog) | EdgeBench-format C++/text-I/O public fixture, 4 candidates, pool=2 |
-| `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | `SearchCandidateAgent` (50 steps) | 4 candidates, pool=2, single batch |
-| `cannbench-tilelang-ascend/` | local CANNBench TileLang-Ascend submission workspace | Pi RPC worker | Generated SearchSpec; CANNBench is the verifier |
-| `ascendc-direct-search/` | Natural-language operator semantics, approximate shapes/dtypes, and reference hints | `/goal-plus` host + candidate workers | Spec Discovery generates the Direct Invoke workspace, Golden, cases, verifier, baseline, SearchSpec, and promotion gate |
-| `kernel-optimize/` | reusable PyTorch-reference kernel verifier template | `/goal-plus` host | Correctness + latency verifier and a worked C++ prompt; not a standalone fixture |
-| `workspace-backends/` | tiny local Python source tree | none (runtime-only E2E) | 3 Git worktree candidates, including a follow-up from the best parent commit |
-| `model-opt-gpu/` | future standalone TorchBench `BERT_pytorch` source | `/goal-plus` host on V100 | **WIP, incomplete, not validated, and not recommended yet**; preparation prompt only |
-
-For each example, start through `/goal-plus`. The goal-plus layer records the
-raw goal, triage, autonomous verifier/spec readiness, and final raw-goal audit. Once
-the task enters Search Mode, create the run, call `search_plan_next(run_id, k)`,
-then start the returned plan with `search_start_batch(run_id, plan_id)`. For
-multi-batch examples, plan + start the next batch after the first batch
-finishes. The runtime enforces isolated workspaces and verifier-owned scoring;
-the active strategy defines how later candidates should derive from history.
-
-Before requesting a follow-up batch, the host can call `search_list_history(run_id)` to recover a compact JSON summary of the best candidates so far.
-
-`strategy.worker_mode` is always `agent-session-pool`. Candidate execution goes through a host foreground worker launched from a runtime context handle: generic hosts call `search_start_agent_session(run_id, candidate_id, directive)`, launch the configured worker with the returned `launch` payload, then bind the returned handle. OpenCode uses `search_bind_opencode_session`; Codex and Claude Code use `search_bind_agent_handle`. Pi main agents use `pi_search_run_batch` or `pi_search_run_candidate`, which perform start, launch, and bind internally.
-
-Subagents run until the host cap hits or the user/runner interrupts them. Pi
-RPC requires `worker_host="pi-rpc"` and `worker_budget.max_runtime_seconds`;
-the runner starts workers with `--no-session` and writes a metadata-only
-`.gp/host-logs/pi-rpc-<agent_session_id>.jsonl` event log. Pi RPC recovery uses
-state-level redispatch, not same-worker continuation.
-
-If a candidate needs more work after a step-cap hit, generic hosts call `search_redispatch_candidate` for the same candidate and may raise `worker_agent_type` / `worker_budget`. Pi main agents call `pi_search_run_candidate(..., redispatch=true)`, whose driver performs that redispatch internally. Both paths create a fresh session for the same workspace and rely on runtime history/iterations for resume.
-
-## Step Tiers
-
-`strategy.worker_agent_type` picks one of four OpenCode subagent variants. The variant fixes the host-enforced step cap. Python strategy plugins may return a `worker_policy` override for the next plan; the `search_start_agent_session` launch payload is the authoritative subagent tier for that candidate.
-
-| Variant | Steps | Use when |
+| Spec | Source | Purpose |
 |---|---|---|
-| `SearchCandidateAgentFlash` | 15 | Smoke tests, toy tasks, cheap iterations (k_module, small fixtures) |
-| `SearchCandidateAgent` (default) | 50 | Standard autoresearch loop |
-| `SearchCandidateAgentDeep` | 100 | Sustained iteration on harder problems |
-| `SearchCandidateAgentExtraDeep` | 150 | Extensive search, complex fixtures |
+| `circle_packing_search_spec.json` | `tests/fixtures/circle_packing` | numeric optimization with two lanes |
+| `k_module_search_spec.json` | `tests/fixtures/k_module_problem` | small multi-file correctness and score fixture |
+| `signal_processing_search_spec.json` | `tests/fixtures/signal_processing` | wider parallel score fixture |
+| `edgebench_ad_placement_search_spec.json` | `examples/edgebench-ad-placement/workspace` | public-score C++ workflow |
+| `swe_bench_20212_search_spec.json` | `tests/fixtures/swe_bench_20212` | repository patching fixture |
+| `workspace-backends/git_worktree_search_spec.json` | `examples/workspace-backends/source` | Git worktree materialization demo |
 
-When the step cap is reached OpenCode injects a system prompt instructing the agent to summarize and stop — the session ends cleanly without a hard kill.
+Paths in specs are repository-relative so tests and host agents can load them
+without machine-specific configuration.
 
-## Budget Semantics
+## Strategy Contract
 
-Each `SearchSpec` must include an explicit `budget`; there are no runtime defaults.
+Maintained hosts are Codex and Pi RPC. Use one of these strategy shapes:
 
 ```json
 {
-  "budget": {
-    "max_candidates": 4,
-    "max_parallel": 2
+  "strategy": {
+    "name": "random",
+    "orchestration_mode": "parallel_loops",
+    "worker_host": "codex"
   }
 }
 ```
-
-- `max_candidates`: total candidate workspaces allowed for the run. Enforced by `search_plan_next` / `search_start_batch`.
-- `max_parallel`: batch planning hint. The runtime records it in the spec, but Task calls are foreground and the runtime does not supervise workers.
-- `max_tokens`: optional worker-level cap.
-
-The maximum number of full-width planning rounds is approximately
-`ceil(max_candidates / max_parallel)`. Equal values normally permit only one
-full batch. `requested_k` is a per-call batch request, not a whole-run budget;
-the runtime clamps it by both the remaining total candidates and
-`max_parallel`.
-
-## Workspace Backends
-
-`SearchSpec.workspace.backend` controls how the runtime materializes candidate
-workspaces:
-
-| Backend | Storage model | Source requirements | Intended use |
-|---|---|---|---|
-| `git_worktree` (default) | One run-local repository plus one Git worktree per candidate | Any non-empty directory; the runtime snapshots it into the run-local repository | Shared Git objects and explicit candidate branch lineage |
-| `copy` | Full independent tree per candidate | Any directory | Small fixtures or callers that explicitly require fully independent repositories |
-
-For `git_worktree`, branches use
-`gp/<run_id>/baseline` and `gp/<run_id>/<candidate_id>`. Follow-up candidates
-start at the selected parent's best verifier commit, not at uncommitted parent
-state. Candidate directories still contain checked-out working files, so Git
-objects are shared but working-tree files consume disk once per candidate.
-
-Run the host-free runtime E2E example with:
-
-```bash
-python examples/workspace-backends/run_demo.py --runtime-root /tmp/gp-workspace-demo
-```
-
-The final JSON shows candidate branches, scores, the parent/child base
-revision, shared Git common-dir evidence, selection, and report path.
-
-Freeze the matching evaluator as the verifier artifact:
-
-```text
-tests/fixtures/circle_packing/evaluator.py
-tests/fixtures/signal_processing/evaluator.py
-tests/fixtures/k_module_problem/evaluator.py
-tests/fixtures/swe_bench_20212/evaluator.py
-```
-
-## Strategy Modes
-
-The default strategy is `agent_guided`: the runtime exposes the official candidate history and the main agent authors the next batch (pick parents, write one proposal per slot). OpenCode-oriented fixture examples pin `independent_branches` to keep their demo flows independent of history. The Pi RPC EdgeBench-format example uses `agent_guided` directly. Select strategies from the configured host's supported subset; non-OpenCode hosts currently accept `agent_guided`/`agent`/`default` and `random`/`random_mode` only.
 
 ```json
 {
   "strategy": {
     "name": "agent_guided",
-    "driver": "builtin",
-    "worker_mode": "agent-session-pool",
-    "worker_agent_type": "SearchCandidateAgent",
-    "history_policy": {"scope": "top_n", "top_n": 5}
+    "orchestration_mode": "parallel_loops",
+    "worker_host": "pi-rpc",
+    "worker_budget": {
+      "max_runtime_seconds": 600,
+      "max_turns": 8,
+      "on_exceed": "interrupt"
+    }
   }
 }
 ```
 
-Comparison:
+`random` creates fixed independent source branches. `agent_guided` requires
+the main agent to provide the initial lane intents to `search_start_batch`.
+Neither strategy permits a second `search_plan_next` call.
 
-| Strategy | Parent picker | `requires_agent_proposals` | First batch | Use when |
-|---|---|---|---|---|
-| `agent_guided` (default) | Main agent | `true` | Empty history → no reference constraint, proposals may start from source | Let the main agent judge which prior candidates to build on |
-| `independent_branches` | None — all from source | `false` | All from source | Baseline, no lineage |
-| `evolve` | Runtime: best-score parent + top-N inspirations | `false` | Bootstrap from source | OpenEvolve-style fixed parent selection |
-| `openevolve` | Runtime: sampled parent from scored population/archive + inspirations | `false` | Bootstrap from source | Minimal OpenEvolve-style parent/archive/inspiration sampling |
-| `mcts` | Runtime: best-score frontier | `false` | Bootstrap from source | MCTS-style expansion (placeholder planner) |
-| `random` | Runtime: random scored parent (seedable via `strategy.config.seed`) | `false` | Bootstrap from source | Cheap random-walk baseline |
-| `adaptevolve` | Python plugin: best-score parent + confidence-routed worker tier | `false` | Bootstrap from source with `SearchCandidateAgentFlash` | Adaptive compute allocation around evolve-style mutations |
+Set `budget.max_candidates` equal to `budget.max_parallel` for normal runs.
+Each candidate workspace is a long-lived lane, not a disposable attempt.
 
-Notes:
+## Host Flow
 
-- In `agent_guided`, `search_plan_next` returns `proposal_contract.must_reference_one_of` listing the candidate_ids each proposal must cite. The first batch has empty history so the constraint is empty; from the second batch on every proposal must reference at least one official candidate.
-- In `evolve` / `openevolve` / `mcts` / `random`, the runtime selects the parent internally and emits fixed `work_orders`; `search_start_batch` must be called without proposals.
-- In `adaptevolve`, the Python strategy plugin emits fixed `work_orders` and a dynamic `worker_policy`. The runtime records that policy in candidate metadata and uses it when building the OpenCode Task launch payload.
-- `independent_branches` ignores history entirely — every candidate starts from the frozen source workspace.
+Codex launches every initial lane using `search_start_agent_session`,
+`spawn_agent`, and `search_bind_agent_handle`. When a worker returns and the
+global stop condition is false, continue the same native subagent with
+`search_continue_agent_session` and `followup_task`.
 
-## Running an example
+Pi opens the fixed lane set with `pi_search_pool_open`, consumes terminal
+events with `pi_search_pool_wait_any`, and resumes the same candidate/native
+session with `pi_search_pool_continue`. `pi_search_pool_snapshot` recovers pool
+state after a main-session interruption; `pi_search_pool_close` drains or
+interrupts it before final selection. There is no public synchronous batch,
+single-candidate runner, or manual pool submit API.
 
-Start OpenCode:
+For both hosts:
 
-```bash
-opencode
-```
+1. Freeze the verifier-backed spec and create the run.
+2. Call `search_plan_next` exactly once.
+3. Materialize all initial candidates with `search_start_batch`.
+4. Let every lane own its internal hypothesis, edits, verifier calls, and
+   evidence commits.
+5. Resume completed lanes while time remains; do not create replacement
+   candidates based on score or rank.
+6. Drain workers, call `search_select`, record/promote the result, finish the
+   Goal Plus audit, then call `search_report` after terminal status.
 
-Then paste a plain-language prompt into `/goal-plus`. The host loads the
-goal-plus skill first and uses the internal `search` skill only after Search
-Mode starts. Interactive and non-interactive runs use the same autonomous
-admission rule; verifier/spec hints are optional and no confirmation text is
-required.
+## Workspace Backends
 
-### AscendC Direct Invoke
+`workspace.backend="copy"` is useful for simple fixtures. The default
+`git_worktree` backend creates one branch/worktree per initial lane and keeps
+verifier-backed Git revisions available for final selection.
 
-Use [`ascendc-direct-search/README.md`](ascendc-direct-search/README.md) for the
-goal-driven AscendC Direct Invoke scenario. The user describes operator
-semantics, approximate shapes/dtypes, and references such as CANNBench, AKG,
-PyTorch, or local code. The main agent resolves those references and generates
-the Golden, cases, verifier, baseline, and SearchSpec during Spec Discovery.
-Candidates receive the generated contract plus API, tiling, performance, and
-debugging knowledge exported from an exact CANNBot Git commit during Spec
-Discovery; no CANNBot Agent or Plugin runs.
-
-### circle_packing — fork-style continuation smoke test
-
-Use this when you want to verify the "subagent finished, then main starts it again from the same node" path:
-
-```
-Load examples/circle_packing_search_spec.json and freeze tests/fixtures/circle_packing/evaluator.py.
-
-Run one circle_packing candidate and then continue the same OpenCode session:
-  1. freeze_spec → create → plan_next(k=1) → start_batch
-  2. call search_start_agent_session for c001
-  3. launch Task with session.launch; use a directive like "build a hexagonal or staggered lattice, then tune radii to improve total packed area"
-  4. when Task returns, call search_bind_opencode_session(session.agent_session_id, Task metadata.sessionId)
-  5. run search_run_verifier(run_id, "c001", "process") from the main agent
-  6. call search_continue_agent_session(session.agent_session_id, directive="continue the same circle_packing candidate from the current workspace; tune radii and repair overlaps; do not create a new candidate")
-  7. launch Task again with task_id=continued.launch.task_id and the rest of continued.launch
-  8. when Task returns, run search_run_verifier(run_id, "c001", "process") again
-  9. call search_list_history and search_report
-
-This is the fork-style smoke test for the current implementation: it continues the same OpenCode session with Task task_id instead of using OpenCode Session.fork. Do not create a second agent session for c001. Report run_id, agent_session_id, opencode_session_id, both verifier scores, score delta, and report path.
-```
-
-### circle_packing — two batches, SearchCandidateAgentFlash
-
-```
-Load examples/circle_packing_search_spec.json. The spec already sets max_candidates=4, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash (15 step cap). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
-
-Batch 1 (c001, c002):
-  - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
-  - c002: square grid with shrink-to-fit (start uniform, iteratively shrink radii to remove overlaps and maximize sum)
-
-Wait for both to finish, run run_verifier on each, then plan_next(k=2) → start_batch for batch 2.
-
-Batch 2 (c003, c004):
-  - c003: concentric rings with optimized ring radii (try 1+6+12+7 or 1+8+16+1 type layouts, tune ring radii)
-  - c004: boundary-hugging approach (pack circles along the perimeter first, then fill center)
-
-After both batches terminate, run run_verifier on c003 and c004 yourself (no agent_session_id, auto-attribute), then select across all 4 candidates and report.
-
-For each Task: use the runtime launch payload, then bind the returned Task metadata.sessionId. Do not hard-code run_id/candidate_id/workspace.
-
-Report at the end: run_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
-```
-
-### circle_packing — random strategy, two batches
-
-Same fixture as above but the spec uses the `random` strategy so batch 2 derives from a runtime-picked parent instead of fresh source branches. Copy `circle_packing_search_spec.json` and set `"strategy": {"name": "random", "config": {"seed": 42}}` (seed optional; omit for non-deterministic parent pick).
-
-```
-Load a copy of examples/circle_packing_search_spec.json with strategy.name set to "random" (keep max_candidates=4, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash; optionally set strategy.config.seed=42 for a reproducible parent pick). Freeze tests/fixtures/circle_packing/evaluator.py as the verifier artifact. Then run the full search end-to-end with TWO batches:
-
-Batch 1 (c001, c002 — random bootstrap, both derive from source):
-  - c001: hexagonal lattice (rows of offset circles, e.g. 6+5+6+5+4=26 or 7+6+7+6=26, varied radius per row)
-  - c002: square grid with shrink-to-fit (start uniform, iteratively shrink radii to remove overlaps and maximize sum)
-
-Wait for both to finish, run run_verifier on each, then plan_next(k=2) → start_batch for batch 2. The runtime will randomly pick one of {c001, c002} as the parent; batch 2 workspaces are copied from that parent.
-
-Batch 2 (c003, c004 — both mutate the runtime-picked parent):
-  - c003: concentric rings with optimized ring radii (try 1+6+12+7 or 1+8+16+1 type layouts, tune ring radii)
-  - c004: boundary-hugging approach (pack circles along the perimeter first, then fill center)
-
-After both batches terminate, run run_verifier on c003 and c004 yourself (no agent_session_id, auto-attribute), then select across all 4 candidates and report. Report strategy_trace.parent_candidate_id from the batch 2 plan so the random pick is visible.
-
-For each Task: use the runtime launch payload, then bind the returned Task metadata.sessionId. Do not hard-code run_id/candidate_id/workspace.
-
-Report at the end: run_id, batch 2 parent_candidate_id, all 4 candidate scores + iteration counts, selected candidate_id, and report.md path.
-```
-
-### k_module — smoke test, SearchCandidateAgentFlash
-
-```
-Load examples/k_module_search_spec.json. The spec sets max_candidates=2, max_parallel=2, worker_agent_type=SearchCandidateAgentFlash. Freeze tests/fixtures/k_module_problem/evaluator.py and run end-to-end: freeze_spec → create → plan_next(k=2) → start_batch → start 2 sessions → Task → bind_opencode_session → run_verifier on each → select → report.
-```
-
-### EdgeBench-format ad placement — public-feedback optimization
-
-This local fixture matches the current EdgeBench
-`ad_placement_optimization` agent-visible format: edit/submit `solution.cpp`,
-compile as C++17, read and write the same text shapes, invoke
-`tools/bin/gen SEEDS_FILE -d OUTPUT_DIR`, invoke
-`tools/bin/tester INPUT OUTPUT`, parse `Score = <integer>` from stderr, and use
-five-second per-case limits. Its deterministic cases and tester are public
-synthetic substitutes; no real EdgeBench judge is called and the resulting
-`local_score_sum` is not a leaderboard score.
-
-The retained [`edgebench-ad-placement/report.md`](edgebench-ad-placement/report.md)
-is historical evidence from the retired Python-shaped fixture. It does not
-describe the current C++ example.
-
-```
-Load examples/edgebench_ad_placement_search_spec.json. It is already configured for Pi RPC with the portable agent_guided strategy and a 240-second worker watchdog. Freeze examples/edgebench-ad-placement/workspace/.goal-plus-verifiers/ad_local_score.py, examples/edgebench-ad-placement/workspace/tools/bin/gen, and examples/edgebench-ad-placement/workspace/tools/bin/tester as verifier artifacts. Run two batches of Pi RPC candidates and provide one agent-guided proposal per candidate.
-
-Suggested first-batch directions:
-  - c001: target-area greedy rectangles, sorted by largest target first, never covering another ad anchor.
-  - c002: compact rectangles around dense clusters, shrinking on overlap until valid.
-
-After each candidate finishes, run the public process verifier. Select and report across all candidates. Do not add promotion verifiers for this example; external benchmark judges should stay outside GP.
-```
-
-The opt-in real Pi RPC smoke `pytest -m "st and st_pi_rpc" -k
-edgebench_time_advisory -v -s` runs one candidate from this example with an
-outer deadline supplied by the harness and asserts that a worker PostTool event
-produces exactly one informational verifier-time advisory.
-
-### k_module — AdaptEvolve smoke test
-
-```
-Load examples/search-mode/k_module_adaptevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run the smallest end-to-end AdaptEvolve case: freeze_spec → create → plan_next(k=1) → start_batch → start_agent_session → Task with session.launch → bind_opencode_session → run_verifier → select → report. Confirm that the plan strategy_trace shows selected_worker_agent_type and that the Task launch uses SearchCandidateAgentFlash for the first bootstrap candidate.
-```
-
-### k_module — OpenEvolve sampling smoke test
-
-```
-Load examples/search-mode/k_module_openevolve_search_spec.json. Freeze tests/fixtures/k_module_problem/evaluator.py and run two sequential one-candidate batches: batch 1 does bootstrap from source, then run_verifier; batch 2 calls plan_next(k=1) again so openevolve samples a parent from scored history and emits inspiration context. Start the second batch without proposals, launch Task with session.launch, bind, verify, select, and report. Confirm that the second plan strategy_trace shows selection_rule=openevolve sampled parent plus inspirations and includes parent_candidate_id.
-```
-
-### signal_processing — multi-batch, SearchCandidateAgent
-
-```
-Load examples/signal_processing_search_spec.json (max_candidates=8, max_parallel=4, SearchCandidateAgent 50 steps). Freeze tests/fixtures/signal_processing/evaluator.py. Plan + start 4 candidates, wait for each OpenCode Task to return, then plan + start the next 4. Report the best score after both batches.
-```
-
-## SWE-bench Style Fixture
-
-`swe_bench_20212_search_spec.json` wraps a SWE-bench bug fix (`sympy__sympy-20212`) instead of a multi-batch optimization. The candidate's job is to patch `evaluate_power` in `tests/fixtures/swe_bench_20212/initial_program.py` so that `evaluate_power(ZERO, NEG_INFINITY)` returns `COMPLEX_INFINITY`. See `tests/fixtures/swe_bench_20212/README.md` for the bug context and the local verification recipe (no sympy or docker required).
-
-```
-Load examples/swe_bench_20212_search_spec.json. Freeze tests/fixtures/swe_bench_20212/evaluator.py. Request 4 candidates. After submitting and verifying them, inspect summaries and FAIL_TO_PASS / PASS_TO_PASS results. Stop after report generation and do not promote.
-```
-
-Quick local sanity check (no runtime needed):
+Run the host-free worktree demo with:
 
 ```bash
-cd tests/fixtures/swe_bench_20212 && python3 -c "from evaluator import evaluate; import json; print(json.dumps(evaluate('initial_program.py'), indent=2))"
+python examples/workspace-backends/run_demo.py --runtime-root .tmp/worktree-demo
 ```
 
-The buggy baseline returns `combined_score = 0.0`; after applying the two-line gold patch described in the fixture README the score reaches `1.0`.
+## Scenario Guides
 
-## Hidden-Answer QA Benchmarks
+- [AscendC Direct Search](ascendc-direct-search/README.md)
+- [CANNBench TileLang Ascend](cannbench-tilelang-ascend/README.md)
+- [EdgeBench Ad Placement](edgebench-ad-placement/README.md)
+- [Goal and Goal Plus](goal-and-goal-plus/README.md)
+- [Kernel Optimize](kernel-optimize/README.md)
+- [Model Optimize](model-optimize/README.md)
+- [Model Optimize GPU (WIP)](model-opt-gpu/README.md)
+- [Git Worktree Backend](workspace-backends/README.md)
 
-Benchmarks with fixed hidden answers, such as formal_logic, ARC, WinoGrande,
-TruthfulQA, and GSM8K, should not be evaluated with normal verifier-guided
-Search Mode. In Search Mode, workers are expected to call verifiers and use the
-feedback to iterate. If the verifier returns correctness, score, gold labels, or
-prediction-vs-gold details, the feedback becomes an answer oracle. For
-multiple-choice tasks, even a visible correct / incorrect bit can be used to
-try labels until the answer is found.
+The GPU model-optimization example is explicitly WIP and is not part of the
+maintained validation gate.
 
-A clean QA benchmark can still use the same worker-launch machinery, but split
-public validation from private scoring:
+## Hidden-Answer QA
 
-- Public worker-visible verifier: checks only submission format, for example
-  `answer.json` exists, the answer is a valid label, or a numeric answer is
-  parseable.
-- Private grader: runs after all workers have stopped and compares final
-  answers against hidden gold.
-- Final aggregation: chooses an answer without looking at hidden gold, such as
-  majority vote with a fixed tie-break or first valid answer.
-
-Do not include gold files, answer keys, hidden-answer grader commands, or
-gold-file paths in the frozen spec, candidate workspace, worker context, or
-worker-visible verifier output. Keep hidden gold in the parent evaluator, or
-load it only after worker execution has finished. Answering agents must not use
-internet search, external lookup, Hugging Face caches, previous reports/runs,
-other local repositories, or dataset files outside the candidate workspace to
-recover answers.
+Do not expose hidden correctness labels through a worker-visible verifier.
+Use only format validation during Search, then grade finalized answers in a
+parent evaluator with a predeclared gold-independent aggregation rule.

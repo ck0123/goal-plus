@@ -56,12 +56,12 @@ def run_demo(runtime_root: Path) -> dict[str, object]:
     )
     run_id = tools.search_create(frozen["frozen_spec_id"])["run_id"]
 
-    first_plan = tools.search_plan_next(run_id, 2)
-    first = tools.search_start_batch(run_id, first_plan["plan_id"])
+    plan = tools.search_plan_next(run_id, 3)
+    candidates = tools.search_start_batch(run_id, plan["plan_id"])
     scores: dict[str, float] = {}
     branches: dict[str, str] = {}
     workspaces: dict[str, Path] = {}
-    for task, value in zip(first, (1, 2), strict=True):
+    for task, value in zip(candidates, (1, 2, 3), strict=True):
         candidate_id = task["candidate_id"]
         workspace = Path(task["workspace"])
         workspaces[candidate_id] = workspace
@@ -69,17 +69,6 @@ def run_demo(runtime_root: Path) -> dict[str, object]:
         _write_value(workspace, value)
         report = tools.search_run_verifier(run_id, candidate_id)
         scores[candidate_id] = report["aggregate_score"]
-
-    parent_iterations = tools.search_list_iterations(run_id, "c002")
-    parent_best_git_head = parent_iterations[0]["git_head"]
-    second_plan = tools.search_plan_next(run_id, 1)
-    child = tools.search_start_batch(run_id, second_plan["plan_id"])[0]
-    child_workspace = Path(child["workspace"])
-    workspaces["c003"] = child_workspace
-    branches["c003"] = child["workspace_branch"]
-    _write_value(child_workspace, 3)
-    child_report = tools.search_run_verifier(run_id, "c003")
-    scores["c003"] = child_report["aggregate_score"]
 
     selection = tools.search_select(run_id)
     report = tools.search_report(run_id)
@@ -91,11 +80,6 @@ def run_demo(runtime_root: Path) -> dict[str, object]:
         "scores": scores,
         "branches": branches,
         "shared_git_common_dir": len(common_dirs) == 1,
-        "parent_candidate_id": second_plan["strategy_trace"][
-            "parent_candidate_id"
-        ],
-        "parent_best_git_head": parent_best_git_head,
-        "child_base_revision": child["workspace_base_revision"],
         "selected_candidate_id": selection["selected_candidate_id"],
         "report_path": report["report_path"],
     }

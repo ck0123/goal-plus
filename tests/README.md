@@ -7,13 +7,13 @@ the only evidence that a real host can complete the user-visible workflow.
 
 | Layer | Command | Proves |
 |---|---|---|
-| Default fast gate | `pytest -q` | models, runtimes, workspaces, verifiers, APIs, host assets |
-| Integration slice | `pytest -m integration -q` | multi-round search, freeze+plan+batch+verify end-to-end |
+| Default fast gate | `pytest -q` | models, runtimes, workspaces, verifiers, APIs, Codex/Pi assets |
+| Integration slice | `pytest -m integration -q` | one-plan parallel search, freeze+plan+batch+verify end-to-end |
 | Example slice | `pytest -m example -q` | `examples/*` fixtures drive real generated assets |
 | Codex fast slice | `pytest -m codex -q` | Codex adapter, hooks, assets, pool contract |
 | Pi fast slice | `pytest -m pi -q` | Pi extension, driver, supervisor, assets |
 | Runtime-focused | `pytest tests/test_runtime_unit.py` | Search state machine without a host |
-| Real-host ST | `pytest -m "st or st_pi" -v -s` | native launch, hooks/events, worker lifecycle, final evidence |
+| Real-host ST | `pytest -m "(st and (st_codex or st_pi_rpc)) or st_pi" -v -s` | maintained native launch, hooks/events, worker lifecycle, final evidence |
 
 Default tests must never launch OpenCode, Codex, Claude Code, or Pi. A host
 behavior claim requires the matching ST; if it cannot run, report that gap.
@@ -22,17 +22,20 @@ gate with two workers. Keep real-host ST serial so host processes, model calls,
 and machine resources do not interfere with one another.
 
 `integration` and `example` tests are skipped by default via
-`tests/conftest.py`. Add the marker name to `-m` to opt in.
+`tests/conftest.py`. OpenCode and Claude tests are historical, explicitly
+marked `opencode`/`claude`, and excluded by the default `pytest.ini` expression.
+Add a marker name to `-m` only when intentionally auditing that slice.
 
 ## System-Test Markers
 
 | Marker | Runner | Default model |
 |---|---|---|
-| `st_opencode` | `opencode run --command goal-plus` | host default or `ST_OPENCODE_MODEL` |
 | `st_codex` | `codex exec` | `gpt-5.6-terra` or `ST_CODEX_MODEL` |
-| `st_claude` | `claude -p` | host default or `ST_CLAUDE_MODEL` |
 | `st_pi_rpc` | `goal-plus-pi-worker` + Pi RPC | host default or `ST_PI_MODEL` |
 | `st_pi` | native Pi `/goal-plus` print/TUI | host default or `ST_PI_MODEL` |
+
+The registered `st_opencode` and `st_claude` markers remain only so historical
+tests can be selected explicitly; they are not maintained support slices.
 
 Every `tests/st/` case has `st` plus exactly one host marker. Native Pi command
 tests live in `tests/st_pi/`. `-s` is required so failure log paths remain
@@ -70,8 +73,8 @@ pytest -m st_pi -k stop_gate_intercepts -v -s -rs
 pytest -m "st and st_codex" -k goal_plus_required_final_checker -v -s -rs
 pytest -m st_pi -k with_final_check_runs_pi_reviewer -v -s -rs
 
-# All installed/configured hosts
-pytest -m "st or st_pi" -v -s -rs
+# All maintained hosts
+pytest -m "(st and (st_codex or st_pi_rpc)) or st_pi" -v -s -rs
 ```
 
 Useful overrides:

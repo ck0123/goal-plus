@@ -217,7 +217,6 @@ def open_pi_search_pool(
     root_dir: Path | str,
     run_id: str,
     candidate_ids: list[str] | None = None,
-    directive: dict[str, Any] | str | None = None,
     worker_budgets: dict[str, dict[str, Any]] | None = None,
     final_verify: bool = True,
     max_parallel: int | None = None,
@@ -259,11 +258,10 @@ def open_pi_search_pool(
     try:
         for candidate_id in initial_ids:
             submitted.append(
-                submit_pi_search_pool(
+                _submit_pi_search_pool(
                     root_dir=root_dir,
                     pool_id=pool_id,
                     candidate_id=candidate_id,
-                    directive=directive,
                     worker_budget=(worker_budgets or {}).get(candidate_id),
                     final_verify=final_verify,
                 )
@@ -284,25 +282,16 @@ def open_pi_search_pool(
     return snapshot
 
 
-def submit_pi_search_pool(
+def _submit_pi_search_pool(
     *,
     root_dir: Path | str,
     pool_id: str,
     candidate_id: str,
-    directive: dict[str, Any] | str | None = None,
     redispatch: bool = False,
-    runtime_multiplier: float | None = None,
     worker_budget: dict[str, Any] | None = None,
     final_verify: bool = True,
     _launcher: Callable[..., int] | None = None,
 ) -> dict[str, Any]:
-    if runtime_multiplier is not None and worker_budget is not None:
-        raise ValueError("runtime_multiplier and worker_budget are mutually exclusive")
-    if runtime_multiplier is not None:
-        if not redispatch:
-            raise ValueError("runtime_multiplier requires redispatch=true")
-        if runtime_multiplier <= 1 or runtime_multiplier > 2:
-            raise ValueError("runtime_multiplier must be greater than 1 and at most 2")
     launcher = _launcher or _launch_pool_job
     with exclusive_file_lock(_pool_lock_path(root_dir, pool_id)):
         pool = _load_pool(root_dir, pool_id)
@@ -355,10 +344,8 @@ def submit_pi_search_pool(
             "root_dir": str(Path(root_dir).expanduser().resolve()),
             "run_id": pool["run_id"],
             "candidate_id": candidate_id,
-            "directive": directive,
             "redispatch": bool(redispatch),
             "resume_agent_session_id": resume_agent_session_id,
-            "runtime_multiplier": runtime_multiplier,
             "worker_budget": worker_budget,
             "final_verify": bool(final_verify),
         }
@@ -408,18 +395,14 @@ def continue_pi_search_pool(
     root_dir: Path | str,
     pool_id: str,
     candidate_id: str,
-    directive: dict[str, Any] | str | None = None,
     worker_budget: dict[str, Any] | None = None,
-    runtime_multiplier: float | None = None,
     final_verify: bool = True,
 ) -> dict[str, Any]:
-    return submit_pi_search_pool(
+    return _submit_pi_search_pool(
         root_dir=root_dir,
         pool_id=pool_id,
         candidate_id=candidate_id,
-        directive=directive,
         redispatch=True,
-        runtime_multiplier=runtime_multiplier,
         worker_budget=worker_budget,
         final_verify=final_verify,
     )

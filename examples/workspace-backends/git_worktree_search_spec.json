@@ -13,7 +13,7 @@
   },
   "budget": {
     "max_candidates": 3,
-    "max_parallel": 2
+    "max_parallel": 3
   },
   "process_verifiers": [
     {
@@ -27,9 +27,8 @@
     }
   ],
   "strategy": {
-    "name": "evolve",
-    "worker_mode": "agent-session-pool",
-    "worker_host": "opencode",
+    "name": "random",
+    "worker_host": "codex",
     "worker_agent_type": "SearchCandidateAgentFlash"
   },
   "workspace": {

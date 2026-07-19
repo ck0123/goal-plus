@@ -56,22 +56,6 @@ RUNTIME_EXAMPLE_SPECS = [
     case for case in EXAMPLE_SPECS if case[0] != "edgebench_ad_placement_search_spec.json"
 ]
 
-SEARCH_MODE_SPECS = [
-    (
-        "search-mode/k_module_adaptevolve_search_spec.json",
-        "adaptevolve",
-        "python",
-        {"max_candidates": 1, "max_parallel": 1, "worker_agent_type": "SearchCandidateAgentFlash"},
-    ),
-    (
-        "search-mode/k_module_openevolve_search_spec.json",
-        "openevolve",
-        "builtin",
-        {"max_candidates": 2, "max_parallel": 1, "worker_agent_type": "SearchCandidateAgentFlash"},
-    ),
-]
-
-
 def load_expected(spec_name: str) -> dict:
     for name, _, _, expected in EXAMPLE_SPECS:
         if name == spec_name:
@@ -83,29 +67,8 @@ def load_example_spec(name: str) -> dict:
     return json.loads((ROOT / "examples" / name).read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize(("spec_name", "strategy_name", "driver", "expected"), SEARCH_MODE_SPECS)
-def test_search_mode_example_specs_are_valid(
-    spec_name: str,
-    strategy_name: str,
-    driver: str,
-    expected: dict,
-) -> None:
-    spec = load_example_spec(spec_name)
-    parsed = SearchSpec.model_validate(spec)
-
-    assert parsed.source_path == "tests/fixtures/k_module_problem"
-    assert parsed.metric_name == "combined_score"
-    assert parsed.strategy.name == strategy_name
-    assert parsed.strategy.driver == driver
-    assert parsed.strategy.worker_mode == "agent-session-pool"
-    assert parsed.strategy.worker_agent_type == expected["worker_agent_type"]
-    assert parsed.budget.max_candidates == expected["max_candidates"]
-    assert parsed.budget.max_parallel == expected["max_parallel"]
-    assert not Path(parsed.source_path).is_absolute()
-
-
 @pytest.mark.parametrize(("spec_name", "verifier_paths", "metric_name", "expected"), EXAMPLE_SPECS)
-def test_two_round_example_specs_are_valid(
+def test_parallel_loop_example_specs_are_valid(
     spec_name: str,
     verifier_paths: list[str],
     metric_name: str,
@@ -119,7 +82,7 @@ def test_two_round_example_specs_are_valid(
     assert parsed.budget.max_parallel == expected["max_parallel"]
     assert parsed.root_hypotheses == []
     assert parsed.constraints["suggested_batch_size"] == 4
-    assert parsed.strategy.worker_mode == "agent-session-pool"
+    assert parsed.strategy.orchestration_mode == "parallel_loops"
     assert parsed.strategy.worker_agent_type == expected["worker_agent_type"]
     if "strategy_name" in expected:
         assert parsed.strategy.name == expected["strategy_name"]
@@ -139,7 +102,7 @@ def test_two_round_example_specs_are_valid(
     ("spec_name", "verifier_paths", "metric_name", "expected"),
     RUNTIME_EXAMPLE_SPECS,
 )
-def test_two_round_examples_create_batches_and_verify_baseline(
+def test_parallel_loop_examples_create_one_batch_and_verify_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     spec_name: str,
@@ -191,35 +154,12 @@ def test_two_round_examples_create_batches_and_verify_baseline(
         verify_baseline("c001")
         verified_candidate_ids.add("c001")
 
-    second_plan = tools.search_plan_next(run_id, 4)
-    second_proposals = None
-    if second_plan["requires_agent_proposals"]:
-        second_proposals = [
-            {
-                "intent": f"derive Pi proposal {index} from c001",
-                "parent_candidate_ids": ["c001"],
-                "base_candidate_id": "c001",
-            }
-            for index in range(1, second_plan["planned_k"] + 1)
-        ]
-    second_round = tools.search_start_batch(
-        run_id,
-        second_plan["plan_id"],
-        proposals=second_proposals,
-    )
-
     first_expected = [
         f"c{index:03d}" for index in range(1, expected["max_parallel"] + 1)
     ]
-    second_expected = [
-        f"c{index:03d}"
-        for index in range(expected["max_parallel"] + 1, expected["max_candidates"] + 1)
-    ]
 
     assert first_plan["planned_k"] == expected["max_parallel"]
-    assert second_plan["planned_k"] == expected["max_parallel"]
     assert [task["candidate_id"] for task in first_round] == first_expected
-    assert [task["candidate_id"] for task in second_round] == second_expected
     if first_plan["requires_agent_proposals"]:
         assert first_round[0]["hypothesis"] == "independent Pi proposal 1"
     else:
@@ -230,8 +170,8 @@ def test_two_round_examples_create_batches_and_verify_baseline(
             verify_baseline(candidate_id)
 
     history = tools.search_list_history(run_id)
-    assert history["total_candidates"] == expected["max_candidates"]
-    assert history["returned_candidates"] == min(5, expected["max_candidates"])
+    assert history["total_candidates"] == expected["max_parallel"]
+    assert history["returned_candidates"] == min(5, expected["max_parallel"])
     assert history["sort_by"] == "score"
     assert history["candidates"][0]["score"] >= history["candidates"][1]["score"]
     assert metric_name in history["candidates"][0]["key_metrics"]
@@ -240,7 +180,7 @@ def test_two_round_examples_create_batches_and_verify_baseline(
     assert [item["candidate_id"] for item in created_history["candidates"]] == ["c001", "c002"]
 
     status = tools.search_status(run_id)
-    assert status["candidates_total"] == expected["max_candidates"]
+    assert status["candidates_total"] == expected["max_parallel"]
     assert status["candidates_evaluated"] == 2
 
 
@@ -266,8 +206,6 @@ def test_git_worktree_workspace_demo_runs_end_to_end(tmp_path: Path) -> None:
     assert summary["scores"] == {"c001": 1.0, "c002": 2.0, "c003": 3.0}
     assert summary["shared_git_common_dir"] is True
     assert len(set(summary["branches"].values())) == 3
-    assert summary["parent_candidate_id"] == "c002"
-    assert summary["child_base_revision"] == summary["parent_best_git_head"]
     assert summary["selected_candidate_id"] == "c003"
     assert Path(summary["report_path"]).exists()
 

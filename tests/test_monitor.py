@@ -17,7 +17,6 @@ def _pi_rpc_spec(project: Path):
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": 600,
@@ -115,26 +114,16 @@ def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(
     assert snapshot["run"]["candidates_evaluated"] == 1
     assert snapshot["strategy"] == {
         "name": "random",
-        "driver": "builtin",
-        "ref": None,
-        "orchestration_mode": "rolling_candidates",
-        "worker_mode": "agent-session-pool",
+        "orchestration_mode": "parallel_loops",
         "worker_host": "pi-rpc",
         "worker_agent_type": None,
-        "history_policy": {
-            "scope": "top_n",
-            "top_n": 5,
-            "include": ["summary", "score", "key_metrics", "parent_id", "changed_files"],
-            "inherited_feature_limit": 50,
-            "inherited_pitfall_limit": 30,
-        },
         "latest_plan": {
             "plan_id": plan.plan_id,
             "status": "started",
             "requested_k": 2,
             "planned_k": 2,
             "started_candidate_ids": [first.candidate_id, second.candidate_id],
-            "selection_rule": "random bootstrap",
+            "selection_rule": "independent source branches",
             "state": {},
         },
     }
@@ -279,8 +268,6 @@ def test_goal_plus_monitor_snapshot_aggregates_multiple_search_tasks(
     assert snapshot["search_tasks"][1]["started_rounds_total"] == 1
     assert snapshot["search_tasks"][1]["strategy"] == {
         "name": "random",
-        "driver": "builtin",
-        "worker_mode": "agent-session-pool",
         "worker_host": "pi-rpc",
     }
     aggregate = snapshot["search_task_aggregate"]
@@ -356,41 +343,3 @@ def test_goal_plus_monitor_snapshot_is_exposed_to_mcp_and_pi_facade(tmp_path: Pa
         {"agent_session_id": session.agent_session_id},
     )
     assert observability["host"] == "pi-rpc"
-
-
-def test_goal_plus_monitor_snapshot_summarizes_strategy_specific_plan_state(
-    tmp_path: Path,
-) -> None:
-    project = make_project(tmp_path)
-    runtime_root = tmp_path / ".search"
-    runtime = FileSearchRuntime(runtime_root)
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "openevolve",
-            "worker_mode": "agent-session-pool",
-            "worker_host": "opencode",
-            "history_policy": {"scope": "top_n", "top_n": 3},
-            "config": {"archive_size": 10, "seed": 7},
-        },
-        max_candidates=2,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, requested_k=1)
-
-    snapshot = goal_plus_monitor_snapshot(root_dir=runtime_root, run_id=run_id)
-
-    assert snapshot["strategy"]["name"] == "openevolve"
-    assert snapshot["strategy"]["driver"] == "builtin"
-    assert snapshot["strategy"]["orchestration_mode"] == "rolling_candidates"
-    assert snapshot["strategy"]["history_policy"]["top_n"] == 3
-    assert snapshot["strategy"]["latest_plan"] == {
-        "plan_id": plan.plan_id,
-        "status": "planned",
-        "requested_k": 1,
-        "planned_k": 1,
-        "started_candidate_ids": [],
-        "selection_rule": "openevolve bootstrap",
-        "state": {"sampling_mode": "bootstrap"},
-    }

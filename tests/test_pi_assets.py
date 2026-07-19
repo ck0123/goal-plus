@@ -38,7 +38,7 @@ def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
 
     assert 'goal_plus_create(raw_goal="$ARGUMENTS")' in text
     assert 'worker_host: "pi-rpc"' in text
-    assert 'worker_mode: "agent-session-pool"' in text
+    assert 'worker_mode: "agent-session-pool"' not in text
     assert 'orchestration_mode: "parallel_loops"' in text
     assert 'numeric `spec.metric_name`' in text
     assert ".goal-plus-verifiers/" in text
@@ -66,7 +66,6 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "upgrade to Search Mode automatically" in text
     assert "Do not ask the user" in text
     assert "User hints are useful but optional" in text
-    assert "optional audit evidence" in text
     assert "goal_plus_create" in text
     assert "goal_plus_gate" in text
     assert "goal_plus_monitor_snapshot" in text
@@ -75,19 +74,16 @@ def test_pi_goal_plus_skill_records_modes_and_gate() -> None:
     assert "Do not use manual file tailing as the primary monitoring path" in text
     assert "goal_plus_link_search_run" in text
     assert 'worker_host: "pi-rpc"' in text
-    assert 'worker_mode: "agent-session-pool"' in text
+    assert 'worker_mode: "agent-session-pool"' not in text
     assert 'orchestration_mode: "parallel_loops"' in text
     assert "Pi-supported strategy names" in text
     assert "`agent_guided`, `agent`, or `default`" in text
     assert "`random` or `random_mode`" in text
     assert "reuse an existing `frozen_spec_id`" in text
-    assert "pi_search_run_batch" in text
+    assert "pi_search_pool_open" in text
     assert "max_parallel=<budget.max_parallel>" in text
-    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" in text
-    assert "pi_search_run_candidate" in text
-    assert "search_start_agent_session" in text
-    assert "pi_rpc_run_worker" in text
-    assert "search_bind_agent_handle" in text
+    assert "pi_search_run_batch" not in text
+    assert "pi_search_run_candidate" not in text
     assert "final `search_run_verifier`" in text
     assert "search_select" in text
     assert "search_report" in text
@@ -148,7 +144,7 @@ def test_pi_goal_plus_skill_documents_parallel_loop_policy() -> None:
     assert "Runtime rejects a second plan" in normalized
     assert "pi_search_pool_wait_any" in text
     assert "pi_search_pool_continue" in text
-    assert "pi_search_pool_submit" in text
+    assert "pi_search_pool_submit" not in text
     assert "pi_search_pool_close" in text
     assert "worker_budgets" in text
     assert "Continue the same autonomous search loop" in text
@@ -252,9 +248,9 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "exactly one validated row" in text
     assert "VerifierWorkspaceSideEffect" in text
     assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
-    assert "pi_rpc_run_worker" in text
-    assert "pi_search_run_batch" in text
-    assert "pi_search_run_candidate" in text
+    assert "pi_rpc_run_worker" not in text
+    assert "pi_search_run_batch" not in text
+    assert "pi_search_run_candidate" not in text
     assert 'pi.registerCommand("goal-plus"' in text
     assert 'pi.registerCommand("goal-plus-with-final-check"' in text
     assert "mode=autonomous|probe" in text
@@ -308,12 +304,10 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert "workspaceGuard" in text
     assert "resource_lock: Type.Optional(Type.String({ minLength: 1 }))" in text
     assert "MAIN_GATED_TOOLS" in text
-    assert "pi_rpc_run_worker" in text
-    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER" in text
-    assert 'process.env.GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER === "1"' in text
-    assert "role === \"main\" && exposeLowLevelWorker" in text
-    assert '"pi_search_run_candidate"' in text
-    assert '"pi_search_run_batch"' in text
+    assert "pi_rpc_run_worker" not in text
+    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER" not in text
+    assert '"pi_search_run_candidate"' not in text
+    assert '"pi_search_run_batch"' not in text
     assert "block" in text
     assert 'role === "final-checker"' in text
     assert "registerPiFinalCheckTool" in text
@@ -341,8 +335,8 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "metric_direction: Type.Union" in text
     assert "process_verifiers: Type.Array(VerifierCommand" in text
     assert "worker_budget: Type.Optional(Type.Union" in text
-    assert "inherited_feature_limit: Type.Optional(NullablePositiveInteger)" in text
-    assert "inherited_pitfall_limit: Type.Optional(NullablePositiveInteger)" in text
+    assert "inherited_feature_limit" not in text
+    assert "inherited_pitfall_limit" not in text
     assert "const RuntimeToolDescriptions" in text
     assert "RuntimeToolDescriptions[name]" in text
     assert "Hard cap on total distinct candidate workspaces" in text
@@ -360,25 +354,17 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "goal_plus_prepare_final_check: Type.Object" in text
     assert "goal_plus_submit_final_check: Type.Object" in text
     assert "pi_goal_plus_run_final_check: Type.Object" in text
-    assert "pi_search_run_candidate: Type.Object" in text
-    assert "runtime_multiplier" in text
     assert "worker_budget: Type.Optional(WorkerBudget)" in text
-    assert "pi_search_run_batch: Type.Object" in text
     assert "worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget))" in text
-    assert "redispatch: Type.Optional(Type.Boolean())" in text
-    assert "candidate_ids: Type.Array(Type.String())" in text
+    assert "candidate_ids: Type.Optional(Type.Array(Type.String()))" in text
     assert "max_parallel: Type.Optional(PositiveInteger)" in text
     assert "pi_search_pool_open: Type.Object" in text
-    assert "pi_search_pool_submit: Type.Object" in text
+    assert "pi_search_pool_submit: Type.Object" not in text
     assert "pi_search_pool_wait_any: Type.Object" in text
     assert "pi_search_pool_snapshot: Type.Object" in text
     assert "pi_search_pool_continue: Type.Object" in text
     assert "pi_search_pool_close: Type.Object" in text
-    candidate_schema = text.split("pi_search_run_candidate: Type.Object", 1)[1].split(
-        "pi_search_run_batch: Type.Object", 1
-    )[0]
-    assert "model_pattern" not in candidate_schema
-    assert "provider" not in candidate_schema
+    assert "runtime_multiplier" not in text
 
     main_tools = text.split("const mainTools = [", 1)[1].split("];", 1)[0]
     assert '"search_start_agent_session"' not in main_tools
@@ -408,18 +394,17 @@ def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:
     assert "worker_host=\"pi-rpc\"" in combined
     assert "goal-plus-pi-worker" in combined
     assert "goal-plus-pi-tool" in combined
-    assert "pi_search_run_batch" in combined
-    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" in combined
-    assert "pi_search_run_candidate" in combined
+    assert "pi_search_run_batch" not in combined
+    assert "GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1" not in combined
+    assert "pi_search_run_candidate" not in combined
     assert "goal_plus_monitor_snapshot" in combined
     assert "search_get_agent_observability" in combined
     assert "read-only" in combined
     assert "one user-facing `goal-plus` skill" in combined
     assert "does not expose a separate user-facing `search` skill" in combined
     assert ".pi/skills/goal-plus/" in combined
-    assert "automatically start the agent session" in combined
-    assert "run the Pi" in combined
-    assert "RPC worker, bind the handle, and can run the final verifier" in combined
+    assert "pi_search_pool_open" in combined
+    assert "pi_search_pool_continue" in combined
     assert "How Pi Differs From Other Hosts" in combined
     assert "Pi currently supports the portable builtin strategies only" in combined
     assert "pre-model `/goal-plus` creation" in combined

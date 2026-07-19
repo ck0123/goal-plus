@@ -13,7 +13,6 @@ index and ownership guide.
 | `goal_plus_update_goal` | replace the complete effective objective and start a revision |
 | `goal_plus_record_triage` | choose ordinary goal work or verifier/spec discovery |
 | `goal_plus_save_spec_draft` | persist the typed candidate Search spec |
-| `goal_plus_confirm_frozen_verifier` | record optional verifier-approval evidence |
 | `goal_plus_link_search_run` | append a frozen Search run to the goal |
 | `goal_plus_record_search_result` | attach selected/promotion evidence and reserve canonical final report paths |
 | `goal_plus_prepare_final_check` | create a required independent-review request |
@@ -46,18 +45,16 @@ goal can retain multiple search tasks.
 | `search_plan_next` | persist one planning round |
 | `search_start_batch` | materialize that plan's isolated candidate workspaces |
 
-`strategy.orchestration_mode` is `rolling_candidates` for backward
-compatibility or `parallel_loops` for the new Pi/Codex flow. In
-`parallel_loops`, `search_plan_next(requested_k)` may be called exactly once;
-later work uses continuation/redispatch of existing candidates. It plans:
+New Pi/Codex specs use `strategy.orchestration_mode="parallel_loops"`.
+`search_plan_next(requested_k)` may be called exactly once; later work resumes
+the existing candidates. It plans:
 
 ```text
 min(requested_k, remaining max_candidates, max_parallel)
 ```
 
-The default `requested_k=4` is a request for one planning call, not a whole-run
-budget. `max_candidates` is the immutable cap on distinct workspaces across all
-rounds.
+The default `requested_k=4` is a request for that one planning call.
+`max_candidates` is the immutable cap on distinct workspaces.
 
 `search_invalidate_run` requires a typed verifier reason, non-empty summary,
 and concrete evidence. It changes the run to `aborted` and blocks new planning,
@@ -73,10 +70,6 @@ search_create(new_frozen_spec_id, source_run_id=invalidated_or_exhausted_run)
 
 The new run exposes `inherited_research` containing a predecessor frontier,
 feature ledger, and scoped pitfalls. It marks predecessor scores non-reusable.
-`strategy.history_policy.inherited_feature_limit` and
-`inherited_pitfall_limit` bound the inherited ledgers by default; set either to
-`null` to disable that runtime truncation when the host context can carry the
-full history.
 
 ### Worker context
 
@@ -84,8 +77,7 @@ full history.
 |---|---|---|
 | `search_start_agent_session` | main | create a provenance handle and host-native launch payload |
 | `search_redispatch_candidate` | main | create a fresh session in the same candidate workspace |
-| `search_bind_agent_handle` | main/host driver | attach a Codex, Claude, or Pi native handle |
-| `search_bind_opencode_session` | OpenCode main | attach a Task session id |
+| `search_bind_agent_handle` | main/host driver | attach a Codex or Pi native handle |
 | `search_continue_agent_session` | main | return native same-worker continuation fields when supported |
 | `search_get_agent_context` | candidate worker | load authoritative ids, workspace, history, iterations, and resume data |
 | `search_get_agent_observability` | main/monitor | read normalized model, timing, terminal, usage, context, artifact, and handoff evidence for one session |
@@ -100,9 +92,10 @@ version 2 adds `execution.provider` and `usage.processed_tokens`; Pi processed
 tokens include input, cache read/write, and output tokens, while Codex uses its
 native total-token counter because cached input is already included. Codex
 reads its native subagent session JSONL (bound by `SubagentStop` or discovered
-from the unique task name); Pi normalizes `metadata.pi_metrics`. OpenCode and
-Claude Code expose the portable evidence already bound to their handles. The
-call never returns prompt, reasoning, tool arguments, or tool output content,
+from the unique task name); Pi normalizes `metadata.pi_metrics`. Legacy
+OpenCode and Claude Code records remain readable when they already contain
+bound metadata. The call never returns prompt, reasoning, tool arguments, or
+tool output content,
 and never waits for or controls a worker. `goal_plus_monitor_snapshot` embeds
 the same object under each `subagents[].observability` while retaining legacy
 Pi fields for backward compatibility.
@@ -168,17 +161,14 @@ server:
 
 | Tool | Purpose |
 |---|---|
-| `pi_search_pool_open` | create/recover a pool and optionally launch initial candidates |
-| `pi_search_pool_submit` | launch one candidate into a free slot |
+| `pi_search_pool_open` | create/recover a fixed pool and launch the initial candidates |
 | `pi_search_pool_wait_any` | return new terminal candidate-ready events |
 | `pi_search_pool_snapshot` | inspect one pool or rediscover pools by `run_id` |
-| `pi_search_pool_continue` | state-redispatch a candidate with a fresh worker |
+| `pi_search_pool_continue` | resume the same candidate and native Pi session in a new process |
 | `pi_search_pool_close` | drain or terminate live pool jobs |
-| `pi_search_run_candidate` | synchronous single-candidate compatibility driver |
-| `pi_search_run_batch` | synchronous batch compatibility driver |
 
-Normal Pi Search uses the pool tools. The compatibility drivers remain useful
-for recovery and focused debugging but wait for their entire call to finish.
+Normal Pi Search uses only these fixed-lane pool tools. The pool does not expose
+a submit/refill API and does not plan candidates.
 
 Example read-only call:
 
@@ -202,7 +192,7 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
 | `promotion_verifiers` | checks required before promotion |
 | `budget.max_candidates` | whole-run distinct candidate cap |
 | `budget.max_parallel` | live-worker/planned-batch cap |
-| `strategy.worker_host` | `pi-rpc`, `codex`, `claude-code`, or `opencode` |
+| `strategy.worker_host` | maintained execution host: `pi-rpc` or `codex` |
 | `strategy.worker_budget` | host-enforced limit for one dispatch |
 | `workspace.backend` | `git_worktree` (default) or `copy` |
 

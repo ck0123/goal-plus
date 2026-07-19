@@ -181,15 +181,13 @@ def _search_spec(
         },
         "strategy": {
             "name": "agent_guided",
-            "driver": "builtin",
-            "worker_mode": "agent-session-pool",
+            "orchestration_mode": "parallel_loops",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": timeout_seconds,
                 "max_turns": 30,
                 "on_exceed": "interrupt",
             },
-            "history_policy": {"scope": "top_n", "top_n": 5},
         },
         "constraints": {
             "backend": "tilelang_ascend",

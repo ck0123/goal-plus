@@ -59,7 +59,7 @@ def spec_for(project: Path, *, max_candidates: int = 4, direction: str = "maximi
                     "timeout_seconds": 30,
                 }
             ],
-            "strategy": {"name": "independent_branches"},
+            "strategy": {"name": "random"},
             "workspace": {"backend": "copy"},
         }
     )
@@ -87,7 +87,6 @@ def spec_with_host(
         project,
         {
             "name": strategy_name,
-            "worker_mode": "agent-session-pool",
             "worker_host": worker_host,
         },
         max_candidates=max_candidates,

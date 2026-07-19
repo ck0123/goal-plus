@@ -104,7 +104,6 @@ def _pi_spec(*, max_runtime_seconds: int = 300) -> SearchSpec:
         ],
         "strategy": {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": max_runtime_seconds,
@@ -121,8 +120,7 @@ def _circle_packing_pi_spec(*, max_runtime_seconds: int = 300) -> SearchSpec:
     data["source_path"] = str(CIRCLE_PACKING)
     data["strategy"] = {
         "name": "random",
-        "driver": "builtin",
-        "worker_mode": "agent-session-pool",
+        "orchestration_mode": "parallel_loops",
         "worker_host": "pi-rpc",
         "worker_budget": {
             "max_runtime_seconds": max_runtime_seconds,
@@ -233,12 +231,6 @@ def test_pi_rpc_edgebench_time_advisory_after_post_tool(
         root_dir=runtime.root_dir,
         run_id=run_id,
         candidate_id=task.candidate_id,
-        directive={
-            "goal": (
-                "Implement one small valid improvement to solution.cpp, run the public "
-                "verifier, then inspect the final artifact once more and return."
-            )
-        },
         final_verify=False,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
         model_pattern=os.environ.get("ST_PI_MODEL"),
@@ -291,12 +283,6 @@ def test_pi_rpc_managed_pool_wait_any(st_project_root: Path) -> None:
         root_dir=runtime.root_dir,
         run_id=run_id,
         candidate_ids=[task.candidate_id for task in tasks],
-        directive={
-            "goal": (
-                "Improve the circle packing artifact, run multiple meaningful "
-                "verifier iterations when useful, and return a structured handoff."
-            )
-        },
         max_parallel=2,
     )
     pool_id = opened["pool_id"]
@@ -369,12 +355,6 @@ def test_pi_rpc_parallel_loop_cycle(st_project_root: Path) -> None:
         root_dir=runtime.root_dir,
         run_id=run_id,
         candidate_ids=[task.candidate_id for task in tasks],
-        directive={
-            "goal": (
-                "Run this autonomous circle-packing loop, choose evidence-backed "
-                "hypotheses yourself, verify material changes, and return a handoff."
-            )
-        },
         max_parallel=2,
     )
     pool_id = opened["pool_id"]
@@ -400,12 +380,6 @@ def test_pi_rpc_parallel_loop_cycle(st_project_root: Path) -> None:
         root_dir=runtime.root_dir,
         pool_id=pool_id,
         candidate_id=first_candidate_id,
-        directive=(
-            "Continue the same autonomous search loop from the latest committed "
-            "evidence. Refresh runtime context, choose the next evidence-backed "
-            "hypothesis yourself, verify every material change, and keep working "
-            "while the assigned budget remains."
-        ),
         worker_budget={
             "max_runtime_seconds": int(
                 os.environ.get("ST_PI_CYCLE_WORKER_SECONDS", "90")
@@ -479,71 +453,6 @@ def test_pi_rpc_parallel_loop_cycle(st_project_root: Path) -> None:
     report_path = runtime.report(run_id)
     assert selection["selected_candidate_id"]
     assert runtime.status(run_id).best_score is not None
-    assert report_path.exists()
-
-
-@pytest.mark.st
-@pytest.mark.st_pi_rpc
-def test_pi_rpc_circle_packing_two_batch(st_project_root: Path) -> None:
-    runtime = FileSearchRuntime(st_project_root / ".search")
-    spec = _circle_packing_pi_spec(
-        max_runtime_seconds=int(os.environ.get("ST_PI_CYCLE_WORKER_SECONDS", "300"))
-    )
-    frozen = runtime.freeze_spec(spec, [CIRCLE_PACKING / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    directives = [
-        "Implement a hexagonal lattice for 26 circles; edit initial_program.py and run the verifier.",
-        "Implement a square-grid shrink-to-fit packing for 26 circles; edit initial_program.py and run the verifier.",
-        "Implement concentric rings for 26 circles; edit initial_program.py and run the verifier.",
-        "Implement a boundary-hugging packing for 26 circles; edit initial_program.py and run the verifier.",
-    ]
-    completed_results: list[dict] = []
-
-    for round_index in (1, 2):
-        plan = runtime.plan_next(run_id, requested_k=2)
-        tasks = runtime.start_batch(run_id, plan.plan_id)
-        assert len(tasks) == 2
-        assert plan.planned_k == 2
-
-        for task in tasks:
-            directive = {
-                "goal": directives[len(completed_results)],
-                "round_index": round_index,
-                "batch_size": 2,
-            }
-            result = run_pi_search_candidate(
-                root_dir=runtime.root_dir,
-                run_id=run_id,
-                candidate_id=task.candidate_id,
-                directive=directive,
-                final_verify=True,
-                pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
-                model_pattern=os.environ.get("ST_PI_MODEL"),
-                thinking_level=os.environ.get("ST_PI_THINKING"),
-            )
-            assert [step["tool"] for step in result["steps"]] == [
-                "search_start_agent_session",
-                "pi_rpc_run_worker",
-                "search_bind_agent_handle",
-                "search_run_verifier",
-            ]
-            completed_results.append(result)
-
-    selection = runtime.select(run_id)
-    report_path = runtime.report(run_id)
-    candidates = _candidate_summary(runtime, run_id)
-
-    assert len(completed_results) == 4
-    assert [result["candidate_id"] for result in completed_results] == [
-        "c001",
-        "c002",
-        "c003",
-        "c004",
-    ]
-    assert len(candidates) == 4
-    assert all(candidate["status"] == "evaluated" for candidate in candidates)
-    assert all(candidate["iterations"] >= 1 for candidate in candidates)
-    assert selection["selected_candidate_id"]
     assert report_path.exists()
 
 
@@ -628,7 +537,6 @@ def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
         root_dir=runtime.root_dir,
         run_id=run_id,
         candidate_id=task.candidate_id,
-        directive={"goal": "Start the k_module fix."},
         final_verify=False,
         worker_runner=interrupted_worker,
     )
@@ -639,14 +547,12 @@ def test_pi_rpc_redispatch_after_timeout(st_project_root: Path) -> None:
         root_dir=runtime.root_dir,
         run_id=run_id,
         candidate_id=task.candidate_id,
-        directive={
-            "goal": (
-                "Resume from context.resume and the existing workspace. Read evaluator.py, "
-                "finish the remaining k_module target values, and verify immediately."
-            )
-        },
         redispatch=True,
-        runtime_multiplier=2,
+        worker_budget={
+            "max_runtime_seconds": 300,
+            "max_turns": 8,
+            "on_exceed": "interrupt",
+        },
         final_verify=True,
         pi_binary=os.environ.get("ST_PI_BINARY", "pi"),
         model_pattern=os.environ.get("ST_PI_MODEL"),

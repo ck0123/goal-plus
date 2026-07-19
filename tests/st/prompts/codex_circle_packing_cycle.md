@@ -10,8 +10,7 @@ exact changes before freezing it:
 - Set `source_path` to the absolute path
   `{{PROJECT_ROOT}}/tests/st/fixtures/circle_packing`.
 - Set `budget` to `{"max_candidates": 4, "max_parallel": 2}`.
-- Set `strategy.name="random"` and `strategy.driver="builtin"`.
-- Set `strategy.worker_mode="agent-session-pool"`.
+- Set `strategy.name="random"`.
 - Set `strategy.worker_host="codex"`.
 - Set `strategy.worker_agent_type="search_candidate_agent"`.
 - Set `strategy.worker_budget={"max_runtime_seconds": 180, "max_turns": 8, "on_exceed": "interrupt"}`.

@@ -109,26 +109,14 @@ class SearchTools:
         self,
         run_id: str,
         candidate_id: str,
-        directive: dict[str, Any] | str | None = None,
         worker_agent_type: str | None = None,
         worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.redispatch_candidate(
             run_id=run_id,
             candidate_id=candidate_id,
-            directive=directive,
             worker_agent_type=worker_agent_type,
             worker_budget=worker_budget,
-        ).model_dump(mode="json")
-
-    def search_bind_opencode_session(
-        self,
-        agent_session_id: str,
-        opencode_session_id: str,
-    ) -> dict[str, Any]:
-        return self.runtime.bind_opencode_session(
-            agent_session_id=agent_session_id,
-            opencode_session_id=opencode_session_id,
         ).model_dump(mode="json")
 
     def search_bind_agent_handle(
@@ -144,12 +132,10 @@ class SearchTools:
     def search_continue_agent_session(
         self,
         agent_session_id: str,
-        directive: dict[str, Any] | str | None = None,
         worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.continue_agent_session(
             agent_session_id=agent_session_id,
-            directive=directive,
             worker_budget=worker_budget,
         ).model_dump(mode="json")
 
@@ -183,8 +169,8 @@ class SearchTools:
     ) -> list[dict[str, Any]]:
         return self.runtime.list_iterations(run_id, candidate_id)
 
-    def search_select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
-        return self.runtime.select(run_id, strategy=strategy)
+    def search_select(self, run_id: str) -> dict[str, Any]:
+        return self.runtime.select(run_id)
 
     def search_report(self, run_id: str) -> dict[str, str]:
         report_path = self.runtime.report(run_id)
@@ -275,18 +261,6 @@ class GoalPlusTools:
         return self.runtime.save_spec_draft(
             goal_plus_id,
             parsed_draft,
-        ).model_dump(mode="json")
-
-    def goal_plus_confirm_frozen_verifier(
-        self,
-        goal_plus_id: str,
-        confirmed_by: str = "user",
-        evidence: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self.runtime.confirm_frozen_verifier(
-            goal_plus_id,
-            confirmed_by=confirmed_by,
-            evidence=evidence,
         ).model_dump(mode="json")
 
     def goal_plus_link_search_run(

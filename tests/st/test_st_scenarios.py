@@ -36,7 +36,7 @@ SCENARIO_CASES = [
     *[
         pytest.param(
             scenario,
-            marks=(pytest.mark.st, pytest.mark.st_opencode),
+            marks=(pytest.mark.st, pytest.mark.st_opencode, pytest.mark.opencode),
             id=f"opencode-{scenario}",
         )
         for scenario in OPENCODE_SCENARIOS
@@ -73,7 +73,7 @@ SCENARIO_CASES = [
     ),
     pytest.param(
         "claude_k_module_smoke",
-        marks=(pytest.mark.st, pytest.mark.st_claude),
+        marks=(pytest.mark.st, pytest.mark.st_claude, pytest.mark.claude),
         id="claude_k_module_smoke",
     ),
 ]

@@ -55,7 +55,7 @@ The freeze preflight runs in a disposable source copy and requires the verifier
 to keep that workspace read-only. Put compiler products and temporary outputs
 in the unique `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or a Python
 `tempfile.TemporaryDirectory()`. Never use one fixed `/tmp` pathname because
-`pi_search_run_batch` may verify several candidates concurrently. A
+the managed Pi pool may verify several candidates concurrently. A
 `VerifierWorkspaceSideEffect` must be repaired and refrozen before any Search
 run uses candidate budget.
 
@@ -84,14 +84,11 @@ plugin, or orchestration workflow.
 When the goal is search-ready:
 
 `origin="initial"` and `origin="in_progress"` are provenance only and follow
-the same autonomous admission rule. The legacy
-`goal_plus_confirm_frozen_verifier` tool and
-`user_confirmed_frozen_verifier` field remain compatible with older runs, but
-they are optional audit evidence and must never pause `/goal-plus`.
+the same autonomous admission rule.
 
 Before `search_freeze_spec`, ensure the SearchSpec strategy sets
-`worker_host: "pi-rpc"`, `worker_mode: "agent-session-pool"`, and
-`orchestration_mode: "parallel_loops"`. Pi Search Mode must run a fixed initial
+`worker_host: "pi-rpc"` and `orchestration_mode: "parallel_loops"`. Pi Search
+Mode must run a fixed initial
 set of autonomous candidate loops through the Pi RPC driver. Do not omit these
 fields; legacy runtime defaults do not express this policy.
 
@@ -174,7 +171,8 @@ time remains. No worker lease ending completes the Goal Plus record.
    every imported feature must be re-verified under the successor contract.
 8. After each validated terminal event, apply only the global stop policy. If it
    is false, call `pi_search_pool_continue` for that exact `candidate_id` with a
-   budget that fits remaining time and this neutral directive:
+   budget that fits remaining time. The runtime supplies this fixed neutral
+   continuation prompt:
 
    ```text
    Continue the same autonomous search loop from the latest committed evidence.
@@ -186,8 +184,8 @@ time remains. No worker lease ending completes the Goal Plus record.
    launches a fresh Pi process in the same workspace, but it calls
    `search_continue_agent_session` and reloads the same persisted Pi session.
    It preserves both `agent_session_id` and candidate identity. Do not call
-   `search_plan_next`, `search_start_batch`, or
-   `pi_search_pool_submit` after initial pool creation. Do not vary continuation
+   `search_plan_next`, `search_start_batch`, or any new-candidate submission
+   after initial pool creation. Do not vary continuation
    based on rank or improvement.
    `pi_search_pool_snapshot(run_id=...)` rediscovers the pool after an
    interrupted main Pi turn; use `pool_id` for later exact snapshots.
@@ -294,13 +292,11 @@ preceding runtime tool. In particular, call `search_create` before
 The `pi_search_pool_*` tools are a host-owned supervisor, not Search runtime
 lifecycle APIs. Their durable state lives under `.gp/host-pools/pi/`. They
 enforce `max_parallel`, return `wait_any` events, and survive a main Pi turn
-disconnect. Each worker still performs the same chain:
-`search_start_agent_session`, `pi_rpc_run_worker`,
+disconnect. Each pool job internally performs the same chain:
+`search_start_agent_session`, foreground Pi RPC worker launch,
 `search_bind_agent_handle`, and the final `search_run_verifier` without
-`agent_session_id` when `final_verify=true`. Normal Goal Plus/Search flow must
-not call the low-level `pi_rpc_run_worker` tool directly. It is hidden from the
-main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set
-for manual debugging or custom recovery.
+`agent_session_id` when `final_verify=true`. These mechanical steps are not
+public Pi main-agent tools.
 
 Do not call `search_start_agent_session`, `search_bind_agent_handle`, or
 `search_continue_agent_session` from the Pi main agent; the managed pool owns
@@ -309,12 +305,11 @@ those mechanical steps. For another attempt on an existing candidate, call
 `search_continue_agent_session` internally and records that step before
 launching the next process against the same native session.
 
-Pool submission is non-blocking; the detached wrapper owns the foreground Pi
+Initial pool launch and continuation are non-blocking; the detached wrapper owns the foreground Pi
 RPC child and its cleanup. `worker_budget.max_runtime_seconds` is required and
 maps to the Pi RPC process watchdog. `worker_budget.max_turns` is only a prompt
-hint. `pi_search_run_batch` and `pi_search_run_candidate` remain compatibility
-and debugging helpers, but the batch helper intentionally waits for the slowest
-worker and must not be used for the normal parallel-loop orchestration.
+hint. There is no public synchronous candidate/batch runner or manual pool
+submit API.
 
 Pi workers persist native session JSONL under `.gp/host-sessions/pi/`. If a
 worker times out, fails, or simply completes while the global stop policy is
@@ -343,15 +338,10 @@ and verifier snapshot. `search_get_agent_context` exposes it under
 facts. Native Pi conversation may preserve reasoning and continuation
 instructions, but it must never override durable evidence or top-N history.
 
-When a candidate remains valuable after its first attempt, the main agent may
-redispatch it with an explicit larger `worker_budget`, for example
-`pi_search_run_candidate(..., redispatch=true,
-worker_budget={"max_runtime_seconds": <larger seconds>, ...})`. This creates a
-fresh Pi process for the same native session and candidate workspace with an uninterrupted budget
-chosen from evidence and outer remaining time; it does not mutate the frozen
-spec. `runtime_multiplier` remains a compatibility shortcut for a redispatch
-between 1x and 2x, but it is not the depth policy and must not cap a justified
-long exploration.
+When a candidate continues after its first dispatch, pass an explicit
+`worker_budget` to `pi_search_pool_continue`. This creates a fresh Pi process
+for the same native session and candidate workspace with a dispatch budget
+chosen from the outer remaining time; it does not mutate the frozen spec.
 
 Do not redispatch only because the worker handle has `timed_out=true`. When the
 candidate already has a `process_passed=true` Git-backed iteration, that best
@@ -366,7 +356,7 @@ History is runtime-owned, not a local plan file. Workers must call
 `context.results_tsv` as the resume source. Every verifier call supplies a
 concise `hypothesis`; the runtime validates the inherited workspace-root
 `results.tsv`, appends exactly one row for every returned report, and commits
-the ledger. Workers never edit it directly. Later-round history includes the
+the ledger. Workers never edit it directly. Later-iteration history includes the
 latest structured `research_summary` when a worker supplied a handoff, so use
 its task-specific results and pitfalls rather than repeating failed variants.
 
@@ -398,8 +388,8 @@ SearchSpec before opening Search Mode.
 
 ## Gates
 
-Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`,
-`write`, and `pi_rpc_run_worker` when explicitly exposed for debugging), Pi's
+Before Search Mode tool use and main-agent mutating tools (`bash`, `edit`, and
+`write`), Pi's
 extension calls `goal_plus_gate(event="pre_tool_use")`. At turn end, the
 extension calls `goal_plus_gate(event="stop")`; if the gate blocks, it queues
 the continuation prompt and triggers another model turn. If the extension is

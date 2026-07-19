@@ -7,8 +7,8 @@ OpenMP, MKL, or build job thread counts.
 Use Goal Plus normally: analyze first, discover the metric/verifier/edit
 surface, and open Search Mode only if the verifier-backed optimization is
 ready. Because this run is under Pi, freeze the SearchSpec with
-`strategy.worker_host="pi-rpc"` and
-`strategy.worker_mode="agent-session-pool"`. Search workers may edit
+`strategy.worker_host="pi-rpc"` and `strategy.orchestration_mode="parallel_loops"`.
+Search workers may edit
 `model.py`, `serving.py`, and optional new implementation files under `ops/` or
 `cpp_ops/`, but they must not edit `verify.py`, `benchmark.py`,
 `workload.json`, `single_thread.py`, or `.pi` assets.

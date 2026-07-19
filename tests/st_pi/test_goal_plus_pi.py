@@ -47,7 +47,7 @@ MULTI_SEARCH_PROMPT = (
     "examples/edgebench_ad_placement_search_spec.json，并冻结其中的 "
     ".goal-plus-verifiers/ad_local_score.py、tools/bin/gen、tools/bin/tester。"
     "第一个 SearchSpec 使用 strategy.name=random，第二个使用 strategy.name=agent_guided；"
-    "两次都设置 worker_host=pi-rpc、worker_mode=agent-session-pool、max_candidates=1、"
+    "两次都设置 worker_host=pi-rpc、orchestration_mode=parallel_loops、max_candidates=1、"
     "max_parallel=1，worker budget 为 max_runtime_seconds=60、max_turns=4、"
     "on_exceed=interrupt，只允许候选修改 solution.cpp。每次都必须分别完成 "
     "search_freeze_spec、search_create、goal_plus_link_search_run、candidate verifier、"
@@ -59,7 +59,7 @@ SPEC_REVISION_PROMPT = (
     "在同一个 Goal Plus 记录中验证一次真实的两版 frozen spec 流程。工作区是 {workspace}。"
     "第一轮只使用 .goal-plus-verifiers/simple_score.py，metric_name=score、maximize，"
     "只允许修改 candidate.txt；使用 random、worker_host=pi-rpc、"
-    "worker_mode=agent-session-pool、max_candidates=1、max_parallel=1，worker budget "
+    "orchestration_mode=parallel_loops、max_candidates=1、max_parallel=1，worker budget "
     "为 max_runtime_seconds=60、max_turns=4、on_exceed=interrupt。完成完整的 freeze、"
     "create、link、candidate verify、select、report、promote 和 record_search_result。"
     "拿到第一轮真实 verifier 结果后，不要结束 Goal Plus；在现有 raw-goal audit 中选择 "
@@ -352,7 +352,7 @@ def test_goal_plus_print_autonomously_enters_search(
     )
     assert draft["confidence"] == "high"
     assert draft.get("open_questions") == []
-    assert draft.get("user_confirmed_frozen_verifier") is False
+    assert "user_confirmed_frozen_verifier" not in draft
     linked = record.get("linked_search") or {}
     assert linked.get("run_id"), record
     assert linked.get("selected_candidate_id"), record

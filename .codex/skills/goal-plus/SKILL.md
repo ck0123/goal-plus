@@ -186,11 +186,6 @@ Search Mode is for frozen, measurable optimization. It delegates candidate
 workspace creation, verifier execution, selection, report, and promotion to the
 existing Search MCP flow.
 
-`goal_plus_confirm_frozen_verifier` and
-`user_confirmed_frozen_verifier` remain readable for compatibility with older
-runs. They are optional audit evidence, not Search Mode admission requirements.
-Never pause or ask the user for them during `/goal-plus` execution.
-
 ## Hook Compatibility
 
 This repository ships Codex 0.144.1 Goal Plus host hooks at

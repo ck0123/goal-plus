@@ -30,7 +30,6 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_start_agent_session",
         "search_redispatch_candidate",
         "search_bind_agent_handle",
-        "search_bind_opencode_session",
         "search_continue_agent_session",
         "search_get_agent_context",
         "search_get_agent_observability",
@@ -45,7 +44,6 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "goal_plus_monitor_snapshot",
         "goal_plus_record_triage",
         "goal_plus_save_spec_draft",
-        "goal_plus_confirm_frozen_verifier",
         "goal_plus_link_search_run",
         "goal_plus_record_search_result",
         "goal_plus_prepare_final_check",
@@ -101,20 +99,18 @@ def test_redispatch_candidate_exposes_worker_overrides(tmp_path: Path) -> None:
     properties = schema["properties"]
     assert "run_id" in properties
     assert "candidate_id" in properties
-    assert "directive" in properties
+    assert "directive" not in properties
     assert "worker_agent_type" in properties
     assert "worker_budget" in properties
 
 
-def test_continue_agent_session_exposes_task_id_launch_payload(tmp_path: Path) -> None:
+def test_continue_agent_session_exposes_neutral_continuation_schema(tmp_path: Path) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
     tools = asyncio.run(mcp.get_tools())
 
-    assert "agent_session_id" in tools["search_bind_opencode_session"].parameters["properties"]
-    assert "opencode_session_id" in tools["search_bind_opencode_session"].parameters["properties"]
     assert "agent_session_id" in tools["search_continue_agent_session"].parameters["properties"]
-    assert "directive" in tools["search_continue_agent_session"].parameters["properties"]
+    assert "directive" not in tools["search_continue_agent_session"].parameters["properties"]
 
 
 def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
@@ -249,20 +245,17 @@ def test_agent_observability_exposes_read_only_schema(tmp_path: Path) -> None:
     assert "reasoning" in description
 
 
-def test_goal_plus_create_has_no_mode_hint_and_confirm_tool_is_registered(
+def test_goal_plus_create_has_no_mode_hint_or_verifier_confirm_tool(
     tmp_path: Path,
 ) -> None:
     mcp = create_mcp(tmp_path / ".search")
 
     tools = asyncio.run(mcp.get_tools())
     create_schema = tools["goal_plus_create"].parameters
-    confirm_schema = tools["goal_plus_confirm_frozen_verifier"].parameters
 
     assert "mode_hint" not in create_schema["properties"]
     assert "raw_goal" in create_schema["properties"]
-    assert "goal_plus_id" in confirm_schema["properties"]
-    assert "confirmed_by" in confirm_schema["properties"]
-    assert "evidence" in confirm_schema["properties"]
+    assert "goal_plus_confirm_frozen_verifier" not in tools
     update_schema = tools["goal_plus_update_goal"].parameters
     prepare_schema = tools["goal_plus_prepare_final_check"].parameters
     submit_schema = tools["goal_plus_submit_final_check"].parameters
@@ -329,9 +322,6 @@ def test_create_mcp_constructs_runtime_with_configured_root(
         def search_bind_agent_handle(self, *args, **kwargs):
             return {}
 
-        def search_bind_opencode_session(self, *args, **kwargs):
-            return {}
-
         def search_continue_agent_session(self, *args, **kwargs):
             return {}
 
@@ -367,9 +357,6 @@ def test_create_mcp_constructs_runtime_with_configured_root(
             return {}
 
         def goal_plus_save_spec_draft(self, *args, **kwargs):
-            return {}
-
-        def goal_plus_confirm_frozen_verifier(self, *args, **kwargs):
             return {}
 
         def goal_plus_link_search_run(self, *args, **kwargs):

@@ -100,11 +100,9 @@ low score or lack of improvement. A terminal event
 is published only after the driver has completed the worker, bound its handle,
 and run final verification.
 
-`pi_search_run_candidate` and `pi_search_run_batch` remain synchronous
-compatibility helpers. They automatically start the agent session, run the Pi
-RPC worker, bind the handle, and can run the final verifier. Low-level
-`pi_rpc_run_worker` is hidden unless
-`GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1` is set.
+There is no public synchronous candidate/batch runner and no manual submit
+tool. Pool open owns the initial fixed lane set; pool continue owns later
+dispatches for those same lanes.
 
 ## Worker Boundary
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -8,7 +9,7 @@ from typing import Literal
 from ..cases import BenchmarkCase
 
 
-WorkerHost = Literal["opencode", "codex", "claude-code", "pi-rpc"]
+WorkerHost = Literal["codex", "pi-rpc"]
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ def build_search_spec(
                 "name": "benchmark_accuracy",
                 "role": "ranking_signal",
                 "command": [
-                    "python",
+                    sys.executable,
                     "-m",
                     verifier_module,
                     "--prediction",
@@ -102,7 +103,6 @@ def build_search_spec(
         ],
         "strategy": {
             "name": strategy_name,
-            "worker_mode": "agent-session-pool",
             "worker_host": worker_host,
             "worker_budget": {
                 "max_runtime_seconds": max_runtime_seconds,

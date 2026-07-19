@@ -9,6 +9,7 @@ from tests.test_host_assets_common import assert_common_budget_planning_claims
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.opencode
 
 
 def test_opencode_config_registers_search_runtime_mcp() -> None:
@@ -185,20 +186,6 @@ def test_search_skill_does_not_store_case_specific_references() -> None:
     assert not (ROOT / ".opencode" / "skills" / "search" / "references").exists()
 
 
-def test_search_result_dump_skill_exports_chrome_trace() -> None:
-    skill = (
-        ROOT / ".opencode" / "skills" / "search-result-dump" / "SKILL.md"
-    ).read_text(encoding="utf-8")
-
-    assert "name: search-result-dump" in skill
-    assert "goal-plus-trace" in skill
-    assert "--opencode-log" in skill
-    assert ".gp/runs/<run_id>/trace.json" in skill
-    assert "ui.perfetto.dev" in skill
-    assert "chrome://tracing" in skill
-    assert 'message="exiting loop"' in skill
-
-
 def test_search_candidate_agent_denies_destructive_shell_commands() -> None:
     agent = (ROOT / ".opencode" / "agents" / "SearchCandidateAgent.md").read_text(
         encoding="utf-8"
@@ -297,7 +284,6 @@ def test_search_candidate_agent_tier_has_expected_step_cap(
         "docs/flow-view.md",
         "docs/design.md",
         "docs/opencode.md",
-        "docs/toy-example.md",
         "docs/debugging-runtime.md",
     ],
 )

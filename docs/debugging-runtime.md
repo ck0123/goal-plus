@@ -4,10 +4,9 @@ How to inspect a running or finished `/goal-plus` run after it enters Search
 Mode — what the agents are doing, what scores they have produced, and where to
 look when something goes wrong.
 
-For the general OpenCode inspection technique (SQLite DB, log files), see the
-`inspecting-opencode-runs` skill. This doc covers the project-specific runtime
-surface plus the host-native log entry points for OpenCode, Codex, Claude
-Code, and Pi RPC.
+This doc covers the project-specific runtime surface plus maintained Codex and
+Pi RPC logs. OpenCode and Claude Code sections are retained only for diagnosing
+old records.
 
 ## Two Layers of State
 
@@ -199,13 +198,11 @@ Claude Code also exposes `claude agents --json`, `claude logs <id>`, and
 
 Pi workers are launched by `goal-plus-pi-worker`, not by the MCP
 server. Normal Pi Search Mode uses the durable `pi_search_pool_*` supervisor:
-open/submit launch detached jobs, wait-any returns each candidate-ready event,
-snapshot rediscovers pools by `run_id`, and close drains or terminates them.
-`pi_search_run_batch` remains a synchronous compatibility helper. All paths
-start agent sessions, run foreground Pi RPC worker processes, bind returned
-handles, and can run final verifiers. The low-level `pi_rpc_run_worker` tool is
-hidden from the main Pi agent unless `GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER=1`
-is set for manual debugging.
+open launches the fixed initial lanes, wait-any returns each candidate-ready
+event, continue resumes an existing lane, snapshot rediscovers pools by
+`run_id`, and close drains or terminates them. Pool jobs internally start agent
+sessions, run foreground Pi RPC worker processes, bind returned handles, and
+can run final verifiers; these mechanical steps are not public main-agent APIs.
 
 The runner starts:
 
@@ -459,20 +456,17 @@ warns about missing linked runs, frozen-spec mismatches, non-terminal
 superseded tasks, explicit runs not linked to the requested goal, and a
 completed goal whose current run is not promoted.
 
-The top-level `strategy` object identifies the search algorithm independently
-of candidate and plan counts:
+The top-level `strategy` object identifies the initial planner independently of
+candidate and plan counts:
 
 ```json
 {
   "strategy": {
     "name": "agent_guided",
-    "driver": "builtin",
-    "worker_mode": "agent-session-pool",
     "worker_host": "pi-rpc",
-    "history_policy": {"scope": "top_n", "top_n": 5},
     "latest_plan": {
-      "plan_id": "plan_002",
-      "selection_rule": "agent-guided history policy: top_n",
+      "plan_id": "plan_001",
+      "selection_rule": "initial parallel lanes",
       "state": {}
     }
   }
@@ -480,12 +474,7 @@ of candidate and plan counts:
 ```
 
 `plans_count` is a compatibility alias for the selected run's
-`planning_rounds_total`. It only reports how many planning rounds exist; it does not identify
-whether the run uses agent-guided, random, OpenEvolve, AdaptEvolve, MCTS, or a
-custom strategy. `strategy.latest_plan.state` contains a bounded whitelist of
-strategy-specific fields when present, including sampling mode, parent/archive
-ids, frontier node, generation/population, and tree-depth summaries. Inspect
-raw plan files only when the bounded summary is insufficient.
+`planning_rounds_total`. Maintained runs have exactly one initial plan.
 
 ## Checking OpenCode Step Count
 
@@ -518,12 +507,6 @@ When the step cap is reached OpenCode injects a system prompt instructing the ag
 - **Look at**: `agent_sessions/<id>.json` `counters.verifier_runs` vs `candidates/<id>/candidate.json` `iterations` length
 - **Cause**: They should always match (every run_verifier call appends an iteration). If they don't, the subagent called `run_verifier` against a different candidate_id, or the main agent called it without `agent_session_id`.
 - **Verification**: Check the iteration's `agent_session_id` field — it tells you which session (if any) the verifier call was attributed to.
-
-### Same-session continuation is unavailable
-
-- **Look at**: `agent_sessions/<id>.json` `opencode_session_id`
-- **Cause**: Main agent did not call `search_bind_opencode_session` with the Task `metadata.sessionId`.
-- **Verification**: `search_continue_agent_session` should return a launch payload containing `task_id`; without a binding it raises an error.
 
 ### Subagent is still running but I want to stop it
 

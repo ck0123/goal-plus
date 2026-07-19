@@ -32,7 +32,6 @@ class UnsupportedHostCapability(RuntimeError):
 class HostCapabilities:
     supports_bind_handle: bool
     supports_same_worker_continue: bool
-    supports_trace_export: bool
     uses_background_workers: bool = False
     continuation: str | None = None
     supports_soft_closeout: bool = False
@@ -202,7 +201,6 @@ class OpenCodeAdapter:
     capabilities = HostCapabilities(
         supports_bind_handle=True,
         supports_same_worker_continue=True,
-        supports_trace_export=True,
     )
 
     def collect_observability(self, session: AgentSessionRecord) -> dict[str, Any]:
@@ -273,7 +271,6 @@ class CodexAdapter:
     capabilities = HostCapabilities(
         supports_bind_handle=True,
         supports_same_worker_continue=True,
-        supports_trace_export=False,
         supports_soft_closeout=True,
         supports_model_override=True,
         supports_reasoning_effort=True,
@@ -397,7 +394,6 @@ class ClaudeCodeAdapter:
     capabilities = HostCapabilities(
         supports_bind_handle=True,
         supports_same_worker_continue=True,
-        supports_trace_export=False,
         uses_background_workers=False,
     )
 
@@ -476,7 +472,6 @@ class PiRpcAdapter:
     capabilities = HostCapabilities(
         supports_bind_handle=True,
         supports_same_worker_continue=True,
-        supports_trace_export=False,
         uses_background_workers=False,
         continuation="native_session",
         supports_soft_closeout=True,
@@ -492,7 +487,6 @@ class PiRpcAdapter:
             recovery_mode="supervisor_persisted",
             completion_stage="candidate_ready",
             open_tool="pi_search_pool_open",
-            submit_tool="pi_search_pool_submit",
             wait_tool="pi_search_pool_wait_any",
             snapshot_tool="pi_search_pool_snapshot",
             continue_tool="pi_search_pool_continue",

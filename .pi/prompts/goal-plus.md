@@ -8,8 +8,8 @@ Use `/skill:goal-plus` with this raw user goal:
 $ARGUMENTS
 
 When this Pi prompt opens Search Mode, the SearchSpec strategy must set
-`worker_host: "pi-rpc"`, `worker_mode: "agent-session-pool"`, and
-`orchestration_mode: "parallel_loops"` so workers run through the Pi RPC driver
+`worker_host: "pi-rpc"` and `orchestration_mode: "parallel_loops"` so workers
+run through the durable Pi pool
 as a fixed initial set of autonomous candidate loops.
 
 Before freezing, require each `ranking_signal` to print a final JSON object
@@ -22,8 +22,8 @@ nested `SearchSpec` schema; do not guess fields from validation errors.
 `expected_outputs` lists artifact paths/globs only.
 The verifier must keep the candidate workspace read-only and use the unique
 `GOAL_PLUS_VERIFIER_TMPDIR`/`TMPDIR` or Python `tempfile` for compiler and
-temporary outputs. Never use one fixed `/tmp` path because
-`pi_search_run_batch` may verify candidates concurrently. Freeze rejects any
+temporary outputs. Never use one fixed `/tmp` path because the Pi pool may
+verify candidates concurrently. Freeze rejects any
 workspace side effect before candidate budget is spent.
 
 After the first meaningful optimization result is available, apply the skill's

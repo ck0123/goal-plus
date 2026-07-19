@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from goal_plus.models import (
     CandidateProposal,
@@ -680,8 +681,8 @@ def test_select_records_recoverable_selection_blocked_state(tmp_path: Path) -> N
     assert blocked.budget_used["selection_blocked_reason"] == (
         "no verifier-backed candidate iteration is eligible for selection"
     )
-    recovery_plan = runtime.plan_next(run_id, requested_k=1)
-    assert recovery_plan.planned_k == 1
+    recovery = runtime.redispatch_candidate(run_id, "c001")
+    assert recovery.candidate_id == "c001"
 
 
 def test_load_legacy_frozen_spec_without_workspace_uses_copy_backend(
@@ -769,9 +770,8 @@ def test_plan_next_and_start_batch_record_plan_metadata(tmp_path: Path) -> None:
     plan = runtime.plan_next(run_id, requested_k=2)
     tasks = runtime.start_batch(run_id, plan.plan_id)
 
-    assert plan.strategy.name == "independent_branches"
-    assert plan.worker_policy["mode"] == "agent-session-pool"
-    assert plan.worker_policy["requires_agent_session"] is True
+    assert plan.strategy.name == "random"
+    assert plan.strategy.orchestration_mode == "parallel_loops"
     assert plan.planned_k == 2
     assert [task.candidate_id for task in tasks] == ["c001", "c002"]
     assert tasks[0].plan_id == "plan_001"
@@ -830,14 +830,13 @@ def test_candidate_workspace_has_isolated_git_baseline_under_ignored_parent(
     assert runtime._detect_changed_files(project, task.workspace) == ["initial_program.py"]
 
 
-def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
+def test_worker_policy_documents_host_launch_contract(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -847,10 +846,9 @@ def test_worker_policy_documents_agent_session_pool(tmp_path: Path) -> None:
     plan = runtime.plan_next(run_id, requested_k=1)
     tasks = runtime.start_batch(run_id, plan.plan_id)
 
-    assert plan.worker_policy["mode"] == "agent-session-pool"
+    assert plan.worker_policy["host"] == "codex"
     assert plan.worker_policy["subagent_type"] == "SearchCandidateAgent"
-    assert plan.worker_policy["requires_agent_session"] is True
-    assert tasks[0].strategy_metadata["worker_mode"] == "agent-session-pool"
+    assert "worker_mode" not in tasks[0].strategy_metadata
     assert any(
         "Pass context.agent_session_id to search_run_verifier" in instruction
         for instruction in tasks[0].instructions
@@ -1266,63 +1264,6 @@ def test_promote_patch_uses_selected_commit_after_evidence_check(
     ) == "VALUE = 1\n"
 
 
-def test_copy_backend_child_promotion_patch_includes_parent_changes(
-    tmp_path: Path,
-) -> None:
-    project = make_project(tmp_path)
-    (project / "evaluator.py").write_text(
-        "import json\n"
-        "from pathlib import Path\n"
-        "namespace = {}\n"
-        "exec(Path('initial_program.py').read_text(), namespace)\n"
-        "print(json.dumps({'combined_score': namespace['VALUE']}))\n",
-        encoding="utf-8",
-    )
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(
-        spec_with_strategy(
-            project,
-            {
-                "name": "evolve",
-                "worker_mode": "agent-session-pool",
-            },
-            max_candidates=2,
-        ),
-        [project / "evaluator.py"],
-    )
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    first_plan = runtime.plan_next(run_id, requested_k=1)
-    parent = runtime.start_batch(run_id, first_plan.plan_id)[0]
-    parent.workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 1\n", encoding="utf-8"
-    )
-    assert runtime.run_verifier(run_id, parent.candidate_id).aggregate_score == 1
-
-    second_plan = runtime.plan_next(run_id, requested_k=1)
-    child = runtime.start_batch(run_id, second_plan.plan_id)[0]
-    assert child.workspace_backend == "copy"
-    assert child.base_candidate_id == parent.candidate_id
-    child.workspace.joinpath("initial_program.py").write_text(
-        "VALUE = 2\n", encoding="utf-8"
-    )
-    assert runtime.run_verifier(run_id, child.candidate_id).aggregate_score == 2
-
-    selection = runtime.select(run_id)
-    assert selection["selected_candidate_id"] == child.candidate_id
-    patch_path = runtime.promote(run_id, child.candidate_id)
-    apply_target = tmp_path / "apply-child-target"
-    copy_source_tree(project, apply_target)
-    subprocess.run(
-        ["git", "apply", "--check", str(patch_path)],
-        cwd=apply_target,
-        check=True,
-    )
-    subprocess.run(["git", "apply", str(patch_path)], cwd=apply_target, check=True)
-    assert apply_target.joinpath("initial_program.py").read_text(
-        encoding="utf-8"
-    ) == "VALUE = 2\n"
-
 
 @pytest.mark.codex
 def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> None:
@@ -1335,8 +1276,6 @@ def test_worker_policy_includes_host_capabilities_for_codex(tmp_path: Path) -> N
     plan = runtime.plan_next(run_id, requested_k=1)
 
     assert plan.worker_policy["host"] == "codex"
-    assert plan.worker_policy["supports_same_worker_continue"] is True
-    assert plan.worker_policy["uses_background_workers"] is False
     assert plan.worker_policy["pool"]["launch_mode"] == "async"
     assert plan.worker_policy["pool"]["wait_mode"] == "wait_any"
     assert plan.worker_policy["pool"]["continuation_mode"] == "same_worker"
@@ -1352,7 +1291,6 @@ def test_worker_policy_uses_pi_rpc_native_session_resume(tmp_path: Path) -> None
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": 600,
@@ -1368,9 +1306,7 @@ def test_worker_policy_uses_pi_rpc_native_session_resume(tmp_path: Path) -> None
     plan = runtime.plan_next(run_id, requested_k=1)
 
     assert plan.worker_policy["host"] == "pi-rpc"
-    assert plan.worker_policy["supports_same_worker_continue"] is True
     assert plan.worker_policy["continuation"] == "native_session"
-    assert plan.worker_policy["uses_background_workers"] is False
     assert plan.worker_policy["pool"]["launch_mode"] == "async"
     assert plan.worker_policy["pool"]["wait_mode"] == "wait_any"
     assert plan.worker_policy["pool"]["continuation_mode"] == "native_session"
@@ -1384,8 +1320,7 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -1403,12 +1338,11 @@ def test_start_agent_session_creates_context_handle_and_launch_payload(tmp_path:
     assert session.candidate_id == tasks[0].candidate_id
     assert session.workspace == tasks[0].workspace
     assert session.agent_session_id.startswith("agent_")
-    assert session.launch["subagent_type"] == "SearchCandidateAgent"
-    assert session.host == "opencode"
-    assert session.host_handle.host == "opencode"
-    assert tasks[0].candidate_id in session.launch["description"]
-    assert session.agent_session_id in session.launch["prompt"]
-    assert tasks[0].candidate_id in session.launch["prompt"]
+    assert session.launch["agent_type"] == "SearchCandidateAgent"
+    assert session.host == "codex"
+    assert session.host_handle.host == "codex"
+    assert session.agent_session_id in session.launch["message"]
+    assert tasks[0].candidate_id in session.launch["message"]
     assert "required" not in session.launch
 
 
@@ -1418,9 +1352,8 @@ def test_redispatch_candidate_creates_new_session_with_tier_override(tmp_path: P
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
-            "worker_agent_type": "SearchCandidateAgentFlash",
+            "name": "random",
+            "worker_agent_type": "search_candidate_agent",
         },
         max_candidates=1,
     )
@@ -1433,20 +1366,19 @@ def test_redispatch_candidate_creates_new_session_with_tier_override(tmp_path: P
     redispatched = runtime.redispatch_candidate(
         run_id,
         task.candidate_id,
-        {"goal": "resume with more steps"},
-        worker_agent_type="SearchCandidateAgentDeep",
+        worker_agent_type="search_candidate_agent_deep",
     )
 
     assert redispatched.agent_session_id != first.agent_session_id
     assert redispatched.candidate_id == first.candidate_id
     assert redispatched.workspace == first.workspace
-    assert redispatched.launch["subagent_type"] == "SearchCandidateAgentDeep"
-    assert redispatched.agent_session_id in redispatched.launch["prompt"]
-    assert "state_level_resume" in redispatched.launch["prompt"]
+    assert redispatched.launch["agent_type"] == "search_candidate_agent_deep"
+    assert redispatched.agent_session_id in redispatched.launch["message"]
+    assert "state_level_resume" in redispatched.launch["message"]
 
     refreshed_candidate = runtime._load_candidate_record(run_id, task.candidate_id)
     worker_policy = refreshed_candidate.task.strategy_metadata["worker_policy"]
-    assert worker_policy["worker_agent_type"] == "SearchCandidateAgentFlash"
+    assert worker_policy["worker_agent_type"] == "search_candidate_agent"
 
 
 def test_redispatch_context_includes_previous_progress_handoff(tmp_path: Path) -> None:
@@ -1487,7 +1419,6 @@ def test_redispatch_context_includes_previous_progress_handoff(tmp_path: Path) -
     resumed = runtime.redispatch_candidate(
         run_id,
         task.candidate_id,
-        {"goal": "finish and verify"},
         worker_budget={"max_runtime_seconds": 120, "max_turns": 8},
     )
 
@@ -1546,7 +1477,6 @@ def test_start_agent_session_returns_pi_rpc_launch_payload(tmp_path: Path) -> No
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": 600,
@@ -1586,7 +1516,6 @@ def test_start_agent_session_accepts_one_dispatch_worker_budget(tmp_path: Path) 
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": 600,
@@ -1676,7 +1605,6 @@ def test_redispatch_candidate_overrides_codex_worker_budget(tmp_path: Path) -> N
     redispatched = runtime.redispatch_candidate(
         run_id,
         task.candidate_id,
-        "resume after timeout",
         worker_agent_type="search_candidate_agent_deep",
         worker_budget={"max_runtime_seconds": 30, "max_turns": 12, "on_exceed": "interrupt"},
     )
@@ -1710,7 +1638,6 @@ def test_codex_worker_budget_flows_to_watchdog_launch_payload(tmp_path: Path) ->
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "codex",
             "worker_budget": {
                 "max_runtime_seconds": 600,
@@ -1761,7 +1688,6 @@ def test_codex_worker_launch_options_flow_to_spawn_payload(tmp_path: Path) -> No
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "codex",
             "worker_launch": {
                 "model": "gpt-5.6-terra",
@@ -1796,7 +1722,6 @@ def test_pi_rpc_rejects_unsupported_worker_service_tier(tmp_path: Path) -> None:
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {"max_runtime_seconds": 60},
             "worker_launch": {"service_tier": "priority"},
@@ -1861,7 +1786,6 @@ def test_redispatch_candidate_rejects_claude_tier_budget_mismatch(tmp_path: Path
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
             "worker_agent_type": "search-candidate-agent-flash",
             "worker_budget": {
@@ -1892,7 +1816,6 @@ def test_claude_worker_budget_flows_to_turn_limit_launch_payload(tmp_path: Path)
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
             "worker_agent_type": "search-candidate-agent-deep",
             "worker_budget": {
@@ -1931,7 +1854,6 @@ def test_claude_worker_budget_selects_known_turn_budget_agent(tmp_path: Path) ->
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
             "worker_budget": {
                 "max_turns": 4,
@@ -1959,7 +1881,6 @@ def test_claude_worker_budget_rejects_mismatched_known_agent_type(tmp_path: Path
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
             "worker_agent_type": "search-candidate-agent",
             "worker_budget": {
@@ -1984,7 +1905,6 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "codex",
             "worker_budget": {"max_turns": 8},
         },
@@ -2000,7 +1920,6 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "claude-code",
             "worker_budget": {"max_runtime_seconds": 600},
         },
@@ -2016,7 +1935,6 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {"max_turns": 8},
         },
@@ -2032,7 +1950,6 @@ def test_host_worker_budget_rejects_unenforceable_limits(tmp_path: Path) -> None
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "opencode",
             "worker_budget": {
                 "min_runtime_seconds": 300,
@@ -2143,7 +2060,6 @@ def test_codex_continue_agent_session_uses_bound_worker_and_budget(tmp_path: Pat
 
     continued = runtime.continue_agent_session(
         session.agent_session_id,
-        {"goal": "continue"},
         worker_budget={"max_runtime_seconds": 900, "on_exceed": "interrupt"},
     )
 
@@ -2168,10 +2084,7 @@ def test_claude_continue_agent_session_uses_send_message_payload(tmp_path: Path)
         {"host": "claude-code", "external_id": "agent_123"},
     )
 
-    continued = runtime.continue_agent_session(
-        session.agent_session_id,
-        {"goal": "continue"},
-    )
+    continued = runtime.continue_agent_session(session.agent_session_id)
 
     assert continued.launch["tool"] == "SendMessage"
     assert continued.launch["agent"] == "agent_123"
@@ -2186,7 +2099,6 @@ def test_pi_rpc_continue_agent_session_reuses_native_session(tmp_path: Path) -> 
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {
                 "max_runtime_seconds": 600,
@@ -2218,10 +2130,7 @@ def test_pi_rpc_continue_agent_session_reuses_native_session(tmp_path: Path) -> 
         },
     )
 
-    continued = runtime.continue_agent_session(
-        session.agent_session_id,
-        {"goal": "continue"},
-    )
+    continued = runtime.continue_agent_session(session.agent_session_id)
 
     assert continued.agent_session_id == session.agent_session_id
     assert continued.launch["session_id"] == session.agent_session_id
@@ -2247,8 +2156,7 @@ def test_bind_and_continue_agent_session_reuses_existing_opencode_session(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -2337,11 +2245,8 @@ def test_plan_next_caps_batch_size_to_max_parallel(tmp_path: Path) -> None:
     assert plan.planned_k == 2
     assert [task.candidate_id for task in tasks] == ["c001", "c002"]
 
-    next_plan = runtime.plan_next(run_id, requested_k=4)
-    next_tasks = runtime.start_batch(run_id, next_plan.plan_id)
-
-    assert next_plan.planned_k == 2
-    assert [task.candidate_id for task in next_tasks] == ["c003", "c004"]
+    with pytest.raises(RuntimeError, match="one initial SearchPlan"):
+        runtime.plan_next(run_id, requested_k=4)
 
 
 def test_parallel_loops_rejects_second_plan_and_reuses_initial_candidates(
@@ -2376,30 +2281,6 @@ def test_parallel_loops_rejects_second_plan_and_reuses_initial_candidates(
     assert continued.agent_session_id == session.agent_session_id
     assert continued.candidate_id == tasks[0].candidate_id
 
-
-def test_start_agent_session_does_not_enforce_active_pool_status(tmp_path: Path) -> None:
-    """max_parallel sizes batches; the runtime does not supervise live workers."""
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec_data = spec_for(project, max_candidates=2).model_dump(mode="json")
-    spec_data["budget"]["max_parallel"] = 1
-    frozen = runtime.freeze_spec(SearchSpec.model_validate(spec_data), [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    first_plan = runtime.plan_next(run_id, requested_k=2)
-    first_task = runtime.start_batch(run_id, first_plan.plan_id)[0]
-    second_plan = runtime.plan_next(run_id, requested_k=2)
-    second_task = runtime.start_batch(run_id, second_plan.plan_id)[0]
-
-    first = runtime.start_agent_session(
-        run_id, first_task.candidate_id, {"goal": "first"},
-    )
-    second = runtime.start_agent_session(
-        run_id, second_task.candidate_id, {"goal": "second"},
-    )
-
-    assert first.candidate_id == first_task.candidate_id
-    assert second.candidate_id == second_task.candidate_id
 
 
 def test_start_agent_session_allocates_unique_ids_under_parallel_calls(
@@ -2461,8 +2342,7 @@ def test_get_agent_context_has_only_authoritative_worker_fields(tmp_path: Path) 
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=2,
     )
@@ -2537,10 +2417,7 @@ def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) 
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
         project,
-        {
-            "name": "agent_guided",
-            "history_policy": {"scope": "top_n", "top_n": 2},
-        },
+        {"name": "agent_guided"},
         max_candidates=3,
     )
     frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
@@ -2557,164 +2434,10 @@ def test_agent_guided_strategy_requires_and_validates_proposals(tmp_path: Path) 
         [CandidateProposal(intent="bootstrap from source")],
     )
     assert first_tasks[0].base_candidate_id is None
-
-    plan2 = runtime.plan_next(run_id, requested_k=1)
-    assert plan2.proposal_contract.must_reference_one_of == ["c001"]  # type: ignore[union-attr]
-    assert any(
-        "deepen_incumbent, transfer_feature, and macro_restart" in note
-        for note in plan2.proposal_contract.notes  # type: ignore[union-attr]
-    )
-    notes = " ".join(plan2.proposal_contract.notes)  # type: ignore[union-attr]
-    assert "different candidate ids do not by themselves provide search diversity" in notes
-    assert "prefer continuing it with a larger one-dispatch budget" in notes
-    assert "free slot is not an obligation" in notes
-    assert "theoretical or structural limits" in notes
-    with pytest.raises(ValueError):
-        runtime.start_batch(
-            run_id,
-            plan2.plan_id,
-            [CandidateProposal(intent="invalid proposal", parent_candidate_ids=["missing"])],
-        )
-    with pytest.raises(ValueError):
-        runtime.start_batch(
-            run_id,
-            plan2.plan_id,
-            [
-                CandidateProposal(intent="valid but too many 1", parent_candidate_ids=["c001"]),
-                CandidateProposal(intent="valid but too many 2", parent_candidate_ids=["c001"]),
-            ],
-        )
-
-    valid_tasks = runtime.start_batch(
-        run_id,
-        plan2.plan_id,
-        [
-            CandidateProposal(
-                parent_candidate_ids=["c001"],
-                base_candidate_id="c001",
-                intent="derive from first candidate",
-                expected_tradeoff="reuse the first candidate as base",
-            )
-        ],
-    )
-
-    assert valid_tasks[0].candidate_id == "c002"
-    assert valid_tasks[0].base_candidate_id == "c001"
-    assert valid_tasks[0].parent_candidate_ids == ["c001"]
+    with pytest.raises(RuntimeError, match="one initial SearchPlan"):
+        runtime.plan_next(run_id, requested_k=1)
 
 
-def test_evolve_strategy_derives_followup_from_best_candidate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(project, {"name": "evolve"}, max_candidates=4)
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, 2)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
-
-    for task in tasks:
-        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-
-    def fake_run(*args, **kwargs):
-        cwd = Path(kwargs["cwd"])
-        score = 0.9 if cwd.name == "c002" else 0.1
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=f'{{"combined_score": {score}}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-    runtime.run_verifier(run_id, "c001")
-    runtime.run_verifier(run_id, "c002")
-
-    plan = runtime.plan_next(run_id, 2)
-    followups = runtime.start_batch(run_id, plan.plan_id)
-
-    assert plan.strategy_trace["parent_candidate_id"] == "c002"
-    assert followups[0].base_candidate_id == "c002"
-    assert followups[0].parent_candidate_ids == ["c002"]
-    assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 2\n"
-
-
-def test_git_worktree_runtime_branches_followup_from_best_parent_commit(
-    tmp_path: Path,
-) -> None:
-    project = make_project(tmp_path)
-    (project / "evaluator.py").write_text(
-        "import json\n"
-        "namespace = {}\n"
-        "exec(open('initial_program.py', encoding='utf-8').read(), namespace)\n"
-        "print(json.dumps({'combined_score': float(namespace['VALUE'])}))\n",
-        encoding="utf-8",
-    )
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec_data = spec_with_strategy(
-        project,
-        {"name": "evolve"},
-        max_candidates=3,
-    ).model_dump(mode="json")
-    spec_data["workspace"] = {"backend": "git_worktree"}
-    spec = SearchSpec.model_validate(spec_data)
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    first_plan = runtime.plan_next(run_id, 2)
-    first = runtime.start_batch(run_id, first_plan.plan_id)
-    (first[0].workspace / "initial_program.py").write_text(
-        "VALUE = 1\n", encoding="utf-8"
-    )
-    (first[1].workspace / "initial_program.py").write_text(
-        "VALUE = 2\n", encoding="utf-8"
-    )
-    runtime.run_verifier(run_id, "c001")
-    runtime.run_verifier(run_id, "c002")
-
-    parent = runtime._load_candidate_record(run_id, "c002")
-    best_parent_iteration = runtime._best_iteration_record(parent, "maximize")
-    assert best_parent_iteration is not None
-    assert best_parent_iteration.git_head is not None
-
-    second_plan = runtime.plan_next(run_id, 1)
-    child = runtime.start_batch(run_id, second_plan.plan_id)[0]
-
-    common_dirs = {
-        subprocess.check_output(
-            ["git", "rev-parse", "--git-common-dir"],
-            cwd=task.workspace,
-            text=True,
-        ).strip()
-        for task in (*first, child)
-    }
-    assert len(common_dirs) == 1
-    assert [task.workspace_backend for task in first] == [
-        "git_worktree",
-        "git_worktree",
-    ]
-    assert first[0].workspace_branch != first[1].workspace_branch
-    assert second_plan.strategy_trace["parent_candidate_id"] == "c002"
-    assert child.base_candidate_id == "c002"
-    assert child.workspace_backend == "git_worktree"
-    assert child.workspace_branch == f"gp/{run_id}/c003"
-    assert child.workspace_base_revision == best_parent_iteration.git_head
-    child_record = runtime._load_candidate_record(run_id, child.candidate_id)
-    child_head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=child.workspace, text=True
-    ).strip()
-    assert child_head == child_record.results_ledger_git_head
-    assert child_head != best_parent_iteration.git_head
-    assert child.workspace.joinpath("results.tsv").read_text(encoding="utf-8") == (
-        parent.task.workspace.joinpath("results.tsv").read_text(encoding="utf-8")
-    )
-    assert (child.workspace / "initial_program.py").read_text(
-        encoding="utf-8"
-    ) == "VALUE = 2\n"
 
 
 def test_git_worktree_start_batch_recovers_after_materialization_before_record(
@@ -2725,7 +2448,7 @@ def test_git_worktree_start_batch_recovers_after_materialization_before_record(
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec_data = spec_with_strategy(
         project,
-        {"name": "independent_branches"},
+        {"name": "random"},
         max_candidates=1,
     ).model_dump(mode="json")
     spec_data["workspace"] = {"backend": "git_worktree"}
@@ -2768,7 +2491,7 @@ def test_start_batch_is_serialized_and_idempotent_for_same_plan(
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec_data = spec_with_strategy(
         project,
-        {"name": "independent_branches"},
+        {"name": "random"},
         max_candidates=2,
     ).model_dump(mode="json")
     spec_data["workspace"] = {"backend": "git_worktree"}
@@ -2791,171 +2514,8 @@ def test_start_batch_is_serialized_and_idempotent_for_same_plan(
     assert runtime.status(run_id).candidates_total == 2
 
 
-def test_git_worktree_followup_rejects_parent_without_clean_verifier_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    (project / "evaluator.py").write_text(
-        "import json\n"
-        "namespace = {}\n"
-        "exec(open('initial_program.py', encoding='utf-8').read(), namespace)\n"
-        "print(json.dumps({'combined_score': float(namespace['VALUE'])}))\n",
-        encoding="utf-8",
-    )
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec_data = spec_with_strategy(
-        project,
-        {"name": "evolve"},
-        max_candidates=2,
-    ).model_dump(mode="json")
-    spec_data["workspace"] = {"backend": "git_worktree"}
-    spec = SearchSpec.model_validate(spec_data)
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    first_plan = runtime.plan_next(run_id, 1)
-    parent = runtime.start_batch(run_id, first_plan.plan_id)[0]
-    (parent.workspace / "initial_program.py").write_text(
-        "VALUE = 9\n", encoding="utf-8"
-    )
-    monkeypatch.setattr(runtime, "_commit_workspace_iteration", lambda *args: None)
-    report = runtime.run_verifier(run_id, parent.candidate_id)
-    assert report.aggregate_score == 9.0
-
-    second_plan = runtime.plan_next(run_id, 1)
-    with pytest.raises(RuntimeError, match="no clean verifier-backed Git iteration"):
-        runtime.start_batch(run_id, second_plan.plan_id)
 
 
-def test_evolve_planning_keeps_candidate_with_valid_iteration_after_latest_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    frozen = runtime.freeze_spec(
-        spec_with_strategy(
-            project,
-            {"name": "evolve", "history_policy": {"scope": "top_n", "top_n": 2}},
-            max_candidates=3,
-        ),
-        [project / "evaluator.py"],
-    )
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    first_plan = runtime.plan_next(run_id, requested_k=2)
-    first_tasks = runtime.start_batch(run_id, first_plan.plan_id)
-
-    scores = {"c001": [0.9, 0.0], "c002": [0.8]}
-    real_run = subprocess.run
-
-    def fake_run(*args, **kwargs):
-        command = args[0]
-        if command and command[0] != "python":
-            return real_run(*args, **kwargs)
-        candidate_id = Path(kwargs["cwd"]).name
-        score = scores[candidate_id].pop(0)
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0 if score > 0 else 1,
-            stdout=f'{{"combined_score": {score}}}\n' if score > 0 else "",
-            stderr="verifier failed" if score == 0 else "",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-
-    runtime.run_verifier(run_id, first_tasks[0].candidate_id)
-    runtime.run_verifier(run_id, first_tasks[0].candidate_id)
-    runtime.run_verifier(run_id, first_tasks[1].candidate_id)
-
-    history = runtime.list_history(run_id, top_n=2)
-    second_plan = runtime.plan_next(run_id, requested_k=1)
-
-    assert history["candidates"][0]["candidate_id"] == "c001"
-    assert history["candidates"][0]["score"] == 0.9
-    assert history["candidates"][0]["latest_score"] == 0.0
-    assert history["candidates"][0]["latest_process_passed"] is False
-    assert history["candidates"][0]["latest_failure_classes"] == [
-        "VerifierCommandFailed"
-    ]
-    assert second_plan.strategy_trace["parent_candidate_id"] == "c001"
-    assert second_plan.official_history["candidates"][0]["score"] == 0.9
-
-
-def test_openevolve_strategy_bootstraps_from_source_with_openevolve_trace(
-    tmp_path: Path,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(project, {"name": "openevolve"}, max_candidates=2)
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    plan = runtime.plan_next(run_id, 2)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-
-    assert plan.requires_agent_proposals is False
-    assert plan.strategy_trace["selection_rule"] == "openevolve bootstrap"
-    assert plan.strategy_trace["sampling_mode"] == "bootstrap"
-    assert plan.derivation_policy["base_workspace_source"] == "source"
-    assert [task.base_candidate_id for task in tasks] == [None, None]
-
-
-def test_openevolve_strategy_samples_exploration_parent_and_inspirations(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "openevolve",
-            "config": {
-                "seed": 1,
-                "exploration_ratio": 1.0,
-                "exploitation_ratio": 0.0,
-                "archive_size": 1,
-                "num_inspirations": 2,
-            },
-        },
-        max_candidates=3,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    first_plan = runtime.plan_next(run_id, 2)
-    first_tasks = runtime.start_batch(run_id, first_plan.plan_id)
-    (first_tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (first_tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
-
-    for task in first_tasks:
-        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "score parent pool"})
-
-    def fake_run(*args, **kwargs):
-        cwd = Path(kwargs["cwd"])
-        score = 0.9 if cwd.name == "c002" else 0.1
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=f'{{"combined_score": {score}}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-    runtime.run_verifier(run_id, "c001")
-    runtime.run_verifier(run_id, "c002")
-
-    plan = runtime.plan_next(run_id, 1)
-    followups = runtime.start_batch(run_id, plan.plan_id)
-
-    assert plan.strategy_trace["selection_rule"] == "openevolve sampled parent plus inspirations"
-    assert plan.strategy_trace["sampling_mode"] == "exploration"
-    assert plan.strategy_trace["parent_candidate_id"] == "c001"
-    assert plan.strategy_trace["archive_candidate_ids"] == ["c002"]
-    assert plan.strategy_trace["inspiration_candidate_ids"] == ["c002"]
-    assert plan.work_orders[0].base_candidate_id == "c001"
-    assert "OpenEvolve sampled parent" in plan.work_orders[0].instructions[0]
-    assert followups[0].base_candidate_id == "c001"
-    assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == "VALUE = 1\n"
 
 
 def test_random_strategy_gen1_independent_bootstrap(tmp_path: Path) -> None:
@@ -2968,104 +2528,15 @@ def test_random_strategy_gen1_independent_bootstrap(tmp_path: Path) -> None:
     plan = runtime.plan_next(run_id, 2)
 
     assert plan.requires_agent_proposals is False
-    assert plan.strategy_trace["selection_rule"] == "random bootstrap"
+    assert plan.strategy_trace["selection_rule"] == "independent source branches"
     assert "parent_candidate_id" not in plan.strategy_trace
-    assert plan.derivation_policy["base_workspace_source"] == "source"
     assert len(plan.work_orders) == 2
-    assert all(wo.base_candidate_id is None for wo in plan.work_orders)
+    assert all(wo.metadata["strategy"] == "parallel_loops" for wo in plan.work_orders)
 
     tasks = runtime.start_batch(run_id, plan.plan_id)
     assert all(t.base_candidate_id is None for t in tasks)
 
 
-def test_random_strategy_gen2_picks_scored_parent_with_seed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {"name": "random", "config": {"seed": 42}},
-        max_candidates=4,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, 2)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
-
-    for task in tasks:
-        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-
-    def fake_run(*args, **kwargs):
-        cwd = Path(kwargs["cwd"])
-        score = 0.9 if cwd.name == "c002" else 0.1
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=f'{{"combined_score": {score}}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-    runtime.run_verifier(run_id, "c001")
-    runtime.run_verifier(run_id, "c002")
-
-    plan = runtime.plan_next(run_id, 2)
-    followups = runtime.start_batch(run_id, plan.plan_id)
-
-    parent_id = plan.strategy_trace["parent_candidate_id"]
-    assert plan.strategy_trace["selection_rule"] == "random verified parent"
-    assert parent_id in {"c001", "c002"}
-    assert plan.strategy_trace["seed"] == 42
-    assert followups[0].base_candidate_id == parent_id
-    assert followups[0].parent_candidate_ids == [parent_id]
-    expected_value = "VALUE = 2\n" if parent_id == "c002" else "VALUE = 1\n"
-    assert (followups[0].workspace / "initial_program.py").read_text(encoding="utf-8") == expected_value
-
-
-def test_random_strategy_gen2_without_seed_picks_scored_parent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(project, {"name": "random"}, max_candidates=4)
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-    plan = runtime.plan_next(run_id, 2)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    (tasks[0].workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (tasks[1].workspace / "initial_program.py").write_text("VALUE = 2\n", encoding="utf-8")
-
-    for task in tasks:
-        runtime.start_agent_session(run_id, task.candidate_id, {"goal": "submit"})
-
-    def fake_run(*args, **kwargs):
-        cwd = Path(kwargs["cwd"])
-        score = 0.9 if cwd.name == "c002" else 0.1
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout=f'{{"combined_score": {score}}}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-    runtime.run_verifier(run_id, "c001")
-    runtime.run_verifier(run_id, "c002")
-
-    plan = runtime.plan_next(run_id, 2)
-    followups = runtime.start_batch(run_id, plan.plan_id)
-
-    parent_id = plan.strategy_trace["parent_candidate_id"]
-    assert plan.strategy_trace["selection_rule"] == "random verified parent"
-    assert parent_id in {"c001", "c002"}
-    assert plan.strategy_trace["seed"] is None
-    assert followups[0].base_candidate_id == parent_id
-    assert followups[0].parent_candidate_ids == [parent_id]
 
 
 def test_random_strategy_name_normalizes_case_and_dash(
@@ -3081,7 +2552,7 @@ def test_random_strategy_name_normalizes_case_and_dash(
 
         plan = runtime.plan_next(run_id, 2)
 
-        assert plan.strategy_trace["selection_rule"] == "random bootstrap"
+        assert plan.strategy_trace["selection_rule"] == "independent source branches"
         assert plan.requires_agent_proposals is False
 
 
@@ -3210,188 +2681,21 @@ def test_non_opencode_hosts_reject_non_portable_strategies(
         runtime.plan_next(run_id, requested_k=1)
 
 
-@pytest.mark.parametrize("host", ["codex", "claude-code"])
-def test_non_opencode_hosts_reject_non_builtin_strategy_drivers(
-    tmp_path: Path,
-    host: str,
-) -> None:
+def test_removed_strategy_driver_fields_are_rejected(tmp_path: Path) -> None:
     project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
+    data = spec_for(project, max_candidates=1).model_dump(mode="json")
+    data["strategy"].update(
         {
-            "name": "random",
             "driver": "python",
-            "ref": "goal_plus.strategies.adaptevolve:AdaptEvolveStrategy",
-            "worker_mode": "agent-session-pool",
-            "worker_host": host,
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    with pytest.raises(ValueError, match=f"{host}.*only supports builtin"):
-        runtime.plan_next(run_id, requested_k=1)
-
-
-def test_python_strategy_driver_can_return_standard_plan(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    strategy_module = tmp_path / "custom_strategy.py"
-    strategy_module.write_text(
-        "class Strategy:\n"
-        "    def __init__(self, config):\n"
-        "        self.config = config\n"
-        "    def plan_next(self, payload):\n"
-        "        return {\n"
-        "            'requires_agent_proposals': True,\n"
-        "            'official_history': payload['history'],\n"
-        "            'proposal_contract': {'count': payload['planned_k']},\n"
-        "            'strategy_trace': {'custom': self.config.get('label')},\n"
-        "        }\n",
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "custom_agent",
-            "driver": "python",
-            "ref": "custom_strategy:Strategy",
-            "config": {"label": "unit"},
-        },
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    plan = runtime.plan_next(run_id, 2)
-
-    assert plan.requires_agent_proposals is True
-    assert plan.strategy_trace["custom"] == "unit"
-    assert plan.proposal_contract.count == 2  # type: ignore[union-attr]
-
-
-def test_python_strategy_worker_policy_controls_launch_payload(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    strategy_module = tmp_path / "dynamic_worker_strategy.py"
-    strategy_module.write_text(
-        "class Strategy:\n"
-        "    def __init__(self, config):\n"
-        "        self.config = config\n"
-        "    def plan_next(self, payload):\n"
-        "        return {\n"
-        "            'requires_agent_proposals': False,\n"
-        "            'worker_policy': {\n"
-        "                'mode': 'agent-session-pool',\n"
-        "                'subagent_type': 'SearchCandidateAgentDeep',\n"
-        "                'requires_agent_session': True,\n"
-        "            },\n"
-        "            'work_orders': [\n"
-        "                {\n"
-        "                    'slot': 1,\n"
-        "                    'intent': 'dynamic deep worker',\n"
-        "                    'hypothesis': 'dynamic deep worker',\n"
-        "                    'metadata': {'selected_worker_agent_type': 'SearchCandidateAgentDeep'},\n"
-        "                }\n"
-        "            ],\n"
-        "            'strategy_trace': {'selected_worker_agent_type': 'SearchCandidateAgentDeep'},\n"
-        "        }\n",
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "dynamic_worker",
-            "driver": "python",
-            "ref": "dynamic_worker_strategy:Strategy",
-            "worker_agent_type": "SearchCandidateAgentFlash",
-        },
-        max_candidates=1,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    plan = runtime.plan_next(run_id, 1)
-    tasks = runtime.start_batch(run_id, plan.plan_id)
-    session = runtime.start_agent_session(run_id, tasks[0].candidate_id)
-
-    assert plan.worker_policy["subagent_type"] == "SearchCandidateAgentDeep"
-    assert tasks[0].strategy_metadata["worker_policy"]["subagent_type"] == "SearchCandidateAgentDeep"
-    assert session.launch["subagent_type"] == "SearchCandidateAgentDeep"
-
-
-def test_adaptevolve_bootstraps_with_flash_then_escalates_after_low_score(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(
-        project,
-        {
-            "name": "adaptevolve",
-            "driver": "python",
-            "ref": "goal_plus.strategies.adaptevolve:AdaptEvolveStrategy",
-            "worker_agent_type": "SearchCandidateAgent",
-            "config": {
-                "tiers": [
-                    "SearchCandidateAgentFlash",
-                    "SearchCandidateAgentDeep",
-                    "SearchCandidateAgentExtraDeep",
-                ],
-                "low_score_threshold": 0.2,
-                "high_score_threshold": 0.8,
-            },
-        },
-        max_candidates=2,
-    )
-    frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
-    run_id = runtime.create_run(frozen.frozen_spec_id)
-
-    plan1 = runtime.plan_next(run_id, 1)
-    first_tasks = runtime.start_batch(run_id, plan1.plan_id)
-    first_session = runtime.start_agent_session(run_id, first_tasks[0].candidate_id)
-
-    assert plan1.strategy_trace["selection_rule"] == "adaptevolve bootstrap"
-    assert plan1.strategy_trace["selected_worker_agent_type"] == "SearchCandidateAgentFlash"
-    assert plan1.worker_policy["subagent_type"] == "SearchCandidateAgentFlash"
-    assert first_session.launch["subagent_type"] == "SearchCandidateAgentFlash"
-
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(
-            args=args[0],
-            returncode=0,
-            stdout='{"combined_score": 0.05}\n',
-            stderr="",
-        )
-
-    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_run)
-    runtime.run_verifier(
-        run_id,
-        first_tasks[0].candidate_id,
-        agent_session_id=first_session.agent_session_id,
+            "ref": "some.module:Strategy",
+        }
     )
 
-    plan2 = runtime.plan_next(run_id, 1)
-    followups = runtime.start_batch(run_id, plan2.plan_id)
-    followup_session = runtime.start_agent_session(run_id, followups[0].candidate_id)
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        SearchSpec.model_validate(data)
 
-    assert plan2.strategy_trace["selection_rule"] == "adaptevolve mutate best parent"
-    assert plan2.strategy_trace["parent_candidate_id"] == first_tasks[0].candidate_id
-    assert plan2.strategy_trace["selected_worker_agent_type"] == "SearchCandidateAgentDeep"
-    assert plan2.worker_policy["subagent_type"] == "SearchCandidateAgentDeep"
-    assert followups[0].base_candidate_id == first_tasks[0].candidate_id
-    assert followups[0].strategy_metadata["worker_policy"]["subagent_type"] == "SearchCandidateAgentDeep"
-    assert followup_session.launch["subagent_type"] == "SearchCandidateAgentDeep"
+
+
 
 
 def test_run_verifier_records_edit_surface_violation_in_iteration(
@@ -3402,8 +2706,7 @@ def test_run_verifier_records_edit_surface_violation_in_iteration(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=1,
     )
@@ -3497,8 +2800,7 @@ def test_run_verifier_records_failure_class_on_timeout(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=1,
     )
@@ -3530,8 +2832,7 @@ def test_list_iterations_empty_for_fresh_candidate(tmp_path: Path) -> None:
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=1,
     )
@@ -3552,8 +2853,7 @@ def test_run_verifier_records_iteration_with_agent_session_id(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -3592,8 +2892,7 @@ def test_run_verifier_without_agent_session_id_is_main_final_verify(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -4240,12 +3539,12 @@ def test_results_tsv_is_committed_and_runtime_enforces_one_row_per_report(
     assert len(runtime._load_candidate_record(run_id, candidate_id).results_ledger) == 2
 
 
-def test_results_tsv_inherits_across_derived_candidate_and_successor_run(
+def test_results_tsv_inherits_across_successor_run(
     tmp_path: Path,
 ) -> None:
     project = make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
-    spec = spec_with_strategy(project, {"name": "evolve"}, max_candidates=3)
+    spec = spec_with_strategy(project, {"name": "random"}, max_candidates=1)
     frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
     first_run_id = runtime.create_run(frozen.frozen_spec_id)
 
@@ -4259,23 +3558,6 @@ def test_results_tsv_inherits_across_derived_candidate_and_successor_run(
     parent_results = parent.workspace.joinpath("results.tsv").read_text(
         encoding="utf-8"
     )
-
-    second_plan = runtime.plan_next(first_run_id, requested_k=1)
-    child = runtime.start_batch(first_run_id, second_plan.plan_id)[0]
-    assert child.base_candidate_id == parent.candidate_id
-    assert child.workspace.joinpath("results.tsv").read_text(
-        encoding="utf-8"
-    ) == parent_results
-    runtime.run_verifier(
-        first_run_id,
-        child.candidate_id,
-        hypothesis="child design",
-    )
-    child_results = child.workspace.joinpath("results.tsv").read_text(
-        encoding="utf-8"
-    )
-    assert child_results.startswith(parent_results)
-    assert len(child_results.splitlines()) == len(parent_results.splitlines()) + 1
 
     successor_run_id = runtime.create_run(
         frozen.frozen_spec_id,
@@ -4416,8 +3698,7 @@ def test_run_verifier_rejects_mismatched_agent_session(tmp_path: Path) -> None:
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=2,
     )
@@ -4448,8 +3729,7 @@ def test_concurrent_run_verifiers_preserve_best_score(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=2,
     )
@@ -4512,8 +3792,7 @@ def test_run_verifier_works_without_session_and_records_iterations(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -4559,8 +3838,7 @@ def test_list_iterations_returns_all_records(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=1,
     )
@@ -4598,8 +3876,7 @@ def test_get_agent_context_returns_iterations(
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
         },
         max_candidates=1,
     )
@@ -4635,8 +3912,7 @@ def test_history_and_report_include_agent_sessions(tmp_path: Path) -> None:
     spec = spec_with_strategy(
         project,
         {
-            "name": "independent_branches",
-            "worker_mode": "agent-session-pool",
+            "name": "random",
             "worker_agent_type": "SearchCandidateAgent",
         },
         max_candidates=1,
@@ -4665,7 +3941,6 @@ def test_history_projects_latest_structured_research_handoff(tmp_path: Path) -> 
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {"max_runtime_seconds": 600},
         },
@@ -4758,7 +4033,6 @@ def test_history_feature_ledger_retains_non_frontier_candidate(tmp_path: Path) -
         project,
         {
             "name": "random",
-            "worker_mode": "agent-session-pool",
             "worker_host": "pi-rpc",
             "worker_budget": {"max_runtime_seconds": 600},
         },
@@ -4828,7 +4102,7 @@ def test_invalidate_run_fences_work_and_successor_inherits_research(
     runtime = FileSearchRuntime(tmp_path / ".search")
     spec = spec_with_strategy(
         project,
-        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
+        {"name": "agent_guided"},
         max_candidates=2,
     )
     frozen = runtime.freeze_spec(spec, [project / "evaluator.py"])
@@ -4843,7 +4117,8 @@ def test_invalidate_run_fences_work_and_successor_inherits_research(
     runtime.bind_agent_handle(
         session.agent_session_id,
         {
-            "host": "opencode",
+            "host": "codex",
+            "task_name": "search_candidate_c001",
             "metadata": {
                 "progress_handoff": {
                     "model_handoff": {
@@ -4926,55 +4201,6 @@ def test_invalidate_run_fences_work_and_successor_inherits_research(
     assert inherited["pitfalls"][0]["scope"] == "feature_family"
     assert runtime.status(run_id).replacement_run_id == successor_id
 
-
-def test_successor_history_uses_receiving_policy_limits(tmp_path: Path) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
-    source_spec = spec_with_strategy(
-        project,
-        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
-    )
-    source_frozen = runtime.freeze_spec(source_spec, [project / "evaluator.py"])
-    source_run_id = runtime.create_run(source_frozen.frozen_spec_id)
-    source_run = runtime._load_run(source_run_id)
-    source_run.inherited_research = {
-        "feature_ledger": [{"artifact": f"feature-{index}"} for index in range(60)],
-        "pitfalls": [{"condition": f"pitfall-{index}"} for index in range(40)],
-    }
-    runtime._write_run(source_run)
-
-    default_spec = spec_with_strategy(
-        project,
-        {"name": "agent_guided", "worker_mode": "agent-session-pool"},
-    )
-    default_frozen = runtime.freeze_spec(default_spec, [project / "evaluator.py"])
-    default_run_id = runtime.create_run(
-        default_frozen.frozen_spec_id,
-        source_run_id=source_run_id,
-    )
-    default_inherited = runtime.list_history(default_run_id)["inherited_research"]
-    assert len(default_inherited["feature_ledger"]) == 50
-    assert len(default_inherited["pitfalls"]) == 30
-
-    custom_spec = spec_with_strategy(
-        project,
-        {
-            "name": "agent_guided",
-            "worker_mode": "agent-session-pool",
-            "history_policy": {
-                "inherited_feature_limit": None,
-                "inherited_pitfall_limit": 7,
-            },
-        },
-    )
-    custom_frozen = runtime.freeze_spec(custom_spec, [project / "evaluator.py"])
-    custom_run_id = runtime.create_run(
-        custom_frozen.frozen_spec_id,
-        source_run_id=source_run_id,
-    )
-    custom_inherited = runtime.list_history(custom_run_id)["inherited_research"]
-    assert len(custom_inherited["feature_ledger"]) == 60
-    assert len(custom_inherited["pitfalls"]) == 7
 
 
 def test_invalidation_rejects_in_flight_verifier_result(

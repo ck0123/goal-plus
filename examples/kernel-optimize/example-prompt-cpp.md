@@ -67,10 +67,9 @@ Step 3 — fill and freeze this SearchSpec:
   "budget": {"max_candidates": 4, "max_parallel": 2},
   "strategy": {
     "name": "agent_guided",
-    "driver": "builtin",
-    "worker_mode": "agent-session-pool",
-    "worker_agent_type": "SearchCandidateAgentDeep",
-    "history_policy": {"scope": "top_n", "top_n": 5}
+    "orchestration_mode": "parallel_loops",
+    "worker_host": "codex",
+    "worker_agent_type": "search_candidate_agent"
   }
 }
 
@@ -87,15 +86,13 @@ search_create(frozen_spec_id=<id>)  # record run_id
 
 Step 4 — drive the search:
 - search_plan_next(run_id, requested_k=4)
-- author 4 proposals referencing official_history
-  (first batch: must_reference_one_of is empty, proposals start from source)
+- author 4 initial independent lane proposals
 - search_start_batch(run_id, plan_id, proposals=[...])
 - for each candidate:
     session = search_start_agent_session(run_id, candidate_id, directive)
-    Task(subagent_type=session.launch.subagent_type,
-         description=session.launch.description,
-         prompt=session.launch.prompt)
-    search_bind_opencode_session(session.agent_session_id, Task.metadata.sessionId)
+    spawn_agent(task_name=session.launch.task_name,
+                message=session.launch.message,
+                fork_turns=session.launch.fork_turns)
     search_run_verifier(run_id, candidate_id, "process")
 - search_list_history(run_id, top_n=5)
 - search_select(run_id)

@@ -484,7 +484,6 @@ def test_initial_search_ready_spec_autonomously_allows_freeze(tmp_path) -> None:
         ),
     )
     assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
-    assert draft.spec_draft.user_confirmed_frozen_verifier is False  # type: ignore[union-attr]
 
     for tool_name in ("bash", "write", "edit"):
         discovery_tool = runtime.gate(
@@ -504,16 +503,6 @@ def test_initial_search_ready_spec_autonomously_allows_freeze(tmp_path) -> None:
         context={"tool_name": "search_freeze_spec"},
     )
     assert allowed.decision == "allow"
-
-    # The legacy confirmation API remains available for old callers and audit
-    # evidence, but Search readiness no longer depends on it.
-    confirmed = runtime.confirm_frozen_verifier(
-        record.goal_plus_id,
-        confirmed_by="user",
-        evidence={"message": "freeze this verifier"},
-    )
-    assert confirmed.spec_draft.user_confirmed_frozen_verifier is True  # type: ignore[union-attr]
-    assert confirmed.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
 
     still_allowed = runtime.gate(
         record.goal_plus_id,
@@ -552,7 +541,6 @@ def test_in_progress_search_discovery_uses_same_autonomous_admission(tmp_path) -
         ),
     )
     assert draft.next_action.kind == "freeze_search_spec"  # type: ignore[union-attr]
-    assert draft.spec_draft.user_confirmed_frozen_verifier is False  # type: ignore[union-attr]
 
     gate = runtime.gate(
         record.goal_plus_id,
@@ -937,7 +925,7 @@ def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> N
     gate = runtime.gate(
         record.goal_plus_id,
         event="pre_tool_use",
-        context={"tool_name": "pi_rpc_run_worker"},
+        context={"tool_name": "pi_search_pool_open"},
     )
 
     assert gate.decision == "block"
@@ -945,7 +933,7 @@ def test_pre_tool_use_blocks_pi_worker_launch_before_search_ready(tmp_path) -> N
 
 
 @pytest.mark.pi
-def test_pre_tool_use_blocks_pi_candidate_driver_before_search_ready(tmp_path) -> None:
+def test_pre_tool_use_blocks_pi_pool_continue_before_search_ready(tmp_path) -> None:
     runtime = FileGoalPlusRuntime(tmp_path / ".search")
     record = runtime.create_goal("Optimize kernel latency")
     runtime.record_triage(
@@ -962,7 +950,7 @@ def test_pre_tool_use_blocks_pi_candidate_driver_before_search_ready(tmp_path) -
     gate = runtime.gate(
         record.goal_plus_id,
         event="pre_tool_use",
-        context={"tool_name": "pi_search_run_candidate"},
+        context={"tool_name": "pi_search_pool_continue"},
     )
 
     assert gate.decision == "block"

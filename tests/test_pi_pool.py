@@ -14,7 +14,6 @@ from goal_plus.pi_pool import (
     continue_pi_search_pool,
     open_pi_search_pool,
     snapshot_pi_search_pool,
-    submit_pi_search_pool,
     run_pool_worker,
     wait_any_pi_search_pool,
 )
@@ -34,19 +33,19 @@ def _planned_candidates(
     return [task.candidate_id for task in runtime.start_batch(run_id, plan.plan_id)]
 
 
-def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
+def test_pi_pool_wait_any_reports_free_slot_without_refilling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _make_project(tmp_path)
     runtime = FileSearchRuntime(tmp_path / ".search")
     frozen = runtime.freeze_spec(
-        _pi_rpc_spec_with_budget(project, max_candidates=3, max_parallel=2),
+        _pi_rpc_spec_with_budget(project, max_candidates=2, max_parallel=2),
         [project / "evaluator.py"],
     )
     run_id = runtime.create_run(frozen.frozen_spec_id)
     initial = _planned_candidates(runtime, run_id, 2)
-    completion_delays = iter((0.05, None, 0.05))
+    completion_delays = iter((0.05, None))
     release_slowest = threading.Event()
     threads: list[threading.Thread] = []
 
@@ -110,24 +109,14 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
     assert first["free_slots"] == 1
     assert first["active_count"] == 1
 
-    replacement = _planned_candidates(runtime, run_id, 1)[0]
-    submitted = submit_pi_search_pool(
-        root_dir=runtime.root_dir,
-        pool_id=pool_id,
-        candidate_id=replacement,
-    )
-    after_refill = snapshot_pi_search_pool(root_dir=runtime.root_dir, pool_id=pool_id)
-
-    assert submitted["candidate_id"] == replacement
-    assert after_refill["active_count"] == 2
-    assert any(
-        job["candidate_id"] == initial[1] and job["status"] == "running"
-        for job in after_refill["jobs"]
-    )
+    after_first = snapshot_pi_search_pool(root_dir=runtime.root_dir, pool_id=pool_id)
+    assert after_first["active_count"] == 1
+    assert after_first["free_slots"] == 1
+    assert [job["candidate_id"] for job in after_first["jobs"]] == initial
 
     release_slowest.set()
     observed = []
-    while len(observed) < 2:
+    while len(observed) < 1:
         update = wait_any_pi_search_pool(
             root_dir=runtime.root_dir,
             pool_id=pool_id,
@@ -135,7 +124,7 @@ def test_pi_pool_wait_any_refills_before_slowest_worker_finishes(
             poll_interval_seconds=0.01,
         )
         observed.extend(event["candidate_id"] for event in update["events"])
-    assert set(observed) == {initial[1], replacement}
+    assert observed == [initial[1]]
 
     closed = close_pi_search_pool(
         root_dir=runtime.root_dir,
@@ -232,14 +221,14 @@ def test_pi_pool_worker_publishes_candidate_ready_after_driver_completion(
     )
     run_id = runtime.create_run(frozen.frozen_spec_id)
     candidate_id = _planned_candidates(runtime, run_id, 1)[0]
-    opened = open_pi_search_pool(root_dir=runtime.root_dir, run_id=run_id)
-    pool_id = opened["pool_id"]
-    submitted = submit_pi_search_pool(
+    monkeypatch.setattr(pi_pool, "_launch_pool_job", lambda **_kwargs: os.getpid())
+    opened = open_pi_search_pool(
         root_dir=runtime.root_dir,
-        pool_id=pool_id,
-        candidate_id=candidate_id,
-        _launcher=lambda **_kwargs: os.getpid(),
+        run_id=run_id,
+        candidate_ids=[candidate_id],
     )
+    pool_id = opened["pool_id"]
+    submitted = opened["submitted"][0]
 
     def fake_driver(**request: Any) -> dict[str, Any]:
         return {

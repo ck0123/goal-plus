@@ -87,42 +87,6 @@ class EditSurface(SearchModel):
     max_file_changes: int | None = Field(default=None, gt=0)
 
 
-class HistoryPolicy(SearchModel):
-    scope: Literal[
-        "top_n",
-        "last_batch",
-        "all",
-        "selected_parent_and_inspirations",
-        "frontier",
-    ] = "top_n"
-    top_n: int = Field(default=5, gt=0)
-    include: list[str] = Field(
-        default_factory=lambda: [
-            "summary",
-            "score",
-            "key_metrics",
-            "parent_id",
-            "changed_files",
-        ]
-    )
-    inherited_feature_limit: int | None = Field(
-        default=50,
-        gt=0,
-        description=(
-            "Maximum inherited feature-ledger entries retained for a successor "
-            "run; null disables runtime truncation."
-        ),
-    )
-    inherited_pitfall_limit: int | None = Field(
-        default=30,
-        gt=0,
-        description=(
-            "Maximum inherited pitfall entries retained for a successor run; "
-            "null disables runtime truncation."
-        ),
-    )
-
-
 AgentHostKind = Literal["opencode", "codex", "claude-code", "pi-rpc"]
 
 
@@ -181,19 +145,13 @@ class WorkerLaunchOptions(SearchModel):
 
 class StrategySpec(SearchModel):
     name: str = "agent_guided"
-    driver: Literal["builtin", "python", "external_mcp"] = "builtin"
-    ref: str | None = None
-    agent_role: str = "planner_and_mutator"
     orchestration_mode: Literal["rolling_candidates", "parallel_loops"] = (
-        "rolling_candidates"
+        "parallel_loops"
     )
-    worker_mode: Literal["agent-session-pool"] = "agent-session-pool"
-    worker_host: AgentHostKind = "opencode"
+    worker_host: AgentHostKind = "codex"
     worker_agent_type: str | None = None
     worker_budget: WorkerBudget | None = None
     worker_launch: WorkerLaunchOptions | None = None
-    history_policy: HistoryPolicy = Field(default_factory=HistoryPolicy)
-    parent_policy: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("name")
@@ -363,10 +321,6 @@ class GoalPlusSpecDraft(SearchModel):
     promotion_rule: str = Field(min_length=1)
     confidence: GoalPlusConfidence
     origin: GoalPlusDiscoveryOrigin | None = None
-    user_confirmed_frozen_verifier: bool = Field(
-        default=False,
-        description="Legacy compatibility/audit field; not required for Search admission.",
-    )
     open_questions: list[str] = Field(default_factory=list)
 
     @field_serializer("search_spec")
@@ -493,35 +447,19 @@ class CandidateTask(SearchModel):
 
 
 class CandidateProposal(SearchModel):
-    parent_candidate_ids: list[str] = Field(default_factory=list)
-    base_candidate_id: str | None = None
     hypothesis: str | None = None
     intent: str = Field(min_length=1)
     expected_tradeoff: str = ""
     instructions: list[str] = Field(default_factory=list)
-    history_refs: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CandidateWorkOrder(SearchModel):
     slot: int = Field(gt=0)
-    base_candidate_id: str | None = None
-    parent_candidate_ids: list[str] = Field(default_factory=list)
-    inspiration_candidate_ids: list[str] = Field(default_factory=list)
     intent: str = Field(min_length=1)
     hypothesis: str | None = None
     instructions: list[str] = Field(default_factory=list)
-    must_derive_from: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class ProposalContract(SearchModel):
-    count: int = Field(ge=0)
-    must_reference_one_of: list[str] = Field(default_factory=list)
-    required_fields: list[str] = Field(
-        default_factory=lambda: ["parent_candidate_ids", "intent", "expected_tradeoff"]
-    )
-    notes: list[str] = Field(default_factory=list)
 
 
 class SearchPlan(SearchModel):
@@ -533,10 +471,7 @@ class SearchPlan(SearchModel):
     planned_k: int = Field(ge=0)
     remaining_budget: int = Field(ge=0)
     requires_agent_proposals: bool = False
-    official_history: dict[str, Any] = Field(default_factory=dict)
-    derivation_policy: dict[str, Any] = Field(default_factory=dict)
     worker_policy: dict[str, Any] = Field(default_factory=dict)
-    proposal_contract: ProposalContract | None = None
     work_orders: list[CandidateWorkOrder] = Field(default_factory=list)
     strategy_trace: dict[str, Any] = Field(default_factory=dict)
     started_candidate_ids: list[str] = Field(default_factory=list)

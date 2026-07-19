@@ -77,10 +77,9 @@ a single `{op_name}_impl.py` that imports the binding and defines `ModelNew`.
   "budget": {"max_candidates": 4, "max_parallel": 2},
   "strategy": {
     "name": "agent_guided",
-    "driver": "builtin",
-    "worker_mode": "agent-session-pool",
-    "worker_agent_type": "SearchCandidateAgentDeep",
-    "history_policy": {"scope": "top_n", "top_n": 5}
+    "orchestration_mode": "parallel_loops",
+    "worker_host": "codex",
+    "worker_agent_type": "search_candidate_agent"
   }
 }
 ```
@@ -100,7 +99,7 @@ Notes:
 ## Step 4 — drive the search flow
 
 Hand off to the standard `search` skill. Full mechanics live in
-`.opencode/skills/search/SKILL.md` and `examples/README.md`; this example
+`.codex/skills/search/SKILL.md` and `examples/README.md`; this example
 does not redefine them. The shape:
 
 1. `search_freeze_spec(spec=<above>, verifier_artifact_paths=[`
@@ -108,12 +107,13 @@ does not redefine them. The shape:
    `"_verifier/<op>_torch.py", "_verifier/<op>_impl.py"])`
 2. `search_create(frozen_spec_id=<id>)` — record `run_id`.
 3. `search_plan_next(run_id, requested_k=4)`.
-4. `search_start_batch(run_id, plan_id, proposals=[...])` — author 4
-   proposals referencing the official history (first batch has empty
-   `must_reference_one_of`, so proposals may start from source).
-5. For each candidate: `search_start_agent_session` → launch `Task` with the
-   `launch` payload → `search_bind_opencode_session` → `search_run_verifier
-   (run_id, candidate_id, "process")` (no `agent_session_id`, final confirm).
+4. `search_start_batch(run_id, plan_id, proposals=[...])` — author the four
+   initial independent lane intents.
+5. For each candidate: `search_start_agent_session` → launch the returned Codex
+   payload → wait for completion → `search_run_verifier(run_id, candidate_id,
+   "process")` without `agent_session_id` for parent confirmation. Resume the
+   same worker with `search_continue_agent_session` plus `followup_task` while
+   the global task remains active.
 6. `search_list_history`, `search_select`, `search_report`.
 7. Optional: `search_promote(run_id, selected_candidate_id)`.
 

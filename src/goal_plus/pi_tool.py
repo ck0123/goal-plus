@@ -9,13 +9,11 @@ from typing import Any, Callable
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
-from goal_plus.pi_driver import run_pi_search_batch, run_pi_search_candidate
 from goal_plus.pi_pool import (
     close_pi_search_pool,
     continue_pi_search_pool,
     open_pi_search_pool,
     snapshot_pi_search_pool,
-    submit_pi_search_pool,
     wait_any_pi_search_pool,
 )
 from goal_plus.runtime import FileSearchRuntime
@@ -32,7 +30,6 @@ SEARCH_TOOL_NAMES = {
     "search_start_batch",
     "search_start_agent_session",
     "search_redispatch_candidate",
-    "search_bind_opencode_session",
     "search_bind_agent_handle",
     "search_continue_agent_session",
     "search_get_agent_context",
@@ -50,7 +47,6 @@ GOAL_PLUS_TOOL_NAMES = {
     "goal_plus_update_goal",
     "goal_plus_record_triage",
     "goal_plus_save_spec_draft",
-    "goal_plus_confirm_frozen_verifier",
     "goal_plus_link_search_run",
     "goal_plus_record_search_result",
     "goal_plus_prepare_final_check",
@@ -60,85 +56,10 @@ GOAL_PLUS_TOOL_NAMES = {
 }
 
 
-def _pi_search_run_candidate_tool(
-    root_dir: Path | str,
-) -> Callable[..., dict[str, Any]]:
-    def call(
-        run_id: str,
-        candidate_id: str,
-        directive: dict[str, Any] | str | None = None,
-        redispatch: bool = False,
-        runtime_multiplier: float | None = None,
-        worker_budget: dict[str, Any] | None = None,
-        final_verify: bool = True,
-        pi_binary: str = "pi",
-        extension_path: str | None = None,
-        thinking_level: str | None = None,
-        model_pattern: str | None = None,
-        provider: str | None = None,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        return run_pi_search_candidate(
-            root_dir=root_dir,
-            run_id=run_id,
-            candidate_id=candidate_id,
-            directive=directive,
-            redispatch=redispatch,
-            runtime_multiplier=runtime_multiplier,
-            worker_budget=worker_budget,
-            final_verify=final_verify,
-            pi_binary=pi_binary,
-            extension_path=extension_path,
-            thinking_level=thinking_level,
-            model_pattern=model_pattern,
-            provider=provider,
-            model_id=model_id,
-        )
-
-    return call
-
-
-def _pi_search_run_batch_tool(
-    root_dir: Path | str,
-) -> Callable[..., dict[str, Any]]:
-    def call(
-        run_id: str,
-        candidate_ids: list[str],
-        directive: dict[str, Any] | str | None = None,
-        worker_budgets: dict[str, dict[str, Any]] | None = None,
-        final_verify: bool = True,
-        max_parallel: int | None = None,
-        pi_binary: str = "pi",
-        extension_path: str | None = None,
-        thinking_level: str | None = None,
-        model_pattern: str | None = None,
-        provider: str | None = None,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        return run_pi_search_batch(
-            root_dir=root_dir,
-            run_id=run_id,
-            candidate_ids=candidate_ids,
-            directive=directive,
-            worker_budgets=worker_budgets,
-            final_verify=final_verify,
-            max_parallel=max_parallel,
-            pi_binary=pi_binary,
-            extension_path=extension_path,
-            thinking_level=thinking_level,
-            model_pattern=model_pattern,
-            provider=provider,
-            model_id=model_id,
-        )
-
-    return call
-
-
 def _pi_search_pool_open_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
     def call(
         run_id: str,
         candidate_ids: list[str] | None = None,
-        directive: dict[str, Any] | str | None = None,
         worker_budgets: dict[str, dict[str, Any]] | None = None,
         final_verify: bool = True,
         max_parallel: int | None = None,
@@ -147,30 +68,9 @@ def _pi_search_pool_open_tool(root_dir: Path | str) -> Callable[..., dict[str, A
             root_dir=root_dir,
             run_id=run_id,
             candidate_ids=candidate_ids,
-            directive=directive,
             worker_budgets=worker_budgets,
             final_verify=final_verify,
             max_parallel=max_parallel,
-        )
-
-    return call
-
-
-def _pi_search_pool_submit_tool(root_dir: Path | str) -> Callable[..., dict[str, Any]]:
-    def call(
-        pool_id: str,
-        candidate_id: str,
-        directive: dict[str, Any] | str | None = None,
-        worker_budget: dict[str, Any] | None = None,
-        final_verify: bool = True,
-    ) -> dict[str, Any]:
-        return submit_pi_search_pool(
-            root_dir=root_dir,
-            pool_id=pool_id,
-            candidate_id=candidate_id,
-            directive=directive,
-            worker_budget=worker_budget,
-            final_verify=final_verify,
         )
 
     return call
@@ -205,18 +105,14 @@ def _pi_search_pool_continue_tool(root_dir: Path | str) -> Callable[..., dict[st
     def call(
         pool_id: str,
         candidate_id: str,
-        directive: dict[str, Any] | str | None = None,
         worker_budget: dict[str, Any] | None = None,
-        runtime_multiplier: float | None = None,
         final_verify: bool = True,
     ) -> dict[str, Any]:
         return continue_pi_search_pool(
             root_dir=root_dir,
             pool_id=pool_id,
             candidate_id=candidate_id,
-            directive=directive,
             worker_budget=worker_budget,
-            runtime_multiplier=runtime_multiplier,
             final_verify=final_verify,
         )
 
@@ -247,10 +143,7 @@ def _registry(root_dir: Path | str) -> dict[str, Callable[..., Any]]:
         tools[name] = getattr(search_tools, name)
     for name in GOAL_PLUS_TOOL_NAMES:
         tools[name] = getattr(goal_tools, name)
-    tools["pi_search_run_candidate"] = _pi_search_run_candidate_tool(root_dir)
-    tools["pi_search_run_batch"] = _pi_search_run_batch_tool(root_dir)
     tools["pi_search_pool_open"] = _pi_search_pool_open_tool(root_dir)
-    tools["pi_search_pool_submit"] = _pi_search_pool_submit_tool(root_dir)
     tools["pi_search_pool_wait_any"] = _pi_search_pool_wait_any_tool(root_dir)
     tools["pi_search_pool_snapshot"] = _pi_search_pool_snapshot_tool(root_dir)
     tools["pi_search_pool_continue"] = _pi_search_pool_continue_tool(root_dir)

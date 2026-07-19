@@ -202,17 +202,17 @@ slots. The candidate subagent chooses every later technical action.
 
 ## Strategy And Budget
 
-`agent_guided`/`agent`/`default` consume main-agent proposals.
-`random`/`random_mode` consume runtime work orders. These are the portable
-strategies for Pi, Codex, and Claude Code. Existing advanced strategies and
-trace export remain OpenCode compatibility paths.
+`agent_guided`/`agent`/`default` consume the initial main-agent proposals.
+`random`/`random_mode` create initial runtime work orders. These are the only
+planners accepted for maintained Pi and Codex runs.
 
 `StrategySpec.orchestration_mode` controls planning policy:
 
 - `parallel_loops`: one initial `search_plan_next`; each candidate is resumed in
   place and a second plan is rejected.
-- `rolling_candidates`: backward-compatible legacy behavior for existing specs
-  and hosts.
+
+The model still parses the retired `rolling_candidates` value so old `.gp`
+records remain readable, but new execution does not implement or advertise it.
 
 The initial `search_plan_next` plans:
 

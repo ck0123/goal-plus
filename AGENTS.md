@@ -23,11 +23,6 @@ Read only the page that owns the question:
 - [tests/README.md](tests/README.md): unit/integration/system test layout and
   commands.
 
-Strategy-specific docs:
-
-- [docs/strategy-openevolve.md](docs/strategy-openevolve.md)
-- [docs/strategy-adaptevolve.md](docs/strategy-adaptevolve.md)
-
 Recent implementation evidence:
 
 - [docs/worker-budget-smoke.md](docs/worker-budget-smoke.md)
@@ -126,13 +121,11 @@ When building or running such benchmarks:
 - `src/goal_plus/runtime.py`: file-backed Search Mode state
   machine for workspace copy, verifier execution, selection, reports, and
   promotion.
-- `src/goal_plus/agent_hosts.py`: host adapters for OpenCode,
-  Codex, and Claude Code. Keep host launch/continue/budget mapping here.
+- `src/goal_plus/agent_hosts.py`: maintained Codex/Pi adapters plus unsupported
+  OpenCode/Claude reference adapters. Keep host launch/continue/budget mapping here.
 - `src/goal_plus/tools.py`: JSON-friendly facade used by tests and
   MCP.
 - `src/goal_plus/server.py`: FastMCP stdio server.
-- `src/goal_plus/strategies/`: strategy plugins and helpers.
-- `src/goal_plus/trace_export.py`: OpenCode trace export tooling.
 - `src/goal_plus/pi_tool.py` and
   `src/goal_plus/pi_worker.py`: Pi extension facade and Pi RPC
   worker runner. `src/goal_plus/pi_pool.py` is the durable host-local pool
@@ -161,10 +154,9 @@ Keep runtime behavior host-neutral. Host-specific behavior belongs in
 
 Current host expectations:
 
-- OpenCode is the compatibility baseline. It supports the existing
-  OpenCode-tested strategies, `Task(task_id=...)` continuation, step-tiered
-  agents, and OpenCode trace export. It does not currently provide
-  hook-enforced Goal Plus lifecycle gates in this repository.
+- OpenCode and Claude Code are unsupported reference hosts. Their assets and
+  adapters are not maintained, receive no compatibility guarantee, and their
+  tests are excluded from the default gate with `opencode`/`claude` markers.
 - Codex supports the portable builtin strategy subset. `worker_budget` requires
   `max_runtime_seconds` and is enforced by parent watchdog metadata:
   an initial `wait_agent`, one `send_message` closeout, a final wait, then
@@ -179,11 +171,6 @@ Current host expectations:
   `search_continue_agent_session` plus `followup_task` while no global stop
   condition is true. Main must not choose later technical directions or create
   quality-based replacements.
-- Claude Code supports the portable builtin strategy subset. `worker_budget`
-  requires `max_turns` and maps known budgets to `.claude/agents/*.md`
-  `maxTurns` definitions. Claude Code ships `PostToolUse(goal_plus_create)`
-  session binding and a session-scoped Stop hook backstop;
-  it does not yet wire PreToolUse or SubagentStop host hooks.
 - Pi RPC supports the portable builtin strategy subset. `worker_budget`
   requires `max_runtime_seconds`; `max_turns` is only a prompt hint. Pi uses
   `goal-plus-pi-worker` to launch foreground `pi --mode rpc` workers
@@ -199,13 +186,13 @@ Current host expectations:
   condition is true. Pi has
   extension pre-tool guarding and skill stop gates, but no Codex Stop hook
   parity. Its main-agent pool is a durable host supervisor under
-  `.gp/host-pools/pi/` with explicit open/submit/wait-any/snapshot/continue/
-  close tools; it never plans or auto-refills candidates.
+  `.gp/host-pools/pi/` with explicit open/wait-any/snapshot/continue/close
+  tools; it never plans or auto-refills candidates.
   This is cross-process native-session continuation, not a promise that one Pi
   OS process remains resident for the full run. Add a persistent same-PID host
   supervisor only if process identity itself becomes a requirement.
 
-Portable strategy names for non-OpenCode hosts are currently:
+Maintained strategy names for Codex and Pi are currently:
 
 - `agent_guided`
 - `agent`
@@ -213,7 +200,7 @@ Portable strategy names for non-OpenCode hosts are currently:
 - `random`
 - `random_mode`
 
-Do not enable additional Codex or Claude Code strategies without adding unit or
+Do not enable additional Codex or Pi strategies without adding unit or
 mock coverage for launch payloads and at least one real smoke path when the
 behavior depends on host execution.
 
@@ -225,31 +212,19 @@ matching host skills, and deterministic tests.
 Do not describe a host as fully hook-enforced Goal Plus unless the repository
 ships and tests hook wiring at all relevant Stop, SubagentStop, and PreToolUse
 checkpoints. Codex provides those Goal Plus lifecycle checkpoints, but this is
-not host process supervision. Claude Code currently provides ownership binding
-plus a session-scoped Stop backstop.
+not host process supervision.
 
 ## Asset And Prompt Changes
 
 Host assets are executable product surface, not decorative docs. When changing
 the runtime contract, update the matching assets and tests:
 
-- OpenCode: `.opencode/skills/search/SKILL.md`,
-  `.opencode/skills/goal-plus/SKILL.md`, `.opencode/command/goal-plus.md`,
-  `.opencode/command/goal-any-optimize.md`,
-  `.opencode/agents/goal-plus-orchestrator.md`,
-  `.opencode/agents/SearchCandidateAgent*.md`,
-  `.opencode/agents/search-orchestrator.md`, and
-  `tests/test_opencode_assets.py`.
 - Codex: `.codex/skills/goal-plus/SKILL.md`,
   `.codex/skills/goal-plus-with-final-check/SKILL.md`,
   `.codex/skills/search/SKILL.md`,
   `.codex/agents/search_candidate_agent.toml`,
   `.codex/agents/goal_plus_final_checker.toml`, `.codex/config.example.toml`, and
   `tests/test_codex_assets.py`.
-- Claude Code: `.claude/skills/goal-plus/SKILL.md`,
-  `.claude/skills/search/SKILL.md`,
-  `.claude/agents/search-candidate-agent*.md`, `.mcp.json`, and
-  `tests/test_claude_assets.py`.
 - Pi: `.pi/prompts/goal-plus.md`, `.pi/prompts/search-candidate-worker.md`,
   `.pi/skills/goal-plus/SKILL.md`, `.pi/extensions/goal-plus.ts`, and
   `tests/test_pi_assets.py`.
@@ -259,10 +234,10 @@ observation, submit, abort, and host-sync APIs must not reappear in host assets.
 
 ## Testing
 
-`pytest.ini` registers markers and defaults to `-n 4 --dist=load`. The default
-gate runs fast unit tests in parallel; `integration`, `example`, `st`, and
-`st_pi` tests are skipped unless named in `-m`. See [tests/README.md](tests/README.md)
-for the full marker matrix.
+`pytest.ini` registers markers and defaults to `-n 4 --dist=load` with
+`not opencode and not claude`. The default gate runs maintained fast tests in
+parallel; `integration`, `example`, `st`, and `st_pi` tests are skipped unless
+named in `-m`. See [tests/README.md](tests/README.md) for the full marker matrix.
 
 Default verification:
 
@@ -290,7 +265,7 @@ Focused tests:
 ```bash
 python -m pytest tests/test_runtime_unit.py -q
 python -m pytest tests/test_agent_hosts.py tests/test_models.py -q
-python -m pytest tests/test_opencode_assets.py tests/test_codex_assets.py tests/test_claude_assets.py -q
+python -m pytest tests/test_codex_assets.py tests/test_pi_assets.py -q
 python -m pytest -m codex -q          # all codex-slice tests
 python -m pytest -m pi -q             # all pi-slice tests
 ```
@@ -298,12 +273,12 @@ python -m pytest -m pi -q             # all pi-slice tests
 Opt-in slices:
 
 ```bash
-python -m pytest -m integration -q   # multi-round search end-to-end
+python -m pytest -m integration -q   # multi-component end-to-end
 python -m pytest -m example -q         # examples/* fixtures drive real assets
-python -m pytest -m "st or st_pi" -v -s  # real-host system tests
+python -m pytest -m "(st and (st_codex or st_pi_rpc)) or st_pi" -v -s
 ```
 
-Run ST only when host credentials, `opencode`, and the `goal-plus` MCP
+Run ST only when Codex/Pi credentials and the `goal-plus` MCP
 connection are available. See [tests/README.md](tests/README.md) for preflight
 checks and environment variables.
 
@@ -326,9 +301,8 @@ Goal Plus/Search monitoring:
   completed Goal Plus/Search runs. It summarizes goal status, linked run state,
   search strategy and latest-plan state, selected candidate, candidate scores,
   verifier counts, subagent liveness, Pi token/cost/context metrics, stale
-  warnings, and report/promotion paths. Use `strategy.name` and
-  `strategy.driver` to identify the algorithm; `plans_count` is only a round
-  count.
+  warnings, and report/promotion paths. Use `strategy.name` to identify the
+  initial planning mode; maintained runs have one plan.
 - If the MCP tool is not directly exposed in the current host, use the matching
   facade instead of manually tailing files, for example:
 

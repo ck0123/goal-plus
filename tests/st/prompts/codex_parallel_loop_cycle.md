@@ -9,9 +9,8 @@ exact changes before freezing it:
 
 - `source_path={{PROJECT_ROOT}}/tests/st/fixtures/circle_packing`
 - `budget={"max_candidates": 2, "max_parallel": 2}`
-- `strategy.name="random"`, `strategy.driver="builtin"`
+- `strategy.name="random"`
 - `strategy.orchestration_mode="parallel_loops"`
-- `strategy.worker_mode="agent-session-pool"`
 - `strategy.worker_host="codex"`
 - `strategy.worker_agent_type="search_candidate_agent"`
 - `strategy.worker_budget={"max_runtime_seconds": 90, "max_turns": 4, "on_exceed": "interrupt"}`

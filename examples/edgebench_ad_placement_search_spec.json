@@ -31,7 +31,6 @@
   },
   "strategy": {
     "name": "agent_guided",
-    "worker_mode": "agent-session-pool",
     "worker_host": "pi-rpc",
     "worker_budget": {
       "max_runtime_seconds": 240,

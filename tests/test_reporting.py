@@ -67,7 +67,7 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     assert "Search Task 01" in html
     assert "Search Task 02" in html
     assert "Orchestration" in html
-    assert "rolling_candidates" in html
+    assert "parallel_loops" in html
     assert session.agent_session_id in html
     assert html.count("<h2>Search Execution Timeline</h2>") == 2
     assert "Goal Plus Summary" in html
@@ -94,7 +94,6 @@ def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path)
     runs = [search.create_run(frozen.frozen_spec_id) for _ in range(2)]
     for run_id in runs:
         search.plan_next(run_id, requested_k=1)
-        search.plan_next(run_id, requested_k=1)
 
     goals = FileGoalPlusRuntime(root)
     goal = goals.create_goal("Compare two independent Search tasks")
@@ -106,13 +105,13 @@ def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path)
     assert data["goal_plus_id"] == goal.goal_plus_id
     assert [task["run_id"] for task in data["search_tasks"]] == runs
     assert all(
-        task["strategy"]["orchestration_mode"] == "rolling_candidates"
+        task["strategy"]["orchestration_mode"] == "parallel_loops"
         for task in data["search_tasks"]
     )
-    assert [len(task["plans"]) for task in data["search_tasks"]] == [2, 2]
+    assert [len(task["plans"]) for task in data["search_tasks"]] == [1, 1]
     assert all(task["timeline"]["duration_seconds"] for task in data["search_tasks"])
     assert data["snapshot"]["search_task_aggregate"]["search_tasks_total"] == 2
-    assert data["snapshot"]["search_task_aggregate"]["planning_rounds_total"] == 4
+    assert data["snapshot"]["search_task_aggregate"]["planning_rounds_total"] == 2
 
 
 def test_pi_native_session_resume_renders_distinct_process_dispatches(
@@ -124,7 +123,6 @@ def test_pi_native_session_resume_renders_distinct_process_dispatches(
     spec_data = spec_for(project, max_candidates=1).model_dump(mode="json")
     spec_data["strategy"] = {
         "name": "random",
-        "worker_mode": "agent-session-pool",
         "worker_host": "pi-rpc",
         "worker_budget": {
             "max_runtime_seconds": 60,

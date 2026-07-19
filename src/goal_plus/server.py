@@ -167,9 +167,8 @@ def create_mcp(
         """Create a context/provenance handle and host-native launch payload.
 
         It does not start a worker or track lifecycle. The optional
-        `worker_budget` overrides only this dispatch, so the main agent can
-        give a valuable direction a longer uninterrupted exploration window
-        without mutating the frozen spec. Use the returned `launch` payload
+        `worker_budget` overrides only this dispatch without mutating the
+        frozen spec. Use the returned `launch` payload
         with the selected host. The prompt-supplied `candidate_id` is a label
         only; the worker must derive authoritative context from
         `search_get_agent_context`.
@@ -182,7 +181,6 @@ def create_mcp(
     def search_redispatch_candidate(
         run_id: str,
         candidate_id: str,
-        directive: dict[str, Any] | str | None = None,
         worker_agent_type: str | None = None,
         worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -196,25 +194,8 @@ def create_mcp(
         return tools.search_redispatch_candidate(
             run_id,
             candidate_id,
-            directive,
             worker_agent_type,
             worker_budget,
-        )
-
-    @mcp.tool()
-    def search_bind_opencode_session(
-        agent_session_id: str,
-        opencode_session_id: str,
-    ) -> dict[str, Any]:
-        """Bind a runtime agent session to the OpenCode Task session id.
-
-        Call this after Task returns using the Task result's
-        `metadata.sessionId`. This enables later continuation with
-        `search_continue_agent_session`.
-        """
-        return tools.search_bind_opencode_session(
-            agent_session_id,
-            opencode_session_id,
         )
 
     @mcp.tool()
@@ -222,12 +203,7 @@ def create_mcp(
         agent_session_id: str,
         handle: dict[str, Any],
     ) -> dict[str, Any]:
-        """Bind a runtime agent session to a non-OpenCode host worker handle.
-
-        Used by Codex and Claude Code adapters to record task names, nicknames,
-        or agent ids returned by their native worker launch tools.
-        OpenCode callers may keep using `search_bind_opencode_session`.
-        """
+        """Bind a runtime agent session to its host worker handle."""
         return tools.search_bind_agent_handle(agent_session_id, handle)
 
     @mcp.tool()
@@ -246,19 +222,16 @@ def create_mcp(
     @mcp.tool()
     def search_continue_agent_session(
         agent_session_id: str,
-        directive: dict[str, Any] | str | None = None,
         worker_budget: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return host launch fields for continuing a bound worker session.
 
         Hosts with native continuation reuse the same worker handle. The
-        optional worker budget overrides only this continuation dispatch,
-        allowing the orchestrator to reinvest in a promising direction without
-        mutating the frozen spec.
+        optional worker budget overrides only this continuation dispatch. The
+        continuation prompt is neutral: the worker chooses its next action.
         """
         return tools.search_continue_agent_session(
             agent_session_id,
-            directive,
             worker_budget,
         )
 
@@ -310,9 +283,9 @@ def create_mcp(
         return tools.search_list_iterations(run_id, candidate_id)
 
     @mcp.tool()
-    def search_select(run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
+    def search_select(run_id: str) -> dict[str, Any]:
         """Pick the best evaluated candidate by score. Call after verifying candidates."""
-        return tools.search_select(run_id, strategy)
+        return tools.search_select(run_id)
 
     @mcp.tool()
     def search_report(run_id: str) -> dict[str, str]:
@@ -368,23 +341,6 @@ def create_mcp(
     ) -> dict[str, Any]:
         """Save the discovered frozen-spec candidate before search_freeze_spec."""
         return goal_tools.goal_plus_save_spec_draft(goal_plus_id, spec_draft)
-
-    @mcp.tool()
-    def goal_plus_confirm_frozen_verifier(
-        goal_plus_id: str,
-        confirmed_by: str = "user",
-        evidence: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Optionally record verifier approval evidence for compatibility/audit.
-
-        Search readiness is determined by a high-confidence spec draft with no
-        open questions; it does not require a separate user interaction.
-        """
-        return goal_tools.goal_plus_confirm_frozen_verifier(
-            goal_plus_id,
-            confirmed_by,
-            evidence,
-        )
 
     @mcp.tool()
     def goal_plus_link_search_run(

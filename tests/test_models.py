@@ -55,7 +55,8 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["process_verifiers"][0]["role"] == "ranking_signal"
     assert dumped["metric_direction"] == "maximize"
     assert dumped["strategy"]["name"] == "agent_guided"
-    assert dumped["strategy"]["worker_mode"] == "agent-session-pool"
+    assert dumped["strategy"]["orchestration_mode"] == "parallel_loops"
+    assert dumped["strategy"]["worker_host"] == "codex"
 
 
 def test_goal_plus_spec_draft_exposes_typed_partial_search_spec() -> None:
@@ -164,51 +165,29 @@ def test_search_spec_supports_copy_and_git_worktree_workspace_backends() -> None
 
 def test_search_spec_requires_structured_strategy() -> None:
     data = valid_spec_dict()
-    data["strategy"] = {"name": "agent_guided", "history_policy": {"scope": "top_n", "top_n": 3}}
+    data["strategy"] = {
+        "name": "agent_guided",
+        "worker_host": "codex",
+        "worker_agent_type": "search_candidate_agent",
+    }
     spec = SearchSpec.model_validate(data)
     assert spec.strategy.name == "agent_guided"
-    assert spec.strategy.history_policy.top_n == 3
-    assert spec.strategy.history_policy.inherited_feature_limit == 50
-    assert spec.strategy.history_policy.inherited_pitfall_limit == 30
-    assert spec.strategy.worker_mode == "agent-session-pool"
-
-    data = valid_spec_dict()
-    data["strategy"] = {
-        "name": "agent_guided",
-        "history_policy": {
-            "inherited_feature_limit": None,
-            "inherited_pitfall_limit": 75,
-        },
-    }
-    spec = SearchSpec.model_validate(data)
-    assert spec.strategy.history_policy.inherited_feature_limit is None
-    assert spec.strategy.history_policy.inherited_pitfall_limit == 75
-
-    data = valid_spec_dict()
-    data["strategy"] = {
-        "name": "agent_guided",
-        "history_policy": {"inherited_feature_limit": 0},
-    }
-    with pytest.raises(ValidationError):
-        SearchSpec.model_validate(data)
-
-    data = valid_spec_dict()
-    data["strategy"] = {
-        "name": "independent_branches",
-        "worker_mode": "agent-session-pool",
-        "worker_agent_type": "SearchCandidateAgent"}
-    spec = SearchSpec.model_validate(data)
-    assert spec.strategy.worker_mode == "agent-session-pool"
-    assert spec.strategy.worker_agent_type == "SearchCandidateAgent"
+    assert spec.strategy.worker_host == "codex"
+    assert spec.strategy.worker_agent_type == "search_candidate_agent"
 
     legacy_string = valid_spec_dict()
     legacy_string["strategy"] = "evolve"
     with pytest.raises(ValidationError):
         SearchSpec.model_validate(legacy_string)
 
-    for retired in ("sub-agent-search-dispatch", "main-agent-search-direct", "auto"):
+    for retired_field, retired_value in (
+        ("worker_mode", "agent-session-pool"),
+        ("history_policy", {"scope": "top_n"}),
+        ("driver", "builtin"),
+        ("parent_policy", "best"),
+    ):
         data = valid_spec_dict()
-        data["strategy"] = {"name": "independent_branches", "worker_mode": retired}
+        data["strategy"] = {"name": "agent_guided", retired_field: retired_value}
         with pytest.raises(ValidationError):
             SearchSpec.model_validate(data)
 
@@ -224,10 +203,10 @@ def test_strategy_spec_accepts_supported_worker_hosts() -> None:
 
 
 def test_strategy_spec_accepts_parallel_loop_orchestration() -> None:
-    legacy = StrategySpec()
+    default = StrategySpec()
     parallel = StrategySpec(orchestration_mode="parallel_loops")
 
-    assert legacy.orchestration_mode == "rolling_candidates"
+    assert default.orchestration_mode == "parallel_loops"
     assert parallel.orchestration_mode == "parallel_loops"
 
     with pytest.raises(ValidationError):
@@ -296,7 +275,7 @@ def test_worker_budget_requires_runtime_or_turn_limit() -> None:
         WorkerBudget(min_runtime_seconds=600, max_runtime_seconds=600)
 
 
-def test_strategy_plan_models_capture_proposal_contract() -> None:
+def test_strategy_plan_models_capture_initial_independent_proposals() -> None:
     plan = SearchPlan(
         run_id="run_1",
         plan_id="plan_001",
@@ -305,17 +284,21 @@ def test_strategy_plan_models_capture_proposal_contract() -> None:
         planned_k=2,
         remaining_budget=2,
         requires_agent_proposals=True,
-        proposal_contract={"count": 2, "must_reference_one_of": ["c001"]},  # type: ignore[arg-type]
         created_at="2026-06-24T00:00:00Z",
     )
     proposal = CandidateProposal(
-        parent_candidate_ids=["c001"],
-        intent="mutate c001",
+        intent="try an independent implementation",
         expected_tradeoff="higher score with more risk",
     )
 
-    assert plan.proposal_contract.count == 2  # type: ignore[union-attr]
-    assert proposal.parent_candidate_ids == ["c001"]
+    assert plan.requires_agent_proposals is True
+    assert proposal.intent == "try an independent implementation"
+
+    with pytest.raises(ValidationError):
+        CandidateProposal(
+            intent="mutate c001",
+            parent_candidate_ids=["c001"],  # type: ignore[call-arg]
+        )
 
 
 def test_agent_session_record_is_context_handle_with_required_candidate() -> None:

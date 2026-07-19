@@ -1,7 +1,9 @@
 # Claude Code
 
-Claude Code is a compatibility host for the portable Search strategies. It
-uses foreground `Agent` workers and the shared MCP runtime.
+> **Unsupported reference:** Claude Code is not maintained by the current
+> parallel-loop runtime. Its assets and this setup snapshot may be stale, and
+> its tests are excluded from the default gate. New Search specs must use Codex
+> or Pi RPC.
 
 ## Setup
 
@@ -32,18 +34,18 @@ completion gates but does not supervise workers. Every still-active top-level
 record receives the full raw goal and elapsed-time context until the main agent
 records a terminal status.
 
-## Current Support
+## Historical Capabilities
 
 | Capability | Status |
 |---|---|
-| Search runtime and isolated candidates | supported |
-| Foreground Agent launch | supported |
-| Worker budget | `worker_budget.max_turns` mapped to agents with 4, 8, or 16 `maxTurns` |
-| State-level redispatch | supported |
-| Same-worker messaging | conditional; use redispatch as the portable fallback |
-| Goal creation binding | PostToolUse hook |
-| Top-level completion gate | Stop hook |
-| Pre-tool and subagent-stop enforcement | instruction-driven |
+| Search runtime and isolated candidates | historical snapshot |
+| Foreground Agent launch | historical snapshot |
+| Worker budget | historical `maxTurns` mapping |
+| State-level redispatch | historical snapshot |
+| Same-worker messaging | historical conditional behavior |
+| Goal creation binding | historical PostToolUse hook |
+| Top-level completion gate | historical Stop hook |
+| Pre-tool and subagent-stop enforcement | historical instruction path |
 | Trace export and normalized cost metadata | not implemented |
 
 The local version used for the original adapter evidence was Claude Code
@@ -69,16 +71,15 @@ final-verify after Agent returns. Known budgets map to
 `search-candidate-agent-deep`. If the worker stops too early, call
 `search_redispatch_candidate` with a larger one-dispatch budget.
 
-Claude Code supports `agent_guided`/`agent`/`default` and
-`random`/`random_mode`. The main agent follows the canonical
-[Flow](flow-view.md); no host-specific API copy is maintained here.
+These capabilities describe the retained adapter snapshot, not a supported
+current execution path.
 
 ## Verification And Logs
 
 Fast tests:
 
 ```bash
-pytest tests/test_claude_assets.py -q
+pytest -m claude tests/test_claude_assets.py -q
 ```
 
 Capture headless evidence with:

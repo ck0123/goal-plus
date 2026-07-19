@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests.test_host_assets_common import assert_common_budget_planning_claims
 
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.claude
 
 
 def test_claude_mcp_json_registers_search_runtime() -> None:

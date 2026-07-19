@@ -62,15 +62,17 @@ SEARCH_TOOL_SUFFIXES = (
     "search_start_batch",
     "search_start_agent_session",
     "search_redispatch_candidate",
-    "search_bind_opencode_session",
     "search_bind_agent_handle",
     "search_continue_agent_session",
     "search_run_verifier",
     "search_select",
     "search_report",
     "search_promote",
-    "pi_rpc_run_worker",
-    "pi_search_run_candidate",
+    "pi_search_pool_open",
+    "pi_search_pool_wait_any",
+    "pi_search_pool_snapshot",
+    "pi_search_pool_continue",
+    "pi_search_pool_close",
 )
 MUTATING_TOOL_SUFFIXES = (
     "bash",
@@ -501,40 +503,6 @@ class FileGoalPlusRuntime:
         )
         self._write_record(updated)
         self._append_event(goal_plus_id, "spec_draft_saved", parsed.model_dump(mode="json"))
-        return updated
-
-    def confirm_frozen_verifier(
-        self,
-        goal_plus_id: str,
-        confirmed_by: str = "user",
-        evidence: dict[str, Any] | None = None,
-    ) -> GoalPlusRecord:
-        record = self._load_record(goal_plus_id)
-        if record.spec_draft is None:
-            raise ValueError("Cannot confirm frozen verifier before saving a spec draft.")
-        if record.spec_draft.confidence != "high" or record.spec_draft.open_questions:
-            raise ValueError("Cannot confirm a spec draft that is not search-ready.")
-
-        spec_draft = record.spec_draft.model_copy(
-            update={"user_confirmed_frozen_verifier": True}
-        )
-        updated = record.model_copy(
-            update={
-                "spec_draft": spec_draft,
-                "next_action": GoalPlusNextAction(
-                    kind="freeze_search_spec",
-                    description="Freeze the search-ready SearchSpec and verifier artifacts, then create a search run.",
-                    required=True,
-                ),
-                "updated_at": utc_timestamp(),
-            }
-        )
-        self._write_record(updated)
-        self._append_event(
-            goal_plus_id,
-            "frozen_verifier_confirmed",
-            {"confirmed_by": confirmed_by, "evidence": evidence or {}},
-        )
         return updated
 
     def link_search_run(

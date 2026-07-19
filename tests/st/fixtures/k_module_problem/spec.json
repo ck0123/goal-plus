@@ -39,8 +39,7 @@
     "max_parallel": 2
   },
   "strategy": {
-    "name": "independent_branches",
-    "worker_mode": "agent-session-pool",
+    "name": "random",
     "worker_agent_type": "SearchCandidateAgentFlash"
   },
   "root_hypotheses": [

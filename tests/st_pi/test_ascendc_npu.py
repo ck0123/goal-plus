@@ -400,7 +400,7 @@ def test_pi_goal_plus_ascendc_cannbench_gelu_end_to_end(
     assert frozen.spec.budget.max_candidates == 2
     assert frozen.spec.budget.max_parallel == 2
     assert frozen.spec.strategy.worker_host == "pi-rpc"
-    assert frozen.spec.strategy.worker_mode == "agent-session-pool"
+    assert frozen.spec.strategy.orchestration_mode == "parallel_loops"
     assert frozen.spec.promotion_verifiers
 
     plans = runtime._load_plans(run.run_id)
@@ -500,8 +500,10 @@ def test_pi_goal_plus_ascendc_cannbench_gelu_end_to_end(
     session_files = sorted(session_dir.glob("*.jsonl"))
     assert session_files
     entries = _read_jsonl(session_files[-1])
-    batch_calls = _tool_calls(entries, "pi_search_run_batch")
-    assert len(batch_calls) == 1
-    batch_args = batch_calls[0].get("arguments") or {}
-    assert batch_args["candidate_ids"] == ["c001", "c002"]
-    assert batch_args["max_parallel"] == 2
+    open_calls = _tool_calls(entries, "pi_search_pool_open")
+    assert len(open_calls) == 1
+    open_args = open_calls[0].get("arguments") or {}
+    assert open_args["candidate_ids"] == ["c001", "c002"]
+    assert open_args["max_parallel"] == 2
+    assert _tool_calls(entries, "pi_search_pool_wait_any")
+    assert _tool_calls(entries, "pi_search_pool_close")

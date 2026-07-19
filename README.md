@@ -7,8 +7,9 @@ handles ordinary goals directly and upgrades measurable optimization tasks to
 Search Mode: freeze the evaluation contract, explore isolated candidates, and
 promote the best verifier-backed result.
 
-Pi is the primary host path; Codex is the primary native multi-agent path.
-Claude Code and OpenCode remain supported compatibility hosts.
+Pi and Codex are the maintained host paths. OpenCode and Claude Code assets
+remain in the repository as unsupported references; they receive no
+compatibility guarantee and are excluded from the default test gate.
 
 ## Quick Start
 
@@ -56,8 +57,8 @@ stored as guidance in the final line of `raw_goal`, not as a scheduler state.
 |---|---|---|---|
 | Pi | `.pi/` | `/goal-plus` or `pi -p "/goal-plus ..."` | durable Pi RPC pool; see [Pi](docs/pi.md) |
 | Codex | `.codex/` | `goal-plus` skill or `/goal-plus` prompt | fixed parallel loops with native same-worker continuation; Codex 0.144.1+ hooks cover `UserPromptSubmit`, `PreToolUse`, and `SubagentStop`; see [Codex](docs/codex.md) |
-| Claude Code | `.mcp.json`, `.claude/` | `goal-plus` skill | foreground Agent compatibility path; see [Claude Code](docs/claude-code.md) |
-| OpenCode | `opencode.json`, `.opencode/` | `/goal-plus` | broadest legacy strategy coverage; see [OpenCode](docs/opencode.md) |
+| Claude Code | `.mcp.json`, `.claude/` | unsupported reference assets | not maintained; see [Claude Code](docs/claude-code.md) |
+| OpenCode | `opencode.json`, `.opencode/` | unsupported reference assets | not maintained; see [OpenCode](docs/opencode.md) |
 
 For Codex, copy `.codex/config.example.toml` to the ignored local
 `.codex/config.toml`. Host differences and strategy coverage are summarized in
@@ -82,8 +83,8 @@ New Pi/Codex Search uses fixed parallel loops: create the initial candidates
 once, validate every completion, update the verifier-backed global best, and
 resume that same candidate while no global stop condition is true. Main does
 not choose later technical directions or replace low-scoring candidates.
-Slower workers do not block completed work from being evaluated. Legacy frozen
-specs with `rolling_candidates` remain readable. See [Flow](docs/flow-view.md).
+Slower workers do not block completed work from being evaluated. See
+[Flow](docs/flow-view.md).
 
 Keep one run for one valid evaluation/edit contract. If a successor is
 unavoidable, `source_run_id` preserves bounded frontier/features/scoped
@@ -118,6 +119,6 @@ python -m pytest -q
 git diff --check
 ```
 
-The portable strategy set for Pi, Codex, and Claude Code is `agent_guided`
-(`agent`/`default`) and `random` (`random_mode`). OpenCode remains the
-compatibility host for the existing higher-touch strategies and trace export.
+The maintained strategy set for Pi and Codex is `agent_guided`
+(`agent`/`default`) and `random` (`random_mode`). OpenCode/Claude tests are
+explicit opt-in slices and do not run in `python -m pytest -q`.

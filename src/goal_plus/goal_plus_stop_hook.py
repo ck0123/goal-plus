@@ -1016,7 +1016,11 @@ def _should_gate_tool(tool_name: str) -> bool:
         logical_name.startswith("search_")
         or logical_name in {
             "pi_rpc_run_worker",
-            "pi_search_run_candidate",
+            "pi_search_pool_open",
+            "pi_search_pool_wait_any",
+            "pi_search_pool_snapshot",
+            "pi_search_pool_continue",
+            "pi_search_pool_close",
             "bash",
             "edit",
             "write",

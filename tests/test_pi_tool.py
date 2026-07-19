@@ -52,112 +52,6 @@ def test_pi_tool_calls_context_verifier_and_iterations(tmp_path: Path) -> None:
     assert iterations[0]["agent_session_id"] == session.agent_session_id
 
 
-def test_pi_tool_dispatches_candidate_driver(monkeypatch, tmp_path: Path) -> None:
-    calls: list[dict[str, Any]] = []
-
-    def fake_run_pi_search_candidate(**kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {
-            "ok": True,
-            "run_id": kwargs["run_id"],
-            "candidate_id": kwargs["candidate_id"],
-            "steps": [{"tool": "search_bind_agent_handle"}],
-        }
-
-    monkeypatch.setattr(
-        "goal_plus.pi_tool.run_pi_search_candidate",
-        fake_run_pi_search_candidate,
-    )
-
-    result = call_pi_tool(
-        tmp_path / ".search",
-        "pi_search_run_candidate",
-        {
-            "run_id": "run_1",
-            "candidate_id": "c001",
-            "directive": {"goal": "try candidate"},
-            "redispatch": False,
-            "runtime_multiplier": None,
-            "worker_budget": None,
-            "final_verify": True,
-            "pi_binary": "fake-pi",
-            "model_pattern": "gpt-test",
-        },
-    )
-
-    assert result["ok"] is True
-    assert calls == [
-        {
-            "root_dir": tmp_path / ".search",
-            "run_id": "run_1",
-            "candidate_id": "c001",
-            "directive": {"goal": "try candidate"},
-            "redispatch": False,
-            "runtime_multiplier": None,
-            "worker_budget": None,
-            "final_verify": True,
-            "pi_binary": "fake-pi",
-            "extension_path": None,
-            "thinking_level": None,
-            "model_pattern": "gpt-test",
-            "provider": None,
-            "model_id": None,
-        }
-    ]
-
-
-def test_pi_tool_dispatches_batch_driver(monkeypatch, tmp_path: Path) -> None:
-    calls: list[dict[str, Any]] = []
-
-    def fake_run_pi_search_batch(**kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {
-            "ok": True,
-            "run_id": kwargs["run_id"],
-            "candidate_ids": kwargs["candidate_ids"],
-            "results": [],
-        }
-
-    monkeypatch.setattr(
-        "goal_plus.pi_tool.run_pi_search_batch",
-        fake_run_pi_search_batch,
-    )
-
-    result = call_pi_tool(
-        tmp_path / ".search",
-        "pi_search_run_batch",
-        {
-            "run_id": "run_1",
-            "candidate_ids": ["c001", "c002"],
-            "directive": {"goal": "try batch"},
-            "worker_budgets": None,
-            "final_verify": True,
-            "max_parallel": 2,
-            "pi_binary": "fake-pi",
-            "model_pattern": "gpt-test",
-        },
-    )
-
-    assert result["ok"] is True
-    assert calls == [
-        {
-            "root_dir": tmp_path / ".search",
-            "run_id": "run_1",
-            "candidate_ids": ["c001", "c002"],
-            "directive": {"goal": "try batch"},
-            "worker_budgets": None,
-            "final_verify": True,
-            "max_parallel": 2,
-            "pi_binary": "fake-pi",
-            "extension_path": None,
-            "thinking_level": None,
-            "model_pattern": "gpt-test",
-            "provider": None,
-            "model_id": None,
-        }
-    ]
-
-
 @pytest.mark.parametrize(
     ("tool_name", "function_name", "arguments", "expected"),
     [
@@ -165,13 +59,7 @@ def test_pi_tool_dispatches_batch_driver(monkeypatch, tmp_path: Path) -> None:
             "pi_search_pool_open",
             "open_pi_search_pool",
             {"run_id": "run_1", "candidate_ids": ["c001"], "max_parallel": 1},
-            {"run_id": "run_1", "candidate_ids": ["c001"], "directive": None, "worker_budgets": None, "final_verify": True, "max_parallel": 1},
-        ),
-        (
-            "pi_search_pool_submit",
-            "submit_pi_search_pool",
-            {"pool_id": "pool_1", "candidate_id": "c002"},
-            {"pool_id": "pool_1", "candidate_id": "c002", "directive": None, "worker_budget": None, "final_verify": True},
+            {"run_id": "run_1", "candidate_ids": ["c001"], "worker_budgets": None, "final_verify": True, "max_parallel": 1},
         ),
         (
             "pi_search_pool_wait_any",
@@ -188,8 +76,8 @@ def test_pi_tool_dispatches_batch_driver(monkeypatch, tmp_path: Path) -> None:
         (
             "pi_search_pool_continue",
             "continue_pi_search_pool",
-            {"pool_id": "pool_1", "candidate_id": "c001", "runtime_multiplier": 1.5},
-            {"pool_id": "pool_1", "candidate_id": "c001", "directive": None, "worker_budget": None, "runtime_multiplier": 1.5, "final_verify": True},
+            {"pool_id": "pool_1", "candidate_id": "c001"},
+            {"pool_id": "pool_1", "candidate_id": "c001", "worker_budget": None, "final_verify": True},
         ),
         (
             "pi_search_pool_close",
@@ -218,10 +106,15 @@ def test_pi_tool_dispatches_managed_pool_tools(
     assert calls == [{"root_dir": tmp_path / ".search", **expected}]
 
 
-def test_pi_tool_rejects_unknown_tool(tmp_path: Path) -> None:
-    try:
-        call_pi_tool(tmp_path / ".search", "search_abort_agent_session", {})
-    except ValueError as exc:
-        assert "unsupported pi tool" in str(exc)
-    else:
-        raise AssertionError("unknown Pi tool should fail")
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "search_abort_agent_session",
+        "pi_search_run_candidate",
+        "pi_search_run_batch",
+        "pi_search_pool_submit",
+    ],
+)
+def test_pi_tool_rejects_removed_tools(tmp_path: Path, tool_name: str) -> None:
+    with pytest.raises(ValueError, match="unsupported pi tool"):
+        call_pi_tool(tmp_path / ".search", tool_name, {})

@@ -45,7 +45,6 @@ def assert_common_goal_plus_skill_text(text: str) -> None:
     assert "goal_plus_create" in text
     assert "goal_plus_record_triage" in text
     assert "goal_plus_save_spec_draft" in text
-    assert "goal_plus_confirm_frozen_verifier" in text
     assert "goal_plus_gate" in text
     assert "mode_hint" not in text
     assert "Goal Mode" in text
@@ -56,8 +55,6 @@ def assert_common_goal_plus_skill_text(text: str) -> None:
     assert "Do not send fields named `mode` or `reason`" in text
     assert "Search is an autonomous upgrade" in text
     assert "without asking the user" in text
-    assert "optional audit evidence" in text
-    assert "Never pause or ask the user" in text
     assert "Do not create a SearchSpec in Goal Mode" in text
     assert "search_freeze_spec" in text
     assert "final raw-goal audit" in text

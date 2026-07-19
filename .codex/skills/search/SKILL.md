@@ -53,7 +53,6 @@ New Codex Search runs use:
 strategy:
   orchestration_mode: parallel_loops
   worker_host: codex
-  worker_mode: agent-session-pool
 ```
 
 `parallel_loops` means:
@@ -73,10 +72,6 @@ strategy:
 The parent is a completion validator and continuation trigger, not a search
 conductor. A low score, one non-improving turn, or another candidate leading is
 not a reason to stop or replace a worker.
-
-Legacy frozen specs with `orchestration_mode: rolling_candidates` remain
-readable, but the normal `/goal-plus` Codex flow must freeze
-`parallel_loops`.
 
 ## Search Run Budget Planning
 

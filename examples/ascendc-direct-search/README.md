@@ -96,9 +96,9 @@ scripts/run_ascendc_cannbench_e2e.sh
 ```
 
 The script installs the current Goal Plus checkout, loads the NPU environment,
-and invokes Pi's native `/goal-plus` command. The main Pi host uses one
-`pi_search_run_batch` call to run two Pi RPC candidates concurrently
-(`max_candidates=2`, `max_parallel=2`). The test requires full selection,
+and invokes Pi's native `/goal-plus` command. The main Pi host opens one fixed
+pool to run two Pi RPC candidates concurrently (`max_candidates=2`,
+`max_parallel=2`). The test requires full selection,
 promotion evidence, immutable-revision patch generation, and a completed Goal
 Plus record. It is gated by `GOAL_PLUS_RUN_ASCENDC_NPU_ST=1` and is not part of
 ordinary unit or ST runs.

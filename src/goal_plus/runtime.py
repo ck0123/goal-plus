@@ -3,11 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 import calendar
 import hashlib
-import importlib
 import json
 import math
 import os
-import random
 import signal
 import shutil
 import subprocess
@@ -39,8 +37,6 @@ from goal_plus.models import (
     CandidateWorkOrder,
     FeedbackPolicy,
     FrozenSpec,
-    HistoryPolicy,
-    ProposalContract,
     PromotionEvidence,
     RunRecord,
     RunState,
@@ -671,7 +667,6 @@ class FileSearchRuntime:
         inherited_research = (
             self._build_inherited_research(
                 source_run_id,
-                history_policy=frozen.spec.strategy.history_policy,
             )
             if source_run_id
             else {}
@@ -862,12 +857,9 @@ class FileSearchRuntime:
 
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         spec = frozen.spec
-        if (
-            spec.strategy.orchestration_mode == "parallel_loops"
-            and self._load_plans(run_id)
-        ):
+        if self._load_plans(run_id):
             raise RuntimeError(
-                "parallel_loops permits one initial SearchPlan; resume or "
+                "Search permits one initial SearchPlan; resume or "
                 "redispatch the existing candidates instead of planning a new batch"
             )
         remaining = max(0, spec.budget.max_candidates - run.candidates_total)
@@ -876,22 +868,15 @@ class FileSearchRuntime:
         self._validate_host_strategy(strategy)
         mode = self._strategy_mode(strategy)
 
-        if strategy.driver != "builtin":
-            plan = self._plan_custom_strategy(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"agent", "agent_guided", "default"}:
+        if mode in {"agent", "agent_guided", "default"}:
             plan = self._plan_agent_guided(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"openevolve", "open_evolve", "openevolve_mode"}:
-            plan = self._plan_openevolve(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"evolve", "evolve_mode"}:
-            plan = self._plan_evolve(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"mcts", "mcts_mode"}:
-            plan = self._plan_mcts(run, frozen, requested_k, planned_k, remaining)
         elif mode in {"random", "random_mode"}:
-            plan = self._plan_random(run, frozen, requested_k, planned_k, remaining)
-        elif mode in {"independent", "independent_branches"}:
             plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
         else:
-            raise ValueError(f"unknown builtin strategy: {strategy.name}")
+            raise ValueError(
+                f"unsupported initial strategy: {strategy.name}; "
+                "use agent_guided or random"
+            )
 
         plan.worker_policy = self._normalize_worker_policy(plan.strategy, plan.worker_policy)
         plan.strategy_trace.setdefault("worker_policy", plan.worker_policy)
@@ -1048,7 +1033,6 @@ class FileSearchRuntime:
         self,
         run_id: str,
         candidate_id: str,
-        directive: dict[str, Any] | str | None = None,
         *,
         worker_agent_type: str | None = None,
         worker_budget: dict[str, Any] | None = None,
@@ -1081,13 +1065,11 @@ class FileSearchRuntime:
             worker_agent_type=selected_worker_agent_type,
             worker_budget_override=worker_budget,
         )
-        normalized_directive = self._normalize_main_directive(directive)
         previous_session_ids = [
             session["agent_session_id"]
             for session in self._agent_session_payloads_for_candidate(run_id, candidate_id)
         ]
         resume_directive = {
-            **normalized_directive,
             "state_level_resume": True,
             "resume_candidate_id": candidate_id,
             "previous_agent_session_ids": previous_session_ids,
@@ -1183,35 +1165,6 @@ class FileSearchRuntime:
             self._write_run(run)
             self._write_agent_session(session)
             return session
-
-    def bind_opencode_session(
-        self,
-        agent_session_id: str,
-        opencode_session_id: str,
-    ) -> AgentSessionRecord:
-        """Bind a runtime agent session to the OpenCode session created by Task.
-
-        The runtime cannot observe OpenCode's Task return value by itself, so
-        the main agent records the returned `metadata.sessionId` here. This
-        mapping is what lets a later turn continue the same OpenCode session
-        via Task(task_id=...).
-        """
-        session = self._load_agent_session_by_id(agent_session_id)
-        bound_id = opencode_session_id.strip()
-        if not bound_id:
-            raise ValueError("opencode_session_id must be non-empty")
-        existing_id = session.opencode_session_id or session.host_handle.external_id
-        if existing_id and existing_id != bound_id:
-            raise ValueError(
-                "agent session is already bound to a different OpenCode session"
-            )
-        if session.host != "opencode":
-            raise ValueError(f"agent session host is {session.host}, not opencode")
-
-        return self.bind_agent_handle(
-            agent_session_id,
-            {"host": "opencode", "external_id": bound_id},
-        )
 
     def bind_agent_handle(
         self,
@@ -1327,7 +1280,6 @@ class FileSearchRuntime:
     def continue_agent_session(
         self,
         agent_session_id: str,
-        directive: dict[str, Any] | str | None = None,
         worker_budget: dict[str, Any] | None = None,
     ) -> AgentSessionRecord:
         """Return host launch fields that continue a prior worker session.
@@ -1338,14 +1290,6 @@ class FileSearchRuntime:
         this continuation dispatch and does not mutate the frozen spec.
         """
         session = self._load_agent_session_by_id(agent_session_id)
-        if session.host == "opencode" and not (
-            session.opencode_session_id or session.host_handle.external_id
-        ):
-            raise RuntimeError(
-                "agent session has no bound OpenCode session id; call "
-                "search_bind_opencode_session with Task metadata.sessionId first"
-            )
-
         run = self._load_run(session.run_id)
         if run.state not in {
             RunState.RUNNING,
@@ -1364,11 +1308,6 @@ class FileSearchRuntime:
                 f"cannot continue candidate in status {candidate_record.status}"
             )
 
-        normalized_directive = (
-            session.directive
-            if directive is None
-            else self._normalize_main_directive(directive)
-        )
         worker_agent_type = self._candidate_worker_agent_type(
             frozen,
             candidate_record,
@@ -1382,7 +1321,6 @@ class FileSearchRuntime:
             launch = self._build_continue_launch_payload(
                 frozen=frozen,
                 session=session,
-                directive=normalized_directive,
                 candidate_record=candidate_record,
                 worker_budget_override=worker_budget_override,
             )
@@ -1391,7 +1329,6 @@ class FileSearchRuntime:
         updated = session.model_copy(
             update={
                 "updated_at": utc_timestamp(),
-                "directive": normalized_directive,
                 "workspace": candidate_record.task.workspace,
                 "launch": launch,
             }
@@ -1746,7 +1683,7 @@ class FileSearchRuntime:
                         self._write_run(run)
             raise
 
-    def select(self, run_id: str, strategy: str = "independent_branches") -> dict[str, Any]:
+    def select(self, run_id: str) -> dict[str, Any]:
         with self._run_transaction(run_id):
             run = self._load_run(run_id)
             self._assert_run_not_invalidated(run, "select")
@@ -1830,7 +1767,6 @@ class FileSearchRuntime:
             selected_record.promotion_evidence = None
             self._write_candidate_record(run_id, selected_record)
         return {
-            "strategy": strategy,
             "selected_candidate_id": selected_record.candidate_id,
             "selected_score": selected_score,
             "selected_iteration": selected_iteration,
@@ -1907,7 +1843,7 @@ class FileSearchRuntime:
             f"- Spec hash: `{frozen.spec_hash}`",
             f"- Objective: {frozen.spec.objective}",
             f"- Metric: `{frozen.spec.metric_name}` ({frozen.spec.metric_direction})",
-            f"- Strategy: `{frozen.spec.strategy.name}` ({frozen.spec.strategy.driver})",
+            f"- Initial strategy: `{frozen.spec.strategy.name}`",
             f"- Best candidate: `{run.best_candidate_id}`",
             f"- Best score: `{run.best_score}`",
             f"- Selected score: `{run.selected_score}`",
@@ -1923,14 +1859,14 @@ class FileSearchRuntime:
             "",
             "## Strategy Plans",
             "",
-            "| Plan | Status | Strategy | Worker Mode | Requested | Planned | Started Candidates | Trace |",
+            "| Plan | Status | Strategy | Orchestration | Requested | Planned | Started Candidates | Trace |",
             "|---|---|---|---|---:|---:|---|---|",
         ]
         for plan in plans:
             trace = plan.strategy_trace.get("reason") or plan.strategy_trace.get("selection_rule") or ""
             lines.append(
                 f"| `{plan.plan_id}` | {plan.status} | `{plan.strategy.name}` | "
-                f"`{plan.worker_policy.get('mode', plan.strategy.worker_mode)}` | "
+                f"`{plan.strategy.orchestration_mode}` | "
                 f"{plan.requested_k} | {plan.planned_k} | "
                 f"{self._markdown_cell(', '.join(plan.started_candidate_ids))} | "
                 f"{self._markdown_cell(str(trace))} |"
@@ -2222,12 +2158,10 @@ class FileSearchRuntime:
             worker_agent_type=strategy.worker_agent_type,
             worker_budget=strategy.worker_budget,
         )
-        if strategy.worker_host == "opencode":
-            return
-        if strategy.driver != "builtin":
+        if strategy.worker_host not in {"codex", "pi-rpc"}:
             raise ValueError(
-                f"{strategy.worker_host} worker_host only supports builtin "
-                "default/agent_guided and random strategies"
+                f"{strategy.worker_host} is not a maintained worker host; "
+                "use codex or pi-rpc"
             )
         if not portable_strategy_mode(strategy.name):
             raise ValueError(
@@ -2338,35 +2272,15 @@ class FileSearchRuntime:
                 strategy.worker_budget.max_turns
             ]
         return {
-            "mode": "agent-session-pool",
-            "configured_mode": strategy.worker_mode,
             "host": strategy.worker_host,
             "worker_agent_type": worker_agent_type,
             "subagent_type": worker_agent_type,
             "worker_budget": worker_budget,
             "worker_launch": worker_launch,
-            "supports_bind_handle": adapter.capabilities.supports_bind_handle,
-            "supports_same_worker_continue": adapter.capabilities.supports_same_worker_continue,
-            "supports_trace_export": adapter.capabilities.supports_trace_export,
-            "uses_background_workers": adapter.capabilities.uses_background_workers,
             "continuation": adapter.capabilities.continuation,
-            "supports_soft_closeout": adapter.capabilities.supports_soft_closeout,
-            "supports_model_override": adapter.capabilities.supports_model_override,
-            "supports_reasoning_effort": adapter.capabilities.supports_reasoning_effort,
-            "supports_service_tier": adapter.capabilities.supports_service_tier,
-            "supports_usage_metadata": adapter.capabilities.supports_usage_metadata,
-            "supports_process_kill": adapter.capabilities.supports_process_kill,
             "pool": adapter.capabilities.pool.as_dict(),
-            "directive_rule": (
-                "Worker directives should describe the candidate idea and deliverable, not score "
-                "targets or baseline scores. Workers must treat any score target in a directive as "
-                "main-agent context only and must not run local scoring to satisfy it."
-            ),
-            "requires_agent_session": True,
-            "direct_edit_allowed": False,
             "reason": (
-                f"worker_mode=agent-session-pool requires the main agent to launch "
-                f"{strategy.worker_host} workers through the published host-pool "
+                f"The main agent launches {strategy.worker_host} workers through the host-pool "
                 "contract using launch payloads from search_start_agent_session."
             ),
         }
@@ -2386,10 +2300,6 @@ class FileSearchRuntime:
         )
         policy["worker_agent_type"] = selected
         policy["subagent_type"] = selected
-        policy.setdefault("mode", "agent-session-pool")
-        policy.setdefault("configured_mode", strategy.worker_mode)
-        policy.setdefault("requires_agent_session", True)
-        policy.setdefault("direct_edit_allowed", False)
         return policy
 
     def _default_worker_agent_type(self, host: str) -> str:
@@ -2536,24 +2446,16 @@ class FileSearchRuntime:
         self,
         frozen: FrozenSpec,
         session: AgentSessionRecord,
-        directive: dict[str, Any],
         candidate_record: CandidateRecord,
         worker_budget_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         worker_agent_type = self._candidate_worker_agent_type(frozen, candidate_record)
-        if directive.get("goal"):
-            short_intent = str(directive["goal"])
-        else:
-            short_intent = "continue same candidate"
-
-        if directive:
-            directive_text = "; ".join(
-                f"{key}: {value}" for key, value in directive.items()
-            )
-        else:
-            directive_text = (
-                "continue improving the same candidate from its current workspace state"
-            )
+        short_intent = "continue same autonomous candidate loop"
+        directive_text = (
+            "Continue the same autonomous search loop from the latest committed "
+            "evidence. Refresh runtime context, choose the next evidence-backed "
+            "hypothesis yourself, and verify every material change."
+        )
 
         adapter = get_agent_host_adapter(session.host)
         return adapter.build_continue_payload(
@@ -2638,7 +2540,7 @@ class FileSearchRuntime:
                     slot=slot,
                     intent=hypothesis,
                     hypothesis=hypothesis,
-                    metadata={"strategy": "independent_branches"},
+                    metadata={"strategy": "parallel_loops"},
                 )
             )
 
@@ -2650,11 +2552,6 @@ class FileSearchRuntime:
             planned_k=planned_k,
             remaining_budget=remaining,
             requires_agent_proposals=False,
-            official_history=self._history_view(run, frozen, frozen.spec.strategy.history_policy),
-            derivation_policy={
-                "base_workspace_source": "source",
-                "may_derive_from_source": True,
-            },
             work_orders=work_orders,
             strategy_trace={
                 "selection_rule": "independent source branches",
@@ -2671,17 +2568,6 @@ class FileSearchRuntime:
         planned_k: int,
         remaining: int,
     ) -> SearchPlan:
-        history = self._history_view(run, frozen, frozen.spec.strategy.history_policy)
-        candidate_ids = [candidate["candidate_id"] for candidate in history.get("candidates", [])]
-        notes = [
-            "The main agent may remember more chat history, but this is the official runtime view for the next batch.",
-            "Submitted proposals must cite at least one official candidate when candidate references are available.",
-            "Review the current-run feature_ledger and verifier_assessments before proposing work; do not discard portable discoveries only because their source candidate is outside the visible frontier.",
-            "Consider deepen_incumbent, transfer_feature, and macro_restart actions after each ready event without imposing a quota; record the chosen action in proposal.metadata.search_action.",
-            "Before starting another candidate, assess whether recent and active attempts cluster around the same mechanism or bottleneck; different candidate ids do not by themselves provide search diversity.",
-            "When an existing candidate remains promising and benefits from accumulated workspace understanding, prefer continuing it with a larger one-dispatch budget over launching near-duplicate candidates. A free slot is not an obligation to launch more work.",
-            "After substantial attempts without meaningful progress, reassess applicable theoretical or structural limits, such as lower or upper bounds, critical paths, resource bottlenecks, saturation evidence, or infeasibility constraints, before proposing more nearby mutations.",
-        ]
         return SearchPlan(
             run_id=run.run_id,
             plan_id=self._next_plan_id(run),
@@ -2690,533 +2576,21 @@ class FileSearchRuntime:
             planned_k=planned_k,
             remaining_budget=remaining,
             requires_agent_proposals=True,
-            official_history=history,
-            derivation_policy={
-                "base_workspace_source": "proposal.base_candidate_id or source",
-                "must_reference_one_of": candidate_ids,
-            },
-            proposal_contract=ProposalContract(
-                count=planned_k,
-                must_reference_one_of=candidate_ids,
-                notes=notes,
-            ),
             strategy_trace={
-                "selection_rule": f"agent-guided history policy: {frozen.spec.strategy.history_policy.scope}",
-                "reason": "The runtime provides the official history view; the main agent proposes the next candidates.",
+                "selection_rule": "agent-guided initial candidates",
+                "reason": "The main agent defines the initial candidate set exactly once.",
             },
             created_at=utc_timestamp(),
         )
-
-    def _plan_evolve(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        requested_k: int,
-        planned_k: int,
-        remaining: int,
-    ) -> SearchPlan:
-        records = self._load_candidate_records(run.run_id)
-        scored = self._scored_records(records, frozen.spec)
-
-        if not scored:
-            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
-            plan.strategy_trace = {
-                "selection_rule": "evolve bootstrap",
-                "reason": "No verified parent exists yet, so the first generation starts from source.",
-            }
-            return plan
-
-        parent = self._best_record(scored, frozen.spec)
-        top_records = self._top_records(scored, frozen.spec, frozen.spec.strategy.history_policy.top_n)
-        inspirations = [record for record in top_records if record.candidate_id != parent.candidate_id]
-        inspiration_ids = [record.candidate_id for record in inspirations]
-
-        work_orders = []
-        for slot in range(1, planned_k + 1):
-            work_orders.append(
-                CandidateWorkOrder(
-                    slot=slot,
-                    base_candidate_id=parent.candidate_id,
-                    parent_candidate_ids=[parent.candidate_id],
-                    inspiration_candidate_ids=inspiration_ids,
-                    intent=(
-                        f"Mutate `{parent.candidate_id}` using the selected inspirations; "
-                        "preserve the parent's strongest metrics and explore one concrete tradeoff."
-                    ),
-                    hypothesis=f"Evolve mutation from {parent.candidate_id} slot {slot}",
-                    must_derive_from=[parent.candidate_id],
-                    metadata={
-                        "strategy": "evolve",
-                        "parent_score": parent.score_report.aggregate_score if parent.score_report else None,
-                    },
-                )
-            )
-
-        visible_ids = [parent.candidate_id, *inspiration_ids]
-        return SearchPlan(
-            run_id=run.run_id,
-            plan_id=self._next_plan_id(run),
-            strategy=frozen.spec.strategy,
-            requested_k=requested_k,
-            planned_k=planned_k,
-            remaining_budget=remaining,
-            requires_agent_proposals=False,
-            official_history=self._history_view(
-                run,
-                frozen,
-                frozen.spec.strategy.history_policy,
-                forced_candidate_ids=visible_ids,
-            ),
-            derivation_policy={
-                "base_workspace_source": f"candidate:{parent.candidate_id}",
-                "must_derive_from": [parent.candidate_id],
-                "may_reference": inspiration_ids,
-            },
-            work_orders=work_orders,
-            strategy_trace={
-                "selection_rule": "best verified parent plus top inspirations",
-                "parent_candidate_id": parent.candidate_id,
-                "inspiration_candidate_ids": inspiration_ids,
-                "reason": "Builtin evolve-mode approximates OpenEvolve-style fixed parent selection.",
-            },
-            created_at=utc_timestamp(),
-        )
-
-    def _plan_openevolve(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        requested_k: int,
-        planned_k: int,
-        remaining: int,
-    ) -> SearchPlan:
-        records = self._load_candidate_records(run.run_id)
-        scored = self._records_by_created(self._scored_records(records, frozen.spec))
-        strategy = frozen.spec.strategy
-        config = strategy.config
-
-        if not scored:
-            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
-            plan.strategy_trace = {
-                "selection_rule": "openevolve bootstrap",
-                "sampling_mode": "bootstrap",
-                "reason": (
-                    "No verified parent exists yet, so OpenEvolve starts by creating "
-                    "source-derived programs before database sampling."
-                ),
-            }
-            return plan
-
-        rng = self._openevolve_rng(config, run.next_plan_index)
-        archive = self._openevolve_archive(
-            scored,
-            frozen.spec,
-            int(config.get("archive_size", 100)),
-        )
-        parent, sampling_mode, rand_val = self._openevolve_sample_parent(
-            scored,
-            archive,
-            rng,
-            exploration_ratio=float(config.get("exploration_ratio", 0.2)),
-            exploitation_ratio=float(config.get("exploitation_ratio", 0.7)),
-        )
-        num_inspirations = int(config.get("num_inspirations", 5))
-        inspirations = self._openevolve_sample_inspirations(
-            parent,
-            scored,
-            archive,
-            frozen.spec,
-            rng,
-            num_inspirations,
-        )
-        inspiration_ids = [record.candidate_id for record in inspirations]
-
-        work_orders: list[CandidateWorkOrder] = []
-        for slot in range(1, planned_k + 1):
-            work_orders.append(
-                CandidateWorkOrder(
-                    slot=slot,
-                    base_candidate_id=parent.candidate_id,
-                    parent_candidate_ids=[parent.candidate_id],
-                    inspiration_candidate_ids=inspiration_ids,
-                    intent=(
-                        f"OpenEvolve mutation from `{parent.candidate_id}` using sampled "
-                        "inspirations; make a small diff-like change and keep verifier feedback."
-                    ),
-                    hypothesis=f"OpenEvolve mutation from {parent.candidate_id} slot {slot}",
-                    instructions=[
-                        (
-                            f"OpenEvolve sampled parent `{parent.candidate_id}` via "
-                            f"{sampling_mode}; mutate this workspace instead of restarting."
-                        ),
-                        (
-                            "Use inspirations as design hints only; preserve the parent's "
-                            "working behavior before exploring one concrete change."
-                        ),
-                        (
-                            "Prefer a compact diff-style mutation, then verify through "
-                            "goal-plus_search_run_verifier."
-                        ),
-                    ],
-                    must_derive_from=[parent.candidate_id],
-                    metadata={
-                        "strategy": "openevolve",
-                        "sampling_mode": sampling_mode,
-                        "rand_val": rand_val,
-                        "parent_score": (
-                            parent.score_report.aggregate_score if parent.score_report else None
-                        ),
-                        "archive_candidate_ids": [record.candidate_id for record in archive],
-                    },
-                )
-            )
-
-        visible_ids = [parent.candidate_id, *inspiration_ids]
-        return SearchPlan(
-            run_id=run.run_id,
-            plan_id=self._next_plan_id(run),
-            strategy=strategy,
-            requested_k=requested_k,
-            planned_k=planned_k,
-            remaining_budget=remaining,
-            requires_agent_proposals=False,
-            official_history=self._history_view(
-                run,
-                frozen,
-                strategy.history_policy,
-                forced_candidate_ids=visible_ids,
-            ),
-            derivation_policy={
-                "base_workspace_source": f"candidate:{parent.candidate_id}",
-                "must_derive_from": [parent.candidate_id],
-                "may_reference": inspiration_ids,
-            },
-            work_orders=work_orders,
-            strategy_trace={
-                "selection_rule": "openevolve sampled parent plus inspirations",
-                "sampling_mode": sampling_mode,
-                "rand_val": rand_val,
-                "parent_candidate_id": parent.candidate_id,
-                "archive_candidate_ids": [record.candidate_id for record in archive],
-                "inspiration_candidate_ids": inspiration_ids,
-                "reason": (
-                    "OpenEvolve-style base planner samples a parent from exploration, "
-                    "archive exploitation, or random fallback, then passes sampled "
-                    "inspirations to the worker as mutation context."
-                ),
-            },
-            created_at=utc_timestamp(),
-        )
-
-    def _openevolve_rng(self, config: dict[str, Any], plan_index: int) -> random.Random:
-        seed = config.get("seed", config.get("random_seed"))
-        if seed is None:
-            return random.Random()
-        return random.Random(int(seed) + plan_index)
-
-    def _openevolve_archive(
-        self,
-        scored: list[CandidateRecord],
-        spec: SearchSpec,
-        archive_size: int,
-    ) -> list[CandidateRecord]:
-        if archive_size <= 0:
-            return []
-        return self._top_records(scored, spec, min(archive_size, len(scored)))
-
-    def _openevolve_sample_parent(
-        self,
-        scored: list[CandidateRecord],
-        archive: list[CandidateRecord],
-        rng: random.Random,
-        *,
-        exploration_ratio: float,
-        exploitation_ratio: float,
-    ) -> tuple[CandidateRecord, str, float]:
-        rand_val = rng.random()
-        if rand_val < exploration_ratio:
-            return rng.choice(scored), "exploration", rand_val
-        if rand_val < exploration_ratio + exploitation_ratio and archive:
-            return rng.choice(archive), "exploitation", rand_val
-        return rng.choice(scored), "random", rand_val
-
-    def _openevolve_sample_inspirations(
-        self,
-        parent: CandidateRecord,
-        scored: list[CandidateRecord],
-        archive: list[CandidateRecord],
-        spec: SearchSpec,
-        rng: random.Random,
-        count: int,
-    ) -> list[CandidateRecord]:
-        if count <= 0:
-            return []
-
-        inspirations: list[CandidateRecord] = []
-        seen = {parent.candidate_id}
-
-        best = self._best_record(scored, spec)
-        if best.candidate_id not in seen:
-            inspirations.append(best)
-            seen.add(best.candidate_id)
-
-        for record in archive:
-            if len(inspirations) >= count:
-                return inspirations
-            if record.candidate_id not in seen:
-                inspirations.append(record)
-                seen.add(record.candidate_id)
-
-        remaining = [record for record in scored if record.candidate_id not in seen]
-        while remaining and len(inspirations) < count:
-            record = rng.choice(remaining)
-            remaining = [item for item in remaining if item.candidate_id != record.candidate_id]
-            inspirations.append(record)
-            seen.add(record.candidate_id)
-
-        return inspirations
-
-    def _plan_mcts(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        requested_k: int,
-        planned_k: int,
-        remaining: int,
-    ) -> SearchPlan:
-        records = self._load_candidate_records(run.run_id)
-        scored = self._scored_records(records, frozen.spec)
-        if not scored:
-            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
-            plan.strategy_trace = {
-                "selection_rule": "mcts bootstrap",
-                "reason": "No verified node exists yet, so the first expansion starts from source.",
-            }
-            return plan
-
-        frontier = self._best_record(scored, frozen.spec)
-        work_orders = [
-            CandidateWorkOrder(
-                slot=slot,
-                base_candidate_id=frontier.candidate_id,
-                parent_candidate_ids=[frontier.candidate_id],
-                intent=(
-                    f"Expand frontier candidate `{frontier.candidate_id}` with a distinct action."
-                ),
-                hypothesis=f"MCTS-style expansion from {frontier.candidate_id} slot {slot}",
-                must_derive_from=[frontier.candidate_id],
-                metadata={"strategy": "mcts", "frontier_node": frontier.candidate_id},
-            )
-            for slot in range(1, planned_k + 1)
-        ]
-        return SearchPlan(
-            run_id=run.run_id,
-            plan_id=self._next_plan_id(run),
-            strategy=frozen.spec.strategy,
-            requested_k=requested_k,
-            planned_k=planned_k,
-            remaining_budget=remaining,
-            requires_agent_proposals=False,
-            official_history=self._history_view(
-                run,
-                frozen,
-                frozen.spec.strategy.history_policy,
-                forced_candidate_ids=[frontier.candidate_id],
-            ),
-            derivation_policy={
-                "base_workspace_source": f"candidate:{frontier.candidate_id}",
-                "must_expand_node": frontier.candidate_id,
-                "must_derive_from": [frontier.candidate_id],
-            },
-            work_orders=work_orders,
-            strategy_trace={
-                "selection_rule": "best-score frontier placeholder",
-                "frontier_node": frontier.candidate_id,
-                "reason": "Builtin mcts-mode exposes the same plan contract; a full UCB tree policy can replace this planner.",
-            },
-            created_at=utc_timestamp(),
-        )
-
-    def _plan_random(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        requested_k: int,
-        planned_k: int,
-        remaining: int,
-    ) -> SearchPlan:
-        records = self._load_candidate_records(run.run_id)
-        scored = self._scored_records(records, frozen.spec)
-
-        if not scored:
-            plan = self._plan_independent(run, frozen, requested_k, planned_k, remaining)
-            plan.strategy_trace = {
-                "selection_rule": "random bootstrap",
-                "reason": "No verified parent exists yet, so the first generation starts from source.",
-            }
-            return plan
-
-        seed = frozen.spec.strategy.config.get("seed")
-        rng = random.Random(seed) if seed is not None else random
-        parent = rng.choice(scored)
-
-        work_orders = []
-        for slot in range(1, planned_k + 1):
-            work_orders.append(
-                CandidateWorkOrder(
-                    slot=slot,
-                    base_candidate_id=parent.candidate_id,
-                    parent_candidate_ids=[parent.candidate_id],
-                    inspiration_candidate_ids=[],
-                    intent=(
-                        f"Mutate randomly chosen parent `{parent.candidate_id}`; "
-                        "explore a different direction than the parent."
-                    ),
-                    hypothesis=f"Random mutation from {parent.candidate_id} slot {slot}",
-                    must_derive_from=[parent.candidate_id],
-                    metadata={
-                        "strategy": "random",
-                        "parent_score": parent.score_report.aggregate_score if parent.score_report else None,
-                    },
-                )
-            )
-
-        return SearchPlan(
-            run_id=run.run_id,
-            plan_id=self._next_plan_id(run),
-            strategy=frozen.spec.strategy,
-            requested_k=requested_k,
-            planned_k=planned_k,
-            remaining_budget=remaining,
-            requires_agent_proposals=False,
-            official_history=self._history_view(
-                run,
-                frozen,
-                frozen.spec.strategy.history_policy,
-                forced_candidate_ids=[parent.candidate_id],
-            ),
-            derivation_policy={
-                "base_workspace_source": f"candidate:{parent.candidate_id}",
-                "must_derive_from": [parent.candidate_id],
-            },
-            work_orders=work_orders,
-            strategy_trace={
-                "selection_rule": "random verified parent",
-                "parent_candidate_id": parent.candidate_id,
-                "seed": seed,
-                "reason": "Builtin random-mode picks one verified parent at random for the next generation.",
-            },
-            created_at=utc_timestamp(),
-        )
-
-    def _plan_custom_strategy(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        requested_k: int,
-        planned_k: int,
-        remaining: int,
-    ) -> SearchPlan:
-        strategy = frozen.spec.strategy
-        if strategy.driver == "python":
-            if not strategy.ref:
-                raise ValueError("python strategy requires strategy.ref")
-            return self._plan_python_strategy(run, frozen, requested_k, planned_k, remaining)
-
-        if strategy.driver == "external_mcp":
-            history_policy = strategy.history_policy
-            history = self._history_view(run, frozen, history_policy)
-            candidate_ids = [candidate["candidate_id"] for candidate in history.get("candidates", [])]
-            return SearchPlan(
-                run_id=run.run_id,
-                plan_id=self._next_plan_id(run),
-                strategy=strategy,
-                requested_k=requested_k,
-                planned_k=planned_k,
-                remaining_budget=remaining,
-                requires_agent_proposals=True,
-                official_history=history,
-                derivation_policy={
-                    "base_workspace_source": "external strategy proposal",
-                    "must_reference_one_of": candidate_ids,
-                },
-                proposal_contract=ProposalContract(
-                    count=planned_k,
-                    must_reference_one_of=candidate_ids,
-                    notes=[
-                        "external_mcp strategy is represented through the standard proposal contract in this runtime",
-                        "call the external strategy separately, then pass its proposals to search_start_batch",
-                    ],
-                ),
-                strategy_trace={
-                    "selection_rule": "external strategy proposal contract",
-                    "external_ref": strategy.ref,
-                    "reason": "External MCP strategy integration is modeled as proposals submitted back to this runtime.",
-                },
-                created_at=utc_timestamp(),
-            )
-
-        raise ValueError(f"unsupported strategy driver: {strategy.driver}")
-
-    def _plan_python_strategy(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        requested_k: int,
-        planned_k: int,
-        remaining: int,
-    ) -> SearchPlan:
-        strategy = frozen.spec.strategy
-        module_name, sep, attr_name = (strategy.ref or "").partition(":")
-        if not sep:
-            raise ValueError("python strategy ref must use 'module:object'")
-        module = importlib.import_module(module_name)
-        strategy_factory = getattr(module, attr_name)
-        strategy_object = strategy_factory(strategy.config)
-        if not hasattr(strategy_object, "plan_next"):
-            raise TypeError("python strategy object must define plan_next(payload)")
-
-        full_history = self.list_history(
-            run.run_id,
-            top_n=max(1, len(self._load_candidate_records(run.run_id))),
-            sort_by="created",
-        )
-        payload = {
-            "run": run.model_dump(mode="json"),
-            "spec": frozen.spec.model_dump(mode="json"),
-            "history": full_history,
-            "requested_k": requested_k,
-            "planned_k": planned_k,
-            "remaining_budget": remaining,
-        }
-        planned = strategy_object.plan_next(payload)
-        if not isinstance(planned, dict):
-            raise TypeError("python strategy plan_next must return a dict")
-
-        plan_data = {
-            **planned,
-            "run_id": run.run_id,
-            "plan_id": self._next_plan_id(run),
-            "strategy": strategy.model_dump(mode="json"),
-            "requested_k": requested_k,
-            "planned_k": planned_k,
-            "remaining_budget": remaining,
-            "created_at": utc_timestamp(),
-        }
-        return SearchPlan.model_validate(plan_data)
 
     def _proposal_from_work_order(self, work_order: CandidateWorkOrder) -> CandidateProposal:
         return CandidateProposal(
-            parent_candidate_ids=work_order.parent_candidate_ids,
-            base_candidate_id=work_order.base_candidate_id,
             hypothesis=work_order.hypothesis,
             intent=work_order.intent,
             instructions=work_order.instructions,
-            history_refs=work_order.inspiration_candidate_ids,
             metadata={
                 **work_order.metadata,
                 "slot": work_order.slot,
-                "must_derive_from": work_order.must_derive_from,
             },
         )
 
@@ -3225,23 +2599,9 @@ class FileSearchRuntime:
         plan: SearchPlan,
         proposals: list[CandidateProposal],
     ) -> None:
-        contract = plan.proposal_contract
-        if contract is None:
-            return
-        if len(proposals) > contract.count:
+        if len(proposals) > plan.planned_k:
             raise ValueError("too many proposals for this plan")
-        required_refs = set(contract.must_reference_one_of)
-        if not required_refs:
-            return
-        for proposal in proposals:
-            refs = set(proposal.parent_candidate_ids)
-            refs.update(proposal.history_refs)
-            if proposal.base_candidate_id:
-                refs.add(proposal.base_candidate_id)
-            if not refs.intersection(required_refs):
-                raise ValueError(
-                    "proposal must reference at least one official candidate from the plan"
-                )
+        return
 
     def _create_candidate_task(
         self,
@@ -3253,28 +2613,6 @@ class FileSearchRuntime:
         slot: int,
     ) -> CandidateTask:
         workspace = self._run_dir(run.run_id) / "workspace" / candidate_id
-        base_candidate_id = proposal.base_candidate_id
-        parent_candidate_ids = list(proposal.parent_candidate_ids)
-        if base_candidate_id is None and parent_candidate_ids:
-            base_candidate_id = parent_candidate_ids[0]
-        if base_candidate_id and base_candidate_id not in parent_candidate_ids:
-            parent_candidate_ids.insert(0, base_candidate_id)
-
-        base_workspace: Path | None = None
-        base_revision: str | None = None
-        if base_candidate_id:
-            base_record = self._load_candidate_record(run.run_id, base_candidate_id)
-            base_workspace = base_record.task.workspace
-            if frozen.spec.workspace.backend == "git_worktree":
-                best_iteration = self._best_git_iteration_record(
-                    base_record, frozen.spec.metric_direction
-                )
-                if best_iteration is None:
-                    raise RuntimeError(
-                        f"git_worktree parent {base_candidate_id} has no clean "
-                        "verifier-backed Git iteration"
-                    )
-                base_revision = best_iteration.git_head
 
         materialization = materialize_candidate_workspace(
             backend=frozen.spec.workspace.backend,
@@ -3283,8 +2621,6 @@ class FileSearchRuntime:
             workspace=workspace,
             run_id=run.run_id,
             candidate_id=candidate_id,
-            base_workspace=base_workspace,
-            base_revision=base_revision,
         )
 
         instructions = [
@@ -3306,14 +2642,10 @@ class FileSearchRuntime:
             )
         instructions.extend(proposal.instructions)
 
-        parent_id = parent_candidate_ids[0] if parent_candidate_ids else None
         hypothesis = proposal.hypothesis or proposal.intent or f"Candidate {candidate_id}"
         return CandidateTask(
             run_id=run.run_id,
             candidate_id=candidate_id,
-            parent_id=parent_id,
-            parent_candidate_ids=parent_candidate_ids,
-            base_candidate_id=base_candidate_id,
             plan_id=plan.plan_id,
             hypothesis=hypothesis,
             workspace=workspace,
@@ -3328,8 +2660,6 @@ class FileSearchRuntime:
             proposal=proposal,
             strategy_metadata={
                 "strategy": plan.strategy.name,
-                "strategy_driver": plan.strategy.driver,
-                "worker_mode": plan.worker_policy.get("mode"),
                 "worker_policy": plan.worker_policy,
                 "plan_id": plan.plan_id,
                 "slot": slot,
@@ -3693,61 +3023,6 @@ class FileSearchRuntime:
         record.results_ledger_git_head = ledger_git_head
         self._assert_results_tsv_unchanged(record, metric_name)
         return ledger_git_head
-
-    def _history_view(
-        self,
-        run: RunRecord,
-        frozen: FrozenSpec,
-        policy: HistoryPolicy,
-        forced_candidate_ids: list[str] | None = None,
-    ) -> dict[str, Any]:
-        records = self._load_candidate_records(run.run_id)
-        selected_records: list[CandidateRecord]
-        scope = policy.scope
-
-        if forced_candidate_ids is not None:
-            by_id = {record.candidate_id: record for record in records}
-            selected_records = [
-                by_id[candidate_id]
-                for candidate_id in forced_candidate_ids
-                if candidate_id in by_id
-            ]
-            scope = "selected_parent_and_inspirations"
-        elif policy.scope == "all":
-            selected_records = self._records_by_created(records)
-        elif policy.scope == "last_batch":
-            selected_records = self._last_batch_records(records)
-        else:
-            selected_records = self._top_records(records, frozen.spec, policy.top_n)
-
-        if policy.scope != "all" and forced_candidate_ids is None:
-            selected_records = selected_records[: policy.top_n]
-
-        visible_candidate_ids = [record.candidate_id for record in selected_records]
-        research_rollup = self._run_research_rollup(
-            records,
-            frozen.spec,
-            visible_candidate_ids=visible_candidate_ids,
-        )
-
-        return {
-            "policy": scope,
-            "top_n": policy.top_n,
-            "include": policy.include,
-            "visible_candidate_ids": visible_candidate_ids,
-            "candidates": [
-                self._history_candidate_payload(record, frozen.spec)
-                for record in selected_records
-            ],
-            "feature_ledger": research_rollup["feature_ledger"],
-            "pitfalls": research_rollup["pitfalls"],
-            "verifier_assessments": research_rollup["verifier_assessments"],
-            "research_rollup": research_rollup,
-            "inherited_research": run.inherited_research,
-            "description": (
-                "Official runtime-selected history view for the current strategy plan."
-            ),
-        }
 
     def _record_ranking_score(
         self,
@@ -4688,8 +3963,6 @@ class FileSearchRuntime:
     def _build_inherited_research(
         self,
         source_run_id: str,
-        *,
-        history_policy: HistoryPolicy,
     ) -> dict[str, Any]:
         source_run = self._load_run(source_run_id)
         source_frozen = self._load_frozen_spec(source_run.frozen_spec_id)
@@ -4720,10 +3993,8 @@ class FileSearchRuntime:
         ]
         features = current_features + inherited_features
         pitfalls = current_pitfalls + inherited_pitfalls
-        if history_policy.inherited_feature_limit is not None:
-            features = features[: history_policy.inherited_feature_limit]
-        if history_policy.inherited_pitfall_limit is not None:
-            pitfalls = pitfalls[: history_policy.inherited_pitfall_limit]
+        features = features[:50]
+        pitfalls = pitfalls[:30]
         frontier: list[dict[str, Any]] = []
         for record in frontier_records:
             payload = self._history_candidate_payload(record, source_frozen.spec)
@@ -4871,7 +4142,6 @@ class FileSearchRuntime:
             "expected_tradeoff": (
                 record.task.proposal.expected_tradeoff if record.task.proposal else ""
             ),
-            "history_refs": record.task.proposal.history_refs if record.task.proposal else [],
             "strategy_metadata": record.task.strategy_metadata,
             "workspace": str(record.task.workspace),
             "agent_sessions": agent_sessions,

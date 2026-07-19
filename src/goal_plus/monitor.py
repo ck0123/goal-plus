@@ -261,13 +261,9 @@ def _strategy_payload(
         }
     return {
         "name": strategy.name,
-        "driver": strategy.driver,
-        "ref": strategy.ref,
         "orchestration_mode": strategy.orchestration_mode,
-        "worker_mode": strategy.worker_mode,
         "worker_host": strategy.worker_host,
         "worker_agent_type": strategy.worker_agent_type,
-        "history_policy": strategy.history_policy.model_dump(mode="json"),
         "latest_plan": latest_plan_payload,
     }
 
@@ -495,8 +491,6 @@ def _search_task_payload(
             "strategy": (
                 {
                     "name": frozen.spec.strategy.name,
-                    "driver": frozen.spec.strategy.driver,
-                    "worker_mode": frozen.spec.strategy.worker_mode,
                     "worker_host": frozen.spec.strategy.worker_host,
                 }
                 if frozen is not None

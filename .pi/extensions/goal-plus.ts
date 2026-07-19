@@ -7,7 +7,6 @@ import { type TSchema, Type } from "typebox";
 const role = process.env.GOAL_PLUS_PI_ROLE || "main";
 const runtimeRoot = process.env.GOAL_PLUS_ROOT || ".gp";
 const sourcePath = process.env.GOAL_PLUS_SOURCE_PATH;
-const exposeLowLevelWorker = process.env.GOAL_PLUS_PI_EXPOSE_LOW_LEVEL_WORKER === "1";
 const modeArgIndex = process.argv.indexOf("--mode");
 const isPrintLikeInvocation =
 	process.argv.includes("-p") ||
@@ -125,49 +124,14 @@ const WorkerLaunch = Type.Object(
 	},
 	{ additionalProperties: false },
 );
-const HistoryPolicy = Type.Object(
-	{
-		scope: Type.Optional(
-			Type.Union([
-				Type.Literal("top_n"),
-				Type.Literal("last_batch"),
-				Type.Literal("all"),
-				Type.Literal("selected_parent_and_inspirations"),
-				Type.Literal("frontier"),
-			]),
-		),
-		top_n: Type.Optional(PositiveInteger),
-		include: Type.Optional(Type.Array(Type.String())),
-		inherited_feature_limit: Type.Optional(NullablePositiveInteger),
-		inherited_pitfall_limit: Type.Optional(NullablePositiveInteger),
-	},
-	{ additionalProperties: false },
-);
 const StrategySpec = Type.Object(
 	{
 		name: Type.Optional(Type.String({ minLength: 1 })),
-		driver: Type.Optional(
-			Type.Union([Type.Literal("builtin"), Type.Literal("python"), Type.Literal("external_mcp")]),
-		),
-		ref: Type.Optional(NullableString),
-		agent_role: Type.Optional(Type.String()),
-		orchestration_mode: Type.Optional(
-			Type.Union([Type.Literal("rolling_candidates"), Type.Literal("parallel_loops")]),
-		),
-		worker_mode: Type.Optional(Type.Literal("agent-session-pool")),
-		worker_host: Type.Optional(
-			Type.Union([
-				Type.Literal("opencode"),
-				Type.Literal("codex"),
-				Type.Literal("claude-code"),
-				Type.Literal("pi-rpc"),
-			]),
-		),
+		orchestration_mode: Type.Optional(Type.Literal("parallel_loops")),
+		worker_host: Type.Optional(Type.Literal("pi-rpc")),
 		worker_agent_type: Type.Optional(NullableString),
 		worker_budget: Type.Optional(Type.Union([WorkerBudget, Type.Null()])),
 		worker_launch: Type.Optional(Type.Union([WorkerLaunch, Type.Null()])),
-		history_policy: Type.Optional(HistoryPolicy),
-		parent_policy: Type.Optional(LooseObject),
 		config: Type.Optional(LooseObject),
 	},
 	{ additionalProperties: false },
@@ -207,7 +171,6 @@ const GoalPlusSpecDraft = Type.Object(
 		promotion_rule: Type.String(),
 		confidence: GoalPlusConfidence,
 		origin: Type.Optional(GoalPlusDiscoveryOrigin),
-		user_confirmed_frozen_verifier: Type.Optional(Type.Boolean()),
 		open_questions: Type.Optional(Type.Array(Type.String())),
 	},
 	{ additionalProperties: false },
@@ -250,14 +213,6 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{
 			goal_plus_id: Type.String(),
 			spec_draft: GoalPlusSpecDraft,
-		},
-		{ additionalProperties: false },
-	),
-	goal_plus_confirm_frozen_verifier: Type.Object(
-		{
-			goal_plus_id: Type.String(),
-			confirmed_by: Type.Optional(Type.String()),
-			evidence: Type.Optional(LooseObject),
 		},
 		{ additionalProperties: false },
 	),
@@ -400,12 +355,11 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
-	search_redispatch_candidate: Type.Object(
-		{
-			run_id: Type.String(),
-			candidate_id: Type.String(),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			worker_agent_type: Type.Optional(Type.String()),
+		search_redispatch_candidate: Type.Object(
+			{
+				run_id: Type.String(),
+				candidate_id: Type.String(),
+				worker_agent_type: Type.Optional(Type.String()),
 			worker_budget: Type.Optional(LooseObject),
 		},
 		{ additionalProperties: false },
@@ -417,11 +371,10 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
-	search_continue_agent_session: Type.Object(
-		{
-			agent_session_id: Type.String(),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			worker_budget: Type.Optional(WorkerBudget),
+		search_continue_agent_session: Type.Object(
+			{
+				agent_session_id: Type.String(),
+				worker_budget: Type.Optional(WorkerBudget),
 		},
 		{ additionalProperties: false },
 	),
@@ -462,49 +415,13 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
-	pi_search_run_candidate: Type.Object(
-		{
-			run_id: Type.String(),
-			candidate_id: Type.String(),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			redispatch: Type.Optional(Type.Boolean()),
-			worker_budget: Type.Optional(WorkerBudget),
-			runtime_multiplier: Type.Optional(
-				Type.Number({ exclusiveMinimum: 1, maximum: 2 }),
-			),
-			final_verify: Type.Optional(Type.Boolean()),
-		},
-		{ additionalProperties: false },
-	),
-	pi_search_run_batch: Type.Object(
-		{
-			run_id: Type.String(),
-			candidate_ids: Type.Array(Type.String()),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget)),
-			final_verify: Type.Optional(Type.Boolean()),
-			max_parallel: Type.Optional(Type.Number()),
-		},
-		{ additionalProperties: false },
-	),
-	pi_search_pool_open: Type.Object(
-		{
-			run_id: Type.String(),
-			candidate_ids: Type.Optional(Type.Array(Type.String())),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget)),
+		pi_search_pool_open: Type.Object(
+			{
+				run_id: Type.String(),
+				candidate_ids: Type.Optional(Type.Array(Type.String())),
+				worker_budgets: Type.Optional(Type.Record(Type.String(), WorkerBudget)),
 			final_verify: Type.Optional(Type.Boolean()),
 			max_parallel: Type.Optional(PositiveInteger),
-		},
-		{ additionalProperties: false },
-	),
-	pi_search_pool_submit: Type.Object(
-		{
-			pool_id: Type.String(),
-			candidate_id: Type.String(),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			worker_budget: Type.Optional(WorkerBudget),
-			final_verify: Type.Optional(Type.Boolean()),
 		},
 		{ additionalProperties: false },
 	),
@@ -522,14 +439,12 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		},
 		{ additionalProperties: false },
 	),
-	pi_search_pool_continue: Type.Object(
-		{
-			pool_id: Type.String(),
-			candidate_id: Type.String(),
-			directive: Type.Optional(Type.Union([Type.String(), LooseObject])),
-			worker_budget: Type.Optional(WorkerBudget),
-			runtime_multiplier: Type.Optional(Type.Number({ exclusiveMinimum: 1, maximum: 2 })),
-			final_verify: Type.Optional(Type.Boolean()),
+		pi_search_pool_continue: Type.Object(
+			{
+				pool_id: Type.String(),
+				candidate_id: Type.String(),
+				worker_budget: Type.Optional(WorkerBudget),
+				final_verify: Type.Optional(Type.Boolean()),
 		},
 		{ additionalProperties: false },
 	),
@@ -559,14 +474,8 @@ const RuntimeToolDescriptions: Record<string, string> = {
 		"Generate final report.md and report.html. For a linked Goal Plus run, call this exactly once only after the Goal Plus record is terminal; standalone Search calls it after promotion. Active linked Goal Plus records are rejected.",
 	search_plan_next:
 		"Plan initial candidates. In parallel_loops mode this may be called exactly once; later work resumes existing candidates. planned_k is min(requested_k, remaining max_candidates, max_parallel).",
-	pi_search_run_candidate:
-		"Run one Pi candidate worker. worker_budget optionally overrides only this dispatch, including an initial dispatch or a cross-process native-session continuation, without mutating the frozen spec.",
-	pi_search_run_batch:
-		"Compatibility batch runner. It waits for the whole batch; prefer the managed Pi pool for parallel-loop wait-any scheduling.",
 	pi_search_pool_open:
-		"Open a durable Pi candidate pool and optionally submit the initial workers. Returns immediately after launch and enforces the frozen max_parallel limit.",
-	pi_search_pool_submit:
-		"Submit an initial or legacy candidate into a free Pi pool slot. Normal parallel_loops flow opens all initial candidates once and does not submit replacements.",
+		"Open a durable Pi candidate pool and launch the complete initial candidate set. Returns immediately after launch and enforces the frozen max_parallel limit.",
 	pi_search_pool_wait_any:
 		"Wait until any Pi pool worker reaches candidate_ready after handle binding and final verification. Validate every event, observe the durable best, then continue that same candidate unless a global stop condition is true.",
 	pi_search_pool_snapshot:
@@ -577,14 +486,10 @@ const RuntimeToolDescriptions: Record<string, string> = {
 		"Close a Pi pool by draining active workers or interrupting them. Always close the pool before select/promote.",
 };
 const MAIN_GATED_TOOLS = new Set([
-	"bash",
-	"edit",
-	"write",
-	"pi_rpc_run_worker",
-	"pi_search_run_candidate",
-	"pi_search_run_batch",
-	"pi_search_pool_open",
-	"pi_search_pool_submit",
+		"bash",
+		"edit",
+		"write",
+		"pi_search_pool_open",
 	"pi_search_pool_wait_any",
 	"pi_search_pool_snapshot",
 	"pi_search_pool_continue",
@@ -1185,40 +1090,6 @@ function registerPiFinalCheckTool(pi: ExtensionAPI) {
 	});
 }
 
-function registerPiWorkerTool(pi: ExtensionAPI) {
-	pi.registerTool({
-		name: "pi_rpc_run_worker",
-		label: "Pi RPC Worker",
-		description: "Run a Pi RPC worker from a search_start_agent_session launch payload. Returns a handle for search_bind_agent_handle.",
-		parameters: Type.Object({
-			launch: Type.Object({}, { additionalProperties: true }),
-		}),
-		executionMode: "sequential",
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const commandCtx = commandContextFrom(ctx);
-			const invocation = projectModuleInvocation(commandCtx, "goal-plus-pi-worker", "goal_plus.pi_worker");
-			const result = await pi.exec(invocation.command, [
-				...invocation.argsPrefix,
-				"run",
-				"--launch-json",
-				JSON.stringify(params.launch),
-			]);
-			if (result.code !== 0) {
-				const failure = commandFailure("pi_rpc_run_worker", invocation, result);
-				return {
-					content: [{ type: "text" as const, text: failure.text }],
-					details: failure.details,
-				};
-			}
-			const handle = JSON.parse(result.stdout || "{}");
-			return {
-				content: [{ type: "text" as const, text: JSON.stringify(handle, null, 2) }],
-				details: handle,
-			};
-		},
-	});
-}
-
 function extractCandidatePath(event: ToolCallEvent): string | undefined {
 	const input = event.input as Record<string, unknown>;
 	if (event.toolName === "bash") return String(input.command || "");
@@ -1325,7 +1196,6 @@ export default function (pi: ExtensionAPI) {
 		"goal_plus_monitor_snapshot",
 		"goal_plus_record_triage",
 		"goal_plus_save_spec_draft",
-		"goal_plus_confirm_frozen_verifier",
 		"goal_plus_link_search_run",
 		"goal_plus_record_search_result",
 		"goal_plus_prepare_final_check",
@@ -1344,10 +1214,7 @@ export default function (pi: ExtensionAPI) {
 		"search_select",
 		"search_report",
 		"search_promote",
-		"pi_search_run_candidate",
-		"pi_search_run_batch",
-		"pi_search_pool_open",
-		"pi_search_pool_submit",
+			"pi_search_pool_open",
 		"pi_search_pool_wait_any",
 		"pi_search_pool_snapshot",
 		"pi_search_pool_continue",
@@ -1360,7 +1227,6 @@ export default function (pi: ExtensionAPI) {
 		registerRuntimeTool(pi, tool);
 	}
 	if (role === "main") registerPiFinalCheckTool(pi);
-	if (role === "main" && exposeLowLevelWorker) registerPiWorkerTool(pi);
 	pi.on("input", async (event, ctx) => {
 		if (role !== "main" || (ctx.mode !== "print" && ctx.mode !== "json")) {
 			return { action: "continue" };

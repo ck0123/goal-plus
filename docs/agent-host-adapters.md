@@ -22,28 +22,27 @@ The adapter also returns authoritative launch fields. The main agent projects
 only fields supported by the current host tool schema; for Codex, that means the
 current `spawn_agent` schema rather than assumed optional metadata.
 
-## Capability Matrix
+## Maintained Capability Matrix
 
-| Capability | OpenCode | Codex | Claude Code | Pi RPC |
-|---|---|---|---|---|
-| Launch | foreground `Task` | async `spawn_agent` | foreground `Agent` | detached local supervisor + foreground Pi child |
-| Wait mode | Task return | `wait_agent` any-event wake + `list_agents` | Agent return | `pi_search_pool_wait_any` |
-| Continuation | same Task via `task_id` | same worker via `followup_task` | conditional host support | same native session in a new process |
-| Deadline | step-tiered agent | per-dispatch parent watchdog | `maxTurns` agent | Pi process watchdog |
-| Recovery | Task handle + `.gp` | native agent registry + `.gp` | handle when exposed + `.gp` | persisted `.gp/host-pools/pi/` + `.gp` |
-| Goal gate | instruction-driven | `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop` | PostToolUse binding + Stop backstop | extension input/tool/turn events |
-| Strategy coverage | all existing tested paths | portable builtins | portable builtins | portable builtins |
-| Trace export | yes | no | no | no |
-| Normalized observability | bound metadata | native session JSONL + bound metadata | bound metadata | `pi_metrics` + bound metadata |
+| Capability | Codex | Pi RPC |
+|---|---|---|
+| Launch | async `spawn_agent` | detached local supervisor + foreground Pi child |
+| Wait mode | `wait_agent` any-event wake + `list_agents` | `pi_search_pool_wait_any` |
+| Continuation | same worker via `followup_task` | same native session in a new process |
+| Deadline | per-dispatch parent watchdog | Pi process watchdog |
+| Recovery | native agent registry + `.gp` | persisted `.gp/host-pools/pi/` + `.gp` |
+| Goal gate | `UserPromptSubmit`, `SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop` | extension input/tool/turn events |
+| Strategy coverage | initial parallel loops | initial parallel loops |
+| Normalized observability | native session JSONL + bound metadata | `pi_metrics` + bound metadata |
 
 All adapters implement the read-only `collect_observability` contract exposed
 as `search_get_agent_observability`. This is provenance and diagnostics only;
 it does not add worker lifecycle state to Search records or turn the runtime
 into a supervisor.
 
-Portable builtins are `agent_guided`/`agent`/`default` and
-`random`/`random_mode`. Other strategies remain OpenCode-only until a host has
-contract tests and a real parallel-loop smoke.
+The accepted initial planners are `agent_guided`/`agent`/`default` and
+`random`/`random_mode`. OpenCode and Claude Code assets are retained only as
+unsupported references and are outside this contract.
 
 ## Parallel Loops
 
@@ -67,9 +66,7 @@ completion barrier. Low score or no improvement never causes replacement.
 
 | Host | Required control | Enforcement |
 |---|---|---|
-| OpenCode | worker tier | fixed host step cap |
 | Codex | `worker_budget.max_runtime_seconds` | initial wait, one closeout message, final wait, interrupt |
-| Claude Code | `worker_budget.max_turns` | selected agent's `maxTurns` |
 | Pi RPC | `worker_budget.max_runtime_seconds` | closeout steer plus hard process watchdog |
 
 `max_turns` is only a prompt hint for Codex and Pi. `max_candidates` limits
@@ -99,8 +96,8 @@ State-level redispatch is the portable recovery path:
 4. Git state, verifier iterations, ranked history, and `research_summary`
    replace dependence on a previous transcript.
 
-Same-worker continuation is native on Codex and OpenCode. Pi provides native
-session continuation across process boundaries: each dispatch has a new PID,
+Same-worker continuation is native on Codex. Pi provides native session
+continuation across process boundaries: each dispatch has a new PID,
 but retains the same native session, runtime `agent_session_id`, candidate, and
 workspace. State-level redispatch remains the portable fallback for hosts or
 legacy records without a resumable native session.
@@ -135,7 +132,9 @@ scores cannot be promoted or reused by the successor.
 | Codex parallel-loop cycle | `codex_parallel_loop_cycle`: two initial candidates, one plan, same native worker continuation, best update, final selection/report |
 | Pi managed pool | `pi_rpc_managed_pool_wait_any`: two detached real Pi workers, pool rediscovery, candidate-ready events, drain |
 | Pi parallel-loop cycle | `pi_rpc_parallel_loop_cycle`: one initial plan, same-candidate redispatch with a new session, best update, final selection/report |
-| OpenCode | broad existing unit/assets and opt-in system scenarios |
+
+OpenCode and Claude Code compatibility tests are opt-in historical checks; they
+are not support evidence for the current runtime.
 
 Fast tests prove schemas and adapter mappings. Only the opt-in real-host tests
 prove native launch, waiting, continuation, hooks, and provider behavior.
