@@ -1,4 +1,4 @@
-# 面向开放式 Agentic Search 的搜索图式诱导与事务化协调
+# Search Intelligence Scaling：基于证据累积的搜索空间持续建模与协同探索
 
 > 背景、核心矛盾、方案设想与框架设计
 
@@ -15,15 +15,26 @@
 
 > **系统没有持续构造一个显式、共享、可修订的模型，用来表示已经搜索过什么、当前如何理解搜索空间，以及哪些区别对下一步决策真正重要。**
 
-因此，我们设想的第三种路径不是再设计一个更复杂的搜索控制器，而是引入两个核心机制：
+本文将搜索空间中的认知对象明确分成两层：
 
-### 0.1 Search Schema Induction：搜索图式诱导
+| 层 | 表达什么 | 如何变化 |
+| --- | --- | --- |
+| `Search Evidence` | 已经发生的 intervention、执行上下文、trace 和 verifier outcome | 只追加，不改写 |
+| `Search Schema` | 当前如何组织、区分和解释这些证据 | 随证据版本化修订 |
 
-使用一套跨场景通用的干预元语法，由 LLM 根据具体任务诱导领域本体和运行时搜索图式；每次搜索尝试被编译为结构化、多视图的 Search Footprint。空间表示不是预先固定的，也不是 LLM 一次性生成的，而是随着实验结果不断被拆分、合并和修订。
+candidate 文件、workspace 和 artifact rollback 属于执行层，由 git worktree、sandbox 和 runtime 管理；它们可以为 Evidence 提供 provenance，但不是第三种搜索空间认知状态。
 
-### 0.2 Transactional Search Coordination：事务化搜索协调
+本文所说的 **Search Intelligence Scaling** 不是简单增加 rollout 数量，而是：随着搜索计算增加，系统能够利用累积 Evidence 和持续修订的 Schema，让新增 rollout 继续贡献未被已有搜索覆盖的决策相关信息，并将这些信息转化为更有效的后续搜索。
 
-多个 Agent 可以并行生成方案，但方案不能直接执行。每个方案必须以 `AtomicPlan` 的形式，针对某一版本的共享 Search State 提交；只有经过审核、冲突检测和原子预留后才能进入执行。执行结果经 verifier 验证后，再通过独立的 `EvidenceCommit` 原子写入共享状态。
+在这两层认知模型之上，我们设想的第三种路径不是再设计一个更复杂的搜索控制器，而是引入两个核心机制：
+
+### 0.1 Continual Search-Space Modeling：搜索空间持续建模
+
+使用一套跨场景通用的干预元语法，由 LLM 根据具体任务归纳初始领域概念、关系和 Search Schema；每次搜索尝试先形成带 provenance 的 Search Evidence，再由当前 Schema 投影为结构化、多视图的 Search Footprint。系统持续利用新 Evidence 修订概念、维度、关系和 footprint 映射，而不是一次性生成一个永久空间。
+
+### 0.2 Transactional Search Coordination：基于原子提交的协同探索
+
+多个 Agent 可以并行生成方案，但方案不能直接执行。每个方案必须以 `AtomicPlan` 的形式，针对某一版本的 Evidence、Schema 和协调元数据快照提交；只有经过审核、冲突检测和原子预留后才能进入执行。执行结果经 verifier 验证后，再通过独立的 `EvidenceCommit` 追加到 Evidence 账本，并驱动 Schema 修订。
 
 整体原则可以压缩为：
 
@@ -31,7 +42,7 @@
 
 中文即：
 
-> **Agent 可以自由猜想，计划必须原子提交，证据持续积累，空间图式不断修订。**
+> **Agent 可以自由猜想，计划必须原子提交，证据持续积累，空间模型不断修订。**
 
 ---
 
@@ -153,50 +164,6 @@ LLM 负责：
 
 ---
 
-### 1.3 当前项目所处的位置
-
-当前 `agentic-any-search-mcp` 已经形成了一个适合承载该研究问题的基础运行时：
-
-* runtime 持有 durable state、candidate workspace、verifier、score history、report 和 promotion artifact；
-* host agent 负责启动和管理前台 worker；
-* 不同搜索策略通过统一 runtime 接口产生 plan 和 candidate；
-* 每个 candidate 在隔离 workspace 中执行；
-* verifier 是官方结果来源。
-
-当前架构有意不把 runtime 设计成 worker supervisor。Host adapter 只负责将统一的 session 概念转换为 OpenCode、Codex 或 Claude Code 的前台 Agent 调用，workspace、评分、预算和报告仍保持 host-neutral。
-
-这条边界是合理的，也应当继续保留。
-
-当前缺失的不是更多 lifecycle API，而是：
-
-> runtime 当前主要维护的是 candidate history，而不是 search-space history。
-
-具体来说：
-
-* `SearchPlan` 是一次 batch 的快照；
-* `IterationRecord` 记录 score、failure、changed files 和 metrics；
-* 当前没有独立的 proposal admission 或 evidence submit 阶段；
-* `max_parallel` 只是 planning hint，并不是并发冲突控制。
-
-同时，subagent 当前无法直接读取其他 candidate 的代码，只能看到候选摘要、分数、指标和 changed-file 名称；subagent 之间也没有直接通信渠道。跨 candidate 的学习主要依赖下一次 `plan_next`。
-
-因此，当前系统已经拥有：
-
-* 可验证执行；
-* 可持久化候选；
-* workspace 隔离；
-* 策略扩展边界；
-
-但尚未拥有：
-
-* 显式共享的空间表示；
-* 方案的原子准入；
-* 并发搜索范围预留；
-* 可修订的 coverage state；
-* 经过验证的 evidence commit。
-
----
-
 ## 2. 核心矛盾
 
 ### 2.1 Model Intelligence 不等于 Search Intelligence
@@ -225,7 +192,7 @@ LLM 负责：
 * 相同 verifier；
 * 相似历史；
 
-它们产生的搜索方向往往具有较高相关性。
+它们产生的搜索方向往往具有较高相关性。甚至强化学习后的模型会对数据集里的“已知最优解”存在明显偏向。
 
 因此：
 
@@ -243,7 +210,7 @@ $$
 
 理想情况下，启动 $N$ 个并发 worker，应当让它们探索 $N$ 个不同且有价值的区域。
 
-但在没有共享搜索状态时：
+但在没有共享 Evidence 账本和当前 Schema 时：
 
 $$
 p_i
@@ -272,7 +239,7 @@ $$
 
 > **并发重复是在空间上发生的碰撞；单链重复是在时间上发生的碰撞。**
 
-两者的根因都是：系统没有一个持续更新的共享 Search State。
+两者的根因都是：系统没有共享、持续积累的 Search Evidence，也没有基于这些 Evidence 持续修订的 Search Schema。
 
 ---
 
@@ -321,7 +288,7 @@ Agent 可以说：
 * 预期解决什么瓶颈；
 * 实际执行行为发生了什么变化。
 
-因此，方案的真实身份不是一段文本，而是：
+因此，一次搜索尝试的可比较记录不是一段 proposal 文本，而是一条由实际执行和结果锚定的 Evidence：
 
 $$
 e_i =
@@ -403,21 +370,11 @@ search-strategy space
 
 ---
 
-### 2.6 Solution State 与 Search State 之间的矛盾
+### 2.6 Search Evidence 与 Search Schema 之间的边界
 
-当前很多 loop 只更新当前最优解：
+当前很多 loop 只保留当前 candidate、best score 或一份滚动总结。一次尝试没有成为新 incumbent，并不意味着这次尝试没有产生搜索信息。
 
-$$
-x_{t+1} =
-\begin{cases}
-x'_t, & R(x'_t) > R(x_t), \\
-x_t, & \text{otherwise}.
-\end{cases}
-$$
-
-失败方案被 reset 后，solution 回到了原处。
-
-但失败实验通常仍然提供信息：
+失败或被拒绝的实验通常仍然提供 Evidence：
 
 * 某个机制可能无效；
 * 某个参数范围已经测试；
@@ -425,31 +382,43 @@ $$
 * 某个实现方式导致资源溢出；
 * 某个方向只有在特定 context 下有效。
 
-因此应该有两个状态：
+这些事实应进入只追加的 Search Evidence 账本：
 
 $$
-X_t=\text{Solution State}
+\mathcal E_{t+1}
+=
+\operatorname{Append}(\mathcal E_t,e_{t+1})
 $$
 
-$$
-S_t=\text{Search State}
-$$
+其中，$e_{t+1}$ 是一次经过 provenance 标注和 verifier 确认的 Search Event。后续即使发现该实验环境无效、测量有误或结论被推翻，也应追加 invalidation、correction 或 supersession 关系，而不是改写原始事件。
 
-即使：
+另一方面，系统对这些事实的组织和解释必须允许改变：
 
 $$
-X_{t+1}=X_t
+\Omega_{t+1}
+=
+\operatorname{Revise}(\Omega_t,\mathcal E_{t+1})
 $$
 
-也应当有：
+早期 Schema 可能只把一组实验描述为：
 
-$$
-S_{t+1}\neq S_t
-$$
+```text
+tiling
+```
+
+随着 Evidence 增加，更合适的 Schema 可能变成：
+
+```text
+shape regime × tile size × memory level × pipeline stage
+```
+
+这里变化的是描述粒度、关系和解释，不是已经发生过的事实。
 
 核心原则是：
 
-> **Solution state 可以回退，Search state 不应该发生认知回退。**
+> **Search Evidence 只追加、不改写；Search Schema 随证据持续修订。**
+
+artifact、candidate workspace 的创建、恢复和删除仍由执行层负责。执行层状态是否回退，不决定搜索知识是否保留。
 
 ---
 
@@ -461,54 +430,63 @@ $$
 
 我们的核心设想是：
 
-> **系统从实际干预及其结果中，在线诱导一个任务特定、版本化、可修订、对下一步搜索决策足够充分的空间表示。**
+> **系统从实际干预及其结果中，持续构建并修订一个任务特定、版本化、对下一步搜索决策足够充分的空间模型。**
 
-每次搜索应当同时产生两个结果：
+从搜索空间建模的角度，每次搜索应当同时产生两个结果：
 
 $$
-\text{better or rejected solution}
+\text{new committed search evidence}
 $$
 
 以及：
 
 $$
-\text{better model of the search space}
+\text{a retained or revised search schema}
 $$
 
 因此，“可积累的搜索智能”在第一阶段不需要训练模型权重。
 
-它表现为：
-
-> 一个任务内、非参数化、由证据持续更新的 Search State。
+它表现为一个任务内、非参数化的两层结构：只追加的 Evidence 账本，以及由 Evidence 持续修订的 Search Schema。
 
 ---
 
-### 3.2 Search State 的定义
+### 3.2 两层模型：Search Evidence 与 Search Schema
 
-共享 Search State 可以表示为：
+Search Evidence 可以表示为按提交顺序持久化的事件账本：
 
 $$
-S_t =
-\left(
-I_t,
-\mathcal E_t,
-\Omega_t,
-C_t,
-A_t,
-H_t
-\right)
+\mathcal E_t=(e_1,e_2,\ldots,e_t)
 $$
 
-其中：
+每个 $e_i$ 都记录实际 intervention、执行上下文、trace、verifier outcome 和 provenance。Evidence 的不可变性针对“当时观察并提交了什么”；它不保证当时的测量永远有效，也不把 Agent 的解释提升为事实。纠错通过追加关系表达，而不是原地改写。
 
-* $I_t$：当前 incumbent 或优秀 candidate 集合；
-* $\mathcal E_t$：不可修改的 Search Event 账本；
-* $\Omega_t$：当前版本的 Search Schema；
-* $C_t$：已完成的 coverage；
-* $A_t$：当前 active reservations；
-* $H_t$：当前假设、支持证据、反证和不确定性。
+Search Schema 是对 Evidence 的当前解释：
 
-Search State 不是：
+$$
+\Omega_t
+=
+\operatorname{Revise}(\Omega_{t-1},\mathcal E_t)
+$$
+
+它包括：
+
+* 当前领域概念、关系和有效维度；
+* Event 到多视图 footprint 的映射；
+* coverage、overlap 和 saturation 的当前判断；
+* hypotheses、支持证据、反证和不确定性；
+* split、merge、rename 和 reindex 历史。
+
+Schema 是可修订、可证伪的模型，不是不可修改的事实。相同的 Evidence 账本可以在不同 Schema 版本下得到不同的节点、边界和覆盖视图。
+
+事务执行需要同时读取这两层对象和协调元数据。可以把这个运行时视图记为 `CoordinationSnapshot`：
+
+$$
+Q_t=(\mathcal E_t,\Omega_t,M_t)
+$$
+
+其中 $M_t$ 是 active reservations、budget、snapshot version 等协调元数据。`CoordinationSnapshot` 只是读取和提交事务时的组合视图，不是 Evidence 和 Schema 之外的第三种认知对象。如果现有实现或 API 继续使用 `SearchState` 这个名称，也应将其理解为这一兼容性容器，而不是独立的认知状态。
+
+这套两层模型不是：
 
 * 完整聊天历史；
 * 原始 rollout transcript；
@@ -517,11 +495,11 @@ Search State 不是：
 
 它应当是：
 
-> **对完整搜索历史的有界、结构化、可证伪压缩。**
+> **只追加的事实账本，以及建立在该账本之上的有界、结构化、可证伪解释。**
 
 ---
 
-### 3.3 Search Schema Induction
+### 3.3 Continual Search-Space Modeling
 
 #### 一套通用 Meta-Grammar
 
@@ -540,7 +518,7 @@ $$
 
 | 字段                     | 含义                  |
 | ---------------------- | ------------------- |
-| Base                   | 方案基于哪个状态或 candidate |
+| Base                   | 方案基于哪个 baseline 或 candidate |
 | Target                 | 准备改变哪个对象            |
 | Intervention           | 具体实施什么改变            |
 | Context                | 改变在哪些环境和条件下成立       |
@@ -557,9 +535,11 @@ $$
 
 ---
 
-#### Domain Ontology 是场景相关的
+#### 领域概念模型随任务变化
 
-不同领域变化的是 ontology，而不是最上层元语法。
+不同任务变化的是领域概念、概念之间的关系和真正影响搜索决策的区分，而不是最上层元语法。这些内容共同构成 Search Schema 中的领域概念模型。
+
+这里不使用 `Domain Ontology`：严格的 ontology 通常还要求明确的实体类型、关系语义、公理或约束；本文当前需要的只是足以描述 Plan、投影 Evidence 和判断 overlap 的任务内概念模型。
 
 Kernel optimization 可能包含：
 
@@ -587,7 +567,7 @@ mechanism:
 optimization stability / generalization / throughput / capacity
 ```
 
-Scenario template 可以作为 ontology induction 的 warm-start prior。
+Scenario template 可以作为领域概念建模和 Schema 初始化的 warm-start prior。
 
 但它不应成为固定空间。
 
@@ -597,7 +577,7 @@ $$
 \begin{aligned}
 &\text{Universal Meta-Grammar} \\
 &\quad + \text{Optional Scenario Prior} \\
-&\quad + \text{Run-Time Schema Induction}
+&\quad + \text{Continual Schema Modeling}
 \end{aligned}
 $$
 
@@ -615,7 +595,7 @@ $$
 * execution trace；
 * outcome 分布；
 
-形成当前 run 的空间图式。
+形成当前 run 的搜索空间模型。
 
 初期可能只有：
 
@@ -637,17 +617,17 @@ shape regime × tiling
 
 ---
 
-### 3.4 Event 是事实，Schema 是解释
+### 3.4 Evidence 是事实，Schema 是解释
 
 整个方案中最重要的边界是：
 
-> **Events are permanent; abstractions are provisional.**
+> **Evidence is append-only; schemas are provisional.**
 
 中文即：
 
-> **搜索事件是永久事实，搜索空间是当前最有用的解释。**
+> **Search Evidence 记录已经发生的事实，Search Schema 提供当前最有用的解释。**
 
-一次 Search Event 应当由 runtime、artifact parser 和 verifier 尽可能客观地构造：
+Search Evidence 账本由一条条不可原地修改的 `SearchEvent` 组成。每条 Event 应当由 runtime、artifact parser 和 verifier 尽可能客观地构造：
 
 $$
 e_i =
@@ -678,11 +658,11 @@ system_inferred
 experimentally_supported
 ```
 
-Agent 的描述不能直接成为 verified fact。
+Agent 的描述不能直接成为 verified fact。它可以作为带 provenance 的声明进入 Event，或作为 Schema hypothesis 等待 Evidence 支持，但不能覆盖系统观察。
 
 ---
 
-### 3.5 一个事件可以位于多个空间视图中
+### 3.5 一条 Evidence 可以位于多个空间视图中
 
 开放式搜索不适合强制：
 
@@ -706,25 +686,27 @@ Agent 的描述不能直接成为 verified fact。
 
 而不是一棵单一分类树。
 
-形式上，一次尝试的 footprint 是：
+形式上，一条 Evidence 在 Schema $\Omega_t$ 下的 footprint 是：
 
 $$
-F(p)=
+F_{\Omega_t}(e)=
 \left\{
 \begin{aligned}
-&\phi_{\text{artifact}}(p),
-\phi_{\text{config}}(p),
-\phi_{\text{mechanism}}(p), \\
-&\phi_{\text{context}}(p),
-\phi_{\text{epistemic}}(p),
-\phi_{\text{behavior}}(p)
+&\phi_{\text{artifact}}(e),
+\phi_{\text{config}}(e),
+\phi_{\text{mechanism}}(e), \\
+&\phi_{\text{context}}(e),
+\phi_{\text{epistemic}}(e),
+\phi_{\text{behavior}}(e)
 \end{aligned}
 \right\}
 $$
 
+这里的 $F_{\Omega_t}(e)$ 是 Schema-relative projection，而不是 Evidence 本身。同一条 $e$ 在新的 Schema 下可以得到不同 footprint。
+
 ---
 
-### 3.6 Declared Footprint 与 Realized Footprint
+### 3.6 Declared Footprint、Observed Evidence 与 Realized Footprint
 
 执行前，Agent 只能声明自己打算做什么：
 
@@ -732,11 +714,19 @@ $$
 Declared Footprint
 ```
 
-执行后，系统才能知道实际上做了什么：
+执行后，runtime、parser 和 verifier 先构造不依赖分类结论的 Observed Evidence：
 
 ```text
-Realized Footprint
+actual delta + execution context + trace + verifier outcome
 ```
+
+然后，系统才在当前 Schema $\Omega_v$ 下将这条 Evidence 投影为 Realized Footprint：
+
+$$
+F_{\mathrm{realized}}^{(v)}(e_i)
+=
+\operatorname{Project}(e_i,\Omega_v)
+$$
 
 例如，Agent 声称只修改 tiling，但实际 diff 同时改变了：
 
@@ -745,7 +735,9 @@ Realized Footprint
 * thread mapping；
 * buffer allocation。
 
-因此，AtomicPlan 的 admission 使用 Declared Footprint；EvidenceCommit 则使用 Realized Footprint 修正官方 Search State。
+这里的 actual diff 属于 Evidence；“tile size”“pipeline stage”等分类属于当前 Schema 下的解释。未来 Schema 如果进一步拆分 memory level 或 shape regime，同一条 Evidence 可以被重新投影，而不需要修改原 Event。
+
+因此，AtomicPlan admission 使用当前 Schema 下的 Declared Footprint；EvidenceCommit 先追加 Observed Evidence，再保存带 `schema_version` 的 Realized Footprint 映射，并据此刷新 coverage 视图。
 
 两者之间可以记录：
 
@@ -760,22 +752,40 @@ unclassifiable
 
 ---
 
-### 3.7 正交性的重新定义
+### 3.7 从“正交方案”到边际非冗余
 
-“正交”不能被定义为：
+在并行 Agentic Search 中，人们常说：
+
+> 让不同 Agent 提出彼此正交的方向。
+
+这个说法想解决的是计算重复：如果两个 rollout 测试的是同一机制、同一上下文和同一假设，那么增加并发并没有带来相应的信息增量。
+
+但这里的“正交”只是借用的比喻，并不是严格的数学正交。开放式搜索没有预先固定的坐标轴、内积或独立性判据；两个 Plan 也可能在代码改动上重合，却在 context、hypothesis 或预期信息上不同。
+
+因此，本文真正关心的问题不是：
+
+> 两个方案是否绝对正交？
+
+而是：
+
+> 在已有 Evidence、当前 Schema 和 active reservations 下，新 Plan 是否仍能带来不会被已有搜索完全覆盖的决策相关信息？
+
+这不能简单定义为：
 
 * 文本 embedding 距离大；
 * 修改了不同文件；
 * 配置向量不同；
 * LLM 说它们属于不同类别。
 
-更准确的定义是：
+本文将这一目标称为：
 
 > **Schema-Relative Marginal Non-Redundancy**
 >
-> **相对于当前图式的边际非冗余性**
+> **相对于当前空间模型的边际非冗余性**
 
-两个方案的重合关系应写成：
+“边际”强调判断对象是新增加的这一次计算；“非冗余”强调它不必与其他 Plan 完全不同，只需要有明确的新增信息、验证价值或 exploitation 价值。
+
+两个方案的重合程度应相对于当前 Schema 表达为：
 
 $$
 O(p_i,p_j\mid\Omega_t)
@@ -800,7 +810,7 @@ O_{\text{behavior}}
 \right]
 $$
 
-一个新 Plan 不必完全不同。
+因此，低 overlap 不是唯一目标，一个新 Plan 也不必与已有 Plan 完全不同。
 
 它可以声明自己是：
 
@@ -817,6 +827,8 @@ $$
 
 > 高度重合、没有新增信息、没有 replication 目的，也没有明确 exploitation 理由的无意识重复。
 
+因此，“正交方案”只用于描述问题来源；AtomicPlan admission 真正审核的是 schema-relative overlap、边际信息贡献和计划意图，而不是一个二元的正交/不正交标签。
+
 ---
 
 ### 3.8 Search-Time Learning
@@ -829,13 +841,21 @@ $$
 \theta_{t+1}=\theta_t
 $$
 
-变化的是共享状态：
+变化的是 Evidence 账本和当前 Schema：
 
 $$
-S_{t+1}=U(S_t,e_t)
+\mathcal E_{t+1}
+=
+\operatorname{Append}(\mathcal E_t,e_{t+1})
 $$
 
-它可能学习到：
+$$
+\Omega_{t+1}
+=
+\operatorname{Revise}(\Omega_t,\mathcal E_{t+1})
+$$
+
+Schema 可能从累积 Evidence 中归纳出：
 
 * 当前主要瓶颈是什么；
 * 哪些变量值得区分；
@@ -849,7 +869,7 @@ $$
 
 > **Within-Task Search-Time Learning**
 
-它比 `plans.md` 更严格，因为 plan 只是接下来做什么，而 Search State 需要表达：
+它比 `plans.md` 更严格，因为 plan 只是接下来做什么，而 Evidence 与 Schema 的组合需要表达：
 
 * 为什么；
 * 依据是什么；
@@ -857,7 +877,7 @@ $$
 * 哪些证据支持或反驳；
 * 哪些不确定性仍未解决。
 
-长期看，这些 state 可以进一步被压缩成 skill、workflow 或模型训练数据；但跨任务迁移不是第一阶段必须解决的问题。
+长期看，这些 Evidence 和 Schema 可以进一步被压缩成 skill、workflow 或模型训练数据；但跨任务迁移不是第一阶段必须解决的问题。
 
 ---
 
@@ -865,52 +885,60 @@ $$
 
 ### 4.1 总体架构
 
+这一层只展示 `/goal-plus`、并发搜索 loop、空间控制面和最终结果之间的关系。Evidence、Schema、AtomicPlan 和 EvidenceCommit 的内部结构在后续小节展开。
+
 ```text
-                    SearchSpec + Artifact + Verifier
+                         /goal-plus <goal>
                                   │
                                   ▼
-                    Universal Search Meta-Grammar
+                          Goal Plus Main
                                   │
-                         LLM Schema Induction
-                                  │
+             ┌────────────────────┼────────────────────┐
+             │                    │                    │
+             ▼                    ▼                    ▼
+          Loop A               Loop B               Loop C
+             │                    │                    │
+        local search          local search          local search
+             │                    │                    │
+       submit Plan A         submit Plan B         submit Plan C
+             │                    │                    │
+┌────────────┴────────────────────┴────────────────────┴────────────┐
+│                             SpaceAgent                            │
+│    shared space · AtomicPlan review · atomic admission/commit     │
+└────────────┬────────────────────┬────────────────────┬────────────┘
+             │                    │                    │
+  accept: continue     accept: continue     accept: continue
+  reject: revise ↺     reject: revise ↺     reject: revise ↺
+             │                    │                    │
+             ▼                    ▼                    ▼
+      execute / verify     execute / verify     execute / verify
+             │                    │                    │
+        Candidate A          Candidate B          Candidate C
+             │                    │                    │
+             └────────────────────┼────────────────────┘
                                   ▼
-                  Versioned Run-Specific Schema Ωv
+                      Validated Candidate Set
                                   │
-          ┌───────────────────────┴────────────────────────┐
-          │                                                │
-   Existing Events / Coverage                       Agent Proposal
-          │                                                │
-          └──────────────► AtomicPlan Admission ◄──────────┘
-                                  │
-                    review + atomic reservation
-                                  │
+                         select best candidate
                                   ▼
-                       Committed AtomicPlan
-                                  │
-                        isolated execution
-                                  │
-                                  ▼
-                  Artifact Diff + Trace + Verifier
-                                  │
-                                  ▼
-                       Immutable SearchEvent
-                                  │
-                       atomic EvidenceCommit
-                                  │
-                                  ▼
-          update incumbent / coverage / hypotheses / schema
-                                  │
-                                  ▼
-                         SearchState version v+1
+                             Final Result
 ```
+
+三条竖向泳道表示 loop subagent 始终并发运行。横向的 `SpaceAgent` 是它们共同经过的方案准入关卡：它只串行化 AtomicPlan 的审核和原子提交，不会串行化各个 loop 的本地搜索与 candidate 执行。
+
+每个 loop subagent 独立探索，但在执行新方向前必须向 `SpaceAgent` 提交方案。`SpaceAgent` 对外只返回 accept 或 reject；被接受的 loop 执行 candidate，由 runtime 运行 verifier，然后提交结果并继续下一轮；被拒绝的 loop 根据反馈修改方向后重新提交。
+
+这里的 `SpaceAgent` 是空间控制面的逻辑角色。它封装本章后续描述的 Evidence/Schema 读取、overlap 与边际贡献审核、AtomicPlan admission、reservation、EvidenceCommit 和空间模型修订；它可以使用模型完成分析，但官方状态变更仍由 runtime 通过原子事务提交。`SpaceAgent` 不负责 subagent 的启动、停止或生命周期。
+
+当预算耗尽或满足全局停止条件后，系统从已经验证的 candidate 中按预先声明的选择规则选出 best candidate，作为 `/goal-plus` 的最终结果。
 
 ---
 
 ### 4.2 核心数据对象
 
-#### `SearchEvent`
+#### `SearchEvidence` / `SearchEvent`
 
-不可修改的执行事实：
+`SearchEvidence` 是只追加的账本，`SearchEvent` 是其中一条不可原地修改的执行记录：
 
 ```text
 event_id
@@ -920,7 +948,6 @@ actual artifact delta
 execution context
 trace
 verifier outcome
-failure class
 provenance
 ```
 
@@ -932,42 +959,44 @@ provenance
 
 ```text
 schema_version
-domain ontology
+domain concepts and relations
 active dimensions
 multi-view descriptors
+event-to-footprint mappings
+derived classifications
 split / merge history
-confidence and evidence
+confidence and evidence references
+hypotheses and uncertainty
 ```
 
-Schema 可以变化，Event 不变。
+Schema 可以变化，原始 Event 不变。Schema 对旧 Event 的新解释通过新版本和映射关系表达。
 
 ---
 
-#### `SearchState`
+#### `CoordinationSnapshot`
 
-共享的官方状态：
+为事务读取提供的版本化运行时快照：
 
 ```text
-state_version
-incumbents
-immutable events
+snapshot_version
+evidence ledger reference
 current schema
-completed coverage
+derived coverage view
 active reservations
-hypotheses and evidence
-remaining uncertainty
 budget
 ```
+
+它只是 Evidence、Schema 与协调元数据的组合视图，不是第三种搜索空间认知对象。candidate、workspace 和 incumbent 由现有执行/runtime 数据结构管理，可以被 Plan 引用，但不定义 Evidence 或 Schema 的演化语义。
 
 ---
 
 #### `AtomicPlan`
 
-一个基于特定 state version 的搜索事务：
+一个基于特定 snapshot version 的搜索事务：
 
 ```text
 plan_id
-base_state_version
+base_snapshot_version
 base_candidate
 target
 intervention
@@ -997,16 +1026,25 @@ expiry or lifecycle reference
 
 #### `EvidenceCommit`
 
-执行结束后提交：
+执行结束后，事务接收：
 
 ```text
 plan_id
-realized footprint
-artifact evidence
+candidate/workspace reference
+observed evidence payload
 verifier result
-hypothesis update
-reservation release
+hypothesis interpretation
 schema revision proposal
+```
+
+并原子产生：
+
+```text
+SearchEvent
+schema version
+realized footprint mapping
+reservation release
+snapshot version
 ```
 
 ---
@@ -1016,19 +1054,21 @@ schema revision proposal
 Agent 首先读取：
 
 $$
-S_v
+Q_v=(\mathcal E_v,\Omega_v,M_v)
 $$
+
+这里 $Q_v$ 只是同一版本的 Evidence、Schema 和协调元数据快照。
 
 并生成：
 
 $$
-P_i=\operatorname{Propose}(S_v)
+P_i=\operatorname{Propose}(Q_v)
 $$
 
 系统对其进行审核：
 
 $$
-\operatorname{Admit}(P_i,S_v)
+\operatorname{Admit}(P_i,Q_v)
 $$
 
 可能返回：
@@ -1048,7 +1088,7 @@ accepted_with_reclassification
 3. 建立 reservation；
 4. 分配 candidate/workspace；
 5. 扣除预算；
-6. 增加 state version。
+6. 增加 snapshot version。
 
 要么全部发生，要么全部不发生。
 
@@ -1066,9 +1106,9 @@ Plan admission 至少检查四类问题。
 
 #### Freshness
 
-Plan 是否基于仍然兼容的 Search State？
+Plan 是否基于仍然兼容的 `CoordinationSnapshot`？
 
-如果 Agent 基于 version 10 生成方案，而其他 Plan 已将状态推进到 version 12，系统需要判断：
+如果 Agent 基于 version 10 生成方案，而其他 Plan 已将 snapshot 推进到 version 12，系统需要判断：
 
 * 仍然有效；
 * 需要 rebase；
@@ -1106,7 +1146,7 @@ Plan 是否基于仍然兼容的 Search State？
 一个 Plan 至少应当明确带来一种价值：
 
 $$
-V(P\mid S)
+V(P\mid \mathcal E,\Omega,M)
 =
 \operatorname{ExpectedImprovement}
 + \lambda\operatorname{InformationGain}
@@ -1129,15 +1169,15 @@ $$
 #### LLM 负责
 
 * 将自然语言 proposal 编译成 typed Search IR；
-* 初始化 domain ontology；
+* 提出初始领域概念与关系；
 * 解释可能的机制；
 * 判断潜在语义 overlap；
 * 提议 schema split、merge 或新维度；
-* 根据 Search State 生成下一步 hypothesis。
+* 根据累积 Evidence 和当前 Schema 生成下一步 hypothesis。
 
 #### Runtime 负责
 
-* state version；
+* snapshot version；
 * durable storage；
 * AtomicPlan commit；
 * reservation；
@@ -1146,7 +1186,7 @@ $$
 * verifier；
 * evidence provenance；
 * budget；
-* official state transition。
+* official Evidence append 和 Schema transition。
 
 原则是：
 
@@ -1175,11 +1215,12 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 * 已提交 AtomicPlan；
 * active reservation；
-* verified SearchEvent；
+* 已提交的 Search Evidence；
 * completed coverage；
 * 当前 Search Schema；
-* 当前 incumbent；
 * unresolved uncertainty。
+
+当前 candidate 或 incumbent 的引用可以作为执行 proposal 的输入共享，但由 workspace/runtime 层管理，不属于 Search Evidence 或 Search Schema。
 
 即：
 
@@ -1189,28 +1230,29 @@ LLM 的输出可以参与审核，但不能直接将自己的解释写成 verifi
 
 ### 4.7 EvidenceCommit
 
-执行完成后，worker 不能直接修改官方 Search State。
+执行完成后，worker 不能直接修改 Evidence 账本或官方 Search Schema。
 
-它只能提交：
+worker 只能提交或暴露：
 
-* actual artifact；
-* actual diff；
-* verifier output；
-* profiler/trace；
-* 对 hypothesis 的解释。
+* plan 和 candidate/workspace 引用；
+* 对 intended/actual intervention 的声明；
+* 对 hypothesis 的解释；
+* schema revision proposal。
 
-系统从中构造 SearchEvent，并原子完成：
+actual diff 由 runtime 从 workspace 提取，trace 和环境信息由执行系统记录，verifier outcome 由 verifier 产生。它们与 Agent 声明使用不同 provenance，不能相互覆盖。
+
+系统从中构造新的 SearchEvent，并原子完成：
 
 1. verifier 确认；
-2. 生成 realized footprint；
-3. 比较 declared 与 realized footprint；
-4. 写入 immutable event；
-5. 释放 reservation；
-6. 更新 coverage；
-7. 更新 hypothesis；
-8. 必要时更新 incumbent；
-9. 必要时修订 schema；
-10. 增加 state version。
+2. 从 actual diff、context、trace 和 verifier outcome 构造 Observed Evidence；
+3. 将 Event 追加到 Evidence 账本；
+4. 在当前 Schema 下投影 realized footprint，并记录 `schema_version`；
+5. 比较 declared 与 realized footprint；
+6. 释放 reservation；
+7. 根据累积 Evidence 更新 hypothesis；
+8. 必要时修订 Schema，并重新投影受影响的历史 Event；
+9. 刷新 derived coverage；
+10. 增加 snapshot version。
 
 因此，Plan Commit 和 EvidenceCommit 是两个不同的事务边界。
 
@@ -1234,7 +1276,7 @@ Evidence commits serialize
 
 因此：
 
-> **Agents execute in parallel, but the official search space advances through atomic commits.**
+> **Agents execute in parallel, while Evidence and Schema advance through atomic commits.**
 
 ---
 
@@ -1243,7 +1285,7 @@ Evidence commits serialize
 当 `max_parallel = 1` 时，同一个协议仍然成立：
 
 ```text
-read SearchState
+read Evidence + Schema + coordination snapshot
 → submit AtomicPlan
 → check against historical coverage
 → execute
@@ -1295,7 +1337,7 @@ LLM 可以提出：
 2. outcome 预测能力；
 3. 下一步规划质量。
 
-因此，图式优化的标准不是“语义上看起来更漂亮”，而是：
+因此，空间模型修订的标准不是“语义上看起来更漂亮”，而是：
 
 > **Decision Sufficiency**
 >
@@ -1314,8 +1356,11 @@ Host:
 worker lifecycle
 
 Runtime:
-search state / workspace / verifier / score / report
+evidence ledger / schema / coordination
+workspace / verifier / score / report
 ```
+
+这里 workspace、candidate 和 artifact 操作仍属于执行存储；Evidence 账本和 Schema 才构成搜索空间的认知记录。两者由同一个 runtime 持久化，不代表它们是同一类状态。
 
 建议的变化集中在 control plane。
 
@@ -1332,7 +1377,7 @@ plan_next
 ### 5.2 建议流程
 
 ```text
-read_search_state
+read_search_context
 → draft AtomicPlan
 → submit AtomicPlan
 → review / reject / rebase / commit
@@ -1381,7 +1426,7 @@ read_search_state
 
 只研究：
 
-> 在同一个任务、同一个模型、同一个 verifier 和固定计算预算下，一个持续诱导并事务化维护 Search State 的系统，是否比 stateless loop、raw history 和无协调并发获得更高的搜索效率？
+> 在同一个任务、同一个模型、同一个 verifier 和固定计算预算下，一个只追加 Search Evidence、并基于 Evidence 持续修订 Search Schema 的系统，是否比 stateless loop、raw history 和无协调并发获得更高的搜索效率？
 
 ---
 
@@ -1397,7 +1442,7 @@ read_search_state
 | Parallel Independent Rollouts | 多个互不可见 rollout                |
 | Embedding Dedup               | 基于文本或 diff 相似度去重              |
 | Fixed Space Algorithm         | 人工 config / tree / population |
-| Induced Schema + AtomicPlan   | 本文方案                          |
+| Evidence Ledger + Revisable Schema + AtomicPlan | 本文方案              |
 
 ---
 
@@ -1445,13 +1490,13 @@ read_search_state
 
 ## 7. 已知边界与开放问题
 
-### 7.1 Schema Induction 本身仍有模型偏置
+### 7.1 搜索空间持续建模仍有模型偏置
 
 LLM 可能：
 
 * 错误归因；
 * 忽视隐藏变量；
-* 过早形成 ontology；
+* 过早固定领域概念和关系；
 * 将两个不同机制错误合并；
 * 将同一机制过度拆分。
 
@@ -1463,9 +1508,9 @@ LLM 可能：
 
 ---
 
-### 7.2 正交性不是客观真理
+### 7.2 边际非冗余性依赖当前 Schema
 
-两个方案是否冗余依赖：
+两个 Plan 是否重合、一个新 Plan 能否带来边际信息，不是脱离任务后仍然成立的客观“正交关系”。它依赖：
 
 * 当前任务；
 * 当前 evaluator；
@@ -1475,7 +1520,7 @@ LLM 可能：
 
 所以系统只能维护：
 
-> 当前证据下最有用的 overlap 判断。
+> 当前 Evidence 和 Schema 下，对下一步搜索决策最有用的 overlap 与边际贡献判断。
 
 ---
 
@@ -1506,7 +1551,7 @@ LLM 可能：
 * 只覆盖部分输入；
 * 无法反映真实目标；
 
-那么 Search State 可能学习到错误结构。
+那么 Search Schema 可能从不完整或失真的 Evidence 中归纳出错误结构。
 
 因此，框架仍然依赖可验证、可重复的外部反馈。
 
@@ -1518,7 +1563,7 @@ Run-specific Search Schema 首先服务当前任务。
 
 未来可以从多个 run 中抽取：
 
-* domain ontology；
+* 领域概念模型；
 * recurring mechanism；
 * diagnostic workflow；
 * search operators；
@@ -1528,7 +1573,7 @@ Run-specific Search Schema 首先服务当前任务。
 
 第一阶段只要证明：
 
-> 当前任务中的搜索经验不会随 solution reset 或 rollout 结束而消失。
+> 已提交的 Search Evidence 不会随 candidate workspace 被恢复、删除或 rollout 结束而消失，并且仍可被后续 Schema 重新解释。
 
 就已经形成明确贡献。
 
@@ -1538,13 +1583,13 @@ Run-specific Search Schema 首先服务当前任务。
 
 整个方案可以被概括为两个相互依赖、但逻辑上分离的模块。
 
-### 8.1 Search Schema Induction
+### 8.1 Continual Search-Space Modeling
 
 解决：
 
 > 开放式任务中，“搜索空间是什么”以及“哪些差异值得被表示”如何在线形成。
 
-### 8.2 Transactional Search Coordination
+### 8.2 Transactional Search Coordination：基于原子提交的协同探索
 
 解决：
 
@@ -1560,14 +1605,14 @@ Run-specific Search Schema 首先服务当前任务。
 
 ### 8.3 最凝练的核心论点
 
-> 当前 Agentic Search 通常只维护 solution history，而没有维护一个显式、共享、可修订的 search-space model。因此，由同一模型和 harness 产生的 rollout 容易在并发上重复、在单链上停滞。我们提出搜索图式诱导：使用统一干预元语法、LLM 诱导的领域 ontology 和运行时动态 schema，将每次尝试表示为基于事实事件的多视图 Search Footprint；空间节点不是永久事实，而是可以随证据拆分、合并和重索引的决策抽象。在此基础上，我们提出事务化搜索协调：Agent 可以并行生成方案，但 AtomicPlan 只有在针对版本化共享 Search State 完成审核、原子准入和 footprint reservation 后才能执行；验证后的结果再通过 EvidenceCommit 原子写入状态。Solution 可以回退，但 Search State 持续积累。
+> 当前 Agentic Search 通常只保留 candidate 结果或非结构化历史，没有把“已经发生的事实”与“当前如何理解这些事实”明确分离。因此，由同一模型和 harness 产生的 rollout 容易在并发上重复、在单链上停滞。我们提出证据驱动的搜索空间持续建模：使用统一干预元语法归纳任务内的领域概念和关系，将每次尝试记录为具有 provenance 的 Search Evidence，再由可修订的 Search Schema 将 Evidence 投影为多视图 footprint。Evidence 只追加、不改写，空间节点、覆盖关系和 hypothesis 则可以随新证据拆分、合并和重索引。在此基础上，Agent 可以并行生成方案，但 AtomicPlan 只有在针对同一版本的 Evidence、Schema 和协调元数据快照完成审核、原子准入和 footprint reservation 后才能执行；验证后的结果再通过 EvidenceCommit 追加到 Evidence 账本，并驱动下一版 Schema。candidate 文件和 workspace 的生命周期仍由现有 runtime、git worktree 或 sandbox 管理，不参与这两个认知对象的语义定义。
 
 最后可以压缩成四句话：
 
 > **模型负责提出可能性。**
-> **图式负责表示已经理解的空间。**
+> **证据负责记录已经发生的事实。**
+> **空间模型负责提供可修订的解释。**
 > **事务负责协调新增搜索计算。**
-> **证据负责修正模型和图式的偏置。**
 
 以及一句最适合作为项目定位的话：
 
