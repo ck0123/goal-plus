@@ -9,7 +9,7 @@
 1. **模型主导的循环搜索**：依赖强模型在工具和验证器支持下反复提出、执行和改进方案。
 2. **算法引导的智能体搜索**：将 LLM 作为 proposal generator，使用进化、MCTS、UCB、模拟退火或 Quality-Diversity 等算法组织探索。
 
-前者开放、通用，但多个 rollout 在相同模型、prompt、harness 和初始状态下容易高度相关；增加并发往往增加的是尝试数量，而不是有效覆盖。后者能够显式维持分支和多样性，但依赖人预先定义搜索空间、节点、行为描述符、距离函数和搜索算子。
+前者开放、通用，但多个 rollout 在相同模型、prompt、harness 和初始状态下容易高度相关；增加并发往往增加的是尝试数量，而不是有效覆盖。后者已经能够通过 LLM proposal、islands、MAP-Elites 和 tree search 改善候选生成、多样性与预算分配，但 population、lineage、search tree 和 feature grid 主要是搜索控制结构，不等于一个显式、共享、可修订的搜索空间表达。
 
 二者背后存在一个共同缺失：
 
@@ -106,23 +106,13 @@ $$
 * $R_t$ 是评价反馈；
 * $\pi_\theta$ 是模型隐式承担的搜索策略。
 
-这种方法的优势是开放和通用，不需要人为提前定义完整搜索空间。
-
-但它通常将多个职责同时交给同一个模型：
-
-* 生成候选；
-* 解释结果；
-* 判断失败原因；
-* 决定下一步；
-* 判断是否应该换方向。
-
-模型能力增强会提高这些行为的平均质量，但不意味着模型自然拥有良好的全局搜索动力学。
+这种范式没有独立的外部搜索控制器。模型通过上下文或 memory 承载搜索状态，并直接决定下一候选、是否换方向以及何时停止。
 
 ---
 
 #### 范式二：Algorithm-Guided Agent Search
 
-这类方法将 LLM 放入显式搜索算法中：
+AlphaEvolve、OpenEvolve 和 Agent + MCTS 等方法将 LLM 放入显式搜索算法中：
 
 $$
 x_{t+1} =
@@ -150,17 +140,29 @@ LLM 负责：
 * budget allocation；
 * diversity preservation。
 
-这种方案能够人为施加探索结构，但代价是必须先回答：
+其基本方式是：外部算法从 population、tree 或 database 中选择 parent、节点和预算，LLM 在给定上下文中生成候选，再由 evaluator 结果更新外部搜索状态。
 
-* 搜索对象如何表示？
-* 什么算同一个节点？
-* 什么算不同路径？
-* mutation 修改什么？
-* 两个 candidate 的距离是什么？
-* 哪些维度用于维护 diversity？
-* 什么时候应该拆分或合并区域？
+---
 
-因此，它在显式配置空间中容易实现，在开放式代码、研究和系统优化任务中则高度依赖专家设计。
+### 1.3 两种范式的本质差异
+
+两种范式的本质差异不是是否使用 LLM 或 evaluator，而是 **谁拥有搜索控制权，以及持久搜索状态位于哪里**。
+
+| 维度 | Model-Driven Loop | Algorithm-Guided Agent Search |
+| --- | --- | --- |
+| 搜索控制权 | 模型直接决定下一次尝试 | 外部算法决定 parent、分支和预算 |
+| 持久搜索状态 | context、history 或 memory | population、tree、archive 或 database |
+| 空间表达 | 隐含在模型的语义与上下文中 | 由 candidate、lineage、action 或 feature 等操作结构近似 |
+| 主要优势 | 开放、灵活，可以跨抽象层级提出新方向 | 可维持多分支、回溯并显式分配预算 |
+| 主要缺陷 | rollout 相关、遗忘、局部循环，缺少稳定的全局覆盖判断 | 受 seed、早期候选、分支估值和预定义维度影响，结构多样不等于语义覆盖 |
+
+可以将这种对偶关系概括为：
+
+> **Model-Driven Loop 具有语义灵活性，但缺少显式的全局搜索结构；Algorithm-Guided Agent Search 具有显式的全局结构，但缺少与开放语义空间匹配的表达。**
+
+传统 Algorithm-Guided Search 通常要求 candidate、state 和 action 能够被编码为显式 config。引入 LLM 后，proposal 可以跨参数、模块和抽象层级，扩大了可探索范围；但空间也从可比较的配置空间变成由模型、prompt 和历史共同定义的隐式语义空间。此时，population、lineage 和 search tree 仍能记录生成关系，却不能可靠判断不同尝试是否重复、正交或覆盖了新的区域。
+
+因此，两种范式最终面临同一个缺失：系统没有持续构造一个显式、共享、可修订的搜索空间模型，用来表示已经搜索过什么、不同尝试之间有什么关系，以及哪些区别对后续决策真正重要。更完整的对比见 [两种 Agentic Search 范式的差异与共同缺口](./agentic-search-paradigms.md)。
 
 ---
 
