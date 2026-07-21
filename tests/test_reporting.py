@@ -12,6 +12,7 @@ from goal_plus.reporting import (
     _metric_readout,
     _render_search_trajectory,
     _render_sessions,
+    _render_statistics,
     _render_timeline,
     _search_trajectory_payload,
     _task_details,
@@ -785,11 +786,34 @@ def test_metric_lens_combines_score_progression_and_session_efficiency() -> None
     assert 'data-metric-tokens-per-minute="600.000000000"' in html
     assert 'data-metric-verifier-density="2.000000000" style=' in html
     assert 'class="score-step"' in html
+    assert 'r="3"><title>' in html
     assert "Baseline 0.5" in html
     assert "Selected 0.8" in html
     assert "retry 2/2" in html
     assert "session-failure" in html
     assert "Idle 8m 0s" in html
+
+
+def test_statistics_formats_observed_session_count_as_count() -> None:
+    html = _render_statistics(
+        {
+            "statistics": {
+                "timing": {
+                    "worker_duration_seconds_total": 2.0,
+                    "worker_duration_sessions_observed": 2,
+                }
+            }
+        }
+    )
+
+    assert (
+        'Worker Duration Seconds Total</span><strong class="mono">2.0s</strong>'
+        in html
+    )
+    assert (
+        'Worker Duration Sessions Observed</span><strong class="mono">2</strong>'
+        in html
+    )
 
 
 def test_long_dense_timeline_renders_horizontal_and_vertical_scroll_surfaces() -> None:

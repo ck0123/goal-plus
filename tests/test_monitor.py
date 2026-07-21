@@ -45,6 +45,7 @@ def test_metric_context_parses_structured_and_legacy_baselines(tmp_path: Path) -
                 "value": "147,734 combined_score",
             }
         },
+        {"metric_name": "combined_score", "metric_value": 147734},
         {"score": "147734"},
     ]
 
@@ -61,6 +62,35 @@ def test_metric_context_parses_structured_and_legacy_baselines(tmp_path: Path) -
         )
         assert baseline == 147734.0
         assert target == 100000.0
+
+    baseline, target = _metric_context(
+        frozen,
+        task,
+        {3: {"metric": {"baseline": "147,734", "target": "100,000"}}},
+    )
+    assert baseline == 147734.0
+    assert target == 100000.0
+
+    baseline, _ = _metric_context(
+        frozen,
+        task,
+        {
+            3: {
+                "baseline": {
+                    "metric_name": "unrelated_metric",
+                    "metric_value": 147734,
+                }
+            }
+        },
+    )
+    assert baseline is None
+
+    baseline, _ = _metric_context(
+        frozen,
+        task,
+        {3: {"baseline": {"result": {"metric_value": 147734}}}},
+    )
+    assert baseline is None
 
     baseline, _ = _metric_context(
         frozen,

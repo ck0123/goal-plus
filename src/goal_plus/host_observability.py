@@ -32,6 +32,7 @@ def _timestamp_epoch(value: str | None) -> float | None:
 
 def _base_observability(session: AgentSessionRecord) -> dict[str, Any]:
     metadata = session.host_handle.metadata
+    launch = session.launch if isinstance(session.launch, dict) else {}
     timed_out = bool(metadata.get("timed_out"))
     runner_failed = bool(metadata.get("runner_failed"))
     terminal_state = _string(metadata.get("terminal_state"))
@@ -53,10 +54,20 @@ def _base_observability(session: AgentSessionRecord) -> dict[str, Any]:
             "nickname": session.host_handle.nickname,
         },
         "execution": {
-            "provider": _string(metadata.get("provider")),
-            "model": _string(metadata.get("model")),
-            "reasoning_effort": _string(metadata.get("reasoning_effort")),
-            "service_tier": _string(metadata.get("service_tier")),
+            "provider": (
+                _string(metadata.get("provider"))
+                or _string(launch.get("provider"))
+                or ("openai-codex" if session.host == "codex" else None)
+            ),
+            "model": _string(metadata.get("model")) or _string(launch.get("model")),
+            "reasoning_effort": (
+                _string(metadata.get("reasoning_effort"))
+                or _string(launch.get("reasoning_effort"))
+            ),
+            "service_tier": (
+                _string(metadata.get("service_tier"))
+                or _string(launch.get("service_tier"))
+            ),
             "started_at": _string(metadata.get("started_at")) or session.created_at,
             "ended_at": _string(metadata.get("ended_at")),
             "duration_seconds": _number(metadata.get("duration_seconds")),

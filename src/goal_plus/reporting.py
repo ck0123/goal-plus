@@ -366,7 +366,8 @@ tbody tr:last-child td { border-bottom: 0; }
 .observability-group h4 { margin: 0 12px 7px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
 .observability-group .stat-row { padding-right: 12px; padding-left: 12px; }
 .observability-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.observability-summary span:last-child { color: var(--muted); font-size: 11px; font-weight: 500; }
+.observability-summary span { min-width: 0; overflow-wrap: anywhere; }
+.observability-summary span:last-child { color: var(--muted); font-size: 11px; font-weight: 500; text-align: right; }
 details.summary-block { margin-top: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 details.summary-block > summary { padding: 11px 13px; color: var(--accent); font-weight: 700; }
 details.summary-block > div, details.summary-block > pre { margin: 0; padding: 14px; border-top: 1px solid var(--border); }
@@ -394,6 +395,8 @@ pre { max-height: 600px; overflow: auto; white-space: pre-wrap; overflow-wrap: a
   .event-list li { grid-template-columns: 1fr; gap: 2px; }
   .metric-gap-list li { grid-template-columns: 1fr; gap: 2px; }
   .timeline-head, .metric-lens-toolbar { align-items: flex-start; flex-direction: column; }
+  .observability-summary { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .observability-summary span:last-child { text-align: left; }
   .trajectory-head { align-items: flex-start; flex-direction: column; gap: 2px; }
   .trajectory-plot { min-height: 340px; }
   .metric-control { width: 100%; }
@@ -1907,7 +1910,7 @@ def _render_score_chart(
             f"at {point.get('at')}"
         )
         point_marks.append(
-            f'<circle class="score-point" cx="{x:.2f}" cy="{y:.2f}" r="3" '
+            f'<circle class="score-point" cx="{x:.2f}" cy="{y:.2f}" r="3">'
             f'<title>{escape(tooltip)}</title></circle>'
         )
     path_parts.append("H 1000")
@@ -2906,8 +2909,11 @@ def _render_statistics(task: dict[str, Any]) -> str:
     usage = statistics.get("usage") or {}
     efficiency = statistics.get("efficiency") or {}
     lineage = statistics.get("lineage") or {}
+    timing_formatters = {
+        key: _duration if "_seconds" in key else _number for key in timing
+    }
     tables = [
-        ("Timing", timing, {key: _duration for key in timing}),
+        ("Timing", timing, timing_formatters),
         ("Workers", workers, {key: _percent for key in workers if key.endswith("_rate")}),
         ("Verifiers", verifiers, {key: _percent for key in verifiers if key.endswith("_rate")}),
         (

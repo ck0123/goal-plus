@@ -140,11 +140,12 @@ def _metric_payload_value(payload: Any, metric_name: str, *, depth: int = 0) -> 
         declared_metric is not None
         and _metric_token(declared_metric).rstrip("s") == metric.rstrip("s")
     )
-    if depth == 0 or declared_matches:
+    if (depth == 0 and declared_metric is None) or declared_matches:
         for key in (
             "baseline_score",
             "aggregate_score",
             "measured_value",
+            "metric_value",
             "score",
             "value",
         ):
@@ -214,6 +215,11 @@ def _metric_context(
                 frozen.spec.metric_name,
             )
         if isinstance(metric_payload, dict):
+            if baseline is None and "baseline" in metric_payload:
+                baseline = _metric_payload_value(
+                    metric_payload["baseline"],
+                    frozen.spec.metric_name,
+                )
             target = _number(metric_payload.get("target"))
         if target is None and isinstance(correctness, dict):
             target = _number(correctness.get("score_threshold"))
