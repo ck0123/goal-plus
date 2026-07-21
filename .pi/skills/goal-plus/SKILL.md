@@ -83,6 +83,13 @@ plugin, or orchestration workflow.
 
 When the goal is search-ready:
 
+When the requested run enables SpaceAgent, call `search_space_open` once after
+`search_create` and before opening the Pi pool. `enforce` applies duplicate and
+active-reservation rejects; `observe` records the same decisions without
+blocking. SpaceAgent never supplies directions. Candidate workers follow
+`context.search_space`, submit their own three-field PlanCards, and pass the
+accepted plan id to the verifier.
+
 `origin="initial"` and `origin="in_progress"` are provenance only and follow
 the same autonomous admission rule.
 

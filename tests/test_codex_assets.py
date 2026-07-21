@@ -169,6 +169,10 @@ def test_codex_worker_records_progress_handoff_before_returning() -> None:
     assert "evaluation_contract" in text
     assert "single_observation" in text
     assert "candidate-local analysis scripts" not in text
+    assert "search_space_propose" in text
+    assert "expected_new_information" in text
+    assert "duplicate_plans" in text
+    assert "intervention_plan_id" in text
 
 
 def test_codex_search_skill_documents_state_level_resume() -> None:

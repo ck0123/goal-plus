@@ -12,11 +12,15 @@ import subprocess
 import tempfile
 import threading
 import time
-import tomllib
 import uuid
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
+    import tomli as tomllib
 
 try:
     import fcntl
@@ -54,6 +58,14 @@ from goal_plus.models import (
     WorkerBudget,
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from goal_plus.space_agent import (
+    DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL,
+    FileSearchSpaceRuntime,
+    InterventionPlanProposal,
+    SpacePlanRecord,
+    SpaceRealizedEvidence,
+    SearchSpaceMode,
+)
 from goal_plus.workspaces import (
     IGNORED_NAMES,
     IGNORED_SUFFIXES,
@@ -81,6 +93,9 @@ VERIFIER_RESOURCE_LOCK_DIR_ENV = "GOAL_PLUS_VERIFIER_RESOURCE_LOCK_DIR"
 VERIFIER_OUTPUT_LIMIT_BYTES = 64 * 1024
 VERIFIER_LOG_LIMIT_BYTES = VERIFIER_OUTPUT_LIMIT_BYTES * 2 + 8192
 VERIFIER_TERM_GRACE_SECONDS = 0.5
+SPACE_REALIZED_DIFF_LIMIT_CHARS = 12_000
+SPACE_REALIZED_STAT_LIMIT_CHARS = 4_000
+SPACE_REALIZED_SYMBOL_LIMIT = 64
 
 
 class _BoundedOutput:
@@ -285,6 +300,9 @@ class FileSearchRuntime:
         self.runs_dir = self.root_dir / "runs"
         self.specs_dir.mkdir(parents=True, exist_ok=True)
         self.runs_dir.mkdir(parents=True, exist_ok=True)
+        self.search_space = FileSearchSpaceRuntime(self.root_dir)
+        # Compatibility for the frozen B1/B4 experiment runner.
+        self.space_experiments = self.search_space
 
     def _execute_verifier_process(
         self,
@@ -837,6 +855,87 @@ class FileSearchRuntime:
     ) -> list[dict[str, Any]]:
         record = self._load_candidate_record(run_id, candidate_id)
         return [it.model_dump(mode="json") for it in record.iterations]
+
+    def open_search_space(
+        self,
+        run_id: str,
+        *,
+        mode: SearchSpaceMode = "enforce",
+        schema_path: str | None = None,
+        experiment_id: str | None = None,
+        reviewer_model: str,
+        reviewer_reasoning_effort: Literal["low", "medium", "high", "xhigh"],
+        reviewer_timeout_seconds: int = 180,
+        schema_consolidation_interval: int = DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL,
+    ) -> dict[str, Any]:
+        run = self._load_run(run_id)
+        self._assert_run_not_invalidated(run, "open search space")
+        return self.search_space.open(
+            run_id=run_id,
+            source_path=Path(run.source_path),
+            mode=mode,
+            schema_path=schema_path,
+            experiment_id=experiment_id,
+            reviewer_model=reviewer_model,
+            reviewer_reasoning_effort=reviewer_reasoning_effort,
+            reviewer_timeout_seconds=reviewer_timeout_seconds,
+            schema_consolidation_interval=schema_consolidation_interval,
+        )
+
+    def open_space_experiment(
+        self,
+        run_id: str,
+        *,
+        mode: SearchSpaceMode,
+        schema_path: str | None = None,
+        experiment_id: str | None = None,
+        reviewer_model: str,
+        reviewer_reasoning_effort: Literal["low", "medium", "high", "xhigh"],
+        reviewer_timeout_seconds: int = 180,
+        schema_consolidation_interval: int = DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL,
+    ) -> dict[str, Any]:
+        return self.open_search_space(
+            run_id,
+            mode=mode,
+            schema_path=schema_path,
+            experiment_id=experiment_id,
+            reviewer_model=reviewer_model,
+            reviewer_reasoning_effort=reviewer_reasoning_effort,
+            reviewer_timeout_seconds=reviewer_timeout_seconds,
+            schema_consolidation_interval=schema_consolidation_interval,
+        )
+
+    def propose_search_space_plan(
+        self,
+        agent_session_id: str,
+        proposal: InterventionPlanProposal,
+    ) -> dict[str, Any]:
+        session = self._load_agent_session_by_id(agent_session_id)
+        run = self._load_run(session.run_id)
+        self._assert_run_not_invalidated(run, "propose search-space plan")
+        record = self._load_candidate_record(session.run_id, session.candidate_id)
+        latest_score = record.iterations[-1].score if record.iterations else None
+        authoritative = proposal.model_copy(
+            update={
+                "base_git_head": self._git_head(record.task.workspace),
+                "base_score": latest_score,
+            }
+        )
+        return self.search_space.propose(session, authoritative)
+
+    def propose_intervention(
+        self,
+        agent_session_id: str,
+        proposal: InterventionPlanProposal,
+    ) -> dict[str, Any]:
+        return self.propose_search_space_plan(agent_session_id, proposal)
+
+    def search_space_status(self, run_id: str) -> dict[str, Any]:
+        self._load_run(run_id)
+        return self.search_space.status(run_id)
+
+    def space_experiment_status(self, run_id: str) -> dict[str, Any]:
+        return self.search_space_status(run_id)
 
     def plan_next(self, run_id: str, requested_k: int = 4) -> SearchPlan:
         with self._run_transaction(run_id):
@@ -1399,6 +1498,10 @@ class FileSearchRuntime:
         is_native_session_resume = (
             continuation_mode == "native_session" and dispatch_count > 0
         )
+        search_space = self.search_space.candidate_context(
+            session.run_id,
+            session.candidate_id,
+        )
         return {
             "agent_session_id": session.agent_session_id,
             "run_id": session.run_id,
@@ -1412,6 +1515,8 @@ class FileSearchRuntime:
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
             "candidate_task": candidate_record.task.model_dump(mode="json"),
+            "search_space": search_space,
+            "space_experiment": search_space,
             "results_tsv": str(results_tsv),
             "results": [
                 entry.model_dump(mode="json")
@@ -1444,6 +1549,7 @@ class FileSearchRuntime:
         scope: Literal["process", "promotion"] = "process",
         agent_session_id: str | None = None,
         hypothesis: str | None = None,
+        intervention_plan_id: str | None = None,
     ) -> ScoreReport:
         """Subagent self-score with ``agent_session_id``; main final verify
         without it. Process calls record ranking iterations; promotion calls
@@ -1480,6 +1586,32 @@ class FileSearchRuntime:
                 raise ValueError(
                     "agent_session_id does not belong to this candidate"
                 )
+
+        space_plan_started = False
+        space_plan: SpacePlanRecord | None = None
+        verifier_recorded = False
+        if scope == "process" and session is not None:
+            if self.search_space.is_enabled(run_id):
+                if intervention_plan_id is None:
+                    raise PermissionError(
+                        "search-space verifier calls require intervention_plan_id "
+                        "from an accepted search_space_propose response"
+                    )
+                space_plan = self.search_space.begin_verifier(
+                    run_id=run_id,
+                    candidate_id=candidate_id,
+                    agent_session_id=session.agent_session_id,
+                    plan_id=intervention_plan_id,
+                )
+                space_plan_started = True
+            elif intervention_plan_id is not None:
+                raise ValueError(
+                    "intervention_plan_id is only valid for an open search space"
+                )
+        elif intervention_plan_id is not None:
+            raise ValueError(
+                "intervention_plan_id is only valid for candidate process verification"
+            )
 
         results_were_initialized = record.results_ledger_git_head is not None
         self._ensure_results_tsv(record, frozen.spec.metric_name)
@@ -1559,6 +1691,30 @@ class FileSearchRuntime:
             ):
                 outside_allowed = True
 
+            failure_class = next(
+                (
+                    result.failure_class
+                    for result in report.verifier_results
+                    if result.failure_class
+                ),
+                None,
+            )
+            realized_evidence = (
+                self._build_space_realized_evidence(
+                    workspace=record.task.workspace,
+                    plan=space_plan,
+                    report=report,
+                    metric_name=frozen.spec.metric_name,
+                    metric_direction=frozen.spec.metric_direction,
+                    result_git_head=git_head,
+                    artifact_hash=artifact_hash,
+                    changed_files=list(detected_changed),
+                    failure_class=failure_class,
+                )
+                if space_plan is not None
+                else None
+            )
+
             with self._run_transaction(run_id):
                 run = self._load_run(run_id)
                 self._assert_run_not_invalidated(run, "record verifier result")
@@ -1576,14 +1732,6 @@ class FileSearchRuntime:
                         record.promotion_report = None
                         record.promotion_evidence = None
                     iteration_number = len(record.iterations) + 1
-                    failure_class = next(
-                        (
-                            result.failure_class
-                            for result in report.verifier_results
-                            if result.failure_class
-                        ),
-                        None,
-                    )
                     iteration_hypothesis = self._iteration_hypothesis(
                         hypothesis,
                         record,
@@ -1595,6 +1743,7 @@ class FileSearchRuntime:
                     iteration_record = IterationRecord(
                         iteration=iteration_number,
                         agent_session_id=agent_session_id,
+                        intervention_plan_id=intervention_plan_id,
                         score=report.aggregate_score,
                         process_passed=report.process_passed,
                         git_head=git_head,
@@ -1673,8 +1822,37 @@ class FileSearchRuntime:
                     )
                     self._write_agent_session(updated)
 
+                verifier_recorded = True
+
+            if space_plan_started and intervention_plan_id is not None:
+                self.search_space.complete_verifier(
+                    run_id=run_id,
+                    plan_id=intervention_plan_id,
+                    iteration=iteration_number,
+                    score=report.aggregate_score,
+                    process_passed=report.process_passed,
+                    git_head=git_head,
+                    artifact_hash=artifact_hash,
+                    changed_files=list(detected_changed),
+                    failure_class=failure_class,
+                    verifier_metrics={
+                        result.name: result.metrics
+                        for result in report.verifier_results
+                    },
+                    realized_evidence=realized_evidence,
+                )
+
             return report
         except Exception:
+            if (
+                space_plan_started
+                and not verifier_recorded
+                and intervention_plan_id is not None
+            ):
+                self.search_space.restore_after_verifier_error(
+                    run_id,
+                    intervention_plan_id,
+                )
             if scope == "process":
                 with self._run_transaction(run_id):
                     run = self._load_run(run_id)
@@ -1684,6 +1862,10 @@ class FileSearchRuntime:
             raise
 
     def select(self, run_id: str) -> dict[str, Any]:
+        self.search_space.abort_outstanding(
+            run_id,
+            reason="search selection began after the candidate worker drain",
+        )
         with self._run_transaction(run_id):
             run = self._load_run(run_id)
             self._assert_run_not_invalidated(run, "select")
@@ -4227,6 +4409,176 @@ class FileSearchRuntime:
             path = workspace / rel_path
             payload[rel_path] = sha256_file(path) if path.is_file() else None
         return sha256_text(canonical_json(payload))
+
+    def _build_space_realized_evidence(
+        self,
+        *,
+        workspace: Path,
+        plan: SpacePlanRecord,
+        report: ScoreReport,
+        metric_name: str,
+        metric_direction: Literal["minimize", "maximize"],
+        result_git_head: str | None,
+        artifact_hash: str | None,
+        changed_files: list[str],
+        failure_class: str | None,
+    ) -> SpaceRealizedEvidence:
+        base_git_head = plan.proposal.base_git_head
+        delta_files, diff_stat, full_patch = self._space_git_delta(
+            workspace,
+            base_git_head,
+            result_git_head,
+            fallback_files=changed_files,
+        )
+        diff_patch, diff_truncated = self._bounded_space_text(
+            full_patch,
+            SPACE_REALIZED_DIFF_LIMIT_CHARS,
+        )
+        diff_stat, _ = self._bounded_space_text(
+            diff_stat,
+            SPACE_REALIZED_STAT_LIMIT_CHARS,
+        )
+        metrics = {
+            result.name: result.metrics for result in report.verifier_results
+        }
+        infrastructure_failure = (
+            failure_class in {"VerifierWorkspaceSideEffect", "VerifierStartFailed"}
+            or any(
+                isinstance(value, dict)
+                and value.get("infrastructure_failure") is True
+                for value in metrics.values()
+            )
+        )
+        score_before = plan.proposal.base_score
+        score_after = report.aggregate_score
+        score_delta = (
+            score_after - score_before
+            if score_before is not None and score_after is not None
+            else None
+        )
+        if infrastructure_failure:
+            outcome = "infrastructure_failure"
+        elif not report.validity_passed or not report.process_passed:
+            outcome = "invalid"
+        elif score_before is None or score_after is None or math.isclose(
+            score_before,
+            score_after,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            outcome = "neutral"
+        else:
+            improved = (
+                score_after > score_before
+                if metric_direction == "maximize"
+                else score_after < score_before
+            )
+            outcome = "improved" if improved else "regressed"
+        return SpaceRealizedEvidence(
+            base_git_head=base_git_head,
+            result_git_head=result_git_head,
+            artifact_hash=artifact_hash,
+            artifact_delta_sha256=sha256_text(full_patch),
+            changed_files=changed_files,
+            delta_files=delta_files,
+            changed_symbols=self._space_changed_symbols(full_patch),
+            diff_stat=diff_stat,
+            diff_patch=diff_patch,
+            diff_truncated=diff_truncated,
+            metric_name=metric_name,
+            metric_direction=metric_direction,
+            score_before=score_before,
+            score_after=score_after,
+            score_delta=score_delta,
+            outcome=outcome,
+            validity_passed=report.validity_passed,
+            process_passed=report.process_passed,
+            infrastructure_failure=infrastructure_failure,
+            failure_class=failure_class,
+            completed_at=utc_timestamp(),
+        )
+
+    def _space_git_delta(
+        self,
+        workspace: Path,
+        base_git_head: str | None,
+        result_git_head: str | None,
+        *,
+        fallback_files: list[str],
+    ) -> tuple[list[str], str, str]:
+        if base_git_head is None:
+            return list(fallback_files), "", ""
+        revisions = [base_git_head]
+        if result_git_head is not None and result_git_head != base_git_head:
+            revisions.append(result_git_head)
+        pathspec = ["--", ".", f":(exclude){RESULTS_TSV_RELATIVE_PATH}"]
+        try:
+            names = self._git_output(
+                workspace,
+                ["git", "diff", "--name-only", *revisions, *pathspec],
+            )
+            diff_stat = self._git_output(
+                workspace,
+                ["git", "diff", "--stat", *revisions, *pathspec],
+            )
+            patch = self._git_output(
+                workspace,
+                [
+                    "git",
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-color",
+                    "--unified=0",
+                    *revisions,
+                    *pathspec,
+                ],
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return list(fallback_files), "", ""
+        delta_files = [line.strip() for line in names.splitlines() if line.strip()]
+        return delta_files, diff_stat.strip(), patch
+
+    @staticmethod
+    def _bounded_space_text(value: str, limit: int) -> tuple[str, bool]:
+        if len(value) <= limit:
+            return value, False
+        marker = "\n[... deterministic diff truncation ...]\n"
+        available = max(0, limit - len(marker))
+        head = (available * 3) // 4
+        tail = available - head
+        return value[:head] + marker + value[-tail:], True
+
+    @staticmethod
+    def _space_changed_symbols(patch: str) -> list[str]:
+        symbols: list[str] = []
+
+        def add(value: str) -> None:
+            normalized = " ".join(value.split())
+            if normalized and normalized not in symbols:
+                symbols.append(normalized[:240])
+
+        for line in patch.splitlines():
+            if len(symbols) >= SPACE_REALIZED_SYMBOL_LIMIT:
+                break
+            if line.startswith("@@"):
+                parts = line.split("@@", 2)
+                if len(parts) == 3:
+                    add(parts[2])
+                continue
+            if not line.startswith(("+", "-")) or line.startswith(("+++", "---")):
+                continue
+            content = line[1:].strip()
+            for prefix in ("def ", "class ", "fn ", "func ", "#define "):
+                if content.startswith(prefix):
+                    add(content)
+                    break
+            else:
+                if "=" in content:
+                    left = content.split("=", 1)[0].strip()
+                    identifier = left.replace("_", "").replace(".", "")
+                    if identifier.isalnum() and " " not in left:
+                        add(left)
+        return symbols
 
     def _git_head(self, workspace: Path) -> str | None:
         try:

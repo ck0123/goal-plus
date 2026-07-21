@@ -10,6 +10,10 @@ from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.models import GoalPlusSpecDraftInput, SearchSpec
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
 from goal_plus.runtime import FileSearchRuntime
+from goal_plus.space_agent import (
+    DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL,
+    SearchSpacePlanCard,
+)
 from goal_plus.tools import GoalPlusTools, SearchTools
 
 
@@ -253,6 +257,7 @@ def create_mcp(
         scope: str = "process",
         agent_session_id: str | None = None,
         hypothesis: str | None = None,
+        intervention_plan_id: str | None = None,
     ) -> dict[str, Any]:
         """Subagent self-score with `agent_session_id`; main final verify without it.
 
@@ -272,7 +277,60 @@ def create_mcp(
             scope,
             agent_session_id,
             hypothesis,
+            intervention_plan_id,
         )
+
+    @mcp.tool()
+    def search_space_open(
+        run_id: str,
+        mode: Literal["observe", "enforce", "b1", "b4"] = "enforce",
+        schema_path: str | None = None,
+        experiment_id: str | None = None,
+        reviewer_model: str = "gpt-5.6-sol",
+        reviewer_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = "medium",
+        reviewer_timeout_seconds: Annotated[int, Field(gt=0, le=600)] = 180,
+        schema_consolidation_interval: Annotated[int, Field(ge=2, le=100)] = (
+            DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL
+        ),
+    ) -> dict[str, Any]:
+        """Open run-scoped semantic plan admission.
+
+        Enforce mode applies SpaceAgent accept/reject decisions across all
+        candidates; observe mode records the same decisions without blocking.
+        B1/B4 retain the frozen serial experiment behavior. The reviewer only
+        discriminates duplicates and active collisions; it never directs work.
+        """
+        return tools.search_space_open(
+            run_id,
+            mode,
+            schema_path,
+            experiment_id,
+            reviewer_model,
+            reviewer_reasoning_effort,
+            reviewer_timeout_seconds,
+            schema_consolidation_interval,
+        )
+
+    @mcp.tool()
+    def search_space_propose(
+        agent_session_id: str,
+        proposal: SearchSpacePlanCard,
+    ) -> dict[str, Any]:
+        """Submit one minimal intervention card before mutation or evaluation.
+
+        Accept returns a plan id. Reject also returns the conflicting plan ids,
+        their minimal PlanCards, and whether each is completed coverage or an
+        active reservation. Reviewer rationale, overlap, and state features
+        remain private audit data. A rejected plan must not execute. Close an accepted plan with one
+        search_run_verifier call carrying its intervention_plan_id before
+        proposing another plan.
+        """
+        return tools.search_space_propose(agent_session_id, proposal)
+
+    @mcp.tool()
+    def search_space_status(run_id: str) -> dict[str, Any]:
+        """Read aggregate plan, rejection, reviewer-failure, and latency counts."""
+        return tools.search_space_status(run_id)
 
     @mcp.tool()
     def search_list_iterations(

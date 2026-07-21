@@ -126,6 +126,51 @@ and `confidence`. Missing scope defaults to candidate-local. A worker's
 `verifier_assessment` is advisory until the main agent confirms it and calls
 `search_invalidate_run`.
 
+### Search-space admission
+
+The optional file-backed SpaceAgent is enabled once per Search run and supports
+multiple concurrent candidates:
+
+| Tool | Caller | Purpose |
+|---|---|---|
+| `search_space_open` | main | open `observe` or `enforce` admission; an optional schema overrides the built-in universal six-view schema |
+| `search_space_propose` | candidate worker | submit `intervention`, `scope`, and `expected_new_information`; accept returns the plan id, reject also returns the conflicting minimal PlanCards |
+| `search_space_status` | main/analysis | read coverage, reservations, Evidence/Schema heads, tail events, realized outcomes, duplicate probability, loop signals, reviewer latency, and fail-open counts |
+
+When enabled, a candidate process verifier call requires the accepted
+`intervention_plan_id`; the resulting `IterationRecord` stores that id and
+closes exactly one plan. The plan also stores deterministic realized evidence:
+base/result Git heads, a bounded artifact diff and hash, delta files/symbols,
+score transition, validity, outcome, and failure provenance. `enforce`
+synchronously asks an isolated reviewer
+whether the proposal duplicates verifier-backed coverage or collides with an
+active reservation. `observe` records the same counterfactual decision but
+admits the proposal. B1/B4 remain compatibility aliases for the frozen VLIW
+baseline/enforced experiment. The candidate-facing response never exposes the
+mode, reviewer rationale, overlap, induced features, or technical suggestions.
+A rejection does expose `duplicate_of` ids plus each conflicting plan's three-field
+PlanCard and `completed_coverage`/`active_reservation` status, so the candidate
+knows what it repeated. Reviewer errors fail open and remain explicit audit evidence.
+
+Verifier completion appends one immutable Search Evidence event. Every later
+admission sees events newer than the current Schema snapshot as an immediate
+tail; after the configured interval, the same SpaceAgent review appends a
+complete Search Schema snapshot. There is no per-plan projection or extra
+post-verifier Agent call. A valid neutral/regressed point remains coverage after
+solution rollback. Invalid and infrastructure-failed executions remain immutable
+audit facts but do not exhaust semantic coverage.
+
+Admission review runs outside the lock. Commit compares the captured
+`admission_revision`, `evidence_revision`, and `schema_revision`; a stale review
+is retried against the latest evidence, completed coverage, active reservations,
+and Schema snapshot plus Evidence tail. Verifier completion atomically replaces
+the active reservation with eligible completed coverage. See
+[SpaceAgent Runtime](search-space-schema/space-agent-runtime.md).
+
+Codex `PreToolUse` also blocks candidate mutation/evaluation before admission
+and rejects Code Mode calls that combine proposal and execution. This is an
+admission guard, not worker supervision.
+
 ### Verify and finish
 
 | Tool | Purpose |

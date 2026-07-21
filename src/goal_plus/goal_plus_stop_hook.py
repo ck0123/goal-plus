@@ -1174,7 +1174,24 @@ def _handle_pre_tool_use(
     search_root: Path,
     hook_input: dict[str, Any],
 ) -> None:
-    if _is_subagent_context(hook_input) or not _should_gate_tool(_tool_name(hook_input)):
+    if _is_subagent_context(hook_input):
+        agent_session_id = _search_candidate_agent_session_id(
+            search_root,
+            hook_input,
+        )
+        if agent_session_id is not None:
+            from goal_plus.space_agent import candidate_pre_tool_block_reason
+
+            reason = candidate_pre_tool_block_reason(
+                search_root,
+                agent_session_id,
+                _tool_name(hook_input),
+                _raw_tool_input(hook_input),
+            )
+            if reason is not None:
+                _emit_pre_tool_block(reason)
+        return
+    if not _should_gate_tool(_tool_name(hook_input)):
         return
     goal_id = _select_hook_goal_id(search_root, hook_input)
     if goal_id is None:

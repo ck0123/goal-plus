@@ -169,6 +169,9 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     )
 
     assert "search_get_agent_context" in text
+    assert "search_space_propose" in text
+    assert "duplicate_plans" in text
+    assert "intervention_plan_id" in text
     assert "search_run_verifier" in text
     assert "workspace/results.tsv" in text
     assert "exactly one validated" in text
@@ -243,6 +246,11 @@ def test_pi_extension_registers_role_tools_gate_and_workspace_guard() -> None:
     assert 'role === "worker"' in text
     assert "goal_plus_create" in text
     assert "search_get_agent_context" in text
+    assert "search_space_open" in text
+    assert "search_space_propose" in text
+    assert "search_space_status" in text
+    assert "schema_consolidation_interval" in text
+    assert "intervention_plan_id" in text
     assert "search_run_verifier" in text
     assert "workspace/results.tsv" in text
     assert "exactly one validated row" in text

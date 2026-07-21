@@ -13,6 +13,7 @@ from goal_plus.goal_plus import EXPLORATION_MODE_LINES, FileGoalPlusRuntime
 from goal_plus.models import SearchSpec
 from goal_plus.monitor import goal_plus_monitor_snapshot
 from goal_plus.runtime import FileSearchRuntime
+from goal_plus.space_agent import InterventionPlanProposal
 from tests._runtime_helpers import make_project, spec_with_host
 
 
@@ -581,6 +582,109 @@ def test_pre_tool_use_ignores_unrelated_tool(tmp_path: Path) -> None:
 
     assert result.stdout == ""
     assert runtime.status(record.goal_plus_id).hook_counters == {}
+
+
+def test_pre_tool_use_enforces_space_admission_for_candidate(tmp_path: Path) -> None:
+    search_runtime, run_id, _candidate_id, agent_session_id = _codex_search_worker(
+        tmp_path
+    )
+    source = Path(search_runtime._load_run(run_id).source_path)
+    schema_path = source / "space-schema.json"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "hook-test-v1",
+                "views": {
+                    name: {"description": name}
+                    for name in (
+                        "artifact",
+                        "configuration",
+                        "mechanism",
+                        "context",
+                        "epistemic",
+                        "behavior",
+                    )
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    search_runtime.open_space_experiment(
+        run_id,
+        mode="b1",
+        schema_path="space-schema.json",
+        experiment_id="hook-test",
+        reviewer_model="gpt-5.6-sol",
+        reviewer_reasoning_effort="medium",
+        reviewer_timeout_seconds=30,
+    )
+    identity = "space-candidate-worker"
+
+    context_call = _run_hook(
+        tmp_path,
+        search_runtime.root_dir,
+        {
+            "hook_event_name": "PreToolUse",
+            "agent_id": identity,
+            "agent_type": "search_candidate_agent",
+            "tool_name": "mcp__goal-plus__search_get_agent_context",
+            "tool_input": {"agent_session_id": agent_session_id},
+        },
+    )
+    assert context_call.stdout == ""
+
+    mutation = {
+        "hook_event_name": "PreToolUse",
+        "agent_id": identity,
+        "agent_type": "search_candidate_agent",
+        "tool_name": "functions.exec",
+        "tool_input": (
+            "const r = await tools.apply_patch('*** Begin Patch'); text(r);"
+        ),
+    }
+    blocked = _run_hook(tmp_path, search_runtime.root_dir, mutation)
+    payload = json.loads(blocked.stdout)
+    assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "accepted intervention plan" in payload["hookSpecificOutput"][
+        "permissionDecisionReason"
+    ]
+
+    search_runtime.propose_intervention(
+        agent_session_id,
+        InterventionPlanProposal(
+            target="initial_program.py",
+            bottleneck="baseline",
+            mechanism="change constant",
+            proposed_change="set VALUE to one",
+            expected_observation="verifier passes",
+            success_criterion="score is one",
+            failure_criterion="verifier fails",
+            relation="new_axis",
+            footprint={
+                "artifact": ["initial_program.py"],
+                "configuration": ["VALUE=1"],
+                "mechanism": ["constant change"],
+                "context": ["test fixture"],
+                "epistemic": ["whether the edit passes"],
+                "behavior": ["score one"],
+            },
+        ),
+    )
+    allowed = _run_hook(tmp_path, search_runtime.root_dir, mutation)
+    assert allowed.stdout == ""
+
+    combined = {
+        **mutation,
+        "tool_input": (
+            "const p = await tools.search_space_propose({}); "
+            "const r = await tools.apply_patch('*** Begin Patch'); text(r);"
+        ),
+    }
+    combined_blocked = _run_hook(tmp_path, search_runtime.root_dir, combined)
+    combined_payload = json.loads(combined_blocked.stdout)
+    assert "separate tool call" in combined_payload["hookSpecificOutput"][
+        "permissionDecisionReason"
+    ]
 
 
 def test_unbound_search_candidate_stop_requires_own_verifier(tmp_path: Path) -> None:
