@@ -57,6 +57,13 @@ therefore stored under `.gp/host-pools/pi/`, separate from run records.
     plans/<plan_id>.json
     candidates/<candidate_id>/
     agent_sessions/<agent_session_id>.json
+    search-space/
+      config.json
+      state.json
+      plans/<intervention_plan_id>.json
+      events/<search_evidence_event>.json
+      schemas/<search_schema_snapshot>.json
+    space-experiment/              # legacy B1/B4 location
     workspace/<candidate_id>/
     report.md
     report.html
@@ -75,7 +82,8 @@ The core records are:
 - `AgentSessionRecord`: context/provenance plus a host launch payload; never a
   process lifecycle record.
 - `IterationRecord`: verifier result, failure, metrics, changed files, session
-  provenance, and exact candidate Git commit.
+  provenance, optional intervention-plan provenance, and exact candidate Git
+  commit.
 - `RunRecord`: also stores optional verifier invalidation evidence,
   `source_run_id`, `replacement_run_id`, and policy-controlled
   `inherited_research`.
@@ -168,6 +176,20 @@ artifact hash. Changing the selected artifact invalidates that evidence.
     results, selection, or promotion.
 14. **Never reuse cross-run scores.** Successor runs may inherit bounded
     hypotheses and artifacts as research context, but must re-verify them.
+15. **Keep SpaceAgent admission direction-neutral.** Each candidate may have at
+    most one outstanding intervention, while a run may have many concurrent
+    reservations. SpaceAgent only accepts or rejects semantic duplicates and
+    active collisions; it cannot suggest or rewrite a direction. A stale review
+    cannot commit after `admission_revision`, `evidence_revision`, or
+    `schema_revision` changes. Verifier completion records a bounded concrete
+    artifact delta and outcome as immutable Search Evidence without another
+    Agent call. Later admissions immediately read the Evidence tail, while the
+    same SpaceAgent periodically appends a complete Search Schema snapshot under
+    the same CAS protocol; there is no per-plan projection.
+    Every admitted execution closes through one verifier iteration, which
+    atomically moves eligible evidence from active reservation to completed
+    coverage. B1/B4 retain the same candidate-visible protocol for experiment
+    compatibility.
 
 If no verifier-backed revision is eligible, or all ranked revisions fail parent
 final verification, selection records a recoverable `selection_blocked` reason.

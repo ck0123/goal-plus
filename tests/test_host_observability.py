@@ -22,6 +22,7 @@ def _session(
     *,
     host: str,
     handle: AgentHostHandle,
+    launch: dict[str, object] | None = None,
 ) -> AgentSessionRecord:
     return AgentSessionRecord(
         agent_session_id="agent_20260716_demo_001",
@@ -32,6 +33,7 @@ def _session(
         created_at="2026-07-16T10:00:00Z",
         updated_at="2026-07-16T10:00:00Z",
         workspace=tmp_path,
+        launch=launch or {},
     )
 
 
@@ -152,6 +154,35 @@ def test_codex_observability_discovers_and_normalizes_native_session(
     assert result["artifacts"]["session_file"] == str(session_path)
     assert "prompt" not in json.dumps(result)
     assert "not returned" not in json.dumps(result)
+
+
+def test_codex_observability_uses_launch_identity_when_transcript_is_missing(
+    tmp_path: Path,
+) -> None:
+    session = _session(
+        tmp_path,
+        host="codex",
+        handle=AgentHostHandle(host="codex", task_name="missing-task"),
+        launch={
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "medium",
+            "service_tier": "priority",
+        },
+    )
+
+    result = collect_codex_observability(
+        session,
+        codex_home=tmp_path / "missing-codex-home",
+    )
+
+    assert result["source"] == "codex_session_not_found"
+    assert result["execution"]["provider"] == "openai-codex"
+    assert result["execution"]["model"] == "gpt-5.6-sol"
+    assert result["execution"]["reasoning_effort"] == "medium"
+    assert result["execution"]["service_tier"] == "priority"
+    assert result["execution"]["terminal_state"] == "unknown"
+    assert result["execution"]["duration_seconds"] is None
+    assert result["usage"]["processed_tokens"] is None
 
 
 def test_pi_observability_normalizes_legacy_metrics(tmp_path: Path) -> None:

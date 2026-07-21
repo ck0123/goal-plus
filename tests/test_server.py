@@ -34,6 +34,9 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "search_get_agent_context",
         "search_get_agent_observability",
         "search_run_verifier",
+        "search_space_open",
+        "search_space_propose",
+        "search_space_status",
         "search_list_iterations",
         "search_select",
         "search_report",
@@ -121,6 +124,33 @@ def test_run_verifier_exposes_optional_agent_session_id(tmp_path: Path) -> None:
 
     assert "agent_session_id" in schema["properties"]
     assert "hypothesis" in schema["properties"]
+    assert "intervention_plan_id" in schema["properties"]
+
+
+def test_search_space_tools_expose_minimal_plan_contract(tmp_path: Path) -> None:
+    mcp = create_mcp(tmp_path / ".search")
+    tools = asyncio.run(mcp.get_tools())
+
+    open_schema = tools["search_space_open"].parameters
+    assert open_schema["properties"]["mode"]["enum"] == [
+        "observe",
+        "enforce",
+        "b1",
+        "b4",
+    ]
+    assert open_schema["properties"]["mode"]["default"] == "enforce"
+    assert open_schema["properties"]["reviewer_model"]["default"] == "gpt-5.6-sol"
+    assert open_schema["properties"]["schema_consolidation_interval"]["default"] == 20
+    proposal = tools["search_space_propose"].parameters["properties"]["proposal"]
+    assert set(proposal["required"]) == {
+        "intervention",
+        "scope",
+        "expected_new_information",
+    }
+    assert set(proposal["properties"]) == set(proposal["required"])
+    assert all(
+        field["maxLength"] == 2000 for field in proposal["properties"].values()
+    )
 
 
 def test_freeze_spec_exposes_complete_nested_search_spec_schema(tmp_path: Path) -> None:

@@ -1,7 +1,41 @@
-# SE-Bench: Performance Kernel Optimization
+# VLIW Goal Plus SpaceAgent Experiment
 
 This workspace is the public, agent-facing portion of the SE-Bench task. The
 complete task statement is in `problem.md`.
+
+The current experiment runs one global SpaceAgent in `enforce` mode over three
+concurrent Goal Plus candidate lanes. Each lane has a one-hour worker lease.
+There is no control arm and SpaceAgent only accepts a plan or rejects it with
+the plans it duplicates; it never suggests an optimization direction.
+
+The experiment assets are:
+
+- `experiment.json`: frozen 3-lane runtime and reviewer configuration;
+- `../prompts/codex-gp-space-3x1h.txt`: top-level orchestration and candidate prompt;
+- `space-schema.json`: initial semantic intervention schema;
+- `.goal-plus-verifiers/vliw_score.py`: public ranking verifier adapter;
+- `run_experiment.py`: in-place launcher, reviewer service, and result collector.
+
+The current reviewer uses strict Pydantic validation over plain JSON because
+the configured provider rejects the Codex CLI `--output-schema` transport. The
+launcher inherits its Codex profile from `CODEX_HOME`, runs real admission and
+Schema-consolidation preflights before Search creation, and aborts the experiment
+on any later `reviewer_fail_open` admission.
+
+Run from the Goal Plus repository root:
+
+```bash
+python examples-hide/vliw_kernel_optimization/worker-codex-gp/run_experiment.py \
+  --experiment-id "vliw-space-3x1h-$(date +%Y%m%d-%H%M%S)"
+```
+
+The launcher verifies the starter solution, initializes a nested Git baseline,
+and creates candidate worktrees under the repository-level `.gp/`. Host logs and the final summary are
+stored under the repository's ignored
+`output/vliw-space-agent-current/<experiment-id>/`, outside the candidate
+source tree. No experiment state is written under `/root`.
+Use `--prepare-only` to validate and materialize the frozen prompt without
+starting Codex.
 
 ## Quick Start
 

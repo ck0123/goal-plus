@@ -17,6 +17,8 @@ const STATE_ENTRY_TYPE = "goal-plus-native-state";
 const GOAL_PLUS_STATS_ENTRY_TYPE = "goal-plus-stats";
 let workspaceRoot: string | undefined;
 let sawContext = false;
+let searchSpaceEnabled = false;
+let acceptedInterventionPlanId: string | undefined;
 let activeGoalPlusId = process.env.GOAL_PLUS_ID;
 let cachedGoalStatus: GoalPlusStatusPayload | undefined;
 let continuationCount = 0;
@@ -383,6 +385,47 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 		{ agent_session_id: Type.String() },
 		{ additionalProperties: false },
 	),
+	search_space_open: Type.Object(
+		{
+			run_id: Type.String(),
+			mode: Type.Optional(Type.Union([
+				Type.Literal("observe"),
+				Type.Literal("enforce"),
+				Type.Literal("b1"),
+				Type.Literal("b4"),
+			])),
+			schema_path: Type.Optional(Type.String()),
+			experiment_id: Type.Optional(Type.String()),
+			reviewer_model: Type.Optional(Type.String()),
+			reviewer_reasoning_effort: Type.Optional(Type.Union([
+				Type.Literal("low"),
+				Type.Literal("medium"),
+				Type.Literal("high"),
+				Type.Literal("xhigh"),
+			])),
+			reviewer_timeout_seconds: Type.Optional(Type.Integer({ exclusiveMinimum: 0, maximum: 600 })),
+			schema_consolidation_interval: Type.Optional(Type.Integer({ minimum: 2, maximum: 100 })),
+		},
+		{ additionalProperties: false },
+	),
+	search_space_propose: Type.Object(
+		{
+			agent_session_id: Type.String(),
+			proposal: Type.Object(
+				{
+					intervention: Type.String({ minLength: 1 }),
+					scope: Type.String({ minLength: 1 }),
+					expected_new_information: Type.String({ minLength: 1 }),
+				},
+				{ additionalProperties: false },
+			),
+		},
+		{ additionalProperties: false },
+	),
+	search_space_status: Type.Object(
+		{ run_id: Type.String() },
+		{ additionalProperties: false },
+	),
 	search_run_verifier: Type.Object(
 		{
 			run_id: Type.String(),
@@ -390,6 +433,7 @@ const RuntimeToolSchemas: Record<string, TSchema> = {
 			scope: Type.Optional(Type.Union([Type.Literal("process"), Type.Literal("promotion")])),
 			agent_session_id: Type.Optional(Type.String()),
 			hypothesis: Type.Optional(Type.String()),
+			intervention_plan_id: Type.Optional(Type.String()),
 		},
 		{ additionalProperties: false },
 	),
@@ -467,7 +511,13 @@ const RuntimeToolDescriptions: Record<string, string> = {
 	search_freeze_spec:
 		"Freeze an immutable SearchSpec and verifier bundle. Preflight uses a disposable source copy and rejects verifier workspace side effects; verifier temp files belong in the unique GOAL_PLUS_VERIFIER_TMPDIR/TMPDIR, never a fixed /tmp path under concurrent Search. In parallel_loops mode one initial plan creates the long-lived candidates.",
 	search_run_verifier:
-		"Score one candidate and pass a concise hypothesis for the tested design. Every returned verifier report appends exactly one validated row to the runtime-owned, inherited workspace/results.tsv and commits it. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
+		"Score one candidate and pass a concise hypothesis for the tested design. When search-space admission is enabled, also pass the accepted intervention_plan_id. Every returned verifier report appends exactly one validated row to the runtime-owned, inherited workspace/results.tsv and commits it. VerifierWorkspaceSideEffect with candidate_action=stop_and_report is infrastructure failure: the worker must stop without cleaning or retrying so the parent can repair and refreeze.",
+	search_space_open:
+		"Open optional run-scoped observe/enforce SpaceAgent admission before launching candidates. B1/B4 are frozen experiment compatibility modes.",
+	search_space_propose:
+		"Submit intervention, scope, and expected_new_information before material candidate work. Reject responses identify conflicting completed coverage or active reservations but never suggest a direction.",
+	search_space_status:
+		"Inspect run-level coverage, active reservations, semantic duplicate rate, schema revision, and candidate loop signals.",
 	search_invalidate_run:
 		"Atomically fence a run after the main agent confirms verifier contract, coverage, determinism, target-alignment, or infrastructure failure. Then interrupt every host worker, wait for zero active workers, repair/freeze, and create a successor with source_run_id.",
 	search_report:
@@ -1021,9 +1071,37 @@ function registerRuntimeTool(pi: ExtensionAPI, name: string) {
 				activateGoal(pi, result.details, startEntryCount, canPersistPiState);
 			}
 			if (name === "search_get_agent_context") {
-				const details = result.details as { workspace?: string } | undefined;
-				workspaceRoot = details?.workspace;
+				const details = isRecord(result.details) ? result.details : undefined;
+				workspaceRoot = typeof details?.workspace === "string" ? details.workspace : undefined;
 				sawContext = true;
+				const searchSpace = isRecord(details?.search_space)
+					? details.search_space
+					: isRecord(details?.space_experiment)
+						? details.space_experiment
+						: undefined;
+				searchSpaceEnabled = searchSpace?.enabled === true;
+				const outstandingStatus = searchSpace?.outstanding_plan_status;
+				const outstandingPlanId = searchSpace?.outstanding_plan_id;
+				acceptedInterventionPlanId =
+					searchSpaceEnabled &&
+					typeof outstandingPlanId === "string" &&
+					["accepted", "verifying"].includes(String(outstandingStatus))
+						? outstandingPlanId
+						: undefined;
+			}
+			if (name === "search_space_propose" && isRecord(result.details)) {
+				const returnedPlanId = result.details.plan_id;
+				acceptedInterventionPlanId =
+					result.details.decision === "accept" && typeof returnedPlanId === "string"
+						? returnedPlanId
+						: undefined;
+			}
+			if (
+				name === "search_run_verifier" &&
+				isRecord(result.details) &&
+				result.details.ok !== false
+			) {
+				acceptedInterventionPlanId = undefined;
 			}
 			return result;
 		},
@@ -1099,6 +1177,18 @@ function extractCandidatePath(event: ToolCallEvent): string | undefined {
 	return undefined;
 }
 
+function isMaterialWorkerCall(event: ToolCallEvent): boolean {
+	if (["edit", "write", "search_run_verifier"].includes(event.toolName)) return true;
+	if (event.toolName !== "bash") return false;
+	const command = String((event.input as Record<string, unknown>).command || "");
+	return (
+		/(?:^|[;&|]\s*|\s)(?:sed\s+-i|perl\s+-pi|tee|truncate|touch|cp|mv|rm|patch)\b/.test(command) ||
+		/(?:^|\s)>{1,2}\s*\S+/.test(command) ||
+		/(?:write_text|write_bytes|open)\s*\(/.test(command) ||
+		/(?:python(?:3)?\s+[^\n;]*|\.\/)(?:runner|evaluate)\.py\b/i.test(command)
+	);
+}
+
 function workspaceGuard(event: ToolCallEvent) {
 	if (role === "final-checker" && ["edit", "write"].includes(event.toolName)) {
 		return { block: true, reason: "Final-check reviewers are read-only." };
@@ -1109,6 +1199,16 @@ function workspaceGuard(event: ToolCallEvent) {
 		const readOnly = new Set(["read", "grep", "find", "ls"]);
 		if (readOnly.has(event.toolName)) return undefined;
 		return { block: true, reason: "Call search_get_agent_context before mutating tools." };
+	}
+	if (
+		searchSpaceEnabled &&
+		!acceptedInterventionPlanId &&
+		isMaterialWorkerCall(event)
+	) {
+		return {
+			block: true,
+			reason: "Call search_space_propose and receive accept before material edits or verification.",
+		};
 	}
 	if (!workspaceRoot) return undefined;
 	if (!["edit", "write", "bash"].includes(event.toolName)) return undefined;
@@ -1210,6 +1310,8 @@ export default function (pi: ExtensionAPI) {
 		"search_plan_next",
 		"search_start_batch",
 		"search_get_agent_observability",
+		"search_space_open",
+		"search_space_status",
 		"search_run_verifier",
 		"search_select",
 		"search_report",
@@ -1220,7 +1322,12 @@ export default function (pi: ExtensionAPI) {
 		"pi_search_pool_continue",
 		"pi_search_pool_close",
 	];
-	const workerTools = ["search_get_agent_context", "search_run_verifier", "search_list_iterations"];
+	const workerTools = [
+		"search_get_agent_context",
+		"search_space_propose",
+		"search_run_verifier",
+		"search_list_iterations",
+	];
 	const finalCheckerTools = ["goal_plus_status", "goal_plus_submit_final_check"];
 	const roleTools = role === "worker" ? workerTools : role === "final-checker" ? finalCheckerTools : mainTools;
 	for (const tool of roleTools) {

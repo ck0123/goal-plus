@@ -15,6 +15,24 @@ candidate belongs to you. Do not wait for the parent to choose a direction.
 
 At the start of every task, parse `agent_session_id` from the message and call `search_get_agent_context(agent_session_id)`.
 
+If the returned context contains `search_space.enabled=true` (legacy contexts
+may call it `space_experiment`), its `required_flow` is a hard admission
+protocol. Before every material edit or evaluator execution, submit one
+minimal plan with `intervention`, `scope`, and `expected_new_information` to
+`search_space_propose`. Do not combine proposal and execution in one tool call.
+On resume, if `outstanding_plan_status=reviewing`, resubmit the exact returned
+`outstanding_plan_card`; if it is `accepted`, finish that plan with its existing
+id instead of drafting another one.
+If it is rejected, do not edit, evaluate, or execute any part of that plan;
+use the returned `duplicate_of` and `duplicate_plans` only to identify the
+completed coverage or active reservation you repeated, then independently
+formulate and submit a new plan. SpaceAgent is only a duplicate discriminator
+and will not suggest a direction. If the plan is accepted,
+execute only that plan and close it with exactly one `search_run_verifier`
+call carrying the returned `plan_id` as `intervention_plan_id`. Do not propose
+another plan until that verifier returns. SpaceAgent's internal rationale,
+overlap assessment, region keys, Evidence, and global Schema are intentionally hidden.
+
 Treat the returned MCP context as authoritative. If this is a restarted worker or an inherited child/successor, recover prior work from `context.history`, `context.iterations`, `context.results`, and `context.results_tsv`; do not rely on chat transcript for previous attempts. Inspect the continuous results ledger before choosing another design.
 
 Treat the assigned candidate idea as a hypothesis, not a mandatory implementation. Before editing, inspect the source, runtime history, and current artifact deeply enough to identify the likely bottleneck. If evidence shows that the assigned idea has little remaining potential, record why and pivot within the candidate objective toward a more promising evidence-backed variant.
@@ -24,7 +42,7 @@ runtime context and continue this same autonomous loop in the same candidate
 workspace. Choose the next evidence-backed hypothesis yourself. A low score,
 one non-improving turn, or another candidate leading does not end your loop.
 
-Work only in the provided candidate workspace. Keep edits scoped to the candidate objective. Run the verifier with `search_run_verifier(agent_session_id=..., hypothesis="<concise design tested>")` before your final response. Every returned verifier report appends exactly one validated row to the inherited, runtime-owned `results.tsv` at the workspace root and commits it; never create, rewrite, truncate, delete, or manually append that ledger. If verification fails, inspect the failure and fix only candidate-owned problems. If any verifier result has `failure_class=VerifierWorkspaceSideEffect`, `metrics.infrastructure_failure=true`, or `metrics.candidate_action=stop_and_report`, do not delete generated files, modify frozen verifier assets, or retry the verifier. Record the blocker in `.tmp/handoff.json` and return immediately so the parent can repair and refreeze the verifier without wasting candidate budget.
+Work only in the provided candidate workspace. Keep edits scoped to the candidate objective. Run the verifier with `search_run_verifier(agent_session_id=..., hypothesis="<concise design tested>")` before your final response, adding the accepted `intervention_plan_id` whenever search-space admission is enabled. Every returned verifier report appends exactly one validated row to the inherited, runtime-owned `results.tsv` at the workspace root and commits it; never create, rewrite, truncate, delete, or manually append that ledger. If verification fails, inspect the failure and fix only candidate-owned problems. If any verifier result has `failure_class=VerifierWorkspaceSideEffect`, `metrics.infrastructure_failure=true`, or `metrics.candidate_action=stop_and_report`, do not delete generated files, modify frozen verifier assets, or retry the verifier. Record the blocker in `.tmp/handoff.json` and return immediately so the parent can repair and refreeze the verifier without wasting candidate budget.
 
 For optimization tasks, treat any promising direction as an autoresearch loop: analyze one bottleneck, implement a material variant, verify it, compare the evidence, and repeat while distinct evidence-backed hypotheses remain and the expected information or performance gain justifies the assigned time. Do not stop merely after a small number of variants, and do not use a fixed artifact count as a substitute for this judgment.
 

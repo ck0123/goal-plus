@@ -6,7 +6,7 @@ same starter solution:
 
 - `worker/`: native Codex;
 - `worker-claude/`: native Claude Code;
-- `worker-codex-gp/`: single-lane Codex plus Goal Plus.
+- `worker-codex-gp/`: three concurrent Codex lanes plus one global SpaceAgent.
 
 The directory also contains the private evaluator under `judge/`. Do not let an
 optimizing agent inspect `judge/`, hidden cases, sibling workspaces, or files
@@ -86,38 +86,30 @@ This controls the task, starter, public evaluator, and visible prompt across
 the two native runs. It does not control the model: native Claude Code does not
 run GPT-5.5.
 
-## Single-lane Codex plus Goal Plus
+## Three-lane Codex plus Goal Plus and SpaceAgent
 
 ```bash
-cd examples-hide/vliw_kernel_optimization/worker-codex-gp
-codex --model gpt-5.5 -c 'model_reasoning_effort="medium"'
+cd /home/djy/cwy/goal-plus
+python examples-hide/vliw_kernel_optimization/worker-codex-gp/run_experiment.py \
+  --experiment-id "vliw-space-3x1h-$(date +%Y%m%d-%H%M%S)"
 ```
 
-Paste `../prompts/codex-gp-single-lane.txt`. The prompt begins with
-`/goal-plus mode=autonomous`, prepends the Goal Plus orchestration contract to
-the complete unchanged native AutoResearch prompt, and requires:
+The launcher uses `prompts/codex-gp-space-3x1h.txt` and
+`worker-codex-gp/experiment.json`. It requires:
 
-- `budget.max_candidates=1` and `budget.max_parallel=1`;
-- one candidate workspace and a full two-hour worker window;
-- same-agent continuation through `search_continue_agent_session` and
-  `followup_task` whenever the worker returns early;
-- same-candidate redispatch only if the original native agent handle is
-  irrecoverably unavailable after interruption;
-- no technical direction from the main agent beyond evaluation-contract and
-  lifecycle enforcement.
+- exactly three concurrent candidate workspaces with one-hour worker leases;
+- one run-global SpaceAgent in `enforce` mode;
+- a minimal three-field PlanCard before every material experiment;
+- no technical direction from either the main agent or SpaceAgent;
+- final selection from any verifier-backed candidate, followed by public and
+  hidden evaluation by the host harness.
 
-If the top-level Codex session is interrupted, resume the durable goal from the
-same directory:
-
-```bash
-codex resume --last "/goal-plus resume"
-```
-
-Monitor it read-only from the Goal Plus repository root:
+Use `--prepare-only` for a non-launching configuration check. Runtime state and
+the final experiment summary are written inside the worker directory:
 
 ```bash
 ./scripts/monitor_goal_plus.sh --no-clear \
-  examples-hide/vliw_kernel_optimization/worker-codex-gp
+  .gp
 ```
 
 ## Reset
