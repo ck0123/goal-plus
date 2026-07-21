@@ -11,6 +11,7 @@ from typing import Any
 
 from goal_plus.agent_hosts import get_agent_host_adapter
 from goal_plus.goal_plus import FileGoalPlusRuntime
+from goal_plus.host_observability import collect_metadata_observability
 from goal_plus.models import (
     AgentSessionRecord,
     CandidateRecord,
@@ -195,6 +196,30 @@ main { padding-top: 30px; padding-bottom: 72px; }
 .trajectory-head h3 { margin: 0; }
 .trajectory-head span { color: var(--muted); font-size: 11px; }
 .trajectory-plot { width: 100%; min-height: 380px; }
+.trajectory-plot[data-plotly-state="rendering"] > .trajectory-fallback,
+.trajectory-plot[data-plotly-state="rendered"] > .trajectory-fallback { display: none; }
+.trajectory-fallback { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.trajectory-fallback svg { display: block; width: 100%; min-width: 720px; height: 360px; }
+.trajectory-grid { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.trajectory-axis { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.trajectory-axis-label { fill: var(--muted); font-size: 11px; }
+.trajectory-baseline { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.trajectory-global { fill: none; stroke: var(--text); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.trajectory-candidate { fill: none; stroke: var(--trajectory-color); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.trajectory-point { fill: var(--trajectory-color); stroke: var(--surface); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.trajectory-selected { fill: var(--success); stroke: var(--text); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.trajectory-failure { stroke: var(--failure); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.trajectory-series-0 { --trajectory-color: var(--accent); }
+.trajectory-series-1 { --trajectory-color: var(--worker); }
+.trajectory-series-2 { --trajectory-color: var(--parent); }
+.trajectory-series-3 { --trajectory-color: var(--success); }
+.trajectory-series-4 { --trajectory-color: var(--warning); }
+.trajectory-series-5 { --trajectory-color: var(--failure); }
+.trajectory-legend { display: flex; flex-wrap: wrap; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+.trajectory-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.trajectory-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--trajectory-color); }
+.trajectory-legend .global { width: 14px; height: 3px; border-radius: 0; background: var(--text); }
+.trajectory-legend .failure { border-radius: 0; background: var(--failure); transform: rotate(45deg); }
 .timeline-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; border-bottom: 1px solid var(--border); }
 .timeline-head h2 { margin: 0; }
 .metric-lens-toolbar {
@@ -228,8 +253,9 @@ main { padding-top: 30px; padding-bottom: 72px; }
 .metric-control button:last-child { border-right: 0; }
 .metric-control button:hover { background: var(--accent-soft); color: var(--accent); }
 .metric-control button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.metric-control button:disabled { cursor: not-allowed; opacity: 0.45; }
 .timeline-scroll { overflow-x: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.timeline { width: var(--timeline-width, 980px); min-width: 980px; }
+.timeline { width: max(100%, var(--timeline-width, 980px)); min-width: 980px; }
 .score-row { display: grid; grid-template-columns: 190px 1fr; min-height: 64px; border-bottom: 1px solid var(--border); background: var(--surface-subtle); }
 .score-label { position: sticky; left: 0; z-index: 5; padding: 11px 14px; background: var(--surface-subtle); box-shadow: 1px 0 0 var(--border); }
 .score-label strong, .score-label span { display: block; }
@@ -284,7 +310,7 @@ main { padding-top: 30px; padding-bottom: 72px; }
 .retry-badge { display: inline-block; margin-left: 5px; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 3px; color: var(--accent); font-size: 8px; line-height: 13px; }
 .timeline-idle { position: absolute; inset: 0 auto 0 0; z-index: 1; border-right: 1px dashed var(--border-strong); border-left: 1px dashed var(--border-strong); background: #f0f2f4; }
 .timeline-idle-label { position: absolute; inset: 50% auto auto 50%; transform: translate(-50%, -50%); color: var(--muted); font-size: 9px; font-weight: 700; white-space: nowrap; }
-.timeline-event.point { top: 4px; width: 10px !important; min-width: 10px; height: 10px; padding: 0; border: 2px solid var(--surface); border-radius: 50%; }
+.timeline-event.point { top: 4px; width: 10px !important; min-width: 10px; height: 10px; padding: 0; border: 2px solid var(--surface); border-radius: 50%; transform: translateX(-50%); }
 .timeline-axis { display: flex; justify-content: space-between; padding: 8px 10px 9px 200px; color: var(--muted); font-size: 10px; }
 .timeline-key { display: flex; flex-wrap: wrap; gap: 14px; padding: 12px 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 .key-dot { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 50%; background: var(--accent); }
@@ -335,6 +361,12 @@ tbody tr:last-child td { border-bottom: 0; }
 .stat-row:first-of-type { border-top: 0; }
 .stat-row span:first-child { color: var(--muted); overflow-wrap: anywhere; }
 .stat-row strong { text-align: right; overflow-wrap: anywhere; }
+.observability-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.observability-group { min-width: 0; }
+.observability-group h4 { margin: 0 12px 7px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.observability-group .stat-row { padding-right: 12px; padding-left: 12px; }
+.observability-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.observability-summary span:last-child { color: var(--muted); font-size: 11px; font-weight: 500; }
 details.summary-block { margin-top: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
 details.summary-block > summary { padding: 11px 13px; color: var(--accent); font-weight: 700; }
 details.summary-block > div, details.summary-block > pre { margin: 0; padding: 14px; border-top: 1px solid var(--border); }
@@ -347,6 +379,7 @@ pre { max-height: 600px; overflow: auto; white-space: pre-wrap; overflow-wrap: a
   .two-column { grid-template-columns: 1fr; }
   .task-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .observability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fact-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
@@ -357,7 +390,7 @@ pre { max-height: 600px; overflow: auto; white-space: pre-wrap; overflow-wrap: a
   h1 { font-size: 24px; line-height: 31px; }
   .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .task-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .stats-grid { grid-template-columns: 1fr; }
+  .stats-grid, .observability-grid { grid-template-columns: 1fr; }
   .event-list li { grid-template-columns: 1fr; gap: 2px; }
   .metric-gap-list li { grid-template-columns: 1fr; gap: 2px; }
   .timeline-head, .metric-lens-toolbar { align-items: flex-start; flex-direction: column; }
@@ -455,14 +488,18 @@ _REPORT_SCRIPT = """
   }
 
   function renderTrajectory(node) {
-    if (!window.Plotly || node.dataset.plotlyRendered === 'true') return;
+    if (!window.Plotly || typeof window.Plotly.newPlot !== 'function' ||
+        node.dataset.plotlyState === 'rendered' ||
+        node.dataset.plotlyState === 'rendering' ||
+        node.dataset.plotlyState === 'failed') return;
     var payload;
     try {
       payload = JSON.parse(node.dataset.searchTrajectory || '{}');
     } catch (error) {
-      node.textContent = 'Search trajectory data could not be decoded.';
+      node.dataset.plotlyState = 'failed';
       return;
     }
+    var fallbackMarkup = node.innerHTML;
     var windows = payload.call_window
       ? [payload.call_window]
       : [{
@@ -600,6 +637,7 @@ _REPORT_SCRIPT = """
             (trajectory.failed_details[failureIndex] || [])[0],
             (trajectory.failed_details[failureIndex] || [])[1],
             (trajectory.failed_details[failureIndex] || [])[2],
+            (trajectory.failed_details[failureIndex] || [])[3],
             (trajectory.failed_scores || [])[failureIndex]
           ]);
         });
@@ -659,7 +697,7 @@ _REPORT_SCRIPT = """
         traces.push({
           type: 'scatter',
           mode: 'markers',
-          name: 'Failed verifier · not scored',
+          name: 'Not eligible · not scored',
           x: failureCalls,
           y: failureValues,
           customdata: failureDetails,
@@ -673,9 +711,10 @@ _REPORT_SCRIPT = """
             line: {width: 1}
           },
           hovertemplate:
-            '<b>%{customdata[0]} · verifier failed</b><br>' +
+            '<b>%{customdata[0]} · verifier not eligible</b><br>' +
             'Verifier call %{x}<br>Iteration %{customdata[1]} · %{customdata[2]}<br>' +
-            '%{customdata[3]}<br>Raw score %{customdata[4]} · excluded from ranking<extra></extra>'
+            '%{customdata[3]}<br>Status %{customdata[4]}<br>' +
+            'Raw score %{customdata[5]} · excluded from ranking<extra></extra>'
         });
         failureLegendSeen = true;
       }
@@ -690,22 +729,44 @@ _REPORT_SCRIPT = """
       }
     });
 
+    node.dataset.plotlyState = 'rendering';
     node.style.minHeight = String(layout.height) + 'px';
     node.style.height = String(layout.height) + 'px';
-    node.dataset.plotlyRendered = 'true';
-    window.Plotly.newPlot(node, traces, layout, {
-      displaylogo: false,
-      responsive: true,
-      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-      toImageButtonOptions: {format: 'svg', filename: 'complete-search-trajectory'}
-    });
+    try {
+      node.innerHTML = '';
+      var rendering = window.Plotly.newPlot(node, traces, layout, {
+        displaylogo: false,
+        responsive: true,
+        modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+        toImageButtonOptions: {format: 'svg', filename: 'complete-search-trajectory'}
+      });
+      Promise.resolve(rendering).then(function () {
+        node.dataset.plotlyState = 'rendered';
+      }).catch(function () {
+        if (window.Plotly && typeof window.Plotly.purge === 'function') {
+          window.Plotly.purge(node);
+        }
+        node.innerHTML = fallbackMarkup;
+        node.style.height = '';
+        node.style.minHeight = '';
+        node.dataset.plotlyState = 'failed';
+      });
+    } catch (error) {
+      node.innerHTML = fallbackMarkup;
+      node.style.height = '';
+      node.style.minHeight = '';
+      node.dataset.plotlyState = 'failed';
+    }
   }
 
   function renderVisibleTrajectories() {
     Array.prototype.forEach.call(document.querySelectorAll('[data-search-trajectory]'), function (node) {
       if (node.closest('.task-panel[hidden]')) return;
-      if (node.dataset.plotlyRendered === 'true') {
-        window.Plotly.Plots.resize(node);
+      if (node.dataset.plotlyState === 'rendered') {
+        if (window.Plotly && window.Plotly.Plots &&
+            typeof window.Plotly.Plots.resize === 'function') {
+          window.Plotly.Plots.resize(node);
+        }
       } else {
         renderTrajectory(node);
       }
@@ -850,13 +911,26 @@ def _number(value: Any, *, digits: int = 2) -> str:
         return "Not observed"
     if isinstance(value, int) or float(value).is_integer():
         return f"{int(value):,}"
-    return f"{float(value):,.{digits}f}".rstrip("0").rstrip(".")
+    formatted = f"{float(value):,.{digits}f}"
+    return formatted.rstrip("0").rstrip(".") if digits > 0 else formatted
 
 
 def _percent(value: Any) -> str:
     if not isinstance(value, int | float) or isinstance(value, bool):
         return "Not observed"
     return f"{float(value) * 100:.1f}%"
+
+
+def _percentage_points(value: Any) -> str:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return "Not observed"
+    return f"{float(value):.1f}%"
+
+
+def _milliseconds(value: Any) -> str:
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return "Not observed"
+    return f"{float(value):,.1f}ms"
 
 
 def _cost(value: Any) -> str:
@@ -905,6 +979,8 @@ def _session_scores(task: dict[str, Any], direction: str) -> dict[str, float]:
     scores: dict[str, float] = {}
     for candidate in task.get("candidates", []):
         for iteration in candidate.get("iterations", []):
+            if iteration.get("process_passed") is not True:
+                continue
             session_id = iteration.get("agent_session_id")
             score = _finite_float(iteration.get("score"))
             if not isinstance(session_id, str) or score is None:
@@ -954,6 +1030,8 @@ def _timeline_performance(task: dict[str, Any], timeline: dict[str, Any]) -> dic
     checkpoints: list[dict[str, Any]] = []
     for candidate in task.get("candidates", []):
         for iteration in candidate.get("iterations", []):
+            if iteration.get("process_passed") is not True:
+                continue
             score = _finite_float(iteration.get("score"))
             created_epoch = _epoch(iteration.get("created_at"))
             if score is None or created_epoch is None:
@@ -1061,20 +1139,10 @@ def _collect_observability(session: AgentSessionRecord) -> dict[str, Any]:
     try:
         return get_agent_host_adapter(session.host).collect_observability(session)
     except Exception as exc:
-        return {
-            "source": "collection_failed",
-            "execution": {
-                "terminal_state": "unknown",
-                "started_at": session.created_at,
-                "ended_at": session.updated_at,
-                "duration_seconds": None,
-                "timed_out": bool(session.host_handle.metadata.get("timed_out")),
-                "runner_failed": bool(session.host_handle.metadata.get("runner_failed")),
-            },
-            "usage": {},
-            "context": {},
-            "errors": [f"{type(exc).__name__}: {exc}"],
-        }
+        payload = collect_metadata_observability(session)
+        payload["source"] = "collection_failed"
+        payload["errors"] = [f"{type(exc).__name__}: {exc}"]
+        return payload
 
 
 def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) -> dict[str, Any]:
@@ -1100,7 +1168,11 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
 
     candidate_payloads: list[dict[str, Any]] = []
     for candidate in candidates:
-        scored = [iteration for iteration in candidate.iterations if iteration.score is not None]
+        scored = [
+            iteration
+            for iteration in candidate.iterations
+            if iteration.process_passed is True and iteration.score is not None
+        ]
         best = None
         if scored:
             reverse = frozen.spec.metric_direction == "maximize"
@@ -1170,6 +1242,12 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
         usage = usage if isinstance(usage, dict) else {}
         context = observation.get("context")
         context = context if isinstance(context, dict) else {}
+        identity = observation.get("identity")
+        identity = identity if isinstance(identity, dict) else {}
+        artifacts = observation.get("artifacts")
+        artifacts = artifacts if isinstance(artifacts, dict) else {}
+        handoff = observation.get("handoff")
+        handoff = handoff if isinstance(handoff, dict) else {}
         session_iterations = [
             iteration
             for candidate in candidates
@@ -1184,20 +1262,34 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
             "updated_at": session.updated_at,
             "provider": execution.get("provider"),
             "model": execution.get("model"),
+            "reasoning_effort": execution.get("reasoning_effort"),
+            "service_tier": execution.get("service_tier"),
             "terminal_state": execution.get("terminal_state"),
             "started_at": execution.get("started_at") or session.created_at,
             "ended_at": execution.get("ended_at"),
             "duration_seconds": execution.get("duration_seconds"),
+            "wall_duration_seconds": execution.get("wall_duration_seconds"),
+            "time_to_first_token_ms": execution.get("time_to_first_token_ms"),
+            "turns_completed": execution.get("turns_completed"),
             "timed_out": bool(execution.get("timed_out")),
             "runner_failed": bool(execution.get("runner_failed")),
+            "exit_code": execution.get("exit_code"),
             "processed_tokens": usage.get("processed_tokens"),
             "cost_usd": usage.get("cost_usd"),
             "tool_calls": usage.get("tool_calls"),
             "context_tokens": context.get("tokens"),
+            "context_window": context.get("context_window"),
             "context_percent": context.get("percent"),
             "verifier_runs": len(session_iterations),
             "observability_source": observation.get("source"),
             "errors": observation.get("errors") or [],
+            "identity": identity,
+            "execution": execution,
+            "usage": usage,
+            "context": context,
+            "artifacts": artifacts,
+            "handoff": handoff,
+            "observability": observation,
         }
         raw_dispatches = session.host_handle.metadata.get("dispatches")
         dispatches = raw_dispatches if isinstance(raw_dispatches, list) else []
@@ -1248,7 +1340,7 @@ def _task_details(root: Path, task_summary: dict[str, Any], report_run_id: str) 
             scored = [
                 iteration.score
                 for iteration in attributed_iterations
-                if iteration.score is not None
+                if iteration.process_passed is True and iteration.score is not None
             ]
             dispatch_score = None
             if scored:
@@ -1733,7 +1825,7 @@ def _stat_rows(values: dict[str, Any], formatters: dict[str, Any] | None = None)
 def _timeline_position(event: dict[str, Any], start_epoch: float, duration: float) -> tuple[float, float]:
     event_start = _epoch(event.get("start_at")) or start_epoch
     event_end = _epoch(event.get("end_at"))
-    left = max(0.0, min(99.0, (event_start - start_epoch) / duration * 100))
+    left = max(0.0, min(100.0, (event_start - start_epoch) / duration * 100))
     if event_end is None:
         return left, 0.8
     width = max(1.0, (event_end - event_start) / duration * 100)
@@ -1742,7 +1834,7 @@ def _timeline_position(event: dict[str, Any], start_epoch: float, duration: floa
 
 def _timeline_width(duration_seconds: float) -> int:
     duration_minutes = max(0.0, duration_seconds / 60.0)
-    return max(980, min(20_000, int(round(190 + duration_minutes * 80))))
+    return max(980, min(10_000, int(round(190 + duration_minutes * 28))))
 
 
 def _metric_level(value: Any, metric_range: dict[str, Any]) -> int | None:
@@ -1944,7 +2036,14 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
                     "selected": bool(candidate.get("selected")),
                     "iteration": iteration.get("iteration") or iteration_index + 1,
                     "score": score,
-                    "process_passed": iteration.get("process_passed") is not False,
+                    "process_passed": iteration.get("process_passed") is True,
+                    "process_status": (
+                        "passed"
+                        if iteration.get("process_passed") is True
+                        else "failed"
+                        if iteration.get("process_passed") is False
+                        else "unknown"
+                    ),
                     "created_at": created_at,
                     "created_epoch": created_epoch,
                     "source": "worker verifier" if session_id is not None else "parent verifier",
@@ -1998,6 +2097,7 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
                         point["iteration"],
                         point["source"],
                         str(point.get("created_at") or "timestamp unavailable"),
+                        point["process_status"],
                     ]
                     for point in failed_points
                 ],
@@ -2050,6 +2150,12 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
     if baseline is not None:
         passing_scores.append(float(baseline))
     passing_count = sum(1 for evaluation in evaluations if evaluation["process_passed"])
+    failed_count = sum(
+        1 for evaluation in evaluations if evaluation["process_status"] == "failed"
+    )
+    unknown_count = sum(
+        1 for evaluation in evaluations if evaluation["process_status"] == "unknown"
+    )
     return {
         "metric_name": metric_name,
         "metric_direction": direction,
@@ -2057,13 +2163,236 @@ def _search_trajectory_payload(task: dict[str, Any]) -> dict[str, Any] | None:
         "selected": selected_score,
         "evaluations": len(evaluations),
         "passing_evaluations": passing_count,
-        "failed_evaluations": len(evaluations) - passing_count,
+        "ineligible_evaluations": len(evaluations) - passing_count,
+        "failed_evaluations": failed_count,
+        "unknown_evaluations": unknown_count,
         "call_window": _trajectory_call_window(len(evaluations)),
         "score_axis": _trajectory_score_axis(passing_scores),
         "trajectories": trajectories,
         "global_best": {"calls": global_calls, "scores": global_scores},
         "selected_point": selected_point,
     }
+
+
+def _render_trajectory_fallback(payload: dict[str, Any]) -> str:
+    width = 1000.0
+    height = 360.0
+    left = 76.0
+    right = 24.0
+    top = 22.0
+    bottom = 48.0
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+    evaluations = max(1, int(payload.get("evaluations") or 0))
+    axis = payload.get("score_axis")
+    axis = axis if isinstance(axis, dict) else {}
+    axis_type = "log" if axis.get("type") == "log" else "linear"
+    raw_range = axis.get("range")
+    axis_range = (
+        [_finite_float(raw_range[0]), _finite_float(raw_range[1])]
+        if isinstance(raw_range, list) and len(raw_range) == 2
+        else [None, None]
+    )
+    axis_low = axis_range[0] if axis_range[0] is not None else 0.0
+    axis_high = axis_range[1] if axis_range[1] is not None else 1.0
+    if axis_high <= axis_low:
+        axis_high = axis_low + 1.0
+
+    def x_position(call: Any) -> float | None:
+        value = _finite_float(call)
+        if value is None:
+            return None
+        return left + max(0.0, min(float(evaluations), value)) / evaluations * plot_width
+
+    def axis_value(score: Any) -> float | None:
+        value = _finite_float(score)
+        if value is None or (axis_type == "log" and value <= 0):
+            return None
+        return log10(value) if axis_type == "log" else value
+
+    def y_position(score: Any) -> float | None:
+        value = axis_value(score)
+        if value is None:
+            return None
+        ratio = max(0.0, min(1.0, (value - axis_low) / (axis_high - axis_low)))
+        return top + (1.0 - ratio) * plot_height
+
+    grid: list[str] = []
+    for index in range(5):
+        ratio = index / 4
+        y = top + ratio * plot_height
+        coordinate = axis_high - ratio * (axis_high - axis_low)
+        label_value = 10**coordinate if axis_type == "log" else coordinate
+        grid.append(
+            f'<line class="trajectory-grid" x1="{left:.1f}" y1="{y:.1f}" '
+            f'x2="{width - right:.1f}" y2="{y:.1f}" />'
+            f'<text class="trajectory-axis-label" x="{left - 9:.1f}" y="{y + 4:.1f}" '
+            f'text-anchor="end">{escape(_number(label_value, digits=4))}</text>'
+        )
+
+    call_window = payload.get("call_window")
+    call_window = call_window if isinstance(call_window, dict) else {}
+    call_tick = max(1, int(call_window.get("tick") or 1))
+    call_ticks = list(range(0, evaluations + 1, call_tick))
+    if call_ticks[-1] != evaluations:
+        call_ticks.append(evaluations)
+    for call in call_ticks:
+        x = x_position(call)
+        if x is None:
+            continue
+        grid.append(
+            f'<line class="trajectory-grid" x1="{x:.1f}" y1="{top:.1f}" '
+            f'x2="{x:.1f}" y2="{top + plot_height:.1f}" />'
+            f'<text class="trajectory-axis-label" x="{x:.1f}" y="{height - 18:.1f}" '
+            f'text-anchor="middle">{call}</text>'
+        )
+
+    marks: list[str] = []
+    baseline = _finite_float(payload.get("baseline"))
+    baseline_y = y_position(baseline)
+    if baseline_y is not None:
+        marks.append(
+            f'<line class="trajectory-baseline" x1="{left:.1f}" y1="{baseline_y:.1f}" '
+            f'x2="{width - right:.1f}" y2="{baseline_y:.1f}"><title>'
+            f'Baseline {_html(_number(baseline, digits=4))}</title></line>'
+        )
+
+    legend: list[str] = []
+    trajectories = payload.get("trajectories")
+    trajectories = trajectories if isinstance(trajectories, list) else []
+    has_ineligible = False
+    for trajectory_index, raw_trajectory in enumerate(trajectories):
+        trajectory = raw_trajectory if isinstance(raw_trajectory, dict) else {}
+        series_class = f"trajectory-series-{trajectory_index % 6}"
+        candidate_id = str(trajectory.get("candidate_id") or "candidate")
+        calls = trajectory.get("calls") if isinstance(trajectory.get("calls"), list) else []
+        scores = trajectory.get("scores") if isinstance(trajectory.get("scores"), list) else []
+        details = trajectory.get("details") if isinstance(trajectory.get("details"), list) else []
+        points: list[tuple[float, float, int]] = []
+        for point_index, (call, score) in enumerate(zip(calls, scores)):
+            x = x_position(call)
+            y = y_position(score)
+            if x is not None and y is not None:
+                points.append((x, y, point_index))
+        if len(points) > 1:
+            coordinates = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in points)
+            marks.append(
+                f'<polyline class="trajectory-candidate {series_class}" points="{coordinates}" />'
+            )
+        for x, y, point_index in points:
+            detail = details[point_index] if point_index < len(details) else []
+            detail = detail if isinstance(detail, list) else []
+            detail_text = " / ".join(str(value) for value in detail if value not in (None, ""))
+            score = scores[point_index]
+            title = f"{candidate_id}: {_number(score, digits=4)}"
+            if detail_text:
+                title += f" / {detail_text}"
+            marks.append(
+                f'<circle class="trajectory-point {series_class}" cx="{x:.1f}" cy="{y:.1f}" r="4">'
+                f'<title>{escape(title)}</title></circle>'
+            )
+
+        failed_calls = (
+            trajectory.get("failed_calls")
+            if isinstance(trajectory.get("failed_calls"), list)
+            else []
+        )
+        failed_scores = (
+            trajectory.get("failed_scores")
+            if isinstance(trajectory.get("failed_scores"), list)
+            else []
+        )
+        failed_details = (
+            trajectory.get("failed_details")
+            if isinstance(trajectory.get("failed_details"), list)
+            else []
+        )
+        failure_y = top + plot_height - 10.0
+        for failure_index, call in enumerate(failed_calls):
+            x = x_position(call)
+            if x is None:
+                continue
+            has_ineligible = True
+            raw_score = (
+                failed_scores[failure_index]
+                if failure_index < len(failed_scores)
+                else None
+            )
+            detail = (
+                failed_details[failure_index]
+                if failure_index < len(failed_details)
+                else []
+            )
+            detail = detail if isinstance(detail, list) else []
+            detail_text = " / ".join(str(value) for value in detail if value not in (None, ""))
+            title = f"{candidate_id}: verifier result not eligible"
+            if raw_score is not None:
+                title += f" / raw score {_number(raw_score, digits=4)}"
+            if detail_text:
+                title += f" / {detail_text}"
+            marks.append(
+                f'<g class="trajectory-failure"><title>{escape(title)}</title>'
+                f'<line x1="{x - 4:.1f}" y1="{failure_y - 4:.1f}" x2="{x + 4:.1f}" y2="{failure_y + 4:.1f}" />'
+                f'<line x1="{x - 4:.1f}" y1="{failure_y + 4:.1f}" x2="{x + 4:.1f}" y2="{failure_y - 4:.1f}" />'
+                "</g>"
+            )
+        selected_label = " / selected" if trajectory.get("selected") else ""
+        legend.append(
+            f'<span><i class="{series_class}"></i>{escape(candidate_id + selected_label)}</span>'
+        )
+
+    global_best = payload.get("global_best")
+    global_best = global_best if isinstance(global_best, dict) else {}
+    global_calls = global_best.get("calls") if isinstance(global_best.get("calls"), list) else []
+    global_scores = global_best.get("scores") if isinstance(global_best.get("scores"), list) else []
+    global_points: list[tuple[float, float]] = []
+    for call, score in zip(global_calls, global_scores):
+        x = x_position(call)
+        y = y_position(score)
+        if x is not None and y is not None:
+            global_points.append((x, y))
+    if global_points:
+        path = [f"M {global_points[0][0]:.1f} {global_points[0][1]:.1f}"]
+        for x, y in global_points[1:]:
+            path.extend((f"H {x:.1f}", f"V {y:.1f}"))
+        marks.append(f'<path class="trajectory-global" d="{" ".join(path)}" />')
+        legend.append('<span><i class="global"></i>Global best</span>')
+
+    selected = payload.get("selected_point")
+    selected = selected if isinstance(selected, dict) else {}
+    selected_x = x_position(selected.get("call"))
+    selected_y = y_position(selected.get("score"))
+    if selected_x is not None and selected_y is not None:
+        selected_title = (
+            f"Selected {selected.get('candidate_id') or 'candidate'}: "
+            f"{_number(selected.get('score'), digits=4)}"
+        )
+        marks.append(
+            f'<circle class="trajectory-selected" cx="{selected_x:.1f}" cy="{selected_y:.1f}" r="7">'
+            f'<title>{escape(selected_title)}</title></circle>'
+        )
+    if has_ineligible:
+        legend.append('<span><i class="failure"></i>Not eligible</span>')
+
+    metric_name = str(payload.get("metric_name") or "score")
+    return (
+        '<div class="trajectory-fallback" data-trajectory-fallback>'
+        f'<svg viewBox="0 0 {int(width)} {int(height)}" role="presentation">'
+        f'{"".join(grid)}'
+        f'<line class="trajectory-axis" x1="{left:.1f}" y1="{top + plot_height:.1f}" '
+        f'x2="{width - right:.1f}" y2="{top + plot_height:.1f}" />'
+        f'<line class="trajectory-axis" x1="{left:.1f}" y1="{top:.1f}" '
+        f'x2="{left:.1f}" y2="{top + plot_height:.1f}" />'
+        f'{"".join(marks)}'
+        f'<text class="trajectory-axis-label" x="{left + plot_width / 2:.1f}" y="{height - 3:.1f}" '
+        f'text-anchor="middle">Verifier call</text>'
+        f'<text class="trajectory-axis-label" x="15" y="{top + plot_height / 2:.1f}" '
+        f'text-anchor="middle" transform="rotate(-90 15 {top + plot_height / 2:.1f})">'
+        f'{escape(metric_name)}{escape(" / log" if axis_type == "log" else "")}</text>'
+        "</svg>"
+        f'<div class="trajectory-legend">{"".join(legend)}</div>'
+        "</div>"
+    )
 
 
 def _render_search_trajectory(payload: dict[str, Any]) -> str:
@@ -2073,7 +2402,11 @@ def _render_search_trajectory(payload: dict[str, Any]) -> str:
     )
     evaluations = int(payload.get("evaluations") or 0)
     passing = int(payload.get("passing_evaluations") or 0)
-    failed = int(payload.get("failed_evaluations") or 0)
+    ineligible = int(
+        payload.get("ineligible_evaluations")
+        if payload.get("ineligible_evaluations") is not None
+        else evaluations - passing
+    )
     trajectories = len(payload.get("trajectories") or [])
     axis_type = str((payload.get("score_axis") or {}).get("type") or "linear")
     metric_name = str(payload.get("metric_name") or "score")
@@ -2084,10 +2417,10 @@ def _render_search_trajectory(payload: dict[str, Any]) -> str:
     return (
         '<div class="trajectory-shell">'
         '<div class="trajectory-head"><h3>Complete Search Trajectory</h3>'
-        f'<span>{evaluations} calls / {trajectories} loops · {passing} scored / {failed} failed · '
+        f'<span>{evaluations} calls / {trajectories} loops · {passing} scored / {ineligible} not eligible · '
         f'{axis_type} score axis</span></div>'
         f'<div class="trajectory-plot" role="img" aria-label="{escape(aria_label, quote=True)}" '
-        f'data-search-trajectory="{encoded}"></div></div>'
+        f'data-search-trajectory="{encoded}">{_render_trajectory_fallback(payload)}</div></div>'
     )
 
 
@@ -2113,10 +2446,17 @@ def _render_metric_toolbar(performance: dict[str, Any], default_metric: str) -> 
         ("cost-per-minute", "Cost/min"),
         ("verifier-density", "Verifier/min"),
     )
-    buttons = "".join(
-        f'<button type="button" data-metric-mode="{key}" aria-pressed="{str(key == default_metric.replace("_", "-")).lower()}">{label}</button>'
-        for key, label in options
-    )
+    buttons = []
+    for key, label in options:
+        disabled = key == "score-gain" and score_baseline is None
+        disabled_attributes = (
+            ' disabled title="Baseline was not observed"' if disabled else ""
+        )
+        buttons.append(
+            f'<button type="button" data-metric-mode="{key}" '
+            f'aria-pressed="{str(key == default_metric.replace("_", "-")).lower()}"'
+            f'{disabled_attributes}>{label}</button>'
+        )
     return (
         '<div class="metric-lens-toolbar no-print">'
         '<div class="metric-scale" aria-label="Selected metric range">'
@@ -2124,7 +2464,7 @@ def _render_metric_toolbar(performance: dict[str, Any], default_metric: str) -> 
         '<span class="metric-scale-bar" aria-hidden="true"><i></i><i></i><i></i><i></i></span>'
         f'<span data-metric-high>{escape(high)}</span>'
         '</div>'
-        f'<div class="metric-control" role="group" aria-label="Worker session color metric">{buttons}</div>'
+        f'<div class="metric-control" role="group" aria-label="Worker session color metric">{"".join(buttons)}</div>'
         '</div>'
     )
 
@@ -2157,11 +2497,14 @@ def _render_timeline(
     score_gain_has_baseline = (
         _finite_float((performance.get("score") or {}).get("baseline")) is not None
     )
-    default_metric = "score_gain" if (
-        "score_gain" in metric_ranges or "score_raw" in metric_ranges
-    ) else (
-        "tokens_per_minute" if "tokens_per_minute" in metric_ranges else next(iter(metric_ranges), "status")
-    )
+    if score_gain_has_baseline and "score_gain" in metric_ranges:
+        default_metric = "score_gain"
+    elif "score_raw" in metric_ranges:
+        default_metric = "score_raw"
+    elif "tokens_per_minute" in metric_ranges:
+        default_metric = "tokens_per_minute"
+    else:
+        default_metric = next(iter(metric_ranges), "status")
     tracks: list[tuple[str, str, list[dict[str, Any]]]] = [
         ("Main Agent", "main", main_events),
     ]
@@ -2181,6 +2524,9 @@ def _render_timeline(
     worker_track_index = 0
     for label, lane_class, track_events in tracks:
         marks = []
+        point_slot_last_left: list[float] = []
+        point_gap_percent = 1_400.0 / max(timeline_width - 190, 1)
+        track_height = 48
         if lane_class == "worker":
             for idle in idle_intervals:
                 left, width = _timeline_position(idle, start_epoch, float(duration))
@@ -2194,7 +2540,11 @@ def _render_timeline(
                     f'title="No active worker sessions for {escape(_duration(idle.get("duration_seconds")), quote=True)}">'
                     f'{idle_label}</span>'
                 )
-        for event in track_events:
+        ordered_track_events = sorted(
+            track_events,
+            key=lambda item: _epoch(item.get("start_at")) or start_epoch,
+        )
+        for event in ordered_track_events:
             left, width = _timeline_position(event, start_epoch, float(duration))
             point = event.get("end_at") is None
             kind = event.get("kind")
@@ -2209,6 +2559,22 @@ def _render_timeline(
             if event.get("inferred_end"):
                 tooltip += " (end inferred)"
             style = f"left:{left:.3f}%;width:{width:.3f}%;"
+            if point:
+                slot = next(
+                    (
+                        index
+                        for index, last_left in enumerate(point_slot_last_left)
+                        if left - last_left >= point_gap_percent
+                    ),
+                    len(point_slot_last_left),
+                )
+                if slot == len(point_slot_last_left):
+                    point_slot_last_left.append(left)
+                else:
+                    point_slot_last_left[slot] = left
+                point_top = 4 + slot * 12
+                track_height = max(track_height, point_top + 14)
+                style += f"top:{point_top}px;"
             event_attributes = ""
             label_html = "" if point else escape(str(event.get("label") or ""))
             if kind == "worker_session":
@@ -2295,7 +2661,7 @@ def _render_timeline(
         rows.append(
             f'<div class="{row_class}">'
             f'<div class="timeline-label">{label_html}</div>'
-            f'<div class="timeline-track">{"".join(marks)}</div>'
+            f'<div class="timeline-track" style="min-height:{track_height}px">{"".join(marks)}</div>'
             "</div>"
         )
     end_epoch = start_epoch + float(duration)
@@ -2385,6 +2751,19 @@ def _render_sessions(task: dict[str, Any]) -> str:
         dispatch_label = "{} / {}".format(
             session.get("dispatch_index"), session.get("dispatch_count")
         )
+        context_tokens = _finite_float(session.get("context_tokens"))
+        context_window = _finite_float(session.get("context_window"))
+        context_percent = _finite_float(session.get("context_percent"))
+        context_text = None
+        if context_tokens is not None:
+            context_text = _number(context_tokens)
+            if context_window is not None:
+                context_text += f" / {_number(context_window)}"
+        elif context_window is not None:
+            context_text = f"window {_number(context_window)}"
+        if context_percent is not None:
+            percent_text = _percentage_points(context_percent)
+            context_text = f"{context_text} ({percent_text})" if context_text else percent_text
         rows.append(
             "<tr>"
             f'<td class="mono"><strong>{_html(session.get("agent_session_id"))}</strong></td>'
@@ -2397,15 +2776,124 @@ def _render_sessions(task: dict[str, Any]) -> str:
             f'<td class="mono">{_html(_duration(session.get("duration_seconds")))}</td>'
             f'<td class="mono">{_html(_number(session.get("processed_tokens")))}</td>'
             f'<td class="mono">{_html(_cost(session.get("cost_usd")))}</td>'
+            f'<td class="mono">{_html(context_text)}</td>'
             f'<td class="mono">{_html(session.get("verifier_runs"))}</td>'
+            f'<td>{_html(session.get("observability_source"))}</td>'
             "</tr>"
         )
-    return (
+    table = (
         '<div class="table-scroll"><table><thead><tr>'
         "<th>Session</th><th>Dispatch</th><th>Candidate</th><th>Host</th><th>Provider</th><th>Model</th>"
-        "<th>Terminal state</th><th>Duration</th><th>Processed tokens</th><th>Known cost</th><th>Verifier runs</th>"
+        "<th>Terminal state</th><th>Duration</th><th>Processed tokens</th><th>Known cost</th><th>Context</th>"
+        "<th>Verifier runs</th><th>Source</th>"
         f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
     )
+    return table + _render_session_observability(sessions)
+
+
+def _observation_text(value: Any) -> str:
+    if isinstance(value, dict | list):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return _text(value)
+
+
+def _render_observability_group(
+    title: str,
+    values: dict[str, Any],
+    formatters: dict[str, Any] | None = None,
+) -> str:
+    resolved_formatters = {key: _observation_text for key in values}
+    resolved_formatters.update(formatters or {})
+    return (
+        '<section class="observability-group">'
+        f'<h4>{escape(title)}</h4>'
+        f'{_stat_rows(values, resolved_formatters)}'
+        "</section>"
+    )
+
+
+def _render_session_observability(sessions: list[dict[str, Any]]) -> str:
+    rendered: list[str] = []
+    seen: set[str] = set()
+    for session in sessions:
+        session_id = str(session.get("agent_session_id") or "unknown")
+        if session_id in seen:
+            continue
+        seen.add(session_id)
+        observation = session.get("observability")
+        if not isinstance(observation, dict):
+            continue
+        identity = observation.get("identity")
+        identity = identity if isinstance(identity, dict) else {}
+        execution = observation.get("execution")
+        execution = execution if isinstance(execution, dict) else {}
+        usage = observation.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        context = observation.get("context")
+        context = context if isinstance(context, dict) else {}
+        artifacts = observation.get("artifacts")
+        artifacts = artifacts if isinstance(artifacts, dict) else {}
+        handoff = observation.get("handoff")
+        handoff = handoff if isinstance(handoff, dict) else {}
+        errors = observation.get("errors")
+        errors = errors if isinstance(errors, list) else []
+        identity_values = {
+            "agent_session_id": session_id,
+            "run_id": observation.get("run_id"),
+            "candidate_id": observation.get("candidate_id") or session.get("candidate_id"),
+            "host": observation.get("host") or session.get("host"),
+            **identity,
+        }
+        evidence_values = {
+            "schema_version": observation.get("schema_version"),
+            "source": observation.get("source"),
+            **{f"artifact_{key}": value for key, value in artifacts.items()},
+            **{f"handoff_{key}": value for key, value in handoff.items()},
+            "errors": errors or None,
+        }
+        execution_formatters = {
+            "duration_seconds": _duration,
+            "wall_duration_seconds": _duration,
+            "time_to_first_token_ms": _milliseconds,
+        }
+        usage_formatters = {
+            key: _number
+            for key in usage
+            if key.endswith("_tokens")
+            or key in {"assistant_messages", "tool_calls", "tool_results"}
+        }
+        usage_formatters["cost_usd"] = _cost
+        context_formatters = {
+            "tokens": _number,
+            "context_window": _number,
+            "percent": _percentage_points,
+        }
+        summary_suffix = " / ".join(
+            value
+            for value in (
+                str(observation.get("source") or "source unavailable"),
+                str(execution.get("model") or "model unavailable"),
+                f"{len(errors)} warning(s)" if errors else "",
+            )
+            if value
+        )
+        rendered.append(
+            '<details class="summary-block session-observability">'
+            '<summary class="observability-summary">'
+            f'<span class="mono">{escape(session_id)}</span>'
+            f'<span>{escape(summary_suffix)}</span>'
+            "</summary>"
+            '<div class="observability-grid">'
+            f'{_render_observability_group("Identity", identity_values)}'
+            f'{_render_observability_group("Execution", execution, execution_formatters)}'
+            f'{_render_observability_group("Usage", usage, usage_formatters)}'
+            f'{_render_observability_group("Context", context, context_formatters)}'
+            f'{_render_observability_group("Evidence", evidence_values)}'
+            "</div></details>"
+        )
+    if not rendered:
+        return ""
+    return '<div class="session-observability-list">' + "".join(rendered) + "</div>"
 
 
 def _render_statistics(task: dict[str, Any]) -> str:
@@ -2597,11 +3085,7 @@ def render_html_report(data: dict[str, Any]) -> str:
         _render_task(
             task,
             index,
-            trajectory_payload=(
-                trajectory_payloads.get(str(task.get("run_id")))
-                if plotly_javascript
-                else None
-            ),
+            trajectory_payload=trajectory_payloads.get(str(task.get("run_id"))),
         )
         for index, task in enumerate(tasks, start=1)
     )

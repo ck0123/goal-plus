@@ -191,16 +191,20 @@ Goal Plus state is summarized at the top rather than repeated in a separate
 lifecycle panel. Each Search timeline is assembled from run creation,
 worker-session observability, verifier iterations, and promotion evidence.
 Worker bars use observed host start/end timestamps. Configured maximum or
-minimum budgets are not rendered as actual duration. The file has inline
-CSS/JavaScript only and is readable without a web server. When the optional
-`report` extra is installed, the generator embeds Plotly.js in the file and
-replaces the compact best-score strip with a complete per-candidate trajectory
-over verifier-call order plus a global best-so-far trace. The generator computes
-the score scale and call density before rendering: large positive score ranges use
-a logarithmic axis, the complete run stays on one call axis with adaptive tick and
-marker density, and failed verifier attempts are marked separately without entering
-the score scale or best-so-far trace. Without Plotly, the existing inline SVG score
-strip remains the deterministic fallback. Search-space
+minimum budgets are not rendered as actual duration. Each worker session also
+retains its complete normalized identity, execution, usage, context, artifact,
+handoff, and collection-error evidence in an expandable audit view. The file
+has inline CSS/JavaScript only and is readable without a web server. Every
+report contains a deterministic inline SVG with the complete per-candidate
+trajectory over verifier-call order plus a global best-so-far trace. When the
+optional `report` extra is installed, the generator embeds Plotly.js and
+upgrades that SVG in place; a missing library or Plotly render failure leaves
+the SVG intact. The generator computes the score scale and call density before
+rendering: large positive score ranges use a logarithmic axis, the complete run
+stays on one call axis with adaptive tick and marker density, and only verifier
+attempts with `process_passed=true` enter score scales, candidate/session bests,
+or best-so-far traces. Failed or unknown attempts remain visible as ineligible
+markers. Search-space
 contour and surface plots are intentionally omitted until durable Search state
 contains explicit coordinates or embeddings for those axes. `report.md` remains
 the stable text artifact. A recorded Goal Plus Search result reserves both

@@ -44,6 +44,9 @@ SPACE_REVIEW_COVERAGE_TEXT_CHARS = 1_200
 SPACE_REVIEW_COVERAGE_REF_LIMIT = 4
 SPACE_REVIEW_SOCKET_ENV = "GOAL_PLUS_SPACE_REVIEW_SOCKET"
 MAX_REVIEW_PACKET_BYTES = 8 * 1024 * 1024
+CODEX_REVIEW_MAX_ATTEMPTS = 5
+CODEX_REVIEW_RETRY_BACKOFF_SECONDS = (2, 4, 8, 16)
+CODEX_REVIEW_CAPACITY_MESSAGES = ("selected model is at capacity",)
 SPACE_VIEWS = (
     "artifact",
     "configuration",
@@ -775,6 +778,11 @@ def _usage_from_jsonl(text: str) -> dict[str, int | float]:
     return usage
 
 
+def _is_codex_capacity_error(stdout: str, stderr: str) -> bool:
+    response = f"{stderr}\n{stdout}".casefold()
+    return any(message in response for message in CODEX_REVIEW_CAPACITY_MESSAGES)
+
+
 class CodexSpaceReviewer:
     def __init__(
         self,
@@ -832,6 +840,7 @@ class CodexSpaceReviewer:
             raise SpaceReviewerError("codex executable not found")
 
         started = time.monotonic()
+        deadline = started + config.reviewer_timeout_seconds
         with tempfile.TemporaryDirectory(
             prefix="goal-plus-space-review-",
             dir=self.scratch_root,
@@ -873,45 +882,72 @@ class CodexSpaceReviewer:
             }
             if self.codex_home is not None:
                 environment["CODEX_HOME"] = str(self.codex_home)
-            process = subprocess.Popen(
-                command,
-                cwd=directory,
-                env=environment,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
-            try:
-                stdout, stderr = process.communicate(
-                    prompt,
-                    timeout=config.reviewer_timeout_seconds,
+            total_usage: dict[str, int | float] = {}
+            for attempt in range(1, CODEX_REVIEW_MAX_ATTEMPTS + 1):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SpaceReviewerError(
+                        f"reviewer timed out after {config.reviewer_timeout_seconds}s "
+                        f"during {attempt - 1} capacity retries"
+                    )
+                output_path.unlink(missing_ok=True)
+                process = subprocess.Popen(
+                    command,
+                    cwd=directory,
+                    env=environment,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
                 )
-            except subprocess.TimeoutExpired as exc:
-                if os.name == "posix":
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:  # pragma: no cover - Windows fallback
-                    process.kill()
-                stdout, stderr = process.communicate()
-                raise SpaceReviewerError(
-                    f"reviewer timed out after {config.reviewer_timeout_seconds}s; "
-                    f"stderr={_tail(stderr)!r}"
-                ) from exc
-            latency_ms = int(round((time.monotonic() - started) * 1000))
-            if process.returncode != 0:
-                raise SpaceReviewerError(
-                    f"reviewer exited {process.returncode}; stderr={_tail(stderr)!r}; "
-                    f"stdout={_tail(stdout)!r}"
-                )
-            try:
-                raw_result = output_path.read_text(encoding="utf-8")
-                result = output_model.model_validate_json(raw_result)
-            except (OSError, ValueError) as exc:
-                raise SpaceReviewerError(
-                    f"invalid reviewer output: {type(exc).__name__}: {exc}"
-                ) from exc
-            return result, latency_ms, _usage_from_jsonl(stdout)
+                try:
+                    stdout, stderr = process.communicate(prompt, timeout=remaining)
+                except subprocess.TimeoutExpired as exc:
+                    if os.name == "posix":
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:  # pragma: no cover - Windows fallback
+                        process.kill()
+                    stdout, stderr = process.communicate()
+                    raise SpaceReviewerError(
+                        f"reviewer timed out after "
+                        f"{config.reviewer_timeout_seconds}s; "
+                        f"stderr={_tail(stderr)!r}"
+                    ) from exc
+
+                for key, value in _usage_from_jsonl(stdout).items():
+                    total_usage[key] = total_usage.get(key, 0) + value
+                if process.returncode == 0:
+                    latency_ms = int(round((time.monotonic() - started) * 1000))
+                    try:
+                        raw_result = output_path.read_text(encoding="utf-8")
+                        result = output_model.model_validate_json(raw_result)
+                    except (OSError, ValueError) as exc:
+                        raise SpaceReviewerError(
+                            f"invalid reviewer output: {type(exc).__name__}: {exc}"
+                        ) from exc
+                    return result, latency_ms, total_usage
+
+                capacity_error = _is_codex_capacity_error(stdout, stderr)
+                if not capacity_error or attempt == CODEX_REVIEW_MAX_ATTEMPTS:
+                    attempts = (
+                        f" after {attempt} capacity attempts" if capacity_error else ""
+                    )
+                    raise SpaceReviewerError(
+                        f"reviewer exited {process.returncode}{attempts}; "
+                        f"stderr={_tail(stderr)!r}; stdout={_tail(stdout)!r}"
+                    )
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SpaceReviewerError(
+                        f"reviewer timed out after {config.reviewer_timeout_seconds}s "
+                        f"during {attempt} capacity retries"
+                    )
+                backoff = CODEX_REVIEW_RETRY_BACKOFF_SECONDS[attempt - 1]
+                time.sleep(min(backoff, remaining))
+
+            raise AssertionError("unreachable")
 
     def _isolated_command(
         self,

@@ -9,8 +9,12 @@ from goal_plus.models import GoalPlusRecord, IterationRecord, SearchSpec
 from goal_plus.reporting import (
     _build_timeline,
     _epoch,
+    _metric_readout,
+    _render_search_trajectory,
+    _render_sessions,
     _render_timeline,
     _search_trajectory_payload,
+    _task_details,
     build_html_report_data,
     render_html_report,
 )
@@ -92,7 +96,8 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     assert "data-search-trajectory=" in html
     assert "window.Plotly={newPlot" in html
     assert "payload.call_window" in html
-    assert "Failed verifier · not scored" in html
+    assert "node.innerHTML = '';\n      var rendering = window.Plotly.newPlot" in html
+    assert "Not eligible · not scored" in html
     assert "linear score axis" in html
     assert 'class="score-step"' not in html
     assert "&lt;script&gt;alert(&#x27;unsafe&#x27;)&lt;/script&gt;" in html
@@ -101,8 +106,10 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
 
     monkeypatch.setattr("goal_plus.reporting._load_plotly_javascript", lambda: None)
     fallback_html = render_html_report(build_html_report_data(root, second_run))
-    assert "data-search-trajectory=" not in fallback_html
-    assert 'class="score-step"' in fallback_html
+    assert "data-search-trajectory=" in fallback_html
+    assert "data-trajectory-fallback" in fallback_html
+    assert "Complete Search Trajectory" in fallback_html
+    assert 'class="score-step"' not in fallback_html
 
 
 def test_search_trajectory_payload_keeps_parallel_candidate_loops() -> None:
@@ -121,25 +128,42 @@ def test_search_trajectory_payload_keeps_parallel_candidate_loops() -> None:
                 "candidate_id": "c001",
                 "selected": False,
                 "iterations": [
-                    {"iteration": 1, "score": 1.0, "created_at": "2026-01-01T00:00:01Z"},
-                    {"iteration": 2, "score": 2.0, "created_at": "2026-01-01T00:00:03Z"},
+                    {
+                        "iteration": 1,
+                        "score": 1.0,
+                        "process_passed": True,
+                        "created_at": "2026-01-01T00:00:01Z",
+                    },
+                    {
+                        "iteration": 2,
+                        "score": 2.0,
+                        "process_passed": True,
+                        "created_at": "2026-01-01T00:00:03Z",
+                    },
                 ],
             },
             {
                 "candidate_id": "c002",
                 "selected": True,
                 "iterations": [
-                    {"iteration": 1, "score": 0.5, "created_at": "2026-01-01T00:00:02Z"},
+                    {
+                        "iteration": 1,
+                        "score": 0.5,
+                        "process_passed": True,
+                        "created_at": "2026-01-01T00:00:02Z",
+                    },
                     {
                         "iteration": 2,
                         "agent_session_id": "agent_002",
                         "score": 3.0,
+                        "process_passed": True,
                         "created_at": "2026-01-01T00:00:04Z",
                     },
                     {
                         "iteration": 3,
                         "agent_session_id": "agent_002",
                         "score": 3.0,
+                        "process_passed": True,
                         "created_at": "2026-01-01T00:00:05Z",
                     },
                 ],
@@ -152,7 +176,9 @@ def test_search_trajectory_payload_keeps_parallel_candidate_loops() -> None:
     assert payload is not None
     assert payload["evaluations"] == 5
     assert payload["passing_evaluations"] == 5
+    assert payload["ineligible_evaluations"] == 0
     assert payload["failed_evaluations"] == 0
+    assert payload["unknown_evaluations"] == 0
     assert payload["call_window"] == {
         "start": 0,
         "end": 5,
@@ -206,7 +232,9 @@ def test_search_trajectory_payload_adapts_axes_and_excludes_failed_scores() -> N
     assert payload is not None
     assert payload["evaluations"] == 130
     assert payload["passing_evaluations"] == 129
+    assert payload["ineligible_evaluations"] == 1
     assert payload["failed_evaluations"] == 1
+    assert payload["unknown_evaluations"] == 0
     assert payload["call_window"] == {
         "start": 0,
         "end": 130,
@@ -223,6 +251,203 @@ def test_search_trajectory_payload_adapts_axes_and_excludes_failed_scores() -> N
         "call": 130,
         "score": 1000.0 / 131,
     }
+    fallback = _render_search_trajectory(payload)
+    assert "data-trajectory-fallback" in fallback
+    assert 'class="trajectory-candidate trajectory-series-0"' in fallback
+    assert 'class="trajectory-global"' in fallback
+    assert 'class="trajectory-baseline"' in fallback
+    assert 'class="trajectory-failure"' in fallback
+
+
+def test_failed_and_unknown_iterations_never_enter_report_best_paths(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    root = tmp_path / ".search"
+    search = FileSearchRuntime(root)
+    frozen = search.freeze_spec(
+        spec_for(project, max_candidates=1, direction="minimize"),
+        [project / "evaluator.py"],
+    )
+    run_id = search.create_run(frozen.frozen_spec_id)
+    plan = search.plan_next(run_id, requested_k=1)
+    candidate = search.start_batch(run_id, plan.plan_id)[0]
+    record = search._load_candidate_record(run_id, candidate.candidate_id)
+    record.iterations = [
+        IterationRecord(
+            iteration=1,
+            agent_session_id="agent_score",
+            score=1.0,
+            process_passed=False,
+            failure_class="correctness",
+            created_at="2026-01-01T00:01:00Z",
+        ),
+        IterationRecord(
+            iteration=2,
+            agent_session_id="agent_score",
+            score=90.0,
+            process_passed=True,
+            created_at="2026-01-01T00:02:00Z",
+        ),
+        IterationRecord(
+            iteration=3,
+            agent_session_id="agent_score",
+            score=0.5,
+            process_passed=None,
+            created_at="2026-01-01T00:03:00Z",
+        ),
+    ]
+    search._write_candidate_record(run_id, record)
+    task = _task_details(
+        root,
+        {
+            "run_id": run_id,
+            "statistics": {
+                "scores": {
+                    "metric_name": "combined_score",
+                    "direction": "minimize",
+                    "baseline": 100.0,
+                    "selected": None,
+                }
+            },
+        },
+        run_id,
+    )
+
+    assert task["candidates"][0]["best_iteration"] == 2
+    assert task["candidates"][0]["best_score"] == 90.0
+
+    task["sessions"] = [
+        {
+            "agent_session_id": "agent_score",
+            "candidate_id": candidate.candidate_id,
+            "started_at": "2026-01-01T00:00:30Z",
+            "ended_at": "2026-01-01T00:03:30Z",
+            "duration_seconds": 180.0,
+            "terminal_state": "completed",
+            "processed_tokens": 100,
+            "verifier_runs": 3,
+        }
+    ]
+    _build_timeline(None, [], [task])
+    [worker] = [
+        event
+        for event in task["timeline"]["events"]
+        if event["kind"] == "worker_session"
+    ]
+    assert worker["score"] == 90.0
+    assert [
+        point["score"]
+        for point in task["timeline"]["performance"]["score"]["points"]
+    ] == [90.0]
+
+    payload = _search_trajectory_payload(task)
+    assert payload is not None
+    assert payload["passing_evaluations"] == 1
+    assert payload["failed_evaluations"] == 1
+    assert payload["unknown_evaluations"] == 1
+    assert payload["trajectories"][0]["scores"] == [90.0]
+    assert payload["trajectories"][0]["failed_scores"] == [1.0, 0.5]
+    assert payload["global_best"] == {
+        "calls": [0, 1, 2, 3],
+        "scores": [100.0, 100.0, 90.0, 90.0],
+    }
+
+
+def test_session_observability_is_preserved_and_rendered_completely(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    root = tmp_path / ".search"
+    search = FileSearchRuntime(root)
+    frozen = search.freeze_spec(spec_for(project, max_candidates=1), [project / "evaluator.py"])
+    run_id = search.create_run(frozen.frozen_spec_id)
+    plan = search.plan_next(run_id, requested_k=1)
+    candidate = search.start_batch(run_id, plan.plan_id)[0]
+    session = search.start_agent_session(run_id, candidate.candidate_id)
+    observation = {
+        "schema_version": 2,
+        "agent_session_id": session.agent_session_id,
+        "run_id": run_id,
+        "candidate_id": candidate.candidate_id,
+        "host": "codex",
+        "source": "codex_session_jsonl",
+        "identity": {
+            "native_session_id": "native-thread-1",
+            "external_id": "external-1",
+            "task_name": "search_candidate_1",
+            "nickname": "worker-1",
+        },
+        "execution": {
+            "provider": "openai-codex",
+            "model": "gpt-test",
+            "reasoning_effort": "high",
+            "service_tier": "priority",
+            "started_at": "2026-01-01T00:00:00Z",
+            "ended_at": "2026-01-01T00:01:00Z",
+            "duration_seconds": 55.0,
+            "wall_duration_seconds": 60.0,
+            "time_to_first_token_ms": 250.0,
+            "turns_completed": 3,
+            "terminal_state": "completed",
+            "timed_out": False,
+            "runner_failed": False,
+            "exit_code": 0,
+        },
+        "usage": {
+            "scope": "session_total",
+            "input_tokens": 1000,
+            "cached_input_tokens": 600,
+            "cache_write_tokens": None,
+            "output_tokens": 200,
+            "reasoning_output_tokens": 50,
+            "total_tokens": 1200,
+            "processed_tokens": 1200,
+            "cost_usd": 0.25,
+            "assistant_messages": 4,
+            "tool_calls": 12,
+            "tool_results": 11,
+        },
+        "context": {
+            "tokens": 32000,
+            "context_window": 128000,
+            "percent": 25.0,
+            "source": "codex_last_token_usage",
+        },
+        "artifacts": {
+            "event_log": None,
+            "text_log": None,
+            "session_file": "/tmp/native-session.jsonl",
+        },
+        "handoff": {
+            "present": True,
+            "source_path": ".tmp/handoff.json",
+            "error": None,
+        },
+        "errors": ["collector <warning>"],
+    }
+    monkeypatch.setattr("goal_plus.reporting._collect_observability", lambda _session: observation)
+
+    task = _task_details(root, {"run_id": run_id}, run_id)
+    [rendered_session] = task["sessions"]
+    assert rendered_session["observability"] == observation
+    assert rendered_session["identity"]["native_session_id"] == "native-thread-1"
+    assert rendered_session["execution"]["reasoning_effort"] == "high"
+    assert rendered_session["usage"]["tool_results"] == 11
+    assert rendered_session["context"]["context_window"] == 128000
+    assert rendered_session["artifacts"]["session_file"] == "/tmp/native-session.jsonl"
+    assert rendered_session["handoff"]["present"] is True
+
+    html = _render_sessions(task)
+    assert "native-thread-1" in html
+    assert "Reasoning Effort" in html
+    assert "128,000" in html
+    assert "12" in html
+    assert "/tmp/native-session.jsonl" in html
+    assert ".tmp/handoff.json" in html
+    assert "collector &lt;warning&gt;" in html
+    assert "collector <warning>" not in html
 
 
 def test_html_report_data_keeps_search_tasks_and_rounds_separate(tmp_path: Path) -> None:
@@ -395,7 +620,9 @@ def test_pi_native_session_resume_renders_distinct_process_dispatches(
     }
     html = _render_timeline(task["timeline"], title="Pi dispatch score gain")
     assert "No baseline" in html
+    assert 'data-metric-mode="score-raw"' in html
     assert "Score gain</button><button" in html
+    assert 'disabled title="Baseline was not observed">Score gain</button>' in html
     assert ">Score raw</button>" in html
     assert 'data-score-gain-baseline="false"' in html
     assert "data-metric-score-gain=" not in html
@@ -502,12 +729,14 @@ def test_metric_lens_combines_score_progression_and_session_efficiency() -> None
                             "iteration": 1,
                             "agent_session_id": "agent_metric_001",
                             "score": 0.6,
+                            "process_passed": True,
                             "created_at": "2026-01-01T00:01:30Z",
                         },
                         {
                             "iteration": 2,
                             "agent_session_id": "agent_metric_002",
                             "score": 0.8,
+                            "process_passed": True,
                             "created_at": "2026-01-01T00:10:30Z",
                         },
                     ],
@@ -597,5 +826,36 @@ def test_long_dense_timeline_renders_horizontal_and_vertical_scroll_surfaces() -
     )
 
     assert 'class="timeline-scroll" tabindex="0"' in html
-    assert 'style="--timeline-width:9790px"' in html
+    assert 'style="--timeline-width:3550px"' in html
     assert 'class="timeline-rows" data-track-count="21"' in html
+
+
+def test_timeline_formats_rounded_integer_metrics_without_dropping_zeroes() -> None:
+    assert _metric_readout("tokens_per_minute", 167489.741612991) == "167,490/min"
+
+
+def test_timeline_stacks_nearby_point_events_instead_of_overlapping() -> None:
+    html = _render_timeline(
+        {
+            "start_at": "2026-01-01T00:00:00Z",
+            "end_at": "2026-01-01T01:00:00Z",
+            "duration_seconds": 3600.0,
+            "events": [
+                {
+                    "lane": "verifier",
+                    "kind": "parent_verifier",
+                    "label": f"Parent verifier #{index}",
+                    "start_at": f"2026-01-01T00:59:{50 + index:02d}Z",
+                    "end_at": None,
+                }
+                for index in range(4)
+            ],
+        },
+        title="Point Collision Timeline",
+    )
+
+    assert "left:99.722%;width:0.800%;top:4px" in html
+    assert "left:99.750%;width:0.800%;top:16px" in html
+    assert "left:99.778%;width:0.800%;top:28px" in html
+    assert "left:99.806%;width:0.800%;top:40px" in html
+    assert 'style="min-height:54px"' in html

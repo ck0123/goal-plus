@@ -4,7 +4,8 @@ import asyncio
 from pathlib import Path
 
 from goal_plus.goal_plus import FileGoalPlusRuntime
-from goal_plus.monitor import goal_plus_monitor_snapshot
+from goal_plus.models import GoalPlusLinkedSearch
+from goal_plus.monitor import _metric_context, goal_plus_monitor_snapshot
 from goal_plus.pi_tool import call_pi_tool
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.server import create_mcp
@@ -26,6 +27,54 @@ def _pi_rpc_spec(project: Path):
         },
         max_candidates=2,
     )
+
+
+def test_metric_context_parses_structured_and_legacy_baselines(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".search")
+    frozen = runtime.freeze_spec(_pi_rpc_spec(project), [project / "evaluator.py"])
+    task = GoalPlusLinkedSearch(goal_revision=3)
+    baseline_payloads = [
+        {"combined_score": 147734},
+        {"combined_score": "147,734"},
+        {"combined_score": "147734 combined_score"},
+        {"metrics": {"combined_score": 147734.0}},
+        {
+            "result": {
+                "metric_name": "combined_score",
+                "value": "147,734 combined_score",
+            }
+        },
+        {"score": "147734"},
+    ]
+
+    for baseline_payload in baseline_payloads:
+        baseline, target = _metric_context(
+            frozen,
+            task,
+            {
+                3: {
+                    "baseline": baseline_payload,
+                    "metric": {"target": "100,000"},
+                }
+            },
+        )
+        assert baseline == 147734.0
+        assert target == 100000.0
+
+    baseline, _ = _metric_context(
+        frozen,
+        task,
+        {
+            3: {
+                "baseline": {
+                    "command": "python bench.py --timeout 147734",
+                    "notes": "measured about 147734 on one run",
+                }
+            }
+        },
+    )
+    assert baseline is None
 
 
 def test_goal_plus_monitor_snapshot_summarizes_run_subagents_and_pi_metrics(

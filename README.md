@@ -19,7 +19,7 @@ Install from Git or an existing checkout:
 python -m pip install --user "git+https://github.com/ck0123/goal-plus.git"
 # or
 python -m pip install -e ".[dev]"
-# add the optional self-contained Plotly trajectory to HTML reports
+# add the optional interactive Plotly enhancement to HTML report trajectories
 python -m pip install -e ".[dev,report]"
 ```
 

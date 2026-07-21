@@ -8,8 +8,10 @@ import threading
 
 import pytest
 
+import goal_plus.space_agent as space_agent_module
 from goal_plus.runtime import FileSearchRuntime
 from goal_plus.space_agent import (
+    CodexSpaceReviewer,
     DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL,
     FileSearchSpaceRuntime,
     InterventionPlanProposal,
@@ -19,7 +21,9 @@ from goal_plus.space_agent import (
     SpaceOverlap,
     SpaceRealizedEvidence,
     SpaceReviewDecision,
+    SpaceReviewerError,
     SpaceSchemaUpdate,
+    SearchSpaceConfig,
     candidate_pre_tool_block_reason,
 )
 from tests._runtime_helpers import make_project, spec_with_host
@@ -193,6 +197,134 @@ def rejected_review(
         region_key=region_key,
         point_key=point_key,
     )
+
+
+def reviewer_config(*, timeout_seconds: int = 30) -> SearchSpaceConfig:
+    return SearchSpaceConfig(
+        experiment_id="reviewer-retry-test",
+        run_id="run_reviewer_retry_test",
+        mode="enforce",
+        schema_path="space-schema.json",
+        schema_sha256="test-schema-sha256",
+        space_schema=schema(),
+        reviewer_model="gpt-5.6-terra",
+        reviewer_reasoning_effort="medium",
+        reviewer_timeout_seconds=timeout_seconds,
+        created_at="2026-07-21T00:00:00Z",
+    )
+
+
+def install_fake_codex_processes(
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: list[tuple[int, str, str]],
+    *,
+    result_json: str,
+) -> tuple[list[float], list[float]]:
+    communicate_timeouts: list[float] = []
+    sleeps: list[float] = []
+    pending = iter(outcomes)
+
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self, command: list[str], outcome: tuple[int, str, str]) -> None:
+            self.returncode, self.stdout, self.stderr = outcome
+            self.output_path = Path(command[command.index("-o") + 1])
+
+        def communicate(
+            self,
+            _prompt: str | None = None,
+            *,
+            timeout: float | None = None,
+        ) -> tuple[str, str]:
+            assert timeout is not None
+            communicate_timeouts.append(timeout)
+            if self.returncode == 0:
+                self.output_path.write_text(result_json, encoding="utf-8")
+            else:
+                self.output_path.write_text("stale failed output", encoding="utf-8")
+            return self.stdout, self.stderr
+
+    def fake_popen(command: list[str], **_kwargs) -> FakeProcess:
+        return FakeProcess(command, next(pending))
+
+    monkeypatch.setattr(space_agent_module.shutil, "which", lambda _name: "/codex")
+    monkeypatch.setattr(space_agent_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(space_agent_module.time, "sleep", sleeps.append)
+    return communicate_timeouts, sleeps
+
+
+def test_codex_reviewer_retries_capacity_errors_then_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capacity = "Selected model is at capacity. Please try a different model."
+    timeouts, sleeps = install_fake_codex_processes(
+        monkeypatch,
+        [
+            (1, '{"usage":{"input_tokens":1}}', capacity),
+            (1, '{"usage":{"input_tokens":2}}', capacity),
+            (0, '{"usage":{"input_tokens":3}}', ""),
+        ],
+        result_json=accepted_review().model_dump_json(),
+    )
+
+    result, _latency_ms, usage = CodexSpaceReviewer(
+        scratch_root=tmp_path
+    )._execute(
+        reviewer_config(),
+        prompt="classify this plan",
+        output_model=SpaceReviewDecision,
+    )
+
+    assert result.decision == "accept"
+    assert usage == {"input_tokens": 6}
+    assert sleeps == [2, 4]
+    assert len(timeouts) == 3
+    assert timeouts[0] >= timeouts[1] >= timeouts[2]
+
+
+def test_codex_reviewer_capacity_retries_are_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capacity = "Selected model is at capacity. Please try a different model."
+    timeouts, sleeps = install_fake_codex_processes(
+        monkeypatch,
+        [(1, "", capacity)] * 5,
+        result_json=accepted_review().model_dump_json(),
+    )
+
+    with pytest.raises(SpaceReviewerError, match="after 5 capacity attempts"):
+        CodexSpaceReviewer(scratch_root=tmp_path)._execute(
+            reviewer_config(),
+            prompt="classify this plan",
+            output_model=SpaceReviewDecision,
+        )
+
+    assert len(timeouts) == 5
+    assert sleeps == [2, 4, 8, 16]
+
+
+def test_codex_reviewer_does_not_retry_non_capacity_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeouts, sleeps = install_fake_codex_processes(
+        monkeypatch,
+        [(2, "", "authentication failed")],
+        result_json=accepted_review().model_dump_json(),
+    )
+
+    with pytest.raises(SpaceReviewerError, match="reviewer exited 2"):
+        CodexSpaceReviewer(scratch_root=tmp_path)._execute(
+            reviewer_config(),
+            prompt="classify this plan",
+            output_model=SpaceReviewDecision,
+        )
+
+    assert len(timeouts) == 1
+    assert sleeps == []
 
 
 class AcceptThenRejectReviewer:
