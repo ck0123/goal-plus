@@ -17,6 +17,7 @@ from goal_plus.space_agent import (
     InterventionPlanProposal,
     ReviewerExecution,
     SchemaReviewerExecution,
+    SpaceBaseEvidence,
     SpaceCoverageEntry,
     SpaceOverlap,
     SpaceRealizedEvidence,
@@ -382,6 +383,112 @@ class ConcurrentCollisionReviewer:
                 point_key="loop-schedule:factor-2",
             )
         return ReviewerExecution(result=decision, latency_ms=5, usage={})
+
+
+class ConditionalExperimentReviewer:
+    """Small packet-level oracle for conditional experiment identity tests."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.search_states: list[dict] = []
+
+    @staticmethod
+    def _components(*values: object) -> frozenset[str]:
+        text = json.dumps(values, sort_keys=True).casefold()
+        components: set[str] = set()
+        if "feature_a" in text or "feature a" in text:
+            components.add("a")
+        if "feature_b" in text or "feature b" in text:
+            components.add("b")
+        return frozenset(components)
+
+    @classmethod
+    def _signature(
+        cls,
+        plan_card: dict,
+        base_evidence: dict | None,
+    ) -> tuple[frozenset[str], str]:
+        components = cls._components(base_evidence, plan_card.get("intervention"))
+        expected = str(plan_card.get("expected_new_information") or "").casefold()
+        if "interaction" in expected:
+            question = "interaction:a+b"
+        elif "feature a" in expected:
+            question = "effect:a"
+        elif "feature b" in expected:
+            question = "effect:b"
+        else:
+            question = expected
+        return components, question
+
+    def _before_review(self, _proposal: InterventionPlanProposal) -> None:
+        return
+
+    def review(self, config, proposal, _covered):
+        runtime_state = json.loads(
+            json.dumps(config.space_schema["_runtime_search_state"])
+        )
+        with self.lock:
+            self.search_states.append(runtime_state)
+        self._before_review(proposal)
+
+        current = self._signature(
+            proposal.plan_card(),
+            proposal.base_evidence.model_dump(mode="json")
+            if proposal.base_evidence is not None
+            else None,
+        )
+        for event in runtime_state["tail_events"]:
+            if not event["coverage_eligible"]:
+                continue
+            if self._signature(event["proposal"], event["base_evidence"]) == current:
+                return ReviewerExecution(
+                    result=rejected_review(
+                        event["plan_id"],
+                        region_key="feature-composition",
+                        point_key=f"conditional:{sorted(current[0])}:{current[1]}",
+                    ),
+                    latency_ms=3,
+                    usage={},
+                )
+        for reservation in runtime_state["active_reservations"]:
+            if self._signature(
+                reservation["plan_card"], reservation["base_evidence"]
+            ) == current:
+                return ReviewerExecution(
+                    result=rejected_review(
+                        reservation["plan_id"],
+                        active=True,
+                        region_key="feature-composition",
+                        point_key=f"conditional:{sorted(current[0])}:{current[1]}",
+                    ),
+                    latency_ms=3,
+                    usage={},
+                )
+        return ReviewerExecution(
+            result=accepted_review(
+                region_key="feature-composition",
+                point_key=f"conditional:{sorted(current[0])}:{current[1]}",
+            ),
+            latency_ms=3,
+            usage={},
+        )
+
+
+class ConcurrentConditionalExperimentReviewer(ConditionalExperimentReviewer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.barrier = threading.Barrier(2)
+        self.interaction_calls = 0
+
+    def _before_review(self, proposal: InterventionPlanProposal) -> None:
+        expected = (proposal.expected_new_information or "").casefold()
+        if "interaction" not in expected:
+            return
+        with self.lock:
+            self.interaction_calls += 1
+            call = self.interaction_calls
+        if call <= 2:
+            self.barrier.wait(timeout=5)
 
 
 class SamePointReviewer:
@@ -949,6 +1056,345 @@ def test_parallel_equivalent_plans_create_exactly_one_reservation(
     assert len(status["active_reservations"]) == 1
     assert status["active_collision_reviews"] == 1
     assert reviewer.calls == 3
+
+
+def test_runtime_authors_base_evidence_and_ignores_candidate_spoofing(
+    tmp_path: Path,
+) -> None:
+    runtime, run_id, candidate_id, session_id, workspace = setup_runtime(tmp_path)
+    reviewer = ConsolidatingReviewer()
+    runtime.search_space.reviewer = reviewer  # type: ignore[assignment]
+    open_search_space(runtime, run_id, "enforce")
+
+    seed = runtime.propose_search_space_plan(
+        session_id,
+        InterventionPlanProposal(
+            intervention="add feature A",
+            scope="hot path on the clean base",
+            expected_new_information="whether feature A changes verifier behavior",
+        ),
+    )
+    (workspace / "initial_program.py").write_text(
+        "VALUE = 0\nFEATURE_A = True\n",
+        encoding="utf-8",
+    )
+    runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session_id,
+        intervention_plan_id=seed["plan_id"],
+    )
+
+    spoofed = InterventionPlanProposal(
+        intervention="add feature B",
+        scope="hot path with feature A already present",
+        expected_new_information="whether the feature A and B interaction helps",
+        base_git_head="candidate-supplied-head",
+        base_score=999.0,
+        base_evidence=SpaceBaseEvidence(
+            artifact_hash="candidate-supplied-artifact",
+            cumulative_delta_sha256="candidate-supplied-delta",
+            changed_files=["not-real.py"],
+            changed_symbols=["NOT_REAL"],
+            diff_excerpt="candidate supplied base",
+        ),
+    )
+    admission = runtime.propose_search_space_plan(session_id, spoofed)
+
+    persisted = persisted_space_plan(runtime, run_id, admission["plan_id"])
+    stored = persisted["proposal"]
+    base_evidence = stored["base_evidence"]
+    assert stored["base_git_head"] != "candidate-supplied-head"
+    assert stored["base_score"] == 0.0
+    assert base_evidence["artifact_hash"] != "candidate-supplied-artifact"
+    assert base_evidence["cumulative_delta_sha256"] != "candidate-supplied-delta"
+    assert base_evidence["changed_files"] == ["initial_program.py"]
+    assert "FEATURE_A" in base_evidence["diff_excerpt"]
+    assert "not-real.py" not in base_evidence["changed_files"]
+
+
+def test_base_evidence_is_bounded_in_active_reservation_review_view(
+    tmp_path: Path,
+) -> None:
+    runtime, run_id, candidates = setup_parallel_runtime(tmp_path)
+    reviewer = ConsolidatingReviewer()
+    runtime.search_space.reviewer = reviewer  # type: ignore[assignment]
+    open_search_space(runtime, run_id, "enforce")
+    (candidate_a, session_a, workspace_a), (_candidate_b, session_b, _workspace_b) = (
+        candidates
+    )
+
+    seed = runtime.propose_search_space_plan(session_a, proposal("large-base-seed"))
+    (workspace_a / "initial_program.py").write_text(
+        "VALUE = 0\n"
+        + "".join(f"FEATURE_{index:04d} = {index}\n" for index in range(800)),
+        encoding="utf-8",
+    )
+    for index in range(100):
+        (workspace_a / f"base-file-{index:03d}.txt").write_text(
+            f"base artifact {index}\n",
+            encoding="utf-8",
+        )
+    runtime.run_verifier(
+        run_id,
+        candidate_a,
+        agent_session_id=session_a,
+        intervention_plan_id=seed["plan_id"],
+    )
+    active = runtime.propose_search_space_plan(session_a, proposal("large-base"))
+    runtime.propose_search_space_plan(session_b, proposal("inspect-large-base"))
+
+    persisted = persisted_space_plan(runtime, run_id, active["plan_id"])
+    persisted_evidence = persisted["proposal"]["base_evidence"]
+    assert len(persisted_evidence["diff_excerpt"]) == 4_000
+    assert persisted_evidence["diff_truncated"] is True
+    assert persisted_evidence["changed_file_count"] == 101
+    assert len(persisted_evidence["changed_files"]) <= 64
+    assert sum(map(len, persisted_evidence["changed_files"])) <= 8_000
+
+    active_views = reviewer.search_states[-1]["active_reservations"]
+    [active_view] = [
+        item for item in active_views if item["plan_id"] == active["plan_id"]
+    ]
+    review_evidence = active_view["base_evidence"]
+    assert len(review_evidence["diff_excerpt"]) == 1_000
+    assert len(review_evidence["diff_stat"]) <= 400
+    assert len(review_evidence["changed_files"]) <= 12
+    assert sum(map(len, review_evidence["changed_files"])) <= 1_200
+    assert review_evidence["changed_file_count"] == 101
+    assert len(review_evidence["changed_symbols"]) <= 12
+    assert sum(map(len, review_evidence["changed_symbols"])) <= 1_200
+    assert review_evidence["changed_symbol_count"] == 64
+    assert review_evidence["diff_excerpt_truncated"] is True
+
+
+def test_spaceagent_prompts_define_conditional_experiment_identity() -> None:
+    config = reviewer_config()
+    plan = InterventionPlanProposal(
+        intervention="add feature B",
+        scope="base with feature A present",
+        expected_new_information="whether the feature A and B interaction helps",
+        base_evidence=SpaceBaseEvidence(
+            changed_files=["initial_program.py"],
+            changed_symbols=["FEATURE_A"],
+            diff_excerpt="+FEATURE_A = True\n" * 150,
+        ),
+    )
+
+    admission_prompt = CodexSpaceReviewer._prompt(config, plan)
+    schema_prompt = CodexSpaceReviewer._schema_prompt(config)
+
+    assert "ExperimentEdge = <RelevantBaseProjection" in admission_prompt
+    assert "it is not the base Git head or artifact hash" in admission_prompt
+    assert "Never infer novelty from unequal hashes" in admission_prompt
+    assert "Reject only when all three conditions hold" in admission_prompt
+    assert "relevant base conditions are materially equivalent" in admission_prompt
+    assert "intervention deltas are materially equivalent" in admission_prompt
+    assert "the information target is already covered" in admission_prompt
+    assert "same verified target state" in admission_prompt
+    assert "no additional marginal-effect or order information" in admission_prompt
+    assert "Equal scores do not establish equivalent base states" in admission_prompt
+    assert "When relevance or target-state equivalence is uncertain, accept" in (
+        admission_prompt
+    )
+    assert "Do not reject solely because the intervention appeared before" in (
+        admission_prompt
+    )
+    assert "A then B and B then A are duplicates" in admission_prompt
+    assert '"candidate_base_evidence"' in admission_prompt
+    assert "Do not flatten B alone into B with A already present" in schema_prompt
+
+
+def test_b_on_a_is_distinct_from_b_alone_but_repeated_interaction_is_covered(
+    tmp_path: Path,
+) -> None:
+    runtime, run_id, candidates = setup_parallel_runtime(tmp_path)
+    reviewer = ConditionalExperimentReviewer()
+    runtime.search_space.reviewer = reviewer  # type: ignore[assignment]
+    open_search_space(runtime, run_id, "enforce")
+    (candidate_a, session_a, workspace_a), (
+        candidate_b,
+        session_b,
+        workspace_b,
+    ) = candidates
+
+    plan_a = runtime.propose_search_space_plan(
+        session_a,
+        InterventionPlanProposal(
+            intervention="add feature A",
+            scope="hot path on the clean base",
+            expected_new_information="whether feature A changes verifier behavior",
+        ),
+    )
+    (workspace_a / "initial_program.py").write_text(
+        "VALUE = 0\nFEATURE_A = True\n",
+        encoding="utf-8",
+    )
+    runtime.run_verifier(
+        run_id,
+        candidate_a,
+        agent_session_id=session_a,
+        intervention_plan_id=plan_a["plan_id"],
+    )
+
+    plan_b = runtime.propose_search_space_plan(
+        session_b,
+        InterventionPlanProposal(
+            intervention="add feature B",
+            scope="hot path on the clean base",
+            expected_new_information="whether feature B changes verifier behavior",
+        ),
+    )
+    (workspace_b / "initial_program.py").write_text(
+        "VALUE = 0\nFEATURE_B = True\n",
+        encoding="utf-8",
+    )
+    runtime.run_verifier(
+        run_id,
+        candidate_b,
+        agent_session_id=session_b,
+        intervention_plan_id=plan_b["plan_id"],
+    )
+
+    interaction = runtime.propose_search_space_plan(
+        session_a,
+        InterventionPlanProposal(
+            intervention="add feature B while retaining feature A",
+            scope="hot path with feature A already present",
+            expected_new_information="whether the feature A and B interaction helps",
+        ),
+    )
+    assert interaction["decision"] == "accept"
+    interaction_plan = persisted_space_plan(runtime, run_id, interaction["plan_id"])
+    assert "FEATURE_A" in interaction_plan["proposal"]["base_evidence"][
+        "diff_excerpt"
+    ]
+
+    (workspace_a / "initial_program.py").write_text(
+        "VALUE = 0\nFEATURE_A = True\nFEATURE_B = True\n",
+        encoding="utf-8",
+    )
+    runtime.run_verifier(
+        run_id,
+        candidate_a,
+        agent_session_id=session_a,
+        intervention_plan_id=interaction["plan_id"],
+    )
+
+    # Roll back B and add irrelevant hash noise. The immutable A x B Evidence remains.
+    (workspace_a / "initial_program.py").write_text(
+        "VALUE = 0\nFEATURE_A = True\n# unrelated comment\n",
+        encoding="utf-8",
+    )
+    repeated = runtime.propose_search_space_plan(
+        session_a,
+        InterventionPlanProposal(
+            intervention="retain feature A and introduce feature B",
+            scope="the same hot path after restoring the feature A base",
+            expected_new_information="recheck the feature A and B interaction",
+        ),
+    )
+
+    assert repeated["decision"] == "reject"
+    assert repeated["duplicate_of"] == [interaction["plan_id"]]
+    repeated_plan = persisted_space_plan(runtime, run_id, repeated["plan_id"])
+    current_base = repeated_plan["proposal"]["base_evidence"]
+    interaction_base = interaction_plan["proposal"]["base_evidence"]
+    assert current_base["artifact_hash"] != interaction_base["artifact_hash"]
+    assert "FEATURE_A" in current_base["diff_excerpt"]
+    assert "FEATURE_B" not in current_base["diff_excerpt"]
+
+    interaction_event = next(
+        event
+        for state in reviewer.search_states
+        for event in state["tail_events"]
+        if event["plan_id"] == interaction["plan_id"]
+    )
+    assert "FEATURE_A" in interaction_event["base_evidence"]["diff_excerpt"]
+    assert interaction_event["realized_evidence"]["base_git_head"]
+    assert interaction_event["realized_evidence"]["result_git_head"]
+    assert interaction_event["realized_evidence"]["artifact_hash"]
+
+
+def test_concurrent_a_then_b_and_b_then_a_share_one_interaction_reservation(
+    tmp_path: Path,
+) -> None:
+    runtime, run_id, candidates = setup_parallel_runtime(tmp_path)
+    reviewer = ConcurrentConditionalExperimentReviewer()
+    runtime.search_space.reviewer = reviewer  # type: ignore[assignment]
+    open_search_space(runtime, run_id, "enforce")
+    (candidate_a, session_a, workspace_a), (
+        candidate_b,
+        session_b,
+        workspace_b,
+    ) = candidates
+
+    for candidate_id, session_id, workspace, feature in (
+        (candidate_a, session_a, workspace_a, "A"),
+        (candidate_b, session_b, workspace_b, "B"),
+    ):
+        seed = runtime.propose_search_space_plan(
+            session_id,
+            InterventionPlanProposal(
+                intervention=f"add feature {feature}",
+                scope="hot path on the clean base",
+                expected_new_information=(
+                    f"whether feature {feature} changes verifier behavior"
+                ),
+            ),
+        )
+        (workspace / "initial_program.py").write_text(
+            f"VALUE = 0\nFEATURE_{feature} = True\n",
+            encoding="utf-8",
+        )
+        runtime.run_verifier(
+            run_id,
+            candidate_id,
+            agent_session_id=session_id,
+            intervention_plan_id=seed["plan_id"],
+        )
+
+    proposals = (
+        (
+            session_a,
+            InterventionPlanProposal(
+                intervention="add feature B to the feature A base",
+                scope="hot path with feature A present",
+                expected_new_information="whether the feature A and B interaction helps",
+            ),
+        ),
+        (
+            session_b,
+            InterventionPlanProposal(
+                intervention="add feature A to the feature B base",
+                scope="hot path with feature B present",
+                expected_new_information="whether the feature A and B interaction helps",
+            ),
+        ),
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(runtime.propose_search_space_plan, session_id, candidate_plan)
+            for session_id, candidate_plan in proposals
+        ]
+        results = [future.result(timeout=10) for future in futures]
+
+    assert sorted(result["decision"] for result in results) == ["accept", "reject"]
+    [rejected] = [result for result in results if result["decision"] == "reject"]
+    assert rejected["duplicate_plans"][0]["coverage_status"] == "active_reservation"
+    assert len(runtime.search_space_status(run_id)["active_reservations"]) == 1
+    assert reviewer.interaction_calls == 3
+    active_views = [
+        reservation
+        for state in reviewer.search_states
+        for reservation in state["active_reservations"]
+    ]
+    assert active_views
+    assert any(
+        "FEATURE_A" in reservation["base_evidence"]["diff_excerpt"]
+        or "FEATURE_B" in reservation["base_evidence"]["diff_excerpt"]
+        for reservation in active_views
+    )
 
 
 def test_observe_mode_records_duplicate_without_blocking(tmp_path: Path) -> None:

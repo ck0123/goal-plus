@@ -36,6 +36,10 @@ SEARCH_EVIDENCE_PROTOCOL_VERSION = "search-evidence-v1"
 SEARCH_SCHEMA_SNAPSHOT_PROTOCOL_VERSION = "search-schema-snapshot-v1"
 DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL = 20
 MAX_PLAN_CARD_TEXT_CHARS = 2_000
+SPACE_BASE_EVIDENCE_DIFF_CHARS = 4_000
+SPACE_BASE_EVIDENCE_STAT_CHARS = 1_000
+SPACE_BASE_EVIDENCE_LIST_ITEMS = 64
+SPACE_BASE_EVIDENCE_LIST_CHARS = 8_000
 SPACE_REVIEW_DIFF_EXCERPT_CHARS = 1_000
 SPACE_REVIEW_DIFF_STAT_CHARS = 400
 SPACE_REVIEW_LIST_ITEMS = 12
@@ -66,10 +70,23 @@ DEFAULT_SPACE_SCHEMA = {
         "behavior": {"description": "The measurable behavior expected from the change."},
     },
     "duplicate_policy": {
-        "covered_unit": "A verifier-backed completed plan or active reservation.",
+        "experiment_identity": (
+            "RelevantBaseProjection + InterventionDelta + InformationTarget."
+        ),
+        "base_projection_policy": (
+            "Git and artifact hashes establish exact identity and provenance only; "
+            "novelty depends on the plan-conditioned semantic base projection."
+        ),
+        "covered_unit": (
+            "A verifier-backed conditional experiment or active reservation."
+        ),
         "duplicate": (
-            "A materially equivalent intervention in the same relevant context that "
-            "seeks no substantive new information."
+            "Materially equivalent relevant base conditions and intervention delta "
+            "with an already-covered information target."
+        ),
+        "target_state_entailment": (
+            "Prior Evidence entails the same verified target state and the proposal "
+            "adds no marginal-effect or order information."
         ),
         "uncertainty_policy": "accept",
     },
@@ -140,6 +157,38 @@ class SearchSpacePlanCard(SearchModel):
         return InterventionPlanProposal(**self.model_dump(mode="json"))
 
 
+class SpaceBaseEvidence(SearchModel):
+    """Runtime-authored artifact evidence from which relevance is projected."""
+
+    artifact_hash: str | None = None
+    cumulative_delta_sha256: str | None = None
+    changed_files: list[str] = Field(default_factory=list)
+    changed_file_count: int = Field(default=0, ge=0)
+    changed_symbols: list[str] = Field(default_factory=list)
+    changed_symbol_count: int = Field(default=0, ge=0)
+    diff_stat: str = Field(default="", max_length=SPACE_BASE_EVIDENCE_STAT_CHARS)
+    diff_excerpt: str = Field(default="", max_length=SPACE_BASE_EVIDENCE_DIFF_CHARS)
+    diff_truncated: bool = False
+
+    @field_validator("artifact_hash", "cumulative_delta_sha256")
+    @classmethod
+    def normalize_optional_hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("changed_files", "changed_symbols")
+    @classmethod
+    def normalize_context_lists(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            item = " ".join(value.split())
+            if item and item not in normalized:
+                normalized.append(item)
+        return normalized
+
+
 class InterventionPlanProposal(SearchModel):
     """Persisted proposal, including fields from the original B1/B4 protocol."""
 
@@ -148,6 +197,7 @@ class InterventionPlanProposal(SearchModel):
     expected_new_information: str | None = None
     base_git_head: str | None = None
     base_score: float | None = None
+    base_evidence: SpaceBaseEvidence | None = None
     target: str | None = None
     bottleneck: str | None = None
     mechanism: str | None = None
@@ -757,6 +807,39 @@ def _representative_refs(values: list[str]) -> list[str]:
     return [*values[:head], *values[-head:]]
 
 
+def _review_base_evidence(
+    evidence: SpaceBaseEvidence | None,
+) -> dict[str, Any] | None:
+    if evidence is None:
+        return None
+    return {
+        "artifact_hash": evidence.artifact_hash,
+        "cumulative_delta_sha256": evidence.cumulative_delta_sha256,
+        "changed_files": _bounded_review_list(evidence.changed_files),
+        "changed_file_count": max(
+            evidence.changed_file_count,
+            len(evidence.changed_files),
+        ),
+        "changed_symbols": _bounded_review_list(evidence.changed_symbols),
+        "changed_symbol_count": max(
+            evidence.changed_symbol_count,
+            len(evidence.changed_symbols),
+        ),
+        "diff_stat": _bounded_review_text(
+            evidence.diff_stat,
+            SPACE_REVIEW_DIFF_STAT_CHARS,
+        ),
+        "diff_excerpt": _bounded_review_text(
+            evidence.diff_excerpt,
+            SPACE_REVIEW_DIFF_EXCERPT_CHARS,
+        ),
+        "diff_excerpt_truncated": (
+            evidence.diff_truncated
+            or len(evidence.diff_excerpt) > SPACE_REVIEW_DIFF_EXCERPT_CHARS
+        ),
+    }
+
+
 def _usage_from_jsonl(text: str) -> dict[str, int | float]:
     usage: dict[str, int | float] = {}
     for line in text.splitlines():
@@ -992,10 +1075,23 @@ class CodexSpaceReviewer:
         config: SearchSpaceConfig,
         proposal: InterventionPlanProposal,
     ) -> str:
+        card = proposal.plan_card()
         payload = {
             "schema": config.space_schema,
-            "candidate_plan_card": proposal.plan_card(),
-            "candidate_declared_proposal": proposal.model_dump(mode="json"),
+            "candidate_plan_card": {
+                "intervention": card["intervention"],
+                "scope": card["scope"],
+                "expected_new_information": card["expected_new_information"],
+            },
+            "candidate_base_git_head": proposal.base_git_head,
+            "candidate_base_score": proposal.base_score,
+            "candidate_base_evidence": _review_base_evidence(
+                proposal.base_evidence
+            ),
+            "candidate_declared_proposal": proposal.model_dump(
+                mode="json",
+                exclude={"base_evidence", "base_git_head", "base_score"},
+            ),
             "required_output_json_schema": SpaceReviewDecision.model_json_schema(),
         }
         return (
@@ -1005,16 +1101,46 @@ class CodexSpaceReviewer:
             "provided Search State. Do not propose "
             "directions, improvements, alternatives, unexplored regions, or rewritten "
             "plans.\n\n"
-            "Compare the six views independently: artifact, configuration, mechanism, "
-            "context, epistemic question, and expected behavior. Reject only when the "
-            "material intervention and information sought are already covered. Textual "
+            "Treat the proposal as an ExperimentEdge = <RelevantBaseProjection, "
+            "InterventionDelta, InformationTarget>. RelevantBaseProjection is the "
+            "semantic projection of the current base onto only those predicates that "
+            "materially affect this intervention or information target. Derive it from "
+            "candidate_base_evidence, the PlanCard, and prior Search Evidence; it is not "
+            "the base Git head or artifact hash. Compare the six views independently: "
+            "artifact, configuration, mechanism, context, epistemic question, and expected "
+            "behavior.\n\n"
+            "Reject only when all three conditions hold: (1) relevant base conditions are "
+            "materially equivalent; (2) intervention deltas are materially equivalent; and "
+            "(3) the information target is already covered. Alternatively, reject when "
+            "prior Evidence already entails the same verified target state and the proposed "
+            "edge supplies no additional marginal-effect or order information. Otherwise "
+            "accept.\n\n"
+            "Different base hashes do not establish novelty. Equal scores do not establish "
+            "equivalent base states. A different relevant base should be accepted only when "
+            "it changes the mechanism, conditional effect, target state, or information "
+            "obtained. When relevance or target-state equivalence is uncertain, accept.\n\n"
+            "Do not reject solely because the intervention appeared before: B on a clean "
+            "base and B on a base where A is present are different when the latter "
+            "substantively tests an uncovered A x B interaction. A then B and B then A are "
+            "duplicates when they produce a materially equivalent composition, answer the "
+            "same interaction question, and supply no order information. Textual "
             "paraphrases count as duplicates. A declared refinement, replication, "
             "interaction test, alternative implementation, or representation change is "
             "not automatically novel: accept it only when its concrete difference and "
             "expected new information are substantive. More detailed wording is not a "
             "new point when the underlying intervention and information target are the "
-            "same. When uncertain, accept.\n\n"
-            "For a completed plan, the proposal is intent, while the tail event's compact "
+            "same.\n\n"
+            "candidate_base_evidence is runtime-authored execution evidence, not candidate "
+            "wording and not a precomputed semantic projection. Its hashes answer only "
+            "exact content identity and provenance. Never infer novelty from unequal hashes. "
+            "Two different hashes with semantically equivalent relevant predicates have the "
+            "same RelevantBaseProjection; an unrelated comment or file change must not make "
+            "B a new experiment. Use the cumulative diff, symbols, declared semantics, and "
+            "verified history to determine whether A is present, still material, and relevant "
+            "to B. If that cannot be determined confidently, accept. For a completed plan, "
+            "the proposal is intent, its proposal base_evidence is the pre-intervention "
+            "artifact evidence, and the tail "
+            "event's compact "
             "realized_evidence view is execution truth. Its deterministic diff excerpt, "
             "delta files, symbols, verifier validity, and outcome take precedence over broad or "
             "inaccurate declared wording. A valid neutral or regressed concrete point "
@@ -1057,8 +1183,17 @@ class CodexSpaceReviewer:
             "covered; invalid and infrastructure-failed events remain facts but must not enter "
             "coverage.\n\n"
             "The declared proposal is intent and realized_evidence is execution truth. Use "
-            "artifact deltas, changed symbols, verifier validity, and outcome to make broad "
-            "wording more precise. Never copy _runtime_search_state into the persisted "
+            "each proposal's runtime-authored base_evidence together with artifact deltas, "
+            "changed symbols, verifier validity, and outcome to make broad wording more "
+            "precise. Model each covered experiment as ExperimentEdge = "
+            "<RelevantBaseProjection, InterventionDelta, InformationTarget>. Hashes establish "
+            "only exact identity and provenance; never split coverage merely because hashes "
+            "differ. Derive the relevant projection semantically for the experiment, then "
+            "preserve material base preconditions and interaction "
+            "questions in coverage descriptions and contexts. Do not flatten B alone into "
+            "B with A already present, and do not split A-then-B from B-then-A when both "
+            "produce the same composition and answer the same question. Never copy "
+            "_runtime_search_state into the persisted "
             "space_schema. A no-op consolidation must still return the unchanged schema and "
             "complete coverage so the checkpoint can advance. Return only the required JSON "
             "object and do not include recommendations.\n\n"
@@ -1186,7 +1321,7 @@ class FileSearchSpaceRuntime:
             canonical_json(
                 proposal.model_dump(
                     mode="json",
-                    exclude={"base_git_head", "base_score"},
+                    exclude={"base_git_head", "base_score", "base_evidence"},
                 )
             )
         )
@@ -2563,7 +2698,13 @@ class FileSearchSpaceRuntime:
                 "scope": card["scope"],
                 "expected_new_information": card["expected_new_information"],
             },
+            "base_git_head": event.proposal.base_git_head,
+            "base_score": event.proposal.base_score,
+            "base_evidence": _review_base_evidence(event.proposal.base_evidence),
             "realized_evidence": {
+                "base_git_head": evidence.base_git_head,
+                "result_git_head": evidence.result_git_head,
+                "artifact_hash": evidence.artifact_hash,
                 "artifact_delta_sha256": evidence.artifact_delta_sha256,
                 "delta_files": _bounded_review_list(evidence.delta_files),
                 "delta_file_count": len(evidence.delta_files),
@@ -2659,7 +2800,18 @@ class FileSearchSpaceRuntime:
                 {
                     "plan_id": plan.plan_id,
                     "candidate_id": plan.candidate_id,
-                    "plan_card": plan.proposal.plan_card(),
+                    "plan_card": {
+                        "intervention": plan.proposal.plan_card()["intervention"],
+                        "scope": plan.proposal.plan_card()["scope"],
+                        "expected_new_information": plan.proposal.plan_card()[
+                            "expected_new_information"
+                        ],
+                    },
+                    "base_git_head": plan.proposal.base_git_head,
+                    "base_score": plan.proposal.base_score,
+                    "base_evidence": _review_base_evidence(
+                        plan.proposal.base_evidence
+                    ),
                 }
                 for plan in active
             ],

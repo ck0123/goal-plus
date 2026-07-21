@@ -62,6 +62,11 @@ from goal_plus.space_agent import (
     DEFAULT_SCHEMA_CONSOLIDATION_INTERVAL,
     FileSearchSpaceRuntime,
     InterventionPlanProposal,
+    SPACE_BASE_EVIDENCE_DIFF_CHARS,
+    SPACE_BASE_EVIDENCE_LIST_CHARS,
+    SPACE_BASE_EVIDENCE_LIST_ITEMS,
+    SPACE_BASE_EVIDENCE_STAT_CHARS,
+    SpaceBaseEvidence,
     SpacePlanRecord,
     SpaceRealizedEvidence,
     SearchSpaceMode,
@@ -915,10 +920,16 @@ class FileSearchRuntime:
         self._assert_run_not_invalidated(run, "propose search-space plan")
         record = self._load_candidate_record(session.run_id, session.candidate_id)
         latest_score = record.iterations[-1].score if record.iterations else None
+        workspace = record.task.workspace
         authoritative = proposal.model_copy(
             update={
-                "base_git_head": self._git_head(record.task.workspace),
+                "base_git_head": self._git_head(workspace),
                 "base_score": latest_score,
+                "base_evidence": self._build_space_base_evidence(
+                    source=Path(run.source_path),
+                    workspace=workspace,
+                    base_revision=record.task.workspace_base_revision,
+                ),
             }
         )
         return self.search_space.propose(session, authoritative)
@@ -4410,6 +4421,42 @@ class FileSearchRuntime:
             payload[rel_path] = sha256_file(path) if path.is_file() else None
         return sha256_text(canonical_json(payload))
 
+    def _build_space_base_evidence(
+        self,
+        *,
+        source: Path,
+        workspace: Path,
+        base_revision: str | None,
+    ) -> SpaceBaseEvidence:
+        changed_files = self._detect_changed_files(source, workspace)
+        artifact_hash = self._artifact_hash(workspace, changed_files)
+        _delta_files, diff_stat, full_patch = self._space_git_delta(
+            workspace,
+            base_revision,
+            None,
+            fallback_files=changed_files,
+        )
+        diff_excerpt, diff_truncated = self._bounded_space_text(
+            full_patch,
+            SPACE_BASE_EVIDENCE_DIFF_CHARS,
+        )
+        bounded_stat, _ = self._bounded_space_text(
+            diff_stat,
+            SPACE_BASE_EVIDENCE_STAT_CHARS,
+        )
+        changed_symbols = self._space_changed_symbols(full_patch)
+        return SpaceBaseEvidence(
+            artifact_hash=artifact_hash,
+            cumulative_delta_sha256=sha256_text(full_patch),
+            changed_files=self._bounded_space_list(changed_files),
+            changed_file_count=len(changed_files),
+            changed_symbols=self._bounded_space_list(changed_symbols),
+            changed_symbol_count=len(changed_symbols),
+            diff_stat=bounded_stat,
+            diff_excerpt=diff_excerpt,
+            diff_truncated=diff_truncated,
+        )
+
     def _build_space_realized_evidence(
         self,
         *,
@@ -4547,6 +4594,27 @@ class FileSearchRuntime:
         head = (available * 3) // 4
         tail = available - head
         return value[:head] + marker + value[-tail:], True
+
+    @staticmethod
+    def _bounded_space_list(values: list[str]) -> list[str]:
+        if len(values) <= SPACE_BASE_EVIDENCE_LIST_ITEMS:
+            candidates = values
+        else:
+            head = SPACE_BASE_EVIDENCE_LIST_ITEMS // 2
+            candidates = [*values[:head], *values[-head:]]
+        bounded: list[str] = []
+        used_chars = 0
+        for value in candidates:
+            remaining = SPACE_BASE_EVIDENCE_LIST_CHARS - used_chars
+            if remaining <= 0:
+                break
+            item, _ = FileSearchRuntime._bounded_space_text(
+                value,
+                min(remaining, 500),
+            )
+            bounded.append(item)
+            used_chars += len(item)
+        return bounded
 
     @staticmethod
     def _space_changed_symbols(patch: str) -> list[str]:

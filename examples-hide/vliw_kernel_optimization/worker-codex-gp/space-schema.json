@@ -22,8 +22,11 @@
     }
   },
   "duplicate_policy": {
-    "covered_unit": "A verifier-backed completed plan or active reservation.",
-    "duplicate": "A materially equivalent intervention in the same relevant context that seeks no substantive new information.",
+    "experiment_identity": "RelevantBaseProjection + InterventionDelta + InformationTarget.",
+    "base_projection_policy": "Git and artifact hashes establish exact identity and provenance only; novelty depends on the plan-conditioned semantic base projection.",
+    "covered_unit": "A verifier-backed conditional experiment or active reservation.",
+    "duplicate": "Materially equivalent relevant base conditions and intervention delta with an already-covered information target.",
+    "target_state_entailment": "Prior Evidence entails the same verified target state and the proposal adds no marginal-effect or order information.",
     "not_automatically_novel": [
       "paraphrase",
       "parameter rename",

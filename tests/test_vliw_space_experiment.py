@@ -106,6 +106,13 @@ def test_current_config_is_three_lane_enforce() -> None:
     assert config["reviewer_transport"] == "plain_json"
     assert config["schema_consolidation_interval"] == 20
 
+    schema = json.loads((WORKER / "space-schema.json").read_text(encoding="utf-8"))
+    duplicate_policy = schema["duplicate_policy"]
+    assert "RelevantBaseProjection" in duplicate_policy["experiment_identity"]
+    assert "hashes establish exact identity and provenance only" in (
+        duplicate_policy["base_projection_policy"]
+    )
+
 
 def test_rendered_prompt_has_no_markers_and_uses_worker_source() -> None:
     config = RUNNER.load_config(WORKER / "experiment.json")
