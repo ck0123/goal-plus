@@ -1,0 +1,38 @@
+{
+  "schema_version": "vliw-intervention-space-v1",
+  "task": "vliw_kernel_optimization",
+  "views": {
+    "artifact": {
+      "description": "The concrete code unit, data structure, or generated schedule surface changed by the intervention."
+    },
+    "configuration": {
+      "description": "The concrete parameter values, flags, sizes, or structural settings changed by the intervention."
+    },
+    "mechanism": {
+      "description": "The claimed causal mechanism connecting the intervention to correctness or simulated cycle count."
+    },
+    "context": {
+      "description": "The baseline revision, workload regime, constraints, and preconditions under which the intervention is tested."
+    },
+    "epistemic": {
+      "description": "The specific uncertainty or hypothesis that the experiment resolves."
+    },
+    "behavior": {
+      "description": "The expected measurable cycle-count, correctness, or execution signature that would support or contradict the hypothesis."
+    }
+  },
+  "duplicate_policy": {
+    "covered_unit": "A verifier-backed completed plan or active reservation.",
+    "duplicate": "A materially equivalent intervention in the same relevant context that seeks no substantive new information.",
+    "not_automatically_novel": [
+      "paraphrase",
+      "parameter rename",
+      "more detailed wording without a materially narrower experiment",
+      "undeveloped refinement claim",
+      "undeveloped replication claim",
+      "undeveloped interaction claim",
+      "implementation-only restatement"
+    ],
+    "uncertainty_policy": "accept"
+  }
+}
