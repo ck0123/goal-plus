@@ -114,6 +114,10 @@ promotion stays retryable in `ready_to_promote` and emits no patch.
 | Specs and runnable examples | [Examples](examples/README.md) |
 | Tests and real-host evidence | [Tests](tests/README.md) |
 
+Benchmark-specific tasks, evaluators, campaigns, and comparison evidence live
+in [bench-goal-plus](https://github.com/ck0123/bench-goal-plus), not in this
+runtime repository.
+
 ## Development
 
 ```bash
