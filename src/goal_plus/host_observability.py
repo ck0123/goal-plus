@@ -6,6 +6,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+from goal_plus.codex_pricing import (
+    CODEX_PRICING_AS_OF,
+    CODEX_PRICING_CATALOG,
+    estimate_codex_request_cost,
+)
 from goal_plus.models import AgentSessionRecord
 
 
@@ -342,7 +347,7 @@ def _codex_usage(info: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         "scope": "session_total",
         "input_tokens": _number(total.get("input_tokens")),
         "cached_input_tokens": _number(total.get("cached_input_tokens")),
-        "cache_write_tokens": None,
+        "cache_write_tokens": _number(total.get("cache_write_input_tokens")),
         "output_tokens": _number(total.get("output_tokens")),
         "reasoning_output_tokens": _number(total.get("reasoning_output_tokens")),
         "total_tokens": _number(total.get("total_tokens")),
@@ -370,6 +375,7 @@ def _usage_delta(
         for field in (
             "input_tokens",
             "cached_input_tokens",
+            "cache_write_tokens",
             "output_tokens",
             "reasoning_output_tokens",
             "total_tokens",
@@ -415,6 +421,12 @@ def _parse_codex_session(path: Path, *, since: str | None = None) -> dict[str, A
     malformed = 0
     since_epoch = _timestamp_epoch(since)
     baseline_usage: dict[str, Any] | None = None
+    observed_token_total: int | float | None = None
+    estimated_cost_usd = 0.0
+    priced_calls = 0
+    unpriced_calls = 0
+    priced_models: set[str] = set()
+    priced_service_tiers: set[str] = set()
     try:
         stream = path.open("r", encoding="utf-8")
     except OSError as exc:
@@ -454,7 +466,32 @@ def _parse_codex_session(path: Path, *, since: str | None = None) -> dict[str, A
             elif event_type == "event_msg":
                 message_type = payload.get("type")
                 if message_type == "token_count":
-                    usage, context = _codex_usage(payload.get("info"))
+                    info = payload.get("info")
+                    usage, context = _codex_usage(info)
+                    info = info if isinstance(info, dict) else {}
+                    total_usage = info.get("total_token_usage")
+                    total_usage = total_usage if isinstance(total_usage, dict) else {}
+                    cumulative_total = _number(total_usage.get("total_tokens"))
+                    is_new_usage = (
+                        cumulative_total is None
+                        or observed_token_total is None
+                        or cumulative_total > observed_token_total
+                    )
+                    if cumulative_total is not None:
+                        observed_token_total = cumulative_total
+                    if in_window and is_new_usage:
+                        estimate = estimate_codex_request_cost(
+                            info.get("last_token_usage"),
+                            model=result["model"],
+                            service_tier=result["service_tier"],
+                        )
+                        if estimate is None:
+                            unpriced_calls += 1
+                        else:
+                            estimated_cost_usd += float(estimate["cost_usd"])
+                            priced_calls += 1
+                            priced_models.add(str(estimate["model"]))
+                            priced_service_tiers.add(str(estimate["service_tier"]))
                     if since_epoch is not None and epoch is not None and epoch < since_epoch:
                         baseline_usage = usage
                     elif in_window:
@@ -512,6 +549,24 @@ def _parse_codex_session(path: Path, *, since: str | None = None) -> dict[str, A
         usage["assistant_messages"] = result["assistant_messages"]
         usage["tool_calls"] = result["tool_calls"]
         usage["tool_results"] = result["tool_results"]
+        complete_cost_estimate = priced_calls > 0 and unpriced_calls == 0
+        usage["cost_usd"] = estimated_cost_usd if complete_cost_estimate else None
+        usage["cost_estimate"] = {
+            "kind": "api_equivalent_model_rate_estimate",
+            "catalog": CODEX_PRICING_CATALOG,
+            "pricing_as_of": CODEX_PRICING_AS_OF,
+            "currency": "USD",
+            "priced_calls": priced_calls,
+            "unpriced_calls": unpriced_calls,
+            "complete": complete_cost_estimate,
+            "known_cost_usd": estimated_cost_usd if priced_calls else None,
+            "models": sorted(priced_models),
+            "service_tiers": sorted(priced_service_tiers),
+            "billing_note": (
+                "Model-rate estimate comparable to Pi statistics; not an "
+                "observed ChatGPT subscription charge."
+            ),
+        }
         result["usage"] = usage
     return result
 

@@ -98,12 +98,20 @@ def test_codex_observability_discovers_and_normalizes_native_session(
                     "total_token_usage": {
                         "input_tokens": 1000,
                         "cached_input_tokens": 600,
+                        "cache_write_input_tokens": 50,
                         "output_tokens": 120,
                         "reasoning_output_tokens": 20,
                         "total_tokens": 1120,
                     },
-                    "last_token_usage": {"total_tokens": 280},
-                    "model_context_window": 1000,
+                    "last_token_usage": {
+                        "input_tokens": 1000,
+                        "cached_input_tokens": 600,
+                        "cache_write_input_tokens": 50,
+                        "output_tokens": 120,
+                        "reasoning_output_tokens": 20,
+                        "total_tokens": 1120,
+                    },
+                    "model_context_window": 4000,
                 },
             },
         },
@@ -147,6 +155,12 @@ def test_codex_observability_discovers_and_normalizes_native_session(
     assert result["usage"]["total_tokens"] == 1120
     assert result["usage"]["processed_tokens"] == 1120
     assert result["usage"]["cached_input_tokens"] == 600
+    assert result["usage"]["cache_write_tokens"] == 50
+    assert result["usage"]["cost_usd"] == pytest.approx(0.014125)
+    assert result["usage"]["cost_estimate"]["complete"] is True
+    assert result["usage"]["cost_estimate"]["catalog"] == (
+        "pi-ai@0.80.6/openai-codex"
+    )
     assert result["usage"]["assistant_messages"] == 1
     assert result["usage"]["tool_calls"] == 1
     assert result["usage"]["tool_results"] == 1
@@ -250,7 +264,7 @@ def test_codex_transcript_observability_reports_window_delta_without_content(
         {
             "timestamp": "2026-07-16T09:59:01Z",
             "type": "turn_context",
-            "payload": {"model": "gpt-5.6", "effort": "high"},
+            "payload": {"model": "gpt-5.6-terra", "effort": "high"},
         },
         {
             "timestamp": "2026-07-16T09:59:50Z",
@@ -265,7 +279,12 @@ def test_codex_transcript_observability_reports_window_delta_without_content(
                         "reasoning_output_tokens": 5,
                         "total_tokens": 120,
                     },
-                    "last_token_usage": {"total_tokens": 30},
+                    "last_token_usage": {
+                        "input_tokens": 25,
+                        "cached_input_tokens": 10,
+                        "output_tokens": 5,
+                        "total_tokens": 30,
+                    },
                     "model_context_window": 1000,
                 },
             },
@@ -293,7 +312,12 @@ def test_codex_transcript_observability_reports_window_delta_without_content(
                         "reasoning_output_tokens": 8,
                         "total_tokens": 190,
                     },
-                    "last_token_usage": {"total_tokens": 50},
+                    "last_token_usage": {
+                        "input_tokens": 60,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                        "total_tokens": 70,
+                    },
                     "model_context_window": 1000,
                 },
             },
@@ -315,6 +339,8 @@ def test_codex_transcript_observability_reports_window_delta_without_content(
     assert result["usage"]["output_tokens"] == 10
     assert result["usage"]["total_tokens"] == 70
     assert result["usage"]["processed_tokens"] == 70
+    assert result["usage"]["cost_usd"] == pytest.approx(0.000255)
+    assert result["usage"]["cost_estimate"]["priced_calls"] == 1
     assert result["usage"]["assistant_messages"] == 1
     assert result["usage"]["tool_calls"] == 1
     assert "secret" not in json.dumps(result)

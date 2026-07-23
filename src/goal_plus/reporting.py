@@ -1757,7 +1757,10 @@ _METRIC_GAP_INFO = {
         "The worker host did not publish time-to-first-token for every session.",
     ),
     "worker_processed_tokens": ("Partial coverage", "Processed-token usage is missing for one or more worker sessions."),
-    "worker_cost_usd": ("Partial coverage", "Cost usage is missing for one or more worker sessions."),
+    "worker_cost_usd": (
+        "Partial coverage",
+        "A model-rate cost estimate is missing for one or more worker sessions.",
+    ),
     "worker_duration": ("Partial coverage", "Observed duration is missing for one or more worker sessions."),
     "semantic_candidate_coverage": (
         "Not computed",
@@ -2787,7 +2790,7 @@ def _render_sessions(task: dict[str, Any]) -> str:
     table = (
         '<div class="table-scroll"><table><thead><tr>'
         "<th>Session</th><th>Dispatch</th><th>Candidate</th><th>Host</th><th>Provider</th><th>Model</th>"
-        "<th>Terminal state</th><th>Duration</th><th>Processed tokens</th><th>Known cost</th><th>Context</th>"
+        "<th>Terminal state</th><th>Duration</th><th>Processed tokens</th><th>Estimated cost</th><th>Context</th>"
         "<th>Verifier runs</th><th>Source</th>"
         f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
     )
@@ -3064,7 +3067,7 @@ def render_html_report(data: dict[str, Any]) -> str:
             _metric_card("Worker sessions", _number(aggregate.get("worker_sessions_total")), f"{_number((aggregate_stats.get('workers') or {}).get('timed_out'))} timed out"),
             _metric_card("Verifier runs", _number(aggregate.get("verifier_runs_total")), f"{_number((aggregate_stats.get('verifiers') or {}).get('parent_process_runs'))} parent-owned"),
             _metric_card("Processed tokens", _number(aggregate_usage.get("processed_tokens")), "worker sessions"),
-            _metric_card("Known worker cost", _cost(aggregate_usage.get("cost_usd")), "coverage-aware"),
+            _metric_card("Estimated worker cost", _cost(aggregate_usage.get("cost_usd")), "coverage-aware"),
         ]
     )
 
@@ -3183,7 +3186,7 @@ def render_html_report(data: dict[str, Any]) -> str:
           <div class="fact"><dt>Worker processed tokens</dt><dd class="mono">{_html(_number(aggregate_usage.get("processed_tokens")))}</dd></div>
           <div class="fact"><dt>Orchestrator processed tokens</dt><dd class="mono">{_html(_number(orchestrator_usage.get("processed_tokens")))}</dd></div>
           <div class="fact"><dt>Combined known tokens</dt><dd class="mono">{_html(_number(total_usage.get("processed_tokens")))}</dd></div>
-          <div class="fact"><dt>Combined known cost</dt><dd class="mono">{_html(_cost(total_usage.get("cost_usd")))}</dd></div>
+          <div class="fact"><dt>Combined estimated cost</dt><dd class="mono">{_html(_cost(total_usage.get("cost_usd")))}</dd></div>
         </dl>
       </div>
     </section>

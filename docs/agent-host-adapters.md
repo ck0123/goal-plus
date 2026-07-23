@@ -40,6 +40,16 @@ as `search_get_agent_observability`. This is provenance and diagnostics only;
 it does not add worker lifecycle state to Search records or turn the runtime
 into a supervisor.
 
+Codex rollout JSONL exposes per-response input, cached-input, cache-write,
+output, and reasoning-token usage but does not expose a billed USD amount.
+Goal Plus therefore computes `usage.cost_usd` from each
+`last_token_usage` event with the versioned Pi-compatible OpenAI Codex model
+catalog in `src/goal_plus/codex_pricing.py`. Long-context tiers and
+`flex`/`priority` multipliers follow Pi semantics. The result is an
+API-equivalent model-rate estimate, not an observed ChatGPT subscription
+charge; `usage.cost_estimate` retains the catalog, coverage, and billing note.
+Unknown models keep `cost_usd` unavailable instead of applying a guessed rate.
+
 The accepted initial planners are `agent_guided`/`agent`/`default` and
 `random`/`random_mode`. OpenCode and Claude Code assets are retained only as
 unsupported references and are outside this contract.

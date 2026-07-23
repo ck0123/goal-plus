@@ -106,6 +106,15 @@ Related local state:
 - Archived transcripts: `${CODEX_HOME:-$HOME/.codex}/archived_sessions`
 - macOS app logs: `~/Library/Logs/com.openai.codex/YYYY/MM/DD`
 
+Goal Plus report generation reads content-free usage from the persisted
+`token_count` events. Token totals are native Codex evidence. USD values are
+model-rate estimates calculated per response with the versioned
+Pi-compatible catalog in `src/goal_plus/codex_pricing.py`; they are not
+observed ChatGPT subscription charges. Inspect
+`usage.cost_estimate.complete`, `priced_calls`, `unpriced_calls`, and
+`catalog` in normalized observability when an HTML report shows partial cost
+coverage.
+
 For interactive CLI diagnostics, opt into a plaintext TUI log:
 
 ```bash

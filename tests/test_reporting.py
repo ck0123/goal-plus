@@ -85,6 +85,8 @@ def test_search_report_generates_self_contained_html_with_multi_search_timeline(
     assert "Goal Plus Summary" in html
     assert "Goal status" in html
     assert "Selected score" in html
+    assert "Estimated worker cost" in html
+    assert "Combined estimated cost" in html
     assert "No score threshold was configured" in html
     assert "Metric availability" in html
     assert "Goal Plus Lifecycle" not in html
