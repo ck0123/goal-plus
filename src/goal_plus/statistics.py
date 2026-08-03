@@ -254,7 +254,9 @@ def build_run_statistics(
     candidates_completed_with_result = sum(
         bool(candidate.iterations) for candidate in candidates
     )
-    results_kept = sum(iteration.disposition == "keep" for iteration in iterations)
+    results_kept = sum(
+        iteration.disposition in {"keep", "retain"} for iteration in iterations
+    )
     results_rejected = sum(
         iteration.disposition in {"discard", "failure"} for iteration in iterations
     )

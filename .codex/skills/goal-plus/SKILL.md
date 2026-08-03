@@ -46,6 +46,19 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
    `workspace.backend="git_worktree"`，以便候选共享 Git object database 并解析彼此的
    Evidence commit；只有用户明确要求兼容隔离时才能设置 `copy`。使用
    `goal_plus_save_spec_draft` 保存完整契约。
+   如果 process metric 稀疏、容易饱和，或只是最终 hidden/official 指标的公开代理，
+   根据公开 issue、benchmark 说明、代码和测试生成任务特定的 `acceptance_view`。通常冻结
+   3–8 项 criterion，覆盖实际需求、边界与异常路径、分支/状态空间、回归与 API/行为兼容，
+   并按 benchmark 补充 hidden 泛化风险或性能/资源余量。不要机械复制通用清单；只保留
+   对当前任务有区分度且能从 diff、公开测试或硬 verifier 结果观察的项目。不得读取、猜测
+   或写入 hidden 数据、gold patch 或最终 judge 结果。所有 criterion 都是 `must assess`
+   语义，不使用 `required`；固定 `tie_policy="retain_latest"` 且
+   `affects_final_result=false`。Acceptance View 只引导搜索并显示在 Global Evidence，
+   不参与最终硬 PASS/FAIL、数值分数、selection 或 promotion gate。硬指标已经充分对齐时
+   省略该字段。Goal Mode 始终不创建它。
+   benchmark 机制消融可通过环境变量 `GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED=0` 关闭该策略；
+   Spec Discovery 开始时检查该变量，关闭时不要生成 `acceptance_view`。冻结运行时也会
+   强制移除该字段，恢复硬分持平即回滚的默认行为。
    如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="codex")`，
    将用户填写的名称解析为唯一可用模型并冻结到 `strategy.models`；不存在或不唯一时，
    在创建 run 前直接返回错误。`models=A,B max_parallel=4` 表示按 A、B、A、B 轮转；

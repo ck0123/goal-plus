@@ -58,7 +58,7 @@ class Budget(SearchModel):
 
 
 WorkspaceBackend = Literal["copy", "git_worktree"]
-IterationDisposition = Literal["keep", "discard", "failure"]
+IterationDisposition = Literal["keep", "retain", "discard", "failure"]
 VerifierInvalidationReason = Literal[
     "verifier_contract_invalid",
     "verifier_coverage_inadequate",
@@ -229,12 +229,93 @@ class ResolvedEvidenceAnnotatorProfile(SearchModel):
     provider: ResolvedCodexProvider | None = None
 
 
+AcceptanceCriterionStatus = Literal[
+    "covered",
+    "partial",
+    "missing",
+    "unknown",
+    "not_applicable",
+]
+AcceptanceConfidence = Literal["high", "medium", "low"]
+
+
+class AcceptanceCriterion(SearchModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    category: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    importance: Literal["high", "medium", "low"] = "medium"
+    evidence_hints: list[str] = Field(default_factory=list)
+
+    @field_validator("category", "description")
+    @classmethod
+    def text_must_be_nonempty(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("acceptance criterion text must be non-empty")
+        return normalized
+
+
+class AcceptanceViewSpec(SearchModel):
+    rubric_name: str = Field(min_length=1)
+    benchmark_context: str = Field(min_length=1)
+    criteria: list[AcceptanceCriterion] = Field(min_length=1, max_length=12)
+    tie_policy: Literal["retain_latest"] = "retain_latest"
+    affects_final_result: Literal[False] = False
+
+    @field_validator("rubric_name", "benchmark_context")
+    @classmethod
+    def text_must_be_nonempty(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("acceptance view text must be non-empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def criterion_ids_must_be_unique(self) -> "AcceptanceViewSpec":
+        criterion_ids = [criterion.id for criterion in self.criteria]
+        if len(criterion_ids) != len(set(criterion_ids)):
+            raise ValueError("acceptance criterion ids must be unique")
+        return self
+
+
+class AcceptanceCriterionAssessment(SearchModel):
+    criterion_id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    status: AcceptanceCriterionStatus
+    confidence: AcceptanceConfidence
+    evidence: list[str] = Field(default_factory=list)
+    rationale: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def rationale_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("acceptance rationale must be one line")
+        return " ".join(value.strip().split())
+
+
+class AcceptanceViewAssessment(SearchModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    criteria: list[AcceptanceCriterionAssessment] = Field(min_length=1)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def summary_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("acceptance summary must be one line")
+        return " ".join(value.strip().split())
+
+
 class EvidenceViewRecord(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
     attempt_commit: str = Field(min_length=1)
     description: str = Field(min_length=1, max_length=1000)
+    acceptance_view: AcceptanceViewAssessment | None = None
     created_at: str
 
     @field_validator("description", mode="before")
@@ -349,6 +430,10 @@ class SearchSpec(SearchModel):
     promotion_verifiers: list[VerifierCommand] = Field(default_factory=list)
     constraints: dict[str, Any] = Field(default_factory=dict)
     root_hypotheses: list[str] = Field(default_factory=list)
+    acceptance_view: AcceptanceViewSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     strategy: StrategySpec = Field(default_factory=StrategySpec)
     workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
 
@@ -373,6 +458,10 @@ class SearchSpecDraft(SearchModel):
     promotion_verifiers: list[VerifierCommand] | None = None
     constraints: dict[str, Any] | None = None
     root_hypotheses: list[str] | None = None
+    acceptance_view: AcceptanceViewSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     strategy: StrategySpec | None = None
     workspace: WorkspaceSpec | None = None
 

@@ -94,6 +94,22 @@ EVIDENCE_ANNOTATOR_PROVIDER_NAME_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_PROVIDER_NA
 EVIDENCE_ANNOTATOR_API_KEY_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_API_KEY_ENV"
 EVIDENCE_ANNOTATOR_WIRE_API_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_WIRE_API"
 OUTER_DEADLINE_ENV = "GOAL_PLUS_OUTER_DEADLINE_AT"
+ACCEPTANCE_VIEW_ENABLED_ENV = "GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED"
+
+
+def acceptance_view_enabled(environment: dict[str, str] | None = None) -> bool:
+    source = os.environ if environment is None else environment
+    raw = source.get(ACCEPTANCE_VIEW_ENABLED_ENV)
+    if raw is None:
+        return True
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{ACCEPTANCE_VIEW_ENABLED_ENV} must be a boolean value, found {raw!r}"
+    )
 
 
 @dataclass(frozen=True)
@@ -550,6 +566,8 @@ class FileSearchRuntime:
             process.wait()
 
     def freeze_spec(self, spec: SearchSpec, verifier_artifacts: list[Path]) -> FrozenSpec:
+        if not acceptance_view_enabled() and spec.acceptance_view is not None:
+            spec = spec.model_copy(update={"acceptance_view": None})
         spec = _normalize_verifier_cwds_for_candidate_workspace(spec)
         spec = self._normalize_strategy_models(spec)
         self._validate_strategy_config(spec.strategy)
@@ -1989,10 +2007,11 @@ class FileSearchRuntime:
                 iteration,
                 prior_best,
                 frozen.spec.metric_direction,
+                retain_equal=frozen.spec.acceptance_view is not None,
             )
             iteration.disposition = disposition
 
-            if disposition == "keep":
+            if disposition in {"keep", "retain"}:
                 best_iteration = iteration
             else:
                 target = (
@@ -2124,7 +2143,12 @@ class FileSearchRuntime:
             self._write_run(run)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         records = self._load_candidate_records(run_id)
-        options = self._selection_options(run, records, frozen.spec.metric_direction)
+        options = self._selection_options(
+            run,
+            records,
+            frozen.spec.metric_direction,
+            prefer_latest_hard_tie=frozen.spec.acceptance_view is not None,
+        )
         if not options:
             self._mark_selection_blocked(
                 run_id,
@@ -2351,7 +2375,11 @@ class FileSearchRuntime:
             agent_sessions = ", ".join(
                 session["agent_session_id"] for session in payload["agent_sessions"]
             )
-            best_iteration = self._best_iteration_record(record, frozen.spec.metric_direction)
+            best_iteration = self._best_iteration_record(
+                record,
+                frozen.spec.metric_direction,
+                prefer_latest_hard_tie=frozen.spec.acceptance_view is not None,
+            )
             if best_iteration is not None:
                 score = "" if best_iteration.score is None else str(best_iteration.score)
                 passed = "True"
@@ -3078,9 +3106,9 @@ class FileSearchRuntime:
             "把 context.agent_session_id 传给 search_run_verifier，并省略 scope 以使用 process verifier；同时用一句话 hypothesis 客观概括本轮实际尝试。",
             "每次 run_verifier 调用都会记录一个 iteration。在配置的 host 预算内工作。尽早完成并验证候选，在达到限制前停止启动新的优化 iteration，并留出足够时间返回简洁摘要。",
             "search_run_verifier 会在运行 verifier 前自动提交已修改的候选产物文件；使用 git status、git diff 和 git log 检查 iteration provenance。",
-            "process verifier 返回 keep/discard/failure disposition；非严格改善或验证失败时，runtime 会保留被测 commit 并把候选代码恢复到 candidate-local best。下一轮直接从返回后的已结算工作区继续。",
+            "process verifier 返回 keep/retain/discard/failure disposition；启用 Acceptance View 时，同硬分有效尝试为 retain 并成为下一轮基线，否则非严格改善或验证失败时恢复 candidate-local best。Acceptance View 不改变硬分或最终验收。下一轮直接从返回后的已结算工作区继续。",
             "规划另一个变体前，检查 workspace/results.tsv 中继承的 iteration 日志。运行时拥有并提交这份仅追加账本，会验证已有记录未被修改，并为每份返回的 verifier 报告添加且只添加一条记录；绝不能重写、截断、删除或手动追加它。",
-            "Global Evidence 展示 peer 的 verifier commit、分数、disposition 和可能延迟的客观 View。view=null 只表示 annotator 尚未更新；可先按自己的方向探索。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
+            "Global Evidence 展示 peer 的 verifier commit、硬分、disposition、可能延迟的客观 View 和可选的任务特定 Acceptance View。软项中的 missing、partial 或 unknown 可用于形成新假设，但不参与最终验收。任一 View 为 null 都不要求等待；可先按自己的方向探索。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
         ]
         if plan.worker_policy.get("worker_agent_type"):
             instructions.append(
@@ -3482,7 +3510,11 @@ class FileSearchRuntime:
         record: CandidateRecord,
         spec: SearchSpec,
     ) -> float | None:
-        best_iteration = self._best_iteration_record(record, spec.metric_direction)
+        best_iteration = self._best_iteration_record(
+            record,
+            spec.metric_direction,
+            prefer_latest_hard_tie=spec.acceptance_view is not None,
+        )
         if best_iteration is not None:
             return best_iteration.score
         if (
@@ -4102,6 +4134,8 @@ class FileSearchRuntime:
         iteration: IterationRecord,
         prior_best: IterationRecord | None,
         metric_direction: Literal["maximize", "minimize"],
+        *,
+        retain_equal: bool = False,
     ) -> IterationDisposition:
         if not cls._git_iteration_eligible(iteration):
             return "failure"
@@ -4113,7 +4147,11 @@ class FileSearchRuntime:
             if metric_direction == "maximize"
             else iteration.score < prior_best.score
         )
-        return "keep" if improved else "discard"
+        if improved:
+            return "keep"
+        if retain_equal and iteration.score == prior_best.score:
+            return "retain"
+        return "discard"
 
     def _best_current_artifact_iteration(
         self,
@@ -4147,6 +4185,8 @@ class FileSearchRuntime:
         self,
         record: CandidateRecord,
         metric_direction: Literal["maximize", "minimize"],
+        *,
+        prefer_latest_hard_tie: bool = False,
     ) -> IterationRecord | None:
         scored = [
             iteration
@@ -4159,8 +4199,11 @@ class FileSearchRuntime:
         if not scored:
             return None
         reverse = metric_direction == "maximize"
+        ordered = reversed(scored) if prefer_latest_hard_tie else iter(scored)
         return sorted(
-            scored, key=lambda iteration: iteration.score, reverse=reverse
+            ordered,
+            key=lambda iteration: iteration.score,
+            reverse=reverse,
         )[0]
 
     def _best_git_iteration_record(
@@ -4172,12 +4215,15 @@ class FileSearchRuntime:
             iteration
             for iteration in record.iterations
             if self._git_iteration_eligible(iteration)
+            and iteration.disposition in {None, "keep", "retain"}
         ]
         if not scored:
             return None
         reverse = metric_direction == "maximize"
         return sorted(
-            scored, key=lambda iteration: iteration.score, reverse=reverse
+            reversed(scored),
+            key=lambda iteration: iteration.score,
+            reverse=reverse,
         )[0]
 
     def _selection_options(
@@ -4185,6 +4231,8 @@ class FileSearchRuntime:
         run: RunRecord,
         records: list[CandidateRecord],
         metric_direction: Literal["maximize", "minimize"],
+        *,
+        prefer_latest_hard_tie: bool = False,
     ) -> list[tuple[float, CandidateRecord, int | None, str | None]]:
         options: list[tuple[float, CandidateRecord, int | None, str | None]] = []
         for record in records:
@@ -4195,7 +4243,12 @@ class FileSearchRuntime:
                 record.task.workspace, current_changed
             )
             report_is_represented = False
-            for iteration in record.iterations:
+            iterations = (
+                reversed(record.iterations)
+                if prefer_latest_hard_tie
+                else iter(record.iterations)
+            )
+            for iteration in iterations:
                 if (
                     iteration.process_passed is not True
                     or iteration.score is None
@@ -4354,7 +4407,11 @@ class FileSearchRuntime:
                 record.task.run_id,
                 record.candidate_id,
             )
-            best_iteration = self._best_iteration_record(record, spec.metric_direction)
+            best_iteration = self._best_iteration_record(
+                record,
+                spec.metric_direction,
+                prefer_latest_hard_tie=spec.acceptance_view is not None,
+            )
             score = self._record_ranking_score(record, spec)
             best_git_head = best_iteration.git_head if best_iteration else None
 
@@ -4513,7 +4570,11 @@ class FileSearchRuntime:
         spec: SearchSpec,
     ) -> dict[str, Any]:
         score_report = record.score_report
-        best_iteration = self._best_iteration_record(record, spec.metric_direction)
+        best_iteration = self._best_iteration_record(
+            record,
+            spec.metric_direction,
+            prefer_latest_hard_tie=spec.acceptance_view is not None,
+        )
         evidence_score = (
             best_iteration.score
             if best_iteration is not None
@@ -5552,6 +5613,11 @@ class FileSearchRuntime:
             "score": iteration.score,
             "disposition": iteration.disposition,
             "view": view.description if view is not None else None,
+            "acceptance_view": (
+                view.acceptance_view.model_dump(mode="json")
+                if view is not None and view.acceptance_view is not None
+                else None
+            ),
         }
 
     def _global_evidence_view(self, run_id: str) -> list[dict[str, Any]]:
@@ -5638,6 +5704,8 @@ class FileSearchRuntime:
         candidate_id: str,
         iteration_number: int,
     ) -> dict[str, Any]:
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
         record = self._load_candidate_record(run_id, candidate_id)
         iteration = next(
             (
@@ -5700,6 +5768,12 @@ class FileSearchRuntime:
                 "failure_class": iteration.failure_class,
             },
             "relevant_metrics": iteration.metrics,
+            "objective": frozen.spec.objective,
+            "acceptance_contract": (
+                frozen.spec.acceptance_view.model_dump(mode="json")
+                if frozen.spec.acceptance_view is not None
+                else None
+            ),
             "annotator": task.profile.model_dump(mode="json"),
             "outer_deadline_at": task.outer_deadline_at,
             "runtime_root": str(self.root_dir),

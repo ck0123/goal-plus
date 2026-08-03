@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from goal_plus.models import (
+    AcceptanceViewSpec,
     AgentHostHandle,
     AgentSessionRecord,
     Budget,
@@ -22,6 +23,8 @@ from goal_plus.models import (
     WorkerBudget,
     ModelSpec,
 )
+from goal_plus.runtime import ACCEPTANCE_VIEW_ENABLED_ENV, FileSearchRuntime
+from tests._runtime_helpers import make_project
 
 
 def valid_spec_dict() -> dict:
@@ -58,6 +61,90 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["strategy"]["orchestration_mode"] == "parallel_loops"
     assert dumped["strategy"]["worker_host"] == "codex"
     assert "models" not in dumped["strategy"]
+
+
+def test_search_spec_freezes_non_gating_acceptance_view() -> None:
+    data = valid_spec_dict()
+    data["acceptance_view"] = {
+        "rubric_name": "SWE issue coverage",
+        "benchmark_context": "The process gate only checks for a valid patch.",
+        "criteria": [
+            {
+                "id": "issue_requirements",
+                "category": "issue_coverage",
+                "description": "Cover each behavior requested by the issue.",
+                "importance": "high",
+                "evidence_hints": ["changed implementation", "focused tests"],
+            },
+            {
+                "id": "regression_risk",
+                "category": "regression",
+                "description": "Preserve adjacent behavior and API compatibility.",
+            },
+        ],
+    }
+
+    spec = SearchSpec.model_validate(data)
+
+    assert isinstance(spec.acceptance_view, AcceptanceViewSpec)
+    assert spec.acceptance_view.affects_final_result is False
+    assert spec.acceptance_view.tie_policy == "retain_latest"
+    dumped = spec.model_dump(mode="json")["acceptance_view"]
+    assert dumped["criteria"][0]["id"] == "issue_requirements"
+    assert "required" not in dumped["criteria"][0]
+
+
+def test_acceptance_view_rejects_gating_or_ambiguous_criteria() -> None:
+    data = valid_spec_dict()
+    data["acceptance_view"] = {
+        "rubric_name": "invalid",
+        "benchmark_context": "invalid contract",
+        "affects_final_result": True,
+        "criteria": [
+            {
+                "id": "coverage",
+                "category": "coverage",
+                "description": "Inspect coverage.",
+                "required": True,
+            }
+        ],
+    }
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(data)
+
+    del data["acceptance_view"]["affects_final_result"]
+    del data["acceptance_view"]["criteria"][0]["required"]
+    data["acceptance_view"]["criteria"].append(
+        dict(data["acceptance_view"]["criteria"][0])
+    )
+    with pytest.raises(ValidationError, match="ids must be unique"):
+        SearchSpec.model_validate(data)
+
+
+def test_acceptance_view_ablation_is_enforced_at_freeze(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    data = valid_spec_dict()
+    data["source_path"] = str(project)
+    data["acceptance_view"] = {
+        "rubric_name": "SWE issue coverage",
+        "benchmark_context": "The hard process metric is sparse.",
+        "criteria": [
+            {
+                "id": "issue_requirements",
+                "category": "issue_coverage",
+                "description": "Cover each behavior requested by the issue.",
+            }
+        ],
+    }
+    monkeypatch.setenv(ACCEPTANCE_VIEW_ENABLED_ENV, "0")
+
+    frozen = FileSearchRuntime(tmp_path / ".gp").freeze_spec(
+        SearchSpec.model_validate(data), [project / "evaluator.py"]
+    )
+
+    assert frozen.spec.acceptance_view is None
 
 
 def test_goal_plus_spec_draft_exposes_typed_partial_search_spec() -> None:

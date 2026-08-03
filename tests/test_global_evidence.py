@@ -6,7 +6,11 @@ import subprocess
 
 import pytest
 
-from goal_plus.models import EvidenceViewRecord, SearchSpec
+from goal_plus.models import (
+    AcceptanceViewAssessment,
+    EvidenceViewRecord,
+    SearchSpec,
+)
 from goal_plus.runtime import FileSearchRuntime
 from tests._runtime_helpers import git_commit_all, make_project, spec_for
 
@@ -16,6 +20,7 @@ def _search_with_candidates(
     count: int,
     *,
     strategy_updates: dict | None = None,
+    acceptance_view: dict | None = None,
 ) -> tuple[FileSearchRuntime, str, list[tuple[str, str, Path]]]:
     project = make_project(tmp_path)
     (project / "evaluator.py").write_text(
@@ -28,6 +33,8 @@ def _search_with_candidates(
     spec_data = spec_for(project, max_parallel=count).model_dump(mode="json")
     spec_data["workspace"] = {"backend": "git_worktree"}
     spec_data["strategy"].update(strategy_updates or {})
+    if acceptance_view is not None:
+        spec_data["acceptance_view"] = acceptance_view
     runtime = FileSearchRuntime(tmp_path / ".gp")
     frozen = runtime.freeze_spec(
         SearchSpec.model_validate(spec_data),
@@ -97,6 +104,7 @@ def test_global_evidence_is_immediate_and_view_is_late_bound(tmp_path: Path) -> 
         "discard",
     ]
     assert all(entry["commit"] and entry["view"] is None for entry in view)
+    assert all(entry["acceptance_view"] is None for entry in view)
 
     discarded_commit = view[-1]["commit"]
     annotation_task = runtime._load_evidence_annotation_task(run_id, second[0], 2)
@@ -133,6 +141,81 @@ def test_global_evidence_is_immediate_and_view_is_late_bound(tmp_path: Path) -> 
         check=True,
     )
     assert _git(first[2], "show", f"{peer_commit}:initial_program.py") == "VALUE = 2"
+
+
+def test_global_evidence_presents_structured_acceptance_view(tmp_path: Path) -> None:
+    contract = {
+        "rubric_name": "EdgeBench hidden generalization",
+        "benchmark_context": "Local and hidden workloads differ.",
+        "criteria": [
+            {
+                "id": "input_generalization",
+                "category": "hidden_generalization",
+                "description": "Handle valid inputs beyond public examples.",
+                "importance": "high",
+            }
+        ],
+    }
+    runtime, run_id, [candidate] = _search_with_candidates(
+        tmp_path,
+        1,
+        acceptance_view=contract,
+    )
+    candidate_id, session_id, workspace = candidate
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    report = runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session_id,
+        hypothesis="Generalize the implementation",
+    )
+    assert report.disposition == "keep"
+
+    context = runtime._evidence_annotation_context(run_id, candidate_id, 1)
+    assert context["acceptance_contract"]["rubric_name"] == contract["rubric_name"]
+    assert context["acceptance_contract"]["affects_final_result"] is False
+
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
+    assert task is not None
+    runtime._write_evidence_annotation_task(
+        task.model_copy(
+            update={
+                "state": "completed",
+                "view": EvidenceViewRecord(
+                    run_id=run_id,
+                    candidate_id=candidate_id,
+                    iteration=1,
+                    attempt_commit=task.attempt_commit,
+                    description="Changed the implementation to handle more inputs.",
+                    acceptance_view=AcceptanceViewAssessment.model_validate(
+                        {
+                            "summary": "The diff provides partial public evidence.",
+                            "criteria": [
+                                {
+                                    "criterion_id": "input_generalization",
+                                    "status": "partial",
+                                    "confidence": "medium",
+                                    "evidence": ["initial_program.py diff"],
+                                    "rationale": "The broader branch is visible, but hidden behavior is unknown.",
+                                }
+                            ],
+                        }
+                    ),
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+            }
+        )
+    )
+
+    [entry] = runtime.get_global_evidence(session_id)
+    assert entry["score"] == 1.0
+    assert entry["acceptance_view"]["criteria"][0] == {
+        "criterion_id": "input_generalization",
+        "status": "partial",
+        "confidence": "medium",
+        "evidence": ["initial_program.py diff"],
+        "rationale": "The broader branch is visible, but hidden behavior is unknown.",
+    }
 
 
 def test_worker_hypothesis_is_required_and_parent_evidence_is_private(

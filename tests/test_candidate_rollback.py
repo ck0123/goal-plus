@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from goal_plus.models import SearchSpec
-from goal_plus.runtime import FileSearchRuntime
+from goal_plus.runtime import ACCEPTANCE_VIEW_ENABLED_ENV, FileSearchRuntime
 from tests._runtime_helpers import make_project, spec_for
 
 
@@ -15,10 +15,24 @@ def _candidate(
     *,
     direction: str = "maximize",
     backend: str = "copy",
+    acceptance_view: bool = False,
 ) -> tuple[FileSearchRuntime, str, str, Path]:
     project = make_project(tmp_path)
     spec_data = spec_for(project, direction=direction).model_dump(mode="json")
     spec_data["workspace"] = {"backend": backend}
+    if acceptance_view:
+        spec_data["acceptance_view"] = {
+            "rubric_name": "proxy metric generalization",
+            "benchmark_context": "The hard process metric is sparse.",
+            "criteria": [
+                {
+                    "id": "generalization",
+                    "category": "hidden_generalization",
+                    "description": "Avoid specializing only to the visible examples.",
+                    "importance": "high",
+                }
+            ],
+        }
     runtime = FileSearchRuntime(tmp_path / ".gp")
     frozen = runtime.freeze_spec(
         SearchSpec.model_validate(spec_data),
@@ -179,6 +193,92 @@ def test_first_failed_iteration_restores_pre_attempt_workspace(
         cwd=workspace,
         check=True,
     )
+
+
+def test_acceptance_view_retains_latest_valid_hard_score_tie(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, run_id, candidate_id, workspace = _candidate(
+        tmp_path,
+        backend="git_worktree",
+        acceptance_view=True,
+    )
+    program = workspace / "initial_program.py"
+
+    def fake_verify(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        value = program.read_text(encoding="utf-8").split("'", 2)[1]
+        score = 1.0 if value in {"first", "broader"} else 0.0
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            f'{{"combined_score": {score}}}\n',
+            "",
+        )
+
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_verify)
+    reports = []
+    for value in ("first", "broader", "worse"):
+        program.write_text(f"VALUE = {value!r}\n", encoding="utf-8")
+        reports.append(
+            runtime.run_verifier(
+                run_id,
+                candidate_id,
+                hypothesis=f"try {value}",
+            )
+        )
+
+    assert [report.disposition for report in reports] == [
+        "keep",
+        "retain",
+        "discard",
+    ]
+    assert [report.best_iteration for report in reports] == [1, 2, 2]
+    assert program.read_text(encoding="utf-8") == "VALUE = 'broader'\n"
+
+    selected = runtime.select(run_id)
+    assert selected["selected_iteration"] == 2
+    assert selected["selected_score"] == 1.0
+    assert program.read_text(encoding="utf-8") == "VALUE = 'broader'\n"
+
+
+def test_acceptance_view_ablation_restores_strict_hard_score_ties(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(ACCEPTANCE_VIEW_ENABLED_ENV, "false")
+    runtime, run_id, candidate_id, workspace = _candidate(
+        tmp_path,
+        backend="git_worktree",
+        acceptance_view=True,
+    )
+    program = workspace / "initial_program.py"
+
+    def fake_verify(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            command, 0, '{"combined_score": 1.0}\n', ""
+        )
+
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_verify)
+    dispositions = []
+    for value in ("first", "equal"):
+        program.write_text(f"VALUE = {value!r}\n", encoding="utf-8")
+        dispositions.append(
+            runtime.run_verifier(
+                run_id, candidate_id, hypothesis=f"try {value}"
+            ).disposition
+        )
+
+    assert dispositions == ["keep", "discard"]
+    assert program.read_text(encoding="utf-8") == "VALUE = 'first'\n"
+
+    selected = runtime.select(run_id)
+    assert selected["selected_iteration"] == 1
+    assert selected["selected_score"] == 1.0
 
 
 def test_select_and_promote_keep_all_iteration_commits_reachable(

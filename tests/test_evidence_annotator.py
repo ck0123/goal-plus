@@ -14,8 +14,10 @@ from goal_plus.evidence_annotator import (
     MAX_ANNOTATION_ATTEMPTS,
     MAX_ANNOTATION_DIFF_BYTES,
     CodexEvidenceAnnotator,
+    EvidenceAnnotationOutput,
     EvidenceAnnotationResult,
     HostEvidenceAnnotator,
+    AnnotationOutputError,
     PermanentAnnotationError,
     TransientAnnotationError,
     drain_evidence_annotations,
@@ -48,6 +50,53 @@ class RecordingAnnotator:
         return EvidenceAnnotationResult(
             description="Changed the candidate value stored in initial_program.py.",
             usage={"input_tokens": 7, "output_tokens": 3},
+        )
+
+
+def test_acceptance_output_must_match_frozen_criterion_order() -> None:
+    contract = {
+        "criteria": [
+            {"id": "issue_coverage"},
+            {"id": "regression_risk"},
+        ]
+    }
+    output = EvidenceAnnotationOutput.model_validate(
+        {
+            "description": "Changed the requested behavior.",
+            "acceptance_view": {
+                "summary": "Public evidence is incomplete.",
+                "criteria": [
+                    {
+                        "criterion_id": "issue_coverage",
+                        "status": "covered",
+                        "confidence": "high",
+                        "evidence": ["implementation diff"],
+                        "rationale": "The requested branch is implemented.",
+                    },
+                    {
+                        "criterion_id": "regression_risk",
+                        "status": "unknown",
+                        "confidence": "low",
+                        "evidence": [],
+                        "rationale": "No regression test evidence is available.",
+                    },
+                ],
+            },
+        }
+    )
+
+    CodexEvidenceAnnotator._validate_acceptance_output(output, contract)
+    reversed_output = output.model_copy(
+        update={
+            "acceptance_view": output.acceptance_view.model_copy(
+                update={"criteria": list(reversed(output.acceptance_view.criteria))}
+            )
+        }
+    )
+    with pytest.raises(AnnotationOutputError, match="do not match"):
+        CodexEvidenceAnnotator._validate_acceptance_output(
+            reversed_output,
+            contract,
         )
 
 
