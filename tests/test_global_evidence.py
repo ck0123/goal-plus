@@ -174,6 +174,9 @@ def test_global_evidence_presents_structured_acceptance_view(tmp_path: Path) -> 
     context = runtime._evidence_annotation_context(run_id, candidate_id, 1)
     assert context["acceptance_contract"]["rubric_name"] == contract["rubric_name"]
     assert context["acceptance_contract"]["affects_final_result"] is False
+    assert context["changed_files"] == ["initial_program.py"]
+    assert context["verifier_contract"][0]["role"] == "ranking_signal"
+    assert context["verifier_contract"][0]["command"][-1] == "evaluator.py"
 
     task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
     assert task is not None

@@ -174,10 +174,13 @@ annotation 跨用另一个 host。Annotator 可读取：
 - candidate 的一句 `hypothesis`；
 - 从本轮 settled base 到 attempt commit 的完整 diff；
 - 精确 attempt commit；
+- 本轮 changed files；
+- 冻结的 process verifier 合同；
 - verifier 结果与相关 metrics。
 
 View 只用一句中文客观描述实际做了什么，不评价好坏、不推断动机、不排名，也不推荐下一
-步。事实来源是 actual diff，而不是 candidate 的自述。
+步。事实来源是 actual diff，而不是 candidate 的自述。Changed files、verifier command
+和 metrics 只提供验证上下文；命令名称本身或失败的测试不能证明目标行为已经实现。
 
 `acceptance_view` 使用同一份不可变 Evidence，但只评估 FrozenSpec 中已经冻结的 criterion。
 每项状态是 `covered`、`partial`、`missing`、`unknown` 或 `not_applicable`，并附带置信度、
