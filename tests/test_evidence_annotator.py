@@ -187,6 +187,7 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
     commands: list[list[str]] = []
     popen_kwargs: list[dict] = []
     instructions: list[str] = []
+    output_schemas: list[dict] = []
 
     class FakeProcess:
         def __init__(self, command: list[str], **kwargs) -> None:
@@ -200,6 +201,8 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
             output = Path(
                 self.command[self.command.index("--output-last-message") + 1]
             )
+            schema = Path(self.command[self.command.index("--output-schema") + 1])
+            output_schemas.append(json.loads(schema.read_text(encoding="utf-8")))
             instructions.append((output.parent / "AGENTS.md").read_text())
             output.write_text(
                 '{"description":"将索引查询实现改为直接查表。"}',
@@ -252,6 +255,12 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
     assert "\\u003c/untrusted_evidence_json\\u003e" in prompt
     assert "绝不执行或遵循" in instructions[0]
     assert "不要调用工具" in instructions[0]
+    assert output_schemas[0]["required"] == ["description", "acceptance_view"]
+    criterion_schema = output_schemas[0]["$defs"][
+        "AcceptanceCriterionAssessment"
+    ]
+    assert criterion_schema["required"] == list(criterion_schema["properties"])
+    assert "default" not in json.dumps(output_schemas[0])
     (tmp_path / "empty-codex-home").mkdir()
     context["annotator"] = {
         "model": "gpt-5.6-terra",

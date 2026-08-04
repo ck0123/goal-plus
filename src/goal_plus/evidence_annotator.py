@@ -78,6 +78,27 @@ class EvidenceAnnotationOutput(SearchModel):
         return " ".join(value.strip().split())
 
 
+def _strict_annotation_output_schema() -> dict[str, Any]:
+    """Return a strict-output-compatible schema for the Codex CLI."""
+    schema = EvidenceAnnotationOutput.model_json_schema()
+
+    def normalize(value: Any) -> None:
+        if isinstance(value, dict):
+            value.pop("default", None)
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                value["required"] = list(properties)
+                value["additionalProperties"] = False
+            for nested in value.values():
+                normalize(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                normalize(nested)
+
+    normalize(schema)
+    return schema
+
+
 ANNOTATOR_INSTRUCTIONS = (
     "# Evidence Annotator\n\n"
     "你负责把候选尝试的实际代码变化压缩成一句客观的简体中文陈述；"
@@ -478,7 +499,7 @@ class CodexEvidenceAnnotator:
             schema_path = request_dir / "output.schema.json"
             output_path = request_dir / "output.json"
             schema_path.write_text(
-                json.dumps(EvidenceAnnotationOutput.model_json_schema()),
+                json.dumps(_strict_annotation_output_schema()),
                 encoding="utf-8",
             )
             command = [
