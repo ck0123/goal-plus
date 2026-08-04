@@ -194,8 +194,11 @@ View 只用一句中文客观描述实际做了什么，不评价好坏、不推
 
 verifier settlement 和 Evidence 读取都可以触发 run-scoped annotator。一个 drainer
 串行处理 backlog，但 verifier、selection 和 promotion 都不等待它。重试状态、解析后的
-模型/provider、deadline、usage 和 View 都持久化保存。run 关闭后，发布 fence 会拒绝
-迟到的 annotation 修改。
+模型/provider、deadline、usage 和 View 都持久化保存。`ready_to_promote` 和 `promoted`
+run 的 Evidence 已经不可变，因此 annotator 仍可在 outer deadline 内发布迟到 View；
+invalidated、aborted 或 failed run 的发布 fence 继续拒绝修改。需要在销毁宿主环境前得到
+完整 View 的 controller，可以显式同步 drain 已登记的有界重试，而不改变 SearchTools 的
+选择或 promotion 语义。
 
 ## Git 与 Candidate-Local Best
 

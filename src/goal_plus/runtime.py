@@ -200,6 +200,12 @@ WORKER_ITERATION_RUN_STATES = frozenset(
         RunState.SELECTION_BLOCKED,
     }
 )
+EVIDENCE_ANNOTATION_RUN_STATES = WORKER_ITERATION_RUN_STATES | frozenset(
+    {
+        RunState.READY_TO_PROMOTE,
+        RunState.PROMOTED,
+    }
+)
 
 
 def utc_timestamp() -> str:
@@ -5713,7 +5719,7 @@ class FileSearchRuntime:
         run = self._load_run(run_id)
         return (
             run.invalidated_at is None
-            and run.state in WORKER_ITERATION_RUN_STATES
+            and run.state in EVIDENCE_ANNOTATION_RUN_STATES
         )
 
     def _eligible_evidence_annotations(

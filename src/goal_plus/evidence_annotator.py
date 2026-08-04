@@ -1042,14 +1042,41 @@ def _annotation_result(value: str | EvidenceAnnotationResult) -> EvidenceAnnotat
     )
 
 
+def _next_annotation_retry_delay(
+    runtime: FileSearchRuntime,
+    run_id: str,
+) -> float | None:
+    """Return the next retry delay and settle tasks that can no longer run."""
+    if not runtime._evidence_annotation_run_active(run_id):
+        return None
+    now_epoch = time.time()
+    delays: list[float] = []
+    for candidate_id, iteration in runtime._pending_evidence_annotations(run_id):
+        task = runtime._load_evidence_annotation_task(
+            run_id, candidate_id, iteration
+        )
+        if task is None or task.state not in {"pending", "retry_wait"}:
+            continue
+        deadline = runtime._outer_deadline_epoch(task.outer_deadline_at)
+        if task.attempts >= MAX_ANNOTATION_ATTEMPTS or (
+            deadline is not None and deadline <= now_epoch
+        ):
+            _claim_annotation_task(runtime, run_id, candidate_id, iteration)
+            continue
+        retry_at = runtime._outer_deadline_epoch(task.next_attempt_at)
+        delays.append(max(0.0, (retry_at or now_epoch) - now_epoch))
+    return min(delays) if delays else None
+
+
 def drain_evidence_annotations(
     root_dir: Path | str,
     run_id: str,
     *,
     annotator: EvidenceAnnotator | None = None,
     generation: str | None = None,
+    wait_for_retries: bool = False,
 ) -> int:
-    """Describe each pending Evidence once, serially, then leave no idle worker."""
+    """Describe pending Evidence serially, optionally settling bounded retries."""
     runtime = FileSearchRuntime(root_dir)
     published = 0
 
@@ -1111,6 +1138,13 @@ def drain_evidence_annotations(
                             f"{type(exc).__name__}: {exc}",
                         )
                     continue
+
+                if wait_for_retries and generation is None:
+                    retry_delay = _next_annotation_retry_delay(runtime, run_id)
+                    if retry_delay is not None:
+                        if retry_delay > 0:
+                            time.sleep(min(retry_delay, 0.5))
+                        continue
 
                 if generation is None:
                     return published

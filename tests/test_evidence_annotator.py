@@ -429,7 +429,7 @@ def test_kick_is_single_flight_and_non_blocking(
     assert launch_options[0]["start_new_session"] is True
 
 
-def test_permanent_failure_is_not_retried_and_closed_run_does_not_publish(
+def test_permanent_failure_is_not_retried_and_selection_does_not_cancel_view(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -501,16 +501,33 @@ def test_permanent_failure_is_not_retried_and_closed_run_does_not_publish(
 
     processes = []
 
-    class CloseDuringInference:
+    class CompleteAfterSelection:
         def __init__(self, command, **_kwargs):
             self.command = command
             self.returncode = None
             self.terminated = False
+            self.communicate_calls = 0
             processes.append(self)
 
         def communicate(self, input=None, timeout=None):
-            runtime.select(run_id)
-            raise subprocess.TimeoutExpired(self.command, timeout)
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                runtime.select(run_id)
+                raise subprocess.TimeoutExpired(self.command, timeout)
+            output_path = Path(
+                self.command[self.command.index("--output-last-message") + 1]
+            )
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "description": "Described Evidence after Search selection.",
+                        "acceptance_view": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.returncode = 0
+            return "", ""
 
         def poll(self):
             return self.returncode
@@ -529,16 +546,77 @@ def test_permanent_failure_is_not_retried_and_closed_run_does_not_publish(
 
     def fake_popen(command, **kwargs):
         if command[:2] == ["codex", "exec"]:
-            return CloseDuringInference(command, **kwargs)
+            return CompleteAfterSelection(command, **kwargs)
         return real_popen(command, **kwargs)
 
     monkeypatch.setattr(annotator_module.subprocess, "Popen", fake_popen)
     assert drain_evidence_annotations(
         runtime.root_dir, run_id, annotator=CodexEvidenceAnnotator()
-    ) == 0
-    assert processes[0].terminated is True
-    assert runtime.get_global_evidence(session.agent_session_id)[-1]["view"] is None
+    ) == 1
+    assert processes[0].terminated is False
+    assert runtime.get_global_evidence(session.agent_session_id)[-1]["view"] == (
+        "Described Evidence after Search selection."
+    )
     assert kick_evidence_annotator(runtime.root_dir, run_id) is False
+
+
+def test_wait_for_retries_settles_transient_view_after_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path)
+    runtime = FileSearchRuntime(tmp_path / ".gp")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_parallel=1), [project / "evaluator.py"]
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    (task.workspace / "initial_program.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    runtime.run_verifier(
+        run_id,
+        task.candidate_id,
+        agent_session_id=session.agent_session_id,
+        hypothesis="Create Evidence before promotion",
+    )
+    runtime.select(run_id)
+    runtime.promote(run_id, task.candidate_id)
+
+    class TransientThenSuccess:
+        calls = 0
+
+        def annotate(self, _context):
+            self.calls += 1
+            if self.calls == 1:
+                raise TransientAnnotationError("502 Bad Gateway")
+            return EvidenceAnnotationResult(
+                description="Described promoted Evidence after a transient retry.",
+                usage={},
+            )
+
+    monkeypatch.setattr(
+        annotator_module,
+        "ANNOTATION_RETRY_BACKOFF_SECONDS",
+        (0, 0),
+    )
+    annotator = TransientThenSuccess()
+    assert drain_evidence_annotations(
+        runtime.root_dir,
+        run_id,
+        annotator=annotator,
+        wait_for_retries=True,
+    ) == 1
+
+    annotation_task = runtime._load_evidence_annotation_task(
+        run_id, task.candidate_id, 1
+    )
+    assert annotator.calls == 2
+    assert annotation_task is not None
+    assert annotation_task.state == "completed"
+    assert annotation_task.view is not None
 
 
 def test_expired_outer_deadline_never_starts_verifier_or_annotation(
