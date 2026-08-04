@@ -77,6 +77,11 @@ agent 可以在 Spec Discovery 中从公开 issue、benchmark 说明、源码与
 `affects_final_result` 固定为 `false`。Goal Mode 不创建此字段；硬 metric 已充分对齐的
 Search 也应省略它。
 
+Benchmark 机制消融可以设置 `GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1`。该模式要求 Search
+冻结 3–8 项非空软标准；缺失或与 `GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED=0` 冲突时，runtime
+会在创建 run 和消耗候选预算前拒绝冻结。这样 ON 组不能因为 main agent 自行省略字段而
+静默退化成 OFF 组。该要求仍不改变硬分、selection、promotion gate 或最终验收。
+
 冻结后的合同不能原地修改。确认 verifier 合同有误时，应先使当前 run 失效并停止其
 worker，再冻结修正后的 spec，创建 successor run。旧分数不能跨合同复用。
 

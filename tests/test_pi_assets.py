@@ -446,6 +446,8 @@ def test_pi_assets_use_acceptance_view_as_non_gating_search_feedback() -> None:
 
     assert "Goal Mode 始终不创建它" in skill
     assert '`tie_policy="retain_latest"`' in skill
+    assert "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1" in skill
+    assert "不能退化成没有软标准的 ON 组" in skill
     assert "`retain`" in combined
     assert "不改变硬 score 或最终 PASS/FAIL" in combined
 

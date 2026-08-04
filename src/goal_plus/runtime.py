@@ -95,20 +95,40 @@ EVIDENCE_ANNOTATOR_API_KEY_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_API_KEY_ENV"
 EVIDENCE_ANNOTATOR_WIRE_API_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_WIRE_API"
 OUTER_DEADLINE_ENV = "GOAL_PLUS_OUTER_DEADLINE_AT"
 ACCEPTANCE_VIEW_ENABLED_ENV = "GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED"
+ACCEPTANCE_VIEW_REQUIRED_ENV = "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED"
 
 
-def acceptance_view_enabled(environment: dict[str, str] | None = None) -> bool:
+def _boolean_environment_value(
+    name: str,
+    *,
+    default: bool,
+    environment: dict[str, str] | None = None,
+) -> bool:
     source = os.environ if environment is None else environment
-    raw = source.get(ACCEPTANCE_VIEW_ENABLED_ENV)
+    raw = source.get(name)
     if raw is None:
-        return True
+        return default
     normalized = raw.strip().lower()
     if normalized in {"1", "true", "yes", "on"}:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(
-        f"{ACCEPTANCE_VIEW_ENABLED_ENV} must be a boolean value, found {raw!r}"
+    raise ValueError(f"{name} must be a boolean value, found {raw!r}")
+
+
+def acceptance_view_enabled(environment: dict[str, str] | None = None) -> bool:
+    return _boolean_environment_value(
+        ACCEPTANCE_VIEW_ENABLED_ENV,
+        default=True,
+        environment=environment,
+    )
+
+
+def acceptance_view_required(environment: dict[str, str] | None = None) -> bool:
+    return _boolean_environment_value(
+        ACCEPTANCE_VIEW_REQUIRED_ENV,
+        default=False,
+        environment=environment,
     )
 
 
@@ -566,8 +586,26 @@ class FileSearchRuntime:
             process.wait()
 
     def freeze_spec(self, spec: SearchSpec, verifier_artifacts: list[Path]) -> FrozenSpec:
-        if not acceptance_view_enabled() and spec.acceptance_view is not None:
+        view_enabled = acceptance_view_enabled()
+        view_required = acceptance_view_required()
+        if view_required and not view_enabled:
+            raise ValueError(
+                f"{ACCEPTANCE_VIEW_REQUIRED_ENV}=1 requires "
+                f"{ACCEPTANCE_VIEW_ENABLED_ENV}=1"
+            )
+        if not view_enabled and spec.acceptance_view is not None:
             spec = spec.model_copy(update={"acceptance_view": None})
+        if view_required:
+            if spec.acceptance_view is None:
+                raise ValueError(
+                    f"{ACCEPTANCE_VIEW_REQUIRED_ENV}=1 requires SearchSpec.acceptance_view"
+                )
+            criterion_count = len(spec.acceptance_view.criteria)
+            if not 3 <= criterion_count <= 8:
+                raise ValueError(
+                    f"{ACCEPTANCE_VIEW_REQUIRED_ENV}=1 requires 3 to 8 "
+                    f"acceptance criteria, found {criterion_count}"
+                )
         spec = _normalize_verifier_cwds_for_candidate_workspace(spec)
         spec = self._normalize_strategy_models(spec)
         self._validate_strategy_config(spec.strategy)

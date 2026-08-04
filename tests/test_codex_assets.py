@@ -58,6 +58,8 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
         '`tie_policy="retain_latest"`',
         "`affects_final_result=false`",
         "Goal Mode 始终不创建它",
+        "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1",
+        "不能退化成没有软标准的 ON 组",
     ):
         assert expected in text
     assert "mode_hint" not in text
@@ -79,6 +81,8 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
         "OPENAI_API_KEY",
         "SFORGE_AGENT_API_KEY",
         "GOAL_PLUS_OUTER_DEADLINE_AT",
+        "GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED",
+        "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_MODEL",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_REASONING_EFFORT",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_BASE_URL",

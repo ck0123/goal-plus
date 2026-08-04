@@ -59,6 +59,10 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
    benchmark 机制消融可通过环境变量 `GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED=0` 关闭该策略；
    Spec Discovery 开始时检查该变量，关闭时不要生成 `acceptance_view`。冻结运行时也会
    强制移除该字段，恢复硬分持平即回滚的默认行为。
+   当 benchmark 设置 `GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1` 时，即使当前公开硬指标看似
+   充分，也必须根据公开任务冻结非空 `acceptance_view`，且包含 3–8 项有区分度的 criterion；
+   不得机械复制固定清单。运行时会拒绝缺失、过少、过多或同时关闭 enabled 的合同，收到
+   该错误后应补全 SearchSpec 并重新冻结，不能退化成没有软标准的 ON 组。
    如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="codex")`，
    将用户填写的名称解析为唯一可用模型并冻结到 `strategy.models`；不存在或不唯一时，
    在创建 run 前直接返回错误。`models=A,B max_parallel=4` 表示按 A、B、A、B 轮转；
