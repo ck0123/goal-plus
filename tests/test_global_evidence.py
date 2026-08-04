@@ -370,6 +370,54 @@ def test_pi_worker_model_is_inherited_by_pi_annotator(
     assert context["annotator"]["pi_provider"] == "bench-openai"
 
 
+def test_pi_worker_can_use_an_independent_codex_annotator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv(
+        "GOAL_PLUS_EVIDENCE_ANNOTATOR_BASE_URL",
+        "http://proxy.example/v1",
+    )
+    runtime, run_id, [candidate] = _search_with_candidates(
+        tmp_path,
+        1,
+        strategy_updates={
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 60},
+            "worker_launch": {
+                "model": "worker-model",
+                "reasoning_effort": "high",
+            },
+            "evidence_annotator": {
+                "host": "codex",
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "medium",
+            },
+        },
+    )
+    candidate_id, session_id, workspace = candidate
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session_id,
+        hypothesis="Set the Pi candidate value",
+    )
+
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
+    assert task is not None and task.profile is not None
+    assert task.profile.host == "codex"
+    assert task.profile.model == "gpt-5.6-luna"
+    assert task.profile.reasoning_effort == "medium"
+    assert task.profile.codex_home == str(codex_home)
+    assert task.profile.pi_home is None
+    assert task.profile.pi_provider is None
+    assert task.profile.provider is not None
+
+
 def test_pi_annotator_inherits_host_provider_and_model_by_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

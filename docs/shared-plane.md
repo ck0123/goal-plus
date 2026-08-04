@@ -82,6 +82,11 @@ Benchmark 机制消融可以设置 `GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1`。该�
 会在创建 run 和消耗候选预算前拒绝冻结。这样 ON 组不能因为 main agent 自行省略字段而
 静默退化成 OFF 组。该要求仍不改变硬分、selection、promotion gate 或最终验收。
 
+Evidence annotator 默认继承 Search 的 `worker_host`。需要把 ViewAgent 作为独立机制控制
+变量时，可以冻结 `strategy.evidence_annotator.host=codex` 或 `pi-rpc`；模型、provider、
+home 和调用进程都按该 host 解析，不改变候选 worker 的 host。未设置该字段时继续使用
+host-native 默认路径。
+
 冻结后的合同不能原地修改。确认 verifier 合同有误时，应先使当前 run 失效并停止其
 worker，再冻结修正后的 spec，创建 successor run。旧分数不能跨合同复用。
 

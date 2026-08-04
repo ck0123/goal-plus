@@ -5463,23 +5463,28 @@ class FileSearchRuntime:
     ) -> tuple[ResolvedEvidenceAnnotatorProfile | None, str | None]:
         strategy = frozen.spec.strategy
         configured = strategy.evidence_annotator
+        annotation_host = configured.host or strategy.worker_host
         worker_launch = strategy.worker_launch
         env_model = os.environ.get(EVIDENCE_ANNOTATOR_MODEL_ENV)
         if configured.model:
             model = configured.model
-        elif selected_model:
+        elif annotation_host == strategy.worker_host and selected_model:
             model = selected_model
-        elif worker_launch is not None:
+        elif annotation_host == strategy.worker_host and worker_launch is not None:
             model = worker_launch.model
         elif env_model:
             model = env_model.strip() or None
-        elif strategy.worker_host == "pi-rpc":
+        elif annotation_host == "pi-rpc":
             model = (os.environ.get("PI_MODEL") or "").strip() or None
         else:
             model = None
 
         reasoning_effort = configured.reasoning_effort
-        if reasoning_effort is None and worker_launch is not None:
+        if (
+            reasoning_effort is None
+            and annotation_host == strategy.worker_host
+            and worker_launch is not None
+        ):
             reasoning_effort = worker_launch.reasoning_effort
         if reasoning_effort is None:
             reasoning_effort = (
@@ -5487,7 +5492,7 @@ class FileSearchRuntime:
             )
 
         pi_provider: str | None = None
-        if strategy.worker_host == "pi-rpc":
+        if annotation_host == "pi-rpc":
             inherited_pi_provider = os.environ.get("PI_PROVIDER")
             if inherited_pi_provider is not None:
                 inherited_pi_provider = inherited_pi_provider.strip() or None
@@ -5508,17 +5513,17 @@ class FileSearchRuntime:
                 pi_provider = model_provider
 
         provider: ResolvedCodexProvider | None = None
-        if strategy.worker_host == "codex" and configured.pi_provider is not None:
+        if annotation_host == "codex" and configured.pi_provider is not None:
             return None, (
                 "evidence_annotator.pi_provider configures Pi only; Codex "
                 "annotation uses evidence_annotator.provider"
             )
-        if strategy.worker_host == "pi-rpc" and configured.provider is not None:
+        if annotation_host == "pi-rpc" and configured.provider is not None:
             return None, (
                 "evidence_annotator.provider configures Codex only; Pi annotation "
                 "uses the provider/model configuration under PI_CODING_AGENT_DIR"
             )
-        if strategy.worker_host == "codex" and configured.provider is not None:
+        if annotation_host == "codex" and configured.provider is not None:
             provider = ResolvedCodexProvider(
                 provider_id=configured.provider.provider_id,
                 name=configured.provider.name,
@@ -5526,7 +5531,7 @@ class FileSearchRuntime:
                 api_key_env=configured.provider.api_key_env,
                 wire_api=configured.provider.wire_api,
             )
-        elif strategy.worker_host == "codex":
+        elif annotation_host == "codex":
             base_url = os.environ.get(EVIDENCE_ANNOTATOR_BASE_URL_ENV)
             if base_url:
                 provider = ResolvedCodexProvider(
@@ -5552,21 +5557,21 @@ class FileSearchRuntime:
 
         codex_home = (
             os.environ.get("CODEX_HOME")
-            if strategy.worker_host == "codex"
+            if annotation_host == "codex"
             else None
         )
         if codex_home:
             codex_home = str(Path(codex_home).expanduser().resolve())
         pi_home = (
             os.environ.get("PI_CODING_AGENT_DIR")
-            if strategy.worker_host == "pi-rpc"
+            if annotation_host == "pi-rpc"
             else None
         )
         if pi_home:
             pi_home = str(Path(pi_home).expanduser().resolve())
         return (
             ResolvedEvidenceAnnotatorProfile(
-                host=strategy.worker_host,
+                host=annotation_host,
                 model=model,
                 pi_provider=pi_provider,
                 reasoning_effort=reasoning_effort,

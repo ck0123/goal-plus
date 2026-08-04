@@ -168,6 +168,7 @@ class SelectedModel(SearchModel):
 
 
 class EvidenceAnnotatorSpec(SearchModel):
+    host: AgentHostKind | None = None
     model: str | None = None
     pi_provider: str | None = None
     reasoning_effort: str | None = None

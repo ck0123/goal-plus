@@ -469,8 +469,16 @@ def test_evidence_annotator_config_is_optional_and_overridable() -> None:
             "pi_provider": "deepseek",
         },
     )
+    independent_codex = StrategySpec(
+        worker_host="pi-rpc",
+        evidence_annotator={
+            "host": "codex",
+            "model": "gpt-5.6-luna",
+        },
+    )
 
     assert inherited.model_dump(mode="json")["evidence_annotator"] == {
+        "host": None,
         "model": None,
         "pi_provider": None,
         "reasoning_effort": None,
@@ -481,6 +489,7 @@ def test_evidence_annotator_config_is_optional_and_overridable() -> None:
     with pytest.raises(ValidationError):
         StrategySpec(evidence_annotator={"timeout_seconds": 1801})
     assert explicit.model_dump(mode="json")["evidence_annotator"] == {
+        "host": None,
         "model": "gpt-5.6-sol",
         "pi_provider": None,
         "reasoning_effort": "medium",
@@ -494,12 +503,14 @@ def test_evidence_annotator_config_is_optional_and_overridable() -> None:
         },
     }
     assert pi_explicit.model_dump(mode="json")["evidence_annotator"] == {
+        "host": None,
         "model": "deepseek-chat",
         "pi_provider": "deepseek",
         "reasoning_effort": None,
         "timeout_seconds": 1800,
         "provider": None,
     }
+    assert independent_codex.evidence_annotator.host == "codex"
 
 
 def test_worker_budget_requires_runtime_or_turn_limit() -> None:
