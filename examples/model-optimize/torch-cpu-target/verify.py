@@ -34,4 +34,6 @@ def verify() -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(verify(), sort_keys=True))
+    result = verify()
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0 if result["valid"] else 1)

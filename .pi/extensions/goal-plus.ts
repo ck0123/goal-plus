@@ -185,6 +185,25 @@ const WorkspaceSpec = Type.Object(
 	},
 	{ additionalProperties: false },
 );
+const SharedDirSpec = Type.Object(
+	{
+		enabled: Type.Optional(Type.Boolean()),
+		max_tools_per_iteration: Type.Optional(
+			Type.Integer({ minimum: 1, maximum: 128 }),
+		),
+		max_files_per_iteration: Type.Optional(
+			Type.Integer({ minimum: 1, maximum: 512 }),
+		),
+		max_path_entries_per_iteration: Type.Optional(
+			Type.Integer({ minimum: 1, maximum: 8192 }),
+		),
+		max_depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 32 })),
+		max_bytes_per_iteration: Type.Optional(
+			Type.Integer({ minimum: 1, maximum: 67108864 }),
+		),
+	},
+	{ additionalProperties: false },
+);
 const SearchSpecSchema = Type.Object(
 	{
 		objective: Type.String({ minLength: 1 }),
@@ -199,6 +218,7 @@ const SearchSpecSchema = Type.Object(
 		root_hypotheses: Type.Optional(Type.Array(Type.String())),
 		strategy: Type.Optional(StrategySpec),
 		workspace: Type.Optional(WorkspaceSpec),
+		shared_dir: Type.Optional(SharedDirSpec),
 	},
 	{ additionalProperties: false },
 );

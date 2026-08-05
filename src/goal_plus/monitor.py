@@ -755,6 +755,10 @@ def goal_plus_monitor_snapshot(
             results_path = candidate.task.workspace / RESULTS_TSV_RELATIVE_PATH
             results_tsv = _path_info(str(results_path))
             results_tsv["row_count"] = len(candidate.results_ledger)
+            shared_status_counts: dict[str, int] = {}
+            for item in candidate.iterations:
+                status = item.shared_tool_publish_status
+                shared_status_counts[status] = shared_status_counts.get(status, 0) + 1
             candidates_payload[candidate.candidate_id] = {
                 "candidate_id": candidate.candidate_id,
                 "status": candidate.status,
@@ -786,6 +790,25 @@ def goal_plus_monitor_snapshot(
                 "changed_files": candidate.detected_changed_files,
                 "touched_denied_files": candidate.touched_denied_files,
                 "changed_outside_allowed": candidate.changed_outside_allowed,
+                "shared_tools_published_total": sum(
+                    len(item.shared_tools) for item in candidate.iterations
+                ),
+                "shared_tool_staged_entries_last": (
+                    list(last_iteration.shared_tool_staged_entries)
+                    if last_iteration
+                    else []
+                ),
+                "shared_tool_staged_file_count_last": (
+                    last_iteration.shared_tool_staged_file_count
+                    if last_iteration
+                    else 0
+                ),
+                "shared_tool_publish_status_last": (
+                    last_iteration.shared_tool_publish_status
+                    if last_iteration
+                    else None
+                ),
+                "shared_tool_publish_status_counts": shared_status_counts,
                 "results_tsv": results_tsv,
             }
             if not candidate_sessions and candidate.status == "created":

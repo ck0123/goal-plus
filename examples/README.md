@@ -117,6 +117,7 @@ python examples/workspace-backends/run_demo.py --runtime-root .tmp/worktree-demo
 - [Goal and Goal Plus](goal-and-goal-plus/README.md)
 - [Kernel Optimize](kernel-optimize/README.md)
 - [Model Optimize](model-optimize/README.md)
+- [Model Optimize shared-dir validation](model-optimize/torch-cpu-target/shared-dir-experiment.md)
 - [Model Optimize GPU (WIP)](model-opt-gpu/README.md)
 - [VLIW Kernel Optimization](vliw-kernel-optimization/README.md)
 - [Git Worktree Backend](workspace-backends/README.md)

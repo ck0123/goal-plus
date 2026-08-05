@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,7 +30,11 @@ results = {}
 for script in sys.argv[1:]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        runpy.run_path(script, run_name="__main__")
+        try:
+            runpy.run_path(script, run_name="__main__")
+        except SystemExit as exc:
+            if exc.code not in (None, 0):
+                raise
     results[script] = json.loads(output.getvalue().strip().splitlines()[-1])
 print(json.dumps(results, sort_keys=True))
 """
@@ -78,6 +83,27 @@ def test_torch_cpu_target_runs_on_one_cpu_thread() -> None:
         item["id"] == "remove_redundant_projection"
         for item in profile["opportunities"]
     )
+
+
+def test_torch_cpu_validity_gate_rejects_incorrect_output(tmp_path: Path) -> None:
+    target = tmp_path / "torch-cpu-target"
+    shutil.copytree(TARGET, target)
+    workload_path = target / "workload.json"
+    workload = json.loads(workload_path.read_text(encoding="utf-8"))
+    workload["expected_checksum"] += 1.0
+    workload_path.write_text(json.dumps(workload), encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "verify.py"],
+        cwd=target,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert json.loads(completed.stdout.strip().splitlines()[-1])["valid"] is False
 
 
 def test_cpp_reference_fused_op_is_present_and_documented() -> None:

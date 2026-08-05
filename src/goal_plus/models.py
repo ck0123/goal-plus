@@ -59,6 +59,19 @@ class Budget(SearchModel):
 
 WorkspaceBackend = Literal["copy", "git_worktree"]
 IterationDisposition = Literal["keep", "discard", "failure"]
+SharedToolPublishStatus = Literal[
+    "disabled",
+    "legacy_unknown",
+    "not_staged",
+    "staging_invalid",
+    "skipped_unattributed_verifier",
+    "skipped_failed_verifier",
+    "published",
+    "partially_published",
+    "consumed_unchanged",
+    "snapshot_rejected",
+    "snapshot_error",
+]
 VerifierInvalidationReason = Literal[
     "verifier_contract_invalid",
     "verifier_coverage_inadequate",
@@ -338,6 +351,21 @@ class VerifierCommand(SearchModel):
         return normalized
 
 
+class SharedDirSpec(SearchModel):
+    """Run-scoped, verifier-settled shared tool exchange."""
+
+    enabled: bool = False
+    max_tools_per_iteration: int = Field(default=16, gt=0, le=128)
+    max_files_per_iteration: int = Field(default=64, gt=0, le=512)
+    max_path_entries_per_iteration: int = Field(default=512, gt=0, le=8192)
+    max_depth: int = Field(default=8, ge=1, le=32)
+    max_bytes_per_iteration: int = Field(
+        default=2 * 1024 * 1024,
+        gt=0,
+        le=64 * 1024 * 1024,
+    )
+
+
 class SearchSpec(SearchModel):
     objective: str = Field(min_length=1)
     metric_name: str = Field(min_length=1)
@@ -351,6 +379,16 @@ class SearchSpec(SearchModel):
     root_hypotheses: list[str] = Field(default_factory=list)
     strategy: StrategySpec = Field(default_factory=StrategySpec)
     workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
+    shared_dir: SharedDirSpec = Field(default_factory=SharedDirSpec)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_shared_assets(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "shared_dir" in value or "shared_assets" not in value:
+            return value
+        payload = dict(value)
+        payload["shared_dir"] = payload.pop("shared_assets")
+        return payload
 
     @field_validator("source_path")
     @classmethod
@@ -375,6 +413,16 @@ class SearchSpecDraft(SearchModel):
     root_hypotheses: list[str] | None = None
     strategy: StrategySpec | None = None
     workspace: WorkspaceSpec | None = None
+    shared_dir: SharedDirSpec | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_shared_assets(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "shared_dir" in value or "shared_assets" not in value:
+            return value
+        payload = dict(value)
+        payload["shared_dir"] = payload.pop("shared_assets")
+        return payload
 
 
 GoalPlusStatus = Literal["active", "needs_user", "blocked", "complete", "abandoned"]
@@ -557,6 +605,31 @@ class FrozenSpec(SearchModel):
     created_at: str
 
 
+class SharedToolRecord(SearchModel):
+    tool_id: str = Field(min_length=1)
+    candidate_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    source_commit: str | None = None
+    snapshot_hash: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    summary: str | None = None
+    entrypoint: str | None = None
+    source_relative_path: str = Field(min_length=1)
+    read_only_path: Path
+    files: list[str] = Field(default_factory=list)
+    size_bytes: int = Field(ge=0)
+    created_at: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_asset_id(cls, value: Any) -> Any:
+        if not isinstance(value, dict) or "tool_id" in value or "asset_id" not in value:
+            return value
+        payload = dict(value)
+        payload["tool_id"] = payload.pop("asset_id")
+        return payload
+
+
 class CandidateTask(SearchModel):
     run_id: str
     candidate_id: str
@@ -569,6 +642,8 @@ class CandidateTask(SearchModel):
     workspace_backend: WorkspaceBackend = "copy"
     workspace_branch: str | None = None
     workspace_base_revision: str | None = None
+    share_out_dir: Path | None = None
+    shared_dir: Path | None = None
     allowed_files: list[str]
     denied_files: list[str]
     instructions: list[str] = Field(default_factory=list)
@@ -645,6 +720,36 @@ class ScoreReport(SearchModel):
     best_iteration: int | None = Field(default=None, ge=1)
     best_git_head: str | None = None
     workspace_git_head_after_settlement: str | None = None
+    shared_tool_staged_entries: list[str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    shared_tool_staged_file_count: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    shared_tool_staged_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    shared_tool_publish_status: SharedToolPublishStatus | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    shared_tool_errors: list[str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    shared_tool_consumed_entries: list[str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    shared_tool_deduplicated_entries: list[str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class PromotionEvidence(SearchModel):
@@ -687,7 +792,55 @@ class IterationRecord(SearchModel):
     restored_to_iteration: int | None = Field(default=None, ge=1)
     restored_to_git_head: str | None = None
     workspace_git_head_after_settlement: str | None = None
+    shared_tools: list[SharedToolRecord] = Field(default_factory=list)
+    shared_tool_errors: list[str] = Field(default_factory=list)
+    shared_tool_staged_entries: list[str] = Field(default_factory=list)
+    shared_tool_staged_file_count: int = Field(default=0, ge=0)
+    shared_tool_staged_bytes: int = Field(default=0, ge=0)
+    shared_tool_consumed_entries: list[str] = Field(default_factory=list)
+    shared_tool_deduplicated_entries: list[str] = Field(default_factory=list)
+    shared_tool_publish_status: SharedToolPublishStatus = "legacy_unknown"
     created_at: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_shared_tool_publish_status(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "shared_tools" not in payload and "shared_assets" in payload:
+            payload["shared_tools"] = payload.pop("shared_assets")
+        for legacy_name, current_name in {
+            "shared_asset_errors": "shared_tool_errors",
+            "shared_asset_staged_entries": "shared_tool_staged_entries",
+            "shared_asset_staged_file_count": "shared_tool_staged_file_count",
+            "shared_asset_staged_bytes": "shared_tool_staged_bytes",
+            "shared_asset_consumed_entries": "shared_tool_consumed_entries",
+            "shared_asset_deduplicated_entries": "shared_tool_deduplicated_entries",
+            "shared_asset_publish_status": "shared_tool_publish_status",
+        }.items():
+            if current_name not in payload and legacy_name in payload:
+                payload[current_name] = payload.pop(legacy_name)
+        if "shared_tool_publish_status" in payload:
+            return payload
+        tools = payload.get("shared_tools") or []
+        errors = payload.get("shared_tool_errors") or []
+        if tools:
+            payload["shared_tool_publish_status"] = (
+                "partially_published" if errors else "published"
+            )
+        elif errors:
+            payload["shared_tool_publish_status"] = (
+                "snapshot_error"
+                if any(
+                    str(error).startswith("shared tool snapshot failed:")
+                    for error in errors
+                )
+                else "snapshot_rejected"
+            )
+        else:
+            payload["shared_tool_publish_status"] = "legacy_unknown"
+        return payload
 
 
 class ResultLedgerEntry(SearchModel):

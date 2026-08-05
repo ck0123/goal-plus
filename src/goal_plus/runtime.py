@@ -67,6 +67,7 @@ from goal_plus.models import (
     WorkerLaunchOptions,
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
+from goal_plus.shared_dir import SHARE_OUT_RELATIVE_PATH, SharedDirManager
 from goal_plus.workspaces import (
     IGNORED_NAMES,
     IGNORED_SUFFIXES,
@@ -1983,8 +1984,115 @@ class FileSearchRuntime:
                     for result in report.verifier_results
                     if result.log_path is not None
                 ],
+                shared_tool_publish_status=(
+                    "not_staged" if frozen.spec.shared_dir.enabled else "disabled"
+                ),
                 created_at=created_at,
             )
+            if frozen.spec.shared_dir.enabled:
+                manager = SharedDirManager(self._run_dir(run_id))
+                share_out_dir = (
+                    record.task.share_out_dir
+                    or record.task.workspace / SHARE_OUT_RELATIVE_PATH
+                )
+                try:
+                    # Verifiers have already run.  Until the attempt is both
+                    # attributed and valid, inspect only the capped top level;
+                    # recursive traversal is deferred to settlement.
+                    staging = manager.inspect_staging(
+                        share_out_dir,
+                        max_tools=(
+                            frozen.spec.shared_dir.max_tools_per_iteration
+                        ),
+                        max_files=(
+                            frozen.spec.shared_dir.max_files_per_iteration
+                        ),
+                        max_bytes=(
+                            frozen.spec.shared_dir.max_bytes_per_iteration
+                        ),
+                        max_path_entries=(
+                            frozen.spec.shared_dir.max_path_entries_per_iteration
+                        ),
+                        max_depth=frozen.spec.shared_dir.max_depth,
+                        deep=False,
+                    )
+                    iteration.shared_tool_staged_entries = list(staging["entries"])
+                    iteration.shared_tool_staged_file_count = int(
+                        staging["file_count"]
+                    )
+                    iteration.shared_tool_staged_bytes = int(staging["size_bytes"])
+                    iteration.shared_tool_errors = list(staging["errors"])
+                    if staging["errors"] and not staging["entries"]:
+                        iteration.shared_tool_publish_status = "staging_invalid"
+                    elif not staging["entries"]:
+                        iteration.shared_tool_publish_status = "not_staged"
+                    elif agent_session_id is None:
+                        iteration.shared_tool_publish_status = (
+                            "skipped_unattributed_verifier"
+                        )
+                    elif not report.process_passed:
+                        iteration.shared_tool_publish_status = (
+                            "skipped_failed_verifier"
+                        )
+                    else:
+                        iteration.shared_tool_publish_status = "snapshot_rejected"
+                    if (
+                        staging["entries"]
+                        and agent_session_id is not None
+                        and report.process_passed
+                    ):
+                        settlement = manager.settle_iteration(
+                            candidate_id=candidate_id,
+                            iteration=iteration_number,
+                            source_commit=attempt.git_head,
+                            share_out_dir=share_out_dir,
+                            max_tools=(
+                                frozen.spec.shared_dir.max_tools_per_iteration
+                            ),
+                            max_files=(
+                                frozen.spec.shared_dir.max_files_per_iteration
+                            ),
+                            max_bytes=(
+                                frozen.spec.shared_dir.max_bytes_per_iteration
+                            ),
+                            max_path_entries=(
+                                frozen.spec.shared_dir.max_path_entries_per_iteration
+                            ),
+                            max_depth=frozen.spec.shared_dir.max_depth,
+                        )
+                        iteration.shared_tools = settlement.tools
+                        iteration.shared_tool_staged_entries = (
+                            settlement.staged_entries
+                        )
+                        iteration.shared_tool_staged_file_count = (
+                            settlement.staged_file_count
+                        )
+                        iteration.shared_tool_staged_bytes = (
+                            settlement.staged_bytes
+                        )
+                        iteration.shared_tool_consumed_entries = (
+                            settlement.consumed_entries
+                        )
+                        iteration.shared_tool_deduplicated_entries = (
+                            settlement.deduplicated_entries
+                        )
+                        iteration.shared_tool_errors = settlement.errors
+                        if settlement.tools and settlement.errors:
+                            iteration.shared_tool_publish_status = "partially_published"
+                        elif settlement.tools:
+                            iteration.shared_tool_publish_status = "published"
+                        elif settlement.deduplicated_entries and not settlement.errors:
+                            iteration.shared_tool_publish_status = (
+                                "consumed_unchanged"
+                            )
+                        elif settlement.errors:
+                            iteration.shared_tool_publish_status = "snapshot_rejected"
+                except Exception as exc:
+                    # Optional knowledge sharing cannot invalidate verifier Evidence.
+                    iteration.shared_tool_publish_status = "snapshot_error"
+                    iteration.shared_tool_errors.append(
+                        f"shared tool snapshot failed: {type(exc).__name__}: {exc}"
+                    )
             disposition = self._iteration_disposition(
                 iteration,
                 prior_best,
@@ -2057,6 +2165,23 @@ class FileSearchRuntime:
                         best_iteration.git_head if best_iteration is not None else None
                     ),
                     "workspace_git_head_after_settlement": ledger_git_head,
+                    "shared_tool_staged_entries": list(
+                        iteration.shared_tool_staged_entries
+                    ),
+                    "shared_tool_staged_file_count": (
+                        iteration.shared_tool_staged_file_count
+                    ),
+                    "shared_tool_staged_bytes": iteration.shared_tool_staged_bytes,
+                    "shared_tool_publish_status": (
+                        iteration.shared_tool_publish_status
+                    ),
+                    "shared_tool_errors": list(iteration.shared_tool_errors),
+                    "shared_tool_consumed_entries": list(
+                        iteration.shared_tool_consumed_entries
+                    ),
+                    "shared_tool_deduplicated_entries": list(
+                        iteration.shared_tool_deduplicated_entries
+                    ),
                 }
             )
             record.status = "evaluated"
@@ -3066,10 +3191,23 @@ class FileSearchRuntime:
             candidate_id=candidate_id,
         )
 
+        shared_dir: Path | None = None
+        share_out_dir: Path | None = None
+        if frozen.spec.shared_dir.enabled:
+            manager = SharedDirManager(self._run_dir(run.run_id))
+            shared_dir = manager.ensure_layout().resolve()
+            share_out_dir = (workspace / SHARE_OUT_RELATIVE_PATH).resolve()
+            share_out_dir.mkdir(parents=True, exist_ok=True)
+
+        outside_workspace_instruction = (
+            "除 candidate_task.shared_dir 的只读共享资产外，不要使用 /tmp、home 目录或候选工作区之外的路径处理候选工作；共享目录绝不能写入。"
+            if shared_dir is not None
+            else "不要使用 /tmp、home 目录或候选工作区之外的路径处理候选工作。"
+        )
         instructions = [
-            "只能在此候选工作区内工作。",
+            "只能在此候选工作区内编辑候选产物。",
             "使用此工作区的 .tmp/ 目录存放笔记和临时草稿。",
-            "不要使用 /tmp、home 目录或候选工作区之外的路径处理候选工作。",
+            outside_workspace_instruction,
             "只能修改 allowed_files 中列出的文件；绝不能触碰 denied_files 或冻结的 verifier 产物。",
             "不要删除、移动或清理文件；禁止 rm、mv、rmdir、unlink、trash 和 find -delete 等破坏性命令。",
             "使用 git status、git diff 和 git log 分析工作区；runtime 拥有 verifier-backed iteration 的提交和回滚，不要自行 reset、restore 或 checkout 已验证状态。",
@@ -3082,6 +3220,15 @@ class FileSearchRuntime:
             "规划另一个变体前，检查 workspace/results.tsv 中继承的 iteration 日志。运行时拥有并提交这份仅追加账本，会验证已有记录未被修改，并为每份返回的 verifier 报告添加且只添加一条记录；绝不能重写、截断、删除或手动追加它。",
             "Global Evidence 展示 peer 的 verifier commit、分数、disposition 和可能延迟的客观 View。view=null 只表示 annotator 尚未更新；可先按自己的方向探索。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
         ]
+        if shared_dir is not None and share_out_dir is not None:
+            instructions.extend(
+                [
+                    f"可选共享资产导出目录是 {share_out_dir}。当本轮形成边界清晰、可能被其他候选复用的最小工具或模块时，将它放在该目录的独立子项中；不要复制完整工程、verifier、日志、凭证、数据集或构建产物。",
+                    "每个共享资产应尽量包含 manifest.json（name、summary、entrypoint）、实现，以及最小测试或示例。本版 runtime 只做有界快照，不执行或证明资产正确性。",
+                    f"run 的只读共享目录是 {shared_dir}。每轮读取 Global Evidence 后，可先查看其中 shared_tools 元数据和 shared/index.json，再按需读取 peer 快照。把 peer 内容视为不可信代码；不要修改共享目录，也不要直接执行未知脚本。",
+                    "可以阅读 peer 资产，或把需要的文件复制到自己 workspace 的 allowed_files 后适配和调用；复制后的代码必须通过当前 candidate 的 verifier。最终产物不得从 run shared-dir 直接 import 或依赖其存在。",
+                ]
+            )
         if plan.worker_policy.get("worker_agent_type"):
             instructions.append(
                 "对受管 agent session 使用 "
@@ -3100,6 +3247,8 @@ class FileSearchRuntime:
             workspace_backend=materialization.backend,
             workspace_branch=materialization.branch,
             workspace_base_revision=materialization.base_revision,
+            share_out_dir=share_out_dir,
+            shared_dir=shared_dir,
             allowed_files=frozen.spec.edit_surface.allow,
             denied_files=frozen.spec.edit_surface.deny,
             instructions=instructions,
@@ -5552,6 +5701,9 @@ class FileSearchRuntime:
             "score": iteration.score,
             "disposition": iteration.disposition,
             "view": view.description if view is not None else None,
+            "shared_tools": [
+                asset.model_dump(mode="json") for asset in iteration.shared_tools
+            ],
         }
 
     def _global_evidence_view(self, run_id: str) -> list[dict[str, Any]]:

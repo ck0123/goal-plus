@@ -196,6 +196,11 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
         validity_passed=True,
         process_passed=True,
         aggregate_score=1.0,
+        shared_tool_staged_entries=["score-helper"],
+        shared_tool_staged_file_count=2,
+        shared_tool_staged_bytes=128,
+        shared_tool_publish_status="published",
+        shared_tool_errors=[],
         verifier_results=[
             VerifierResult(
                 name="score",
@@ -264,6 +269,9 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     }
     verifier_report = tools.search_run_verifier("run_1", "c001")
     assert verifier_report["aggregate_score"] == 1.0
+    assert verifier_report["shared_tool_staged_entries"] == ["score-helper"]
+    assert verifier_report["shared_tool_staged_file_count"] == 2
+    assert verifier_report["shared_tool_publish_status"] == "published"
     assert verifier_report["verifier_results"][0]["metrics"]["stderr_tail"] == (
         "candidate diagnostic"
     )
@@ -328,6 +336,36 @@ def test_search_tools_delegate_runtime_calls_with_models() -> None:
     )
     runtime.get_agent_observability.assert_called_once_with("agent_001")
     runtime.get_global_evidence.assert_called_once_with("agent_001")
+
+
+def test_search_run_verifier_returns_shared_tool_settlement() -> None:
+    runtime = Mock()
+    runtime.run_verifier.return_value = ScoreReport(
+        run_id="run_1",
+        candidate_id="c001",
+        validity_passed=True,
+        process_passed=True,
+        aggregate_score=1.0,
+        shared_tool_staged_entries=["score-helper"],
+        shared_tool_staged_file_count=2,
+        shared_tool_staged_bytes=128,
+        shared_tool_publish_status="published",
+        shared_tool_errors=[],
+        verifier_results=[],
+    )
+
+    result = SearchTools(runtime).search_run_verifier(
+        "run_1",
+        "c001",
+        agent_session_id="agent_001",
+        hypothesis="publish a reusable helper",
+    )
+
+    assert result["shared_tool_staged_entries"] == ["score-helper"]
+    assert result["shared_tool_staged_file_count"] == 2
+    assert result["shared_tool_staged_bytes"] == 128
+    assert result["shared_tool_publish_status"] == "published"
+    assert result["shared_tool_errors"] == []
 
 
 def test_search_create_uses_models_frozen_in_the_spec() -> None:

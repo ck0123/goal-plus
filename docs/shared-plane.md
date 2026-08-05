@@ -6,7 +6,8 @@ Mode；具有明确可度量目标的优化任务进入 Search Mode。Search Mod
 
 Search Mode 的核心是持久化的共享平面。共享平面不共享 agent 的私有推理，也不共享
 可写工作区。它只共享冻结合同、精确 Git revision、verifier 支持的 Evidence、异步
-生成的客观 View，以及选择和提升结果所需的持久化状态。
+生成的客观 View、可选的 verifier-settled 只读资产快照，以及选择和提升结果所需的
+持久化状态。
 
 ## 总体架构
 
@@ -19,6 +20,7 @@ main agent
 | Goal 记录与冻结 SearchSpec                                      |
 | candidate 工作区与 Git revision                                 |
 | verifier-backed Global Evidence 与异步客观 View                 |
+| 可选的 run-scoped 只读 shared tools                           |
 | candidate-local best、全局 best、报告与 promotion               |
 +------------------------------------------------------------------+
        ^                         ^                         ^
@@ -54,6 +56,7 @@ Search runtime 不是 worker supervisor。`AgentSessionRecord` 只记录上下�
 - 初始并发宽度、工作区后端和 worker 执行策略；
 - 可选的用户模型选择 `strategy.models`；
 - verifier 所依赖的源码内 artifact。
+- 可选的 `shared_dir` 有界工具快照策略（默认关闭）。
 
 当前逻辑由 main agent 在 Spec Discovery 中读取任务说明、公开数据和评分工具，然后
 构造或选择 verifier，并调用 `search_freeze_spec`。Runtime 会：
@@ -99,6 +102,14 @@ worker，再冻结修正后的 spec，创建 successor run。旧分数不能跨�
 4. 调用 `search_run_verifier`，并用一句 `hypothesis` 描述实际完成的尝试。
 5. 从 verifier settlement 返回后的工作区继续。
 
+启用 `shared_dir` 时，candidate 还可在自己的 `.tmp/share-out` 下提取最小工具或模块。
+它仍只写自己的工作区；runtime 在通过的 worker process verifier 结算时原子认领 staging，
+只快照相对该 candidate/路径新增或修改的顶层工具，并将快照绑定到该 iteration 和 attempt
+commit。已接受或内容未变化的条目会被消费；失败、无归属或因限制被拒绝的条目保留给 worker
+修正。内容相同的快照复用同一个哈希寻址物理目录。peer 只能通过 Global Evidence 和
+run-scoped shared-dir 读取快照。采用代码时必须复制到自己的 `allowed_files` 并重新验证，
+最终产物不能直接依赖 run shared-dir。
+
 candidate 不需要在修改前提交 iteration plan。`hypothesis` 是完成尝试后的事实性
 自述，与 verifier 结果一起保存；它不是 pending plan，也不形成协调锁。多个
 candidate 可以同时读取同一版 Evidence 并并发工作。
@@ -106,6 +117,15 @@ candidate 可以同时读取同一版 Evidence 并并发工作。
 main agent 不向 worker 提供后续技术方向。正常路径优先续跑同一个原生 session；
 redispatch 只用于恢复，并继续使用同一个 candidate 工作区、Git 历史、verifier 历史
 和有界 handoff。
+
+Process iterations retain shared-dir staging diagnostics even when no
+snapshot is published: staged entry/file/byte counts, consumed/deduplicated
+entry names, plus `shared_tool_publish_status`. Parent fallback verification remains
+unattributed and records `skipped_unattributed_verifier` instead of publishing
+candidate-authored tools. Staging inspection and snapshot failures remain
+advisory and cannot invalidate verifier Evidence. Legacy iterations infer a
+published state from durable tools when possible and otherwise use
+`legacy_unknown`.
 
 ## Global Evidence
 
@@ -118,7 +138,16 @@ redispatch 只用于恢复，并继续使用同一个 candidate 工作区、Git 
   "commit": "<exact-attempt-commit>",
   "score": 13350,
   "disposition": "keep",
-  "view": "将调度逻辑改为按依赖深度分组。"
+  "view": "将调度逻辑改为按依赖深度分组。",
+  "shared_tools": [
+    {
+      "tool_id": "c001-i0003-...",
+      "name": "dependency-depth-scheduler",
+      "source_commit": "<exact-attempt-commit>",
+      "snapshot_hash": "<sha256>",
+      "read_only_path": "<run-scoped-path>"
+    }
+  ]
 }
 ```
 
@@ -132,6 +161,27 @@ verifier 会同步发布 `candidate_id`、`iteration`、`commit`、`score` 和
 Global Evidence 只包含 worker 的 process-verifier 尝试。parent fallback verification
 与 promotion verification 不会成为 peer Evidence。视图也不会暴露 peer transcript、
 私有推理、annotation 内部任务状态或 peer 工作区路径。
+
+`shared_tools` 是可选的 candidate-authored 研究工具，不等同于 verifier 对工具本身的独立
+正确性证明。runtime 先运行 verifier；只有有归属且通过的尝试才递归扫描 staging。扫描受
+`max_tools_per_iteration`、`max_files_per_iteration`、
+`max_path_entries_per_iteration`、`max_depth` 和 `max_bytes_per_iteration` 的硬上限约束，
+遍历一旦超过上限立即停止。runtime 只做路径安全、内容哈希和不可变快照，不执行、安装或
+自动整合工具。失败的 process verifier 不发布工具；工具快照失败也不会使已经有效的
+verifier Evidence 失效。
+
+### Shared-dir 权限边界（Windows/Linux）
+
+shared-dir 的权威写入者是 runtime。快照先复制到私有临时目录，再用同文件系统内的原子
+rename 发布；索引也用临时文件加原子 replace 更新。staging 的整目录 rename、快照发布和
+索引更新都在 run transaction 锁内，因此 peer 不会从正式 shared-dir 看到半成品或待验证
+输入。索引只复用解析后仍位于 run 的 `shared/tools` 内的快照路径。
+
+runtime 会在 POSIX 和 Windows 上尽力设置只读 mode/attribute，但这只是防止误写，不是同一
+OS 用户下的安全隔离：POSIX owner 可以重新 `chmod`，Windows 的只读属性也不是目录 ACL。
+因此候选“不得写 shared-dir”是 runtime/host 权限契约；需要抵抗恶意 worker 时，host 必须
+用 sandbox、容器、不同 OS 身份或 ACL 让 shared-dir 对 worker 真正只读。runtime 不宣称用
+跨平台 `chmod` 提供强安全边界；`snapshot_hash` 是内容身份和完整性证据，不替代 host 隔离。
 
 ## 客观 View
 
@@ -222,6 +272,10 @@ run。可以继承有界研究上下文，但不能继承旧分数或把旧 Evid
       evidence-annotations/iteration-<n>.json
     agent_sessions/<agent_session_id>.json
     workspace/<candidate_id>/
+      .tmp/share-out/              # candidate-owned optional export staging
+    shared/
+      index.json                   # runtime-owned tool discovery index
+      tools/<candidate>/<iteration>/<tool-hash>/
     report.md
     report.html
     promotion/<candidate_id>.patch
@@ -235,6 +289,8 @@ run。可以继承有界研究上下文，但不能继承旧分数或把旧 Evid
 
 - 并行工作开始前，先冻结 verifier 与编辑策略。
 - 隔离可写 candidate 工作区，只共享持久化事实和 Git object。
+- shared tools 由 candidate-local staging 产生、runtime 单写发布、peer 只读消费。
+- 最终候选必须脱离 run shared-dir 独立验证和 promotion。
 - 只有 verifier-backed 严格改善才能成为 candidate-local best。
 - 回滚、选择和 promotion 后，所有精确 attempt 仍可审计。
 - View 可以延迟，但不能阻塞优化。
