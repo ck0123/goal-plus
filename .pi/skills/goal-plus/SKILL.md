@@ -55,6 +55,23 @@ ranking verifier 必须输出一个最终 JSON 对象，其中包含有限数值
 直接填写，不要根据校验错误猜字段。`search_freeze_spec` 会重复 verifier 预检，
 契约无效时会在候选 worker 启动前拒绝 spec。
 
+如果 process metric 稀疏、容易饱和，或只是最终 hidden/official 指标的公开代理，根据公开
+issue、benchmark 说明、代码和测试生成任务特定的 `acceptance_view`。通常冻结 3–8 项
+criterion，覆盖实际需求、边界与异常路径、分支/状态空间、回归与 API/行为兼容，并按
+benchmark 补充 hidden 泛化风险或性能/资源余量。不要机械复制通用清单；只保留对当前任务
+有区分度且能从 diff、公开测试或硬 verifier 结果观察的项目。不得读取、猜测或写入 hidden
+数据、gold patch 或最终 judge 结果。所有 criterion 都是 `must assess` 语义，不使用
+`required`；固定 `tie_policy="retain_latest"` 且 `affects_final_result=false`。
+Acceptance View 只引导搜索并显示在 Global Evidence，不参与最终硬 PASS/FAIL、数值分数、
+selection 或 promotion gate。硬指标已经充分对齐时省略该字段。Goal Mode 始终不创建它。
+benchmark 机制消融可通过环境变量 `GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED=0` 关闭该策略；
+Spec Discovery 开始时检查该变量，关闭时不要生成 `acceptance_view`。冻结运行时也会强制
+移除该字段，恢复硬分持平即回滚的默认行为。
+当 benchmark 设置 `GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1` 时，即使当前公开硬指标看似
+充分，也必须根据公开任务冻结非空 `acceptance_view`，且包含 3–8 项有区分度的 criterion；
+不得机械复制固定清单。运行时会拒绝缺失、过少、过多或同时关闭 enabled 的合同，收到
+该错误后应补全 SearchSpec 并重新冻结，不能退化成没有软标准的 ON 组。
+
 如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="pi-rpc")`，将用户
 填写的名称解析为唯一可用模型并冻结到 `strategy.models`；不存在或不唯一时，在创建
 run 前直接返回错误。`models=A,B max_parallel=4` 表示 A、B、A、B；
@@ -315,14 +332,18 @@ candidate-local history 由运行时拥有，不是本地 plan 文件。worker �
 `context.results` 和继承的 `context.results_tsv` 作为恢复来源。每轮修改前读取
 `search_get_global_evidence`。其他 candidate 的尝试只通过这个窄视图披露；`view=null`
 只表示 annotator 尚未更新，worker 不等待或轮询，先依据 commit、score、disposition 和
-自己的推理独立探索。仅在 worker 独立判断确有必要时，才在当前 workspace 使用
+自己的推理独立探索。冻结 spec 启用 Acceptance View 时，逐项观察用于发现多个候选共同
+missing、partial 或 unknown 的高重要度搜索缺口，但不作为硬分或 promotion gate。仅在
+worker 独立判断确有必要时，才在当前 workspace 使用
 `git diff HEAD <commit> -- <allowed-file>` 做只读比较，不访问其他 candidate workspace，
 也不 checkout/reset peer commit。worker verifier 用一句话 `hypothesis` 客观概括本轮实际
 尝试。运行时校验工作区根目录
 `results.tsv`，为每份返回报告追加且只追加一条记录，并提交账本。worker 绝不直接编辑它。
-process verifier 同时返回 candidate-local `disposition`：严格改善为 `keep`，同分或退化
-为 `discard`，无有效排名证据为 `failure`。runtime 保留实际被测 commit，并在
-`discard`/`failure` 后恢复 candidate best；worker 不得自行 reset verifier-backed 状态。
+process verifier 同时返回 candidate-local `disposition`：严格改善为 `keep`；启用
+Acceptance View 时，同硬分有效尝试为 `retain` 并成为下一轮基线；未启用时同分、以及
+所有退化尝试为 `discard`；无有效排名证据为 `failure`。Acceptance View 不改变硬 score
+或最终 PASS/FAIL。runtime 保留实际被测 commit，并在 `discard`/`failure` 后恢复
+candidate best；worker 不得自行 reset verifier-backed 状态。
 如果 worker 提供 handoff，后续 iteration history 会包含最新结构化 `research_summary`；
 应使用其中任务特定的结果和问题，避免重复失败变体。
 

@@ -6,7 +6,11 @@ import subprocess
 
 import pytest
 
-from goal_plus.models import EvidenceViewRecord, SearchSpec
+from goal_plus.models import (
+    AcceptanceViewAssessment,
+    EvidenceViewRecord,
+    SearchSpec,
+)
 from goal_plus.runtime import FileSearchRuntime
 from tests._runtime_helpers import git_commit_all, make_project, spec_for
 
@@ -16,6 +20,7 @@ def _search_with_candidates(
     count: int,
     *,
     strategy_updates: dict | None = None,
+    acceptance_view: dict | None = None,
 ) -> tuple[FileSearchRuntime, str, list[tuple[str, str, Path]]]:
     project = make_project(tmp_path)
     (project / "evaluator.py").write_text(
@@ -28,6 +33,8 @@ def _search_with_candidates(
     spec_data = spec_for(project, max_parallel=count).model_dump(mode="json")
     spec_data["workspace"] = {"backend": "git_worktree"}
     spec_data["strategy"].update(strategy_updates or {})
+    if acceptance_view is not None:
+        spec_data["acceptance_view"] = acceptance_view
     runtime = FileSearchRuntime(tmp_path / ".gp")
     frozen = runtime.freeze_spec(
         SearchSpec.model_validate(spec_data),
@@ -97,6 +104,7 @@ def test_global_evidence_is_immediate_and_view_is_late_bound(tmp_path: Path) -> 
         "discard",
     ]
     assert all(entry["commit"] and entry["view"] is None for entry in view)
+    assert all(entry["acceptance_view"] is None for entry in view)
 
     discarded_commit = view[-1]["commit"]
     annotation_task = runtime._load_evidence_annotation_task(run_id, second[0], 2)
@@ -133,6 +141,84 @@ def test_global_evidence_is_immediate_and_view_is_late_bound(tmp_path: Path) -> 
         check=True,
     )
     assert _git(first[2], "show", f"{peer_commit}:initial_program.py") == "VALUE = 2"
+
+
+def test_global_evidence_presents_structured_acceptance_view(tmp_path: Path) -> None:
+    contract = {
+        "rubric_name": "EdgeBench hidden generalization",
+        "benchmark_context": "Local and hidden workloads differ.",
+        "criteria": [
+            {
+                "id": "input_generalization",
+                "category": "hidden_generalization",
+                "description": "Handle valid inputs beyond public examples.",
+                "importance": "high",
+            }
+        ],
+    }
+    runtime, run_id, [candidate] = _search_with_candidates(
+        tmp_path,
+        1,
+        acceptance_view=contract,
+    )
+    candidate_id, session_id, workspace = candidate
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    report = runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session_id,
+        hypothesis="Generalize the implementation",
+    )
+    assert report.disposition == "keep"
+
+    context = runtime._evidence_annotation_context(run_id, candidate_id, 1)
+    assert context["acceptance_contract"]["rubric_name"] == contract["rubric_name"]
+    assert context["acceptance_contract"]["affects_final_result"] is False
+    assert context["changed_files"] == ["initial_program.py"]
+    assert context["verifier_contract"][0]["role"] == "ranking_signal"
+    assert context["verifier_contract"][0]["command"][-1] == "evaluator.py"
+
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
+    assert task is not None
+    runtime._write_evidence_annotation_task(
+        task.model_copy(
+            update={
+                "state": "completed",
+                "view": EvidenceViewRecord(
+                    run_id=run_id,
+                    candidate_id=candidate_id,
+                    iteration=1,
+                    attempt_commit=task.attempt_commit,
+                    description="Changed the implementation to handle more inputs.",
+                    acceptance_view=AcceptanceViewAssessment.model_validate(
+                        {
+                            "summary": "The diff provides partial public evidence.",
+                            "criteria": [
+                                {
+                                    "criterion_id": "input_generalization",
+                                    "status": "partial",
+                                    "confidence": "medium",
+                                    "evidence": ["initial_program.py diff"],
+                                    "rationale": "The broader branch is visible, but hidden behavior is unknown.",
+                                }
+                            ],
+                        }
+                    ),
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+            }
+        )
+    )
+
+    [entry] = runtime.get_global_evidence(session_id)
+    assert entry["score"] == 1.0
+    assert entry["acceptance_view"]["criteria"][0] == {
+        "criterion_id": "input_generalization",
+        "status": "partial",
+        "confidence": "medium",
+        "evidence": ["initial_program.py diff"],
+        "rationale": "The broader branch is visible, but hidden behavior is unknown.",
+    }
 
 
 def test_worker_hypothesis_is_required_and_parent_evidence_is_private(
@@ -241,6 +327,8 @@ def test_annotator_config_overrides_then_inherits_worker_launch(
         run_id, candidate_id, 2
     )
     assert continued_context["actual_diff"] == ""
+    assert "+VALUE = 1" in continued_context["candidate_diff"]
+    assert continued_context["candidate_changed_files"] == ["initial_program.py"]
     assert continued_context["annotator"]["model"] == "worker-model"
 
 
@@ -285,6 +373,54 @@ def test_pi_worker_model_is_inherited_by_pi_annotator(
     assert task.profile.provider is None
     context = runtime._evidence_annotation_context(run_id, candidate_id, 1)
     assert context["annotator"]["pi_provider"] == "bench-openai"
+
+
+def test_pi_worker_can_use_an_independent_codex_annotator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv(
+        "GOAL_PLUS_EVIDENCE_ANNOTATOR_BASE_URL",
+        "http://proxy.example/v1",
+    )
+    runtime, run_id, [candidate] = _search_with_candidates(
+        tmp_path,
+        1,
+        strategy_updates={
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 60},
+            "worker_launch": {
+                "model": "worker-model",
+                "reasoning_effort": "high",
+            },
+            "evidence_annotator": {
+                "host": "codex",
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "medium",
+            },
+        },
+    )
+    candidate_id, session_id, workspace = candidate
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session_id,
+        hypothesis="Set the Pi candidate value",
+    )
+
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
+    assert task is not None and task.profile is not None
+    assert task.profile.host == "codex"
+    assert task.profile.model == "gpt-5.6-luna"
+    assert task.profile.reasoning_effort == "medium"
+    assert task.profile.codex_home == str(codex_home)
+    assert task.profile.pi_home is None
+    assert task.profile.pi_provider is None
+    assert task.profile.provider is not None
 
 
 def test_pi_annotator_inherits_host_provider_and_model_by_default(
