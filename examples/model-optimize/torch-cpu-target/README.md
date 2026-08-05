@@ -33,3 +33,10 @@ The target includes two intentionally obvious opportunities:
 The example prompt and this workspace README explain the domain rules. The
 reference C++ CPU operator pattern is in
 `cpp_reference/fused_vector_tail.cpp`.
+
+## Shared-dir validation
+
+[`shared-dir-experiment.md`](shared-dir-experiment.md) validates the
+verifier-settled shared-dir path with producer and adopter candidates. It
+checks staging, publication, discovery, candidate-local revalidation, duplicate
+consumption, and final independence from the run shared directory.

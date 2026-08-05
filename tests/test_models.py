@@ -14,6 +14,7 @@ from goal_plus.models import (
     CandidateTask,
     EditSurface,
     GoalPlusSpecDraft,
+    IterationRecord,
     SearchPlan,
     SearchSpec,
     SearchSpecDraft,
@@ -22,6 +23,44 @@ from goal_plus.models import (
     WorkerBudget,
     ModelSpec,
 )
+
+
+def test_legacy_iteration_infers_shared_tool_publish_status() -> None:
+    asset = {
+        "asset_id": "legacy-asset",
+        "candidate_id": "c001",
+        "iteration": 1,
+        "snapshot_hash": "abc123",
+        "name": "legacy helper",
+        "source_relative_path": "legacy-helper",
+        "read_only_path": "/tmp/legacy-helper",
+        "files": ["helper.py"],
+        "size_bytes": 12,
+        "created_at": "2026-08-03T00:00:00Z",
+    }
+
+    published = IterationRecord.model_validate(
+        {
+            "iteration": 1,
+            "shared_tools": [asset],
+            "created_at": "2026-08-03T00:00:00Z",
+        }
+    )
+    partial = IterationRecord.model_validate(
+        {
+            "iteration": 1,
+            "shared_tools": [asset],
+            "shared_tool_errors": ["second asset rejected"],
+            "created_at": "2026-08-03T00:00:00Z",
+        }
+    )
+    unknown = IterationRecord.model_validate(
+        {"iteration": 1, "created_at": "2026-08-03T00:00:00Z"}
+    )
+
+    assert published.shared_tool_publish_status == "published"
+    assert partial.shared_tool_publish_status == "partially_published"
+    assert unknown.shared_tool_publish_status == "legacy_unknown"
 
 
 def valid_spec_dict() -> dict:
@@ -421,6 +460,37 @@ def test_models_reject_extra_fields() -> None:
     data = valid_spec_dict()
     data["unexpected"] = True
 
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(data)
+
+
+def test_shared_dir_is_opt_in_and_bounded() -> None:
+    default_spec = SearchSpec.model_validate(valid_spec_dict())
+    assert default_spec.shared_dir.enabled is False
+
+    data = valid_spec_dict()
+    data["shared_dir"] = {
+        "enabled": True,
+        "max_tools_per_iteration": 4,
+        "max_files_per_iteration": 12,
+        "max_path_entries_per_iteration": 96,
+        "max_depth": 5,
+        "max_bytes_per_iteration": 4096,
+    }
+    spec = SearchSpec.model_validate(data)
+    assert spec.shared_dir.enabled is True
+    assert spec.shared_dir.max_tools_per_iteration == 4
+    assert spec.shared_dir.max_files_per_iteration == 12
+    assert spec.shared_dir.max_path_entries_per_iteration == 96
+    assert spec.shared_dir.max_depth == 5
+    assert spec.shared_dir.max_bytes_per_iteration == 4096
+
+    data["shared_dir"]["max_files_per_iteration"] = 0
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(data)
+
+    data["shared_dir"]["max_files_per_iteration"] = 12
+    data["shared_dir"]["max_depth"] = 0
     with pytest.raises(ValidationError):
         SearchSpec.model_validate(data)
 

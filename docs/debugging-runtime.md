@@ -291,6 +291,8 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     │   ├── .git/                                 # agent and runtime ledger Git history
     │   ├── results.tsv                           # committed, runtime-owned inherited append-only ledger
     │   └── <allowed_files>
+    ├── shared/index.json                         # optional verifier-settled asset index
+    ├── shared/tools/<candidate_id>/<iteration>/  # runtime-owned peer-readable snapshots
     ├── agent_sessions/<agent_session_id>.json    # AgentSessionRecord: candidate/host binding, launch payload, counters
     ├── report.md / report.html                   # text and self-contained audit reports
     └── promotion/                                # selected patch outputs

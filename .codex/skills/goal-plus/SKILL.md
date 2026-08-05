@@ -46,6 +46,10 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
    `workspace.backend="git_worktree"`，以便候选共享 Git object database 并解析彼此的
    Evidence commit；只有用户明确要求兼容隔离时才能设置 `copy`。使用
    `goal_plus_save_spec_draft` 保存完整契约。
+   需要候选工具共享时，可在 draft 中显式设置 `shared_dir.enabled=true`；默认关闭。
+   这只启用 verifier-settled `.tmp/share-out` 快照和 Global Evidence 元数据，不代表资产已被
+   执行验证、自动安装或合并。共享资产只能作为 peer 只读研究输入，采用后仍须在当前候选中
+   重新验证，且最终产物不得依赖 run-scoped shared-dir。
    如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="codex")`，
    将用户填写的名称解析为唯一可用模型并冻结到 `strategy.models`；不存在或不唯一时，
    在创建 run 前直接返回错误。`models=A,B max_parallel=4` 表示按 A、B、A、B 轮转；

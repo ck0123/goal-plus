@@ -1,0 +1,84 @@
+{
+  "objective": "maximize single-core PyTorch tokens_per_second while preserving the deterministic workload checksum",
+  "metric_name": "tokens_per_second",
+  "metric_direction": "maximize",
+  "source_path": "examples/model-optimize/torch-cpu-target",
+  "workspace": {
+    "backend": "git_worktree"
+  },
+  "edit_surface": {
+    "allow": [
+      "model.py",
+      "serving.py",
+      "shared_tools/**"
+    ],
+    "deny": [
+      "benchmark.py",
+      "verify.py",
+      "single_thread.py",
+      "workload.json",
+      "cpp_reference/**",
+      "shared-dir-*.json",
+      "shared-dir-experiment.md"
+    ]
+  },
+  "process_verifiers": [
+    {
+      "name": "torch_cpu_correctness",
+      "role": "validity_gate",
+      "command": [
+        "python",
+        "verify.py"
+      ],
+      "timeout_seconds": 60,
+      "resource_lock": "torch-cpu-shared-dir-experiment"
+    },
+    {
+      "name": "torch_cpu_tokens_per_second",
+      "role": "ranking_signal",
+      "command": [
+        "python",
+        "benchmark.py"
+      ],
+      "timeout_seconds": 120,
+      "resource_lock": "torch-cpu-shared-dir-experiment"
+    }
+  ],
+  "promotion_verifiers": [
+    {
+      "name": "torch_cpu_correctness",
+      "role": "promotion_gate",
+      "command": [
+        "python",
+        "verify.py"
+      ],
+      "timeout_seconds": 60,
+      "resource_lock": "torch-cpu-shared-dir-experiment"
+    }
+  ],
+  "budget": {
+    "max_parallel": 2
+  },
+  "strategy": {
+    "name": "agent_guided",
+    "orchestration_mode": "parallel_loops",
+    "worker_host": "codex",
+    "worker_budget": {
+      "max_runtime_seconds": 1200,
+      "min_verifier_runs": 1,
+      "on_exceed": "interrupt"
+    },
+    "config": {
+      "seed": 20260804
+    }
+  },
+  "shared_dir": {
+    "enabled": true,
+    "max_files_per_iteration": 32,
+    "max_bytes_per_iteration": 1048576
+  },
+  "constraints": {
+    "suggested_batch_size": 2,
+    "task_summary": "Shared-dir validation with one publisher and one consumer, one CPU thread, and the correctness gate before publishing or ranking."
+  }
+}

@@ -98,8 +98,8 @@ feature ledger, and scoped pitfalls. It marks predecessor scores non-reusable.
 | `search_redispatch_candidate` | main | create a fresh session in the same candidate workspace |
 | `search_bind_agent_handle` | main/host driver | attach a Codex or Pi native handle |
 | `search_continue_agent_session` | main | return native same-worker continuation fields when supported |
-| `search_get_agent_context` | candidate worker | load authoritative ids, workspace, candidate-local iterations/results, and resume data |
-| `search_get_global_evidence` | candidate worker | project settled worker attempts in the current run as score, disposition, exact attempt commit, and a possibly delayed objective View |
+| `search_get_agent_context` | candidate worker | load authoritative ids, absolute runtime root, workspace, candidate-local iterations/results, and resume data |
+| `search_get_global_evidence` | candidate worker | project settled worker attempts in the current run as score, disposition, exact attempt commit, a possibly delayed objective View, and optional verifier-settled `shared_tools` metadata |
 | `search_get_agent_observability` | main/monitor | read normalized model, timing, terminal, usage, context, artifact, and handoff evidence for one session |
 
 `search_start_agent_session` does not launch or supervise a worker. The caller
@@ -111,6 +111,24 @@ pool job; ordinary overrides remain dispatch-scoped.
 Worker process verifier calls require a one-line `hypothesis` describing the
 realized attempt. `view=null` in Global Evidence means annotation has not been
 published yet; workers continue independently and do not wait or poll.
+When `shared_dir.enabled=true`, candidate context includes `.tmp/share-out`
+and the run-scoped shared directory. Verifiers run before recursive staging
+inspection. An attributed passing worker process verifier atomically consumes
+staging, publishes only new or changed candidate/path versions, and reuses
+content-addressed physical snapshots. Tool, file, filesystem-entry, depth, and
+byte limits stop traversal early. This API does not execute, install, validate,
+or automatically merge tools.
+Every process iteration also records staged entry/file/byte counts and a
+`shared_tool_publish_status`, plus consumed and deduplicated entry names.
+`consumed_unchanged` means accepted staging was removed without publishing a
+duplicate version. Failed, unattributed, or rejected staging remains available
+for correction. Snapshot/index publication uses atomic rename/replace on both
+Windows and POSIX. Read-only file modes are advisory for same-user workers;
+strong write isolation requires host sandboxing or OS ACL/user separation.
+`search_run_verifier` returns the same settlement diagnostics directly for a
+process call. Records created before these fields existed infer published or
+partially published status from saved tools and otherwise report
+`legacy_unknown` instead of incorrectly claiming that sharing was disabled.
 Each worker settlement snapshots the exact attempt base/head, worker host, and
 resolved annotator model/provider into an internal task. Codex runs annotations
 through ephemeral `codex exec`; Pi runs them through ephemeral, tool-free
@@ -237,6 +255,7 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
 | `strategy.worker_host` | maintained execution host: `pi-rpc` or `codex` |
 | `strategy.worker_budget` | host-enforced upper bound and optional minimum lease |
 | `workspace.backend` | `git_worktree` (default) or `copy` |
+| `shared_dir` | optional verifier-settled `.tmp/share-out` tool snapshots; disabled by default, with per-iteration tool/file/path-entry/depth/byte bounds and delta-only publication |
 
 Every ranking command must exit successfully and print a final JSON object with
 a finite numeric value under `metric_name`. Temporary verifier outputs belong
