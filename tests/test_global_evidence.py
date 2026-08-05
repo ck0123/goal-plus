@@ -327,6 +327,8 @@ def test_annotator_config_overrides_then_inherits_worker_launch(
         run_id, candidate_id, 2
     )
     assert continued_context["actual_diff"] == ""
+    assert "+VALUE = 1" in continued_context["candidate_diff"]
+    assert continued_context["candidate_changed_files"] == ["initial_program.py"]
     assert continued_context["annotator"]["model"] == "worker-model"
 
 

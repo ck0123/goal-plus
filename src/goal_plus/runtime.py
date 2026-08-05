@@ -5803,6 +5803,30 @@ class FileSearchRuntime:
                 ],
                 max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
             )
+        candidate_base_commit = (
+            record.task.workspace_base_revision or task.attempt_base_commit
+        )
+        candidate_changed_files = self._git_changed_files(
+            record.task.workspace,
+            candidate_base_commit,
+            commit,
+        )
+        candidate_diff = ""
+        if candidate_changed_files:
+            candidate_diff = self._git_output_bounded(
+                record.task.workspace,
+                [
+                    "git",
+                    "diff",
+                    "--full-index",
+                    "--no-ext-diff",
+                    candidate_base_commit,
+                    commit,
+                    "--",
+                    *candidate_changed_files,
+                ],
+                max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+            )
         return {
             "run_id": run_id,
             "candidate_id": candidate_id,
@@ -5811,6 +5835,9 @@ class FileSearchRuntime:
             "exact_attempt_commit": commit,
             "changed_files": list(task.attempt_changed_files),
             "actual_diff": diff,
+            "candidate_base_commit": candidate_base_commit,
+            "candidate_changed_files": candidate_changed_files,
+            "candidate_diff": candidate_diff,
             "verifier_result": {
                 "score": iteration.score,
                 "process_passed": iteration.process_passed,

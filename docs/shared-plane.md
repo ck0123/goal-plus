@@ -87,6 +87,10 @@ Evidence annotator 默认继承 Search 的 `worker_host`。需要把 ViewAgent �
 home 和调用进程都按该 host 解析，不改变候选 worker 的 host。未设置该字段时继续使用
 host-native 默认路径。
 
+每条 Global Evidence View 同时保留本轮 `actual_diff` 与从候选初始基线到当前提交的
+累计 `candidate_diff`。description 只描述本轮增量，Acceptance View 使用累计候选证据，
+因此后续只增加测试或说明的 iteration 不会把此前已经覆盖的 criterion 误判回 unknown。
+
 冻结后的合同不能原地修改。确认 verifier 合同有误时，应先使当前 run 失效并停止其
 worker，再冻结修正后的 spec，创建 successor run。旧分数不能跨合同复用。
 
