@@ -7,7 +7,7 @@
 - 重新派发或处于继承的子/后继工作区时，在判断剩余工作前检查 `context.resume.latest_handoff`、先前 session 摘要、`context.results`、`context.results_tsv` 和当前工作区状态。
 - 每轮修改前调用 `search_get_global_evidence(agent_session_id)`。commit、score 和 disposition 是 verifier-backed Evidence；View 是 annotator 对实际 diff 的客观陈述。`view=null` 只表示 annotator 尚未更新，不表示 Evidence 无效，也不需要等待。先结合 Evidence、本地代码和自己的推理独立选择探索方向；不要休眠或高频轮询。
 - 启用 `shared_dir` 时，context 会提供 `share_out_dir` 与只读 `shared_dir`。仅将最小、边界清晰的候选工具放入 `share_out_dir`；runtime 只会在有归属且 process verifier 通过后发布它。
-- peer 资产只能只读检查，或复制到自己的 `allowed_files` 后重新验证。不要修改 `shared_dir`、执行未知脚本、直接 import，或让最终产物依赖 run shared-dir。
+- `shared_tools[*].tool_view` 用于判断 peer 工具是否相关，但只说明用途和接入边界，不代表工具被独立验证；`tool_view=null` 时不要等待或轮询。判断相关后才能只读检查快照，或复制到自己的 `allowed_files` 后重新验证。不要修改 `shared_dir`、执行未知脚本、直接 import，或让最终产物依赖 run shared-dir。
 - 若运行时上下文含有 `selected_model`，该模型在本 candidate 的整个 native-session continuation 中保持不变；所有模型都读取同一 run 的 Evidence，模型身份只作 provenance，不改变选择规则。
 - View 不是推荐方向。仅当窄 Evidence 不足、你独立判断代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 `git diff HEAD <commit> -- <allowed-file>` 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。
 - 只能在候选工作区中工作和编辑候选产物。除 runtime 提供的 shared-dir 只读访问外，不要在该工作区之外编辑、写入或运行会产生变更的命令。

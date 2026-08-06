@@ -206,8 +206,9 @@ annotator 尚未更新，worker 可先依据 commit、score、disposition 和自
 
 当冻结 spec 设置 `shared_dir.enabled=true` 时，候选上下文会给出 candidate-local
 `.tmp/share-out` 和 run-scoped `shared_dir`。runtime 只会在有归属的 worker process verifier
-通过后发布 staging 资产。peer 只能只读检查资产，或复制到自己的 `allowed_files` 后重新验证；
-最终产物绝不能直接 import 或依赖 run shared-dir。本版不执行资产、不证明资产正确性，也不自动整合代码。
+通过后发布 staging 工具。View Agent 会异步生成 `shared_tools[*].tool_view`，用于说明用途和接入边界，
+但不代表工具被独立验证；`tool_view=null` 时不等待。peer 判断相关后才能只读检查工具，或复制到自己的
+`allowed_files` 后重新验证；最终产物绝不能直接 import 或依赖 run shared-dir。
 host transcript 是有用上下文，但不是权威 Search 状态。
 
 Codex 的同 worker continuation 使用 `search_continue_agent_session`，随后对现有 task

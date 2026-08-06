@@ -245,8 +245,9 @@ def create_mcp(
 
         每项包含 candidate_id、iteration、score、keep/discard/failure disposition、
         verifier attempt commit、可能延迟的客观 View，以及该次已结算尝试发布的
-        shared_tools。`view=null` 表示 annotator 尚未更新；worker 不需要等待，可先依据
-        Evidence 独立探索，必要时再通过 commit 或只读共享资产做比较。
+        shared_tools 与可能延迟的 Tool View。`view=null` 或 `tool_view=null` 表示
+        annotator 尚未更新；worker 不需要等待，可先依据 Evidence 独立探索，判断相关后
+        再通过 commit 或只读共享工具做比较。Tool View 不代表工具被独立验证。
         """
         return tools.search_get_global_evidence(agent_session_id)
 

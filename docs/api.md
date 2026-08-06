@@ -84,6 +84,8 @@ continuation. All models read the same run-scoped
 `search_get_global_evidence` surface.
 Each verifier-backed iteration is projected there with its commit, score,
 disposition, and an asynchronously generated objective View when available.
+Published tools additionally receive a structured Tool View for relevance and
+adoption guidance.
 Model identity is provenance only and does not alter plan admission or
 iteration selection.
 
@@ -99,7 +101,7 @@ feature ledger, and scoped pitfalls. It marks predecessor scores non-reusable.
 | `search_bind_agent_handle` | main/host driver | attach a Codex or Pi native handle |
 | `search_continue_agent_session` | main | return native same-worker continuation fields when supported |
 | `search_get_agent_context` | candidate worker | load authoritative ids, absolute runtime root, workspace, candidate-local iterations/results, and resume data |
-| `search_get_global_evidence` | candidate worker | project settled worker attempts in the current run as score, disposition, exact attempt commit, a possibly delayed objective View, and optional verifier-settled `shared_tools` metadata |
+| `search_get_global_evidence` | candidate worker | project settled worker attempts in the current run as score, disposition, exact attempt commit, a possibly delayed objective View, and optional `shared_tools` with delayed Tool Views |
 | `search_get_agent_observability` | main/monitor | read normalized model, timing, terminal, usage, context, artifact, and handoff evidence for one session |
 
 `search_start_agent_session` does not launch or supervise a worker. The caller
@@ -129,6 +131,14 @@ strong write isolation requires host sandboxing or OS ACL/user separation.
 process call. Records created before these fields existed infer published or
 partially published status from saved tools and otherwise report
 `legacy_unknown` instead of incorrectly claiming that sharing was disabled.
+After publication, the existing asynchronous View Agent verifies each snapshot
+hash and receives its manifest, file list, bounded text excerpts, and iteration
+verifier Evidence. It produces a structured `tool_view` under the corresponding
+Global Evidence `shared_tools` entry. Runtime, rather than the model, binds
+`tool_id`, `snapshot_hash`, `source_commit`, and the warning that the source
+iteration passed but the tool was not independently verified. A missing Tool
+View never blocks settlement; adopters copy relevant files into their own edit
+surface and must pass their own verifier before use.
 Each worker settlement snapshots the exact attempt base/head, worker host, and
 resolved annotator model/provider into an internal task. Codex runs annotations
 through ephemeral `codex exec`; Pi runs them through ephemeral, tool-free

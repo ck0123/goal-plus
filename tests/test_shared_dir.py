@@ -3,6 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from goal_plus.evidence_annotator import (
+    EvidenceAnnotationResult,
+    ToolViewOutput,
+    drain_evidence_annotations,
+)
 from goal_plus.models import SearchSpec
 from goal_plus.monitor import goal_plus_monitor_snapshot
 from goal_plus.runtime import FileSearchRuntime
@@ -90,6 +97,9 @@ def test_process_verifier_publishes_share_out_into_global_evidence(
     assert "manifest.json" in " ".join(
         producer_context["candidate_task"]["instructions"]
     )
+    assert "shared_tools[*].tool_view" in " ".join(
+        producer_context["candidate_task"]["instructions"]
+    )
 
     _write_tool(share_out)
     (producer[2] / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -138,6 +148,146 @@ def test_process_verifier_publishes_share_out_into_global_evidence(
     assert candidate_monitor["shared_tool_publish_status_counts"] == {
         "published": 1
     }
+
+
+def test_view_agent_publishes_bound_tool_view_into_global_evidence(
+    tmp_path: Path,
+) -> None:
+    runtime, run_id, [producer, peer] = _shared_run(tmp_path)
+    share_out = Path(
+        runtime.get_agent_context(producer[1])["candidate_task"]["share_out_dir"]
+    )
+    _write_tool(share_out)
+    (producer[2] / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    runtime.run_verifier(
+        run_id,
+        producer[0],
+        agent_session_id=producer[1],
+        hypothesis="Publish a parser for peer adoption",
+    )
+    before = runtime.get_global_evidence(peer[1])
+    [published] = before[0]["shared_tools"]
+    assert published["tool_view"] is None
+
+    class ToolViewAnnotator:
+        def annotate(self, context):
+            [tool_input] = context["published_tools"]
+            assert tool_input["tool_id"] == published["tool_id"]
+            assert tool_input["snapshot_hash"] == published["snapshot_hash"]
+            assert tool_input["source_commit"] == before[0]["commit"]
+            assert tool_input["manifest"]["entrypoint"] == "helper.py:read_score"
+            assert not any(
+                item.get("path") == "manifest.json" and "text" in item
+                for item in tool_input["snapshot_excerpts"]
+            )
+            assert any(
+                item.get("path") == "helper.py" and "read_score" in item.get("text", "")
+                for item in tool_input["snapshot_excerpts"]
+            )
+            return EvidenceAnnotationResult(
+                description="发布了一个解析候选分数的辅助工具。",
+                usage={"input_tokens": 10, "output_tokens": 5},
+                tool_views=[
+                    ToolViewOutput(
+                        tool_id=tool_input["tool_id"],
+                        summary="从候选源码文本中解析数值分数。",
+                        capabilities=["解析等号右侧的浮点数"],
+                        when_to_use="复用相同的文本分数格式时。",
+                        entrypoint="hallucinated.py:wrong_entrypoint",
+                        inputs=["包含 VALUE=<number> 的文本"],
+                        outputs=["浮点数"],
+                        dependencies=["Python 标准库"],
+                        adoption_steps=["复制 helper.py 到 allowed_files", "重新运行 verifier"],
+                        limitations=["只支持包含等号的文本"],
+                    )
+                ],
+            )
+
+    assert drain_evidence_annotations(
+        runtime.root_dir,
+        run_id,
+        annotator=ToolViewAnnotator(),
+    ) == 1
+    after = runtime.get_global_evidence(peer[1])
+    tool_view = after[0]["shared_tools"][0]["tool_view"]
+    assert tool_view["tool_id"] == published["tool_id"]
+    assert tool_view["snapshot_hash"] == published["snapshot_hash"]
+    assert tool_view["source_commit"] == before[0]["commit"]
+    assert tool_view["entrypoint"] == "helper.py:read_score"
+    assert tool_view["capabilities"] == ["解析等号右侧的浮点数"]
+    assert "不代表工具已被独立验证" in tool_view["evidence_scope"]
+
+
+def test_view_agent_rejects_tool_identity_mismatch(tmp_path: Path) -> None:
+    runtime, run_id, [producer, peer] = _shared_run(tmp_path)
+    share_out = Path(
+        runtime.get_agent_context(producer[1])["candidate_task"]["share_out_dir"]
+    )
+    _write_tool(share_out)
+    runtime.run_verifier(
+        run_id,
+        producer[0],
+        agent_session_id=producer[1],
+        hypothesis="Publish a parser with immutable identity",
+    )
+
+    class WrongIdentityAnnotator:
+        def annotate(self, _context):
+            return EvidenceAnnotationResult(
+                description="尝试描述一个错误工具身份。",
+                usage={"input_tokens": 3},
+                tool_views=[
+                    ToolViewOutput(
+                        tool_id="invented-tool-id",
+                        summary="错误身份。",
+                        capabilities=[],
+                        when_to_use="不适用。",
+                        entrypoint=None,
+                        inputs=[],
+                        outputs=[],
+                        dependencies=[],
+                        adoption_steps=[],
+                        limitations=["身份不匹配"],
+                    )
+                ],
+            )
+
+    assert drain_evidence_annotations(
+        runtime.root_dir,
+        run_id,
+        annotator=WrongIdentityAnnotator(),
+    ) == 0
+    annotation_task = runtime._load_evidence_annotation_task(
+        run_id, producer[0], 1
+    )
+    assert annotation_task is not None
+    assert annotation_task.state == "retry_wait"
+    assert annotation_task.usage == {"input_tokens": 3}
+    assert "identities do not match" in (annotation_task.last_error or "")
+    assert runtime.get_global_evidence(peer[1])[0]["shared_tools"][0][
+        "tool_view"
+    ] is None
+
+
+def test_view_agent_rejects_tampered_tool_snapshot(tmp_path: Path) -> None:
+    runtime, run_id, [producer, peer] = _shared_run(tmp_path)
+    share_out = Path(
+        runtime.get_agent_context(producer[1])["candidate_task"]["share_out_dir"]
+    )
+    _write_tool(share_out)
+    runtime.run_verifier(
+        run_id,
+        producer[0],
+        agent_session_id=producer[1],
+        hypothesis="Publish a hash-bound parser snapshot",
+    )
+    published = runtime.get_global_evidence(peer[1])[0]["shared_tools"][0]
+    helper = Path(published["read_only_path"]) / "helper.py"
+    helper.chmod(0o666)
+    helper.write_text("def read_score(_text):\n    return 999.0\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="snapshot integrity mismatch"):
+        runtime._evidence_annotation_context(run_id, producer[0], 1)
 
 
 def test_valid_non_improving_iteration_can_still_share_an_tool(tmp_path: Path) -> None:
@@ -525,3 +675,4 @@ def test_torch_cpu_shared_dir_validation_files_cover_publication_and_adoption() 
     assert "shared_tool_publish_status" in experiment
     assert "producer staging" in experiment
     assert "adopter" in experiment
+    assert "Tool View" in experiment

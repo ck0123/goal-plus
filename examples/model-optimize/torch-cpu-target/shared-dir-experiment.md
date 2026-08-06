@@ -29,7 +29,8 @@ The second discovers, copies, adapts, and locally revalidates that tool.
 producer staging
   -> attributed passing process verifier
   -> immutable shared snapshot and index entry
-  -> adopter discovers the tool through Global Evidence or shared/index.json
+  -> View Agent publishes a Tool View from manifest, snapshot, and Evidence
+  -> adopter judges relevance from Global Evidence Tool View
   -> adopter reads or copies it into allowed_files
   -> adopter process verifier passes
 ```
@@ -56,8 +57,8 @@ steps below:
    or `"partially_published"`, and `.gp/runs/<run_id>/shared/index.json`
    contains the published tool id.
 3. Global Evidence exposes the same tool id, source commit, snapshot hash,
-   and read-only path.
-4. An adopter observes that tool, records whether it was read, copied,
+   read-only path, and a Tool View that states the tool was not independently verified.
+4. An adopter judges the Tool View relevant, observes that tool, and records whether it was read, copied,
    adapted, or rejected in its verifier hypothesis, and passes its own process
    verifier after any adoption.
 5. The selected and promoted candidate passes correctness without access to

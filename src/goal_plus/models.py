@@ -242,12 +242,58 @@ class ResolvedEvidenceAnnotatorProfile(SearchModel):
     provider: ResolvedCodexProvider | None = None
 
 
+class ToolViewContent(SearchModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    capabilities: list[str] = Field(max_length=16)
+    when_to_use: str = Field(min_length=1, max_length=1000)
+    entrypoint: str | None = Field(max_length=500)
+    inputs: list[str] = Field(max_length=16)
+    outputs: list[str] = Field(max_length=16)
+    dependencies: list[str] = Field(max_length=16)
+    adoption_steps: list[str] = Field(max_length=16)
+    limitations: list[str] = Field(max_length=16)
+
+    @field_validator(
+        "capabilities",
+        "inputs",
+        "outputs",
+        "dependencies",
+        "adoption_steps",
+        "limitations",
+        mode="before",
+    )
+    @classmethod
+    def normalize_items(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        normalized = []
+        for item in value:
+            if not isinstance(item, str):
+                normalized.append(item)
+                continue
+            text = " ".join(item.strip().split())
+            if not text:
+                raise ValueError("tool view list items must be non-empty")
+            if len(text) > 500:
+                raise ValueError("tool view list items must not exceed 500 characters")
+            normalized.append(text)
+        return normalized
+
+
+class ToolViewRecord(ToolViewContent):
+    tool_id: str = Field(min_length=1)
+    snapshot_hash: str = Field(min_length=1)
+    source_commit: str = Field(min_length=1)
+    evidence_scope: str = Field(min_length=1, max_length=1000)
+
+
 class EvidenceViewRecord(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
     attempt_commit: str = Field(min_length=1)
     description: str = Field(min_length=1, max_length=1000)
+    tool_views: list[ToolViewRecord] = Field(default_factory=list)
     created_at: str
 
     @field_validator("description", mode="before")

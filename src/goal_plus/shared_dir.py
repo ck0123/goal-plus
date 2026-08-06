@@ -8,6 +8,7 @@ settlement cannot publish the same staging contents again on the next iteration.
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
@@ -23,6 +24,8 @@ from goal_plus.models import SharedToolRecord
 
 SHARE_OUT_RELATIVE_PATH = ".tmp/share-out"
 SHARED_INDEX_SCHEMA_VERSION = 1
+TOOL_VIEW_MAX_CONTENT_BYTES = 256 * 1024
+TOOL_VIEW_MAX_FILE_BYTES = 64 * 1024
 
 
 def _utc_timestamp() -> str:
@@ -281,6 +284,137 @@ class SharedDirManager:
                         f"consumed staging cleanup failed at {claim_dir}: {exc}"
                     )
         return result
+
+    def tool_view_input(
+        self,
+        tool: SharedToolRecord,
+        *,
+        max_content_bytes: int,
+    ) -> tuple[dict[str, Any], int]:
+        """Build bounded, hash-checked, untrusted input for the View Agent."""
+        root = tool.read_only_path
+        if not self._safe_snapshot_path(root):
+            raise ValueError(f"unsafe shared tool snapshot path for {tool.tool_id}")
+
+        root = root.resolve()
+        files: list[tuple[str, Path]] = []
+        for value in tool.files:
+            relative = Path(value)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(f"unsafe shared tool file path {value!r}")
+            path = (root / relative).resolve(strict=True)
+            if not path.is_file() or not path.is_relative_to(root):
+                raise ValueError(f"shared tool file escaped its snapshot: {value!r}")
+            if path.relative_to(root).as_posix() != value:
+                raise ValueError(f"non-canonical shared tool file path {value!r}")
+            files.append((value, path))
+
+        entrypoint_file = (tool.entrypoint or "").partition(":")[0]
+        ordered = sorted(
+            files,
+            key=lambda item: (
+                item[0] != "manifest.json",
+                item[0] != entrypoint_file,
+                item[0],
+            ),
+        )
+        remaining = max(0, max_content_bytes)
+        capture_limits: dict[str, int] = {}
+        try:
+            for relative, path in ordered:
+                limit = min(
+                    path.stat().st_size,
+                    remaining,
+                    TOOL_VIEW_MAX_FILE_BYTES,
+                )
+                capture_limits[relative] = limit
+                remaining -= limit
+
+            digest = hashlib.sha256()
+            bytes_read = 0
+            file_sizes: dict[str, int] = {}
+            captured: dict[str, bytearray] = {
+                relative: bytearray() for relative, _path in files
+            }
+            for relative, path in files:
+                digest.update(relative.encode("utf-8"))
+                digest.update(b"\0")
+                file_size = 0
+                with path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        file_size += len(chunk)
+                        bytes_read += len(chunk)
+                        if bytes_read > tool.size_bytes:
+                            raise ValueError("tool changed while it was being read")
+                        digest.update(chunk)
+                        excerpt = captured[relative]
+                        excerpt.extend(
+                            chunk[: max(0, capture_limits[relative] - len(excerpt))]
+                        )
+                file_sizes[relative] = file_size
+            if bytes_read != tool.size_bytes or digest.hexdigest() != tool.snapshot_hash:
+                raise ValueError("tool changed while it was being read")
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"shared tool snapshot integrity mismatch for {tool.tool_id}: {exc}"
+            ) from exc
+
+        used = sum(len(value) for value in captured.values())
+        excerpts: list[dict[str, Any]] = []
+        manifest: dict[str, Any] | None = None
+        for relative, _path in ordered:
+            size = file_sizes[relative]
+            raw = bytes(captured[relative])
+            if not raw:
+                excerpts.append(
+                    {"path": relative, "size_bytes": size, "content_omitted": True}
+                )
+                continue
+            truncated = len(raw) < size
+            try:
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+                text = decoder.decode(raw, final=not truncated)
+            except UnicodeDecodeError:
+                excerpts.append(
+                    {"path": relative, "size_bytes": size, "binary": True}
+                )
+                continue
+            if relative == "manifest.json" and not truncated:
+                try:
+                    payload = json.loads(text)
+                    if isinstance(payload, dict):
+                        manifest = payload
+                        continue
+                except json.JSONDecodeError:
+                    pass
+            excerpts.append(
+                {
+                    "path": relative,
+                    "size_bytes": size,
+                    "text": text,
+                    "truncated": truncated,
+                }
+            )
+
+        return (
+            {
+                "tool_id": tool.tool_id,
+                "snapshot_hash": tool.snapshot_hash,
+                "source_commit": tool.source_commit,
+                "name": tool.name,
+                "summary": tool.summary,
+                "entrypoint": tool.entrypoint,
+                "files": list(tool.files),
+                "size_bytes": tool.size_bytes,
+                "manifest": manifest,
+                "snapshot_excerpts": excerpts,
+                "evidence_warning": (
+                    "The candidate iteration passed its process verifier; the tool "
+                    "was not independently verified."
+                ),
+            },
+            used,
+        )
 
     @staticmethod
     def _top_level_entries(

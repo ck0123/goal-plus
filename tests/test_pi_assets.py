@@ -247,6 +247,8 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "share_out_dir" in text
     assert "shared_dir" in text
     assert "shared_dir" in text
+    assert "shared_tools[*].tool_view" in text
+    assert "tool_view=null" in text
     assert "allowed_files" in text
     assert "直接 import" in text
     assert "VerifierWorkspaceSideEffect" in text
@@ -377,6 +379,7 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "max_path_entries_per_iteration: Type.Optional" in text
     assert "max_depth: Type.Optional(Type.Integer" in text
     assert "shared_dir: Type.Optional(SharedDirSpec)" in text
+    assert "异步 tool_view" in text
     assert "metric_direction: Type.Union" in text
     assert "process_verifiers: Type.Array(VerifierCommand" in text
     assert "worker_budget: Type.Optional(Type.Union" in text

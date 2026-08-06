@@ -67,7 +67,11 @@ from goal_plus.models import (
     WorkerLaunchOptions,
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT
-from goal_plus.shared_dir import SHARE_OUT_RELATIVE_PATH, SharedDirManager
+from goal_plus.shared_dir import (
+    SHARE_OUT_RELATIVE_PATH,
+    TOOL_VIEW_MAX_CONTENT_BYTES,
+    SharedDirManager,
+)
 from goal_plus.workspaces import (
     IGNORED_NAMES,
     IGNORED_SUFFIXES,
@@ -3200,7 +3204,7 @@ class FileSearchRuntime:
             share_out_dir.mkdir(parents=True, exist_ok=True)
 
         outside_workspace_instruction = (
-            "除 candidate_task.shared_dir 的只读共享资产外，不要使用 /tmp、home 目录或候选工作区之外的路径处理候选工作；共享目录绝不能写入。"
+            "除 candidate_task.shared_dir 的只读共享工具外，不要使用 /tmp、home 目录或候选工作区之外的路径处理候选工作；共享目录绝不能写入。"
             if shared_dir is not None
             else "不要使用 /tmp、home 目录或候选工作区之外的路径处理候选工作。"
         )
@@ -3218,15 +3222,15 @@ class FileSearchRuntime:
             "search_run_verifier 会在运行 verifier 前自动提交已修改的候选产物文件；使用 git status、git diff 和 git log 检查 iteration provenance。",
             "process verifier 返回 keep/discard/failure disposition；非严格改善或验证失败时，runtime 会保留被测 commit 并把候选代码恢复到 candidate-local best。下一轮直接从返回后的已结算工作区继续。",
             "规划另一个变体前，检查 workspace/results.tsv 中继承的 iteration 日志。运行时拥有并提交这份仅追加账本，会验证已有记录未被修改，并为每份返回的 verifier 报告添加且只添加一条记录；绝不能重写、截断、删除或手动追加它。",
-            "Global Evidence 展示 peer 的 verifier commit、分数、disposition 和可能延迟的客观 View。view=null 只表示 annotator 尚未更新；可先按自己的方向探索。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
+            "Global Evidence 展示 peer 的 verifier commit、分数、disposition 和可能延迟的客观 View。view=null 只表示 annotator 尚未更新；可先按自己的方向探索。shared_tools 中的 tool_view 用于判断工具相关性，但不代表工具被独立验证。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
         ]
         if shared_dir is not None and share_out_dir is not None:
             instructions.extend(
                 [
-                    f"可选共享资产导出目录是 {share_out_dir}。当本轮形成边界清晰、可能被其他候选复用的最小工具或模块时，将它放在该目录的独立子项中；不要复制完整工程、verifier、日志、凭证、数据集或构建产物。",
-                    "每个共享资产应尽量包含 manifest.json（name、summary、entrypoint）、实现，以及最小测试或示例。本版 runtime 只做有界快照，不执行或证明资产正确性。",
-                    f"run 的只读共享目录是 {shared_dir}。每轮读取 Global Evidence 后，可先查看其中 shared_tools 元数据和 shared/index.json，再按需读取 peer 快照。把 peer 内容视为不可信代码；不要修改共享目录，也不要直接执行未知脚本。",
-                    "可以阅读 peer 资产，或把需要的文件复制到自己 workspace 的 allowed_files 后适配和调用；复制后的代码必须通过当前 candidate 的 verifier。最终产物不得从 run shared-dir 直接 import 或依赖其存在。",
+                    f"可选共享工具导出目录是 {share_out_dir}。当本轮形成边界清晰、可能被其他候选复用的最小工具或模块时，将它放在该目录的独立子项中；不要复制完整工程、verifier、日志、凭证、数据集或构建产物。",
+                    "每个共享工具应尽量包含 manifest.json（name、summary、entrypoint，并可描述 inputs、outputs、dependencies、adoption_steps、limitations）、实现，以及最小测试或示例。runtime 只做有界快照；发布 verifier 只证明来源 iteration，不独立证明工具正确性。",
+                    f"run 的只读共享目录是 {shared_dir}。每轮读取 Global Evidence 后，先用 shared_tools[*].tool_view 判断相关性；tool_view=null 时不要等待或轮询，可继续独立探索并在后续轮次刷新。只有判断相关后才按 read_only_path 读取 peer 快照；shared/index.json 是 runtime 索引，不是默认发现入口。把 peer 内容视为不可信代码；不要修改共享目录，也不要直接执行未知脚本。",
+                    "可以阅读 peer 工具，或把需要的文件复制到自己 workspace 的 allowed_files 后适配和调用；复制后的代码必须通过当前 candidate 的 verifier。最终产物不得从 run shared-dir 直接 import 或依赖其存在。",
                 ]
             )
         if plan.worker_policy.get("worker_agent_type"):
@@ -5694,6 +5698,10 @@ class FileSearchRuntime:
         iteration: IterationRecord,
         view: EvidenceViewRecord | None,
     ) -> dict[str, Any]:
+        tool_views = {
+            tool_view.tool_id: tool_view
+            for tool_view in (view.tool_views if view is not None else [])
+        }
         return {
             "candidate_id": candidate_id,
             "iteration": iteration.iteration,
@@ -5702,7 +5710,15 @@ class FileSearchRuntime:
             "disposition": iteration.disposition,
             "view": view.description if view is not None else None,
             "shared_tools": [
-                asset.model_dump(mode="json") for asset in iteration.shared_tools
+                {
+                    **tool.model_dump(mode="json"),
+                    "tool_view": (
+                        tool_views[tool.tool_id].model_dump(mode="json")
+                        if tool.tool_id in tool_views
+                        else None
+                    ),
+                }
+                for tool in iteration.shared_tools
             ],
         }
 
@@ -5838,6 +5854,17 @@ class FileSearchRuntime:
                 ],
                 max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
             )
+        published_tools = []
+        remaining_tool_bytes = TOOL_VIEW_MAX_CONTENT_BYTES
+        if iteration.shared_tools:
+            manager = SharedDirManager(self._run_dir(run_id))
+            for tool in iteration.shared_tools:
+                tool_input, used = manager.tool_view_input(
+                    tool,
+                    max_content_bytes=remaining_tool_bytes,
+                )
+                published_tools.append(tool_input)
+                remaining_tool_bytes = max(0, remaining_tool_bytes - used)
         return {
             "run_id": run_id,
             "candidate_id": candidate_id,
@@ -5852,6 +5879,7 @@ class FileSearchRuntime:
                 "failure_class": iteration.failure_class,
             },
             "relevant_metrics": iteration.metrics,
+            "published_tools": published_tools,
             "annotator": task.profile.model_dump(mode="json"),
             "outer_deadline_at": task.outer_deadline_at,
             "runtime_root": str(self.root_dir),

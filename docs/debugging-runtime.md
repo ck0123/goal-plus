@@ -285,7 +285,7 @@ guard events, stop continuation messages, and `.gp/goal-plus/...`.
     ├── candidates/<candidate_id>/
     │   ├── candidate.json                        # CandidateRecord: status, score_report, iterations[], results_ledger[]
     │   ├── task.json                             # CandidateTask snapshot
-    │   ├── evidence-annotations/iteration-<n>.json # async View task, retry, usage, optional immutable View
+    │   ├── evidence-annotations/iteration-<n>.json # async View task, retry, usage, immutable Evidence/Tool Views
     │   └── logs/iteration-<n>-<verifier>-<id>.log # durable stdout/stderr per call
     ├── workspace/<candidate_id>/                 # the agent's editable workspace
     │   ├── .git/                                 # agent and runtime ledger Git history

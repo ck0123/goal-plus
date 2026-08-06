@@ -151,9 +151,11 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
             output = Path(
                 self.command[self.command.index("--output-last-message") + 1]
             )
-            instructions.append((output.parent / "AGENTS.md").read_text())
+            instructions.append(
+                (output.parent / "AGENTS.md").read_text(encoding="utf-8")
+            )
             output.write_text(
-                '{"description":"将索引查询实现改为直接查表。"}',
+                '{"description":"将索引查询实现改为直接查表。","tool_views":[]}',
                 encoding="utf-8",
             )
             self.returncode = 0
@@ -260,7 +262,7 @@ def test_pi_annotator_uses_host_native_ephemeral_cli(
                 "content": [
                     {
                         "type": "text",
-                        "text": '{"description":"将索引查询实现改为直接查表。"}',
+                        "text": '{"description":"将索引查询实现改为直接查表。","tool_views":[]}',
                     }
                 ],
                 "stopReason": "stop",

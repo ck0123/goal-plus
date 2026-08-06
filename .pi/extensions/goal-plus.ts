@@ -548,7 +548,7 @@ const RuntimeToolDescriptions: Record<string, string> = {
 	search_create:
 		"从 frozen_spec_id 创建 Search run。初始 run 必须省略 source_run_id，或在 strict schema 下传 null；仅在已有真实前驱时传入准确的 run_* ID，绝不能传 initial 或 in_progress。",
 	search_get_global_evidence:
-		"读取当前 run 的窄 Global Evidence 视图。每项包含 verifier attempt commit、score、keep/discard/failure 和可能延迟的客观 View；view=null 时无需等待，可先依据 Evidence 独立探索。",
+		"读取当前 run 的窄 Global Evidence 视图。每项包含 verifier attempt commit、score、keep/discard/failure 和可能延迟的客观 View；已发布工具可包含异步 tool_view，用于判断用途与接入边界但不代表独立验证。view 或 tool_view 为 null 时无需等待。",
 	search_run_verifier:
 		"为一个候选评分。worker process verifier 必须提供一句话 hypothesis，客观概括本轮实际尝试。每份返回的 verifier 报告都会在运行时拥有、继承而来的 workspace/results.tsv 中追加且只追加一条已验证记录，并提交该文件。process verifier 返回 keep/discard/failure disposition；runtime 保留被测 commit，并在非严格改善时恢复 candidate-local best。带 candidate_action=stop_and_report 的 VerifierWorkspaceSideEffect 属于基础设施失败：worker 必须停止，不能清理或重试，使父级能够修复并重新冻结。",
 	search_invalidate_run:

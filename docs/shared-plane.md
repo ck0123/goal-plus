@@ -106,8 +106,9 @@ worker，再冻结修正后的 spec，创建 successor run。旧分数不能跨�
 它仍只写自己的工作区；runtime 在通过的 worker process verifier 结算时原子认领 staging，
 只快照相对该 candidate/路径新增或修改的顶层工具，并将快照绑定到该 iteration 和 attempt
 commit。已接受或内容未变化的条目会被消费；失败、无归属或因限制被拒绝的条目保留给 worker
-修正。内容相同的快照复用同一个哈希寻址物理目录。peer 只能通过 Global Evidence 和
-run-scoped shared-dir 读取快照。采用代码时必须复制到自己的 `allowed_files` 并重新验证，
+修正。内容相同的快照复用同一个哈希寻址物理目录。View Agent 会校验快照哈希，并结合
+manifest、受限快照文本和 verifier Evidence 异步生成 Tool View。peer 先通过 Global Evidence
+中的 Tool View 判断相关性，再按需读取 run-scoped shared-dir 快照。采用代码时必须复制到自己的 `allowed_files` 并重新验证，
 最终产物不能直接依赖 run shared-dir。
 
 candidate 不需要在修改前提交 iteration plan。`hypothesis` 是完成尝试后的事实性
@@ -145,7 +146,22 @@ published state from durable tools when possible and otherwise use
       "name": "dependency-depth-scheduler",
       "source_commit": "<exact-attempt-commit>",
       "snapshot_hash": "<sha256>",
-      "read_only_path": "<run-scoped-path>"
+      "read_only_path": "<run-scoped-path>",
+      "tool_view": {
+        "tool_id": "c001-i0003-...",
+        "snapshot_hash": "<sha256>",
+        "source_commit": "<exact-attempt-commit>",
+        "summary": "按依赖深度生成调度顺序。",
+        "capabilities": ["读取依赖关系并输出稳定顺序"],
+        "when_to_use": "需要复用依赖调度逻辑时。",
+        "entrypoint": "scheduler.py:order_by_depth",
+        "inputs": ["依赖关系映射"],
+        "outputs": ["稳定的节点序列"],
+        "dependencies": ["Python 标准库"],
+        "adoption_steps": ["复制 scheduler.py 到 allowed_files", "重新运行当前 candidate verifier"],
+        "limitations": ["不处理循环依赖"],
+        "evidence_scope": "来自通过 process verifier 的 iteration，但工具未被独立验证。"
+      }
     }
   ]
 }
@@ -170,6 +186,10 @@ Global Evidence 只包含 worker 的 process-verifier 尝试。parent fallback v
 自动整合工具。失败的 process verifier 不发布工具；工具快照失败也不会使已经有效的
 verifier Evidence 失效。
 
+工具复用分为三个不同门槛：发布者的 process verifier 只证明工具来源于一个通过验证的
+iteration；Tool View 只负责客观概述用途、接入方式和风险；采用者必须把工具复制到自身
+`allowed_files` 并重新运行 verifier，才证明组合后的候选仍满足冻结评价合同。
+
 ### Shared-dir 权限边界（Windows/Linux）
 
 shared-dir 的权威写入者是 runtime。快照先复制到私有临时目录，再用同文件系统内的原子
@@ -192,12 +212,15 @@ annotation 跨用另一个 host。Annotator 可读取：
 - candidate 的一句 `hypothesis`；
 - 从本轮 settled base 到 attempt commit 的完整 diff；
 - 精确 attempt commit；
-- verifier 结果与相关 metrics。
+- verifier 结果与相关 metrics；
+- 已发布工具的绑定身份、manifest、文件列表和总计最多 256 KiB 的哈希复核快照文本。
 
-View 只用一句中文客观描述实际做了什么，不评价好坏、不推断动机、不排名，也不推荐下一
-步。事实来源是 actual diff，而不是 candidate 的自述。
+View 用一句中文客观描述 iteration 实际做了什么；存在已发布工具时，还为每个工具生成
+结构化 Tool View。`tool_id`、`snapshot_hash`、`source_commit` 和 `evidence_scope` 由 runtime
+绑定，不信任模型回传。View 不评价好坏、不推断动机、不排名，也不推荐下一步。
 
-`view=null` 只表示 annotation 尚未发布，Evidence 本身已经有效。candidate 可以先按
+`view=null` 或 `tool_view=null` 只表示 annotation 尚未发布，Evidence 与工具快照本身已经
+结算。candidate 可以先按
 自己的方向继续，不应等待、sleep 或轮询 View。
 
 verifier settlement 和 Evidence 读取都可以触发 run-scoped annotator。一个 drainer

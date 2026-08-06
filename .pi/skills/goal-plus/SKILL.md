@@ -328,8 +328,9 @@ process verifier 同时返回 candidate-local `disposition`：严格改善为 `k
 
 冻结 spec 显式设置 `shared_dir.enabled=true` 时，候选上下文会提供 candidate-local
 `.tmp/share-out` 和 run-scoped `shared_dir`。runtime 仅在有归属的 worker process verifier
-通过后发布资产。peer 只能只读检查，或复制到自身 `allowed_files` 后重新验证；最终产物不能
-直接 import 或依赖 run shared-dir。本版不执行资产、不证明其正确性，也不自动整合代码。
+通过后发布工具，并由 View Agent 异步生成 `shared_tools[*].tool_view` 说明用途和接入边界。
+Tool View 不代表工具被独立验证；peer 判断相关后才能只读检查，或复制到自身 `allowed_files`
+后重新验证。最终产物不能直接 import 或依赖 run shared-dir。
 
 对优化任务，要求 worker 在长时间本地优化循环前创建完整候选产物，并尽早运行
 `search_run_verifier`。对 fix/target 任务，要求先编辑允许文件再调用 verifier；

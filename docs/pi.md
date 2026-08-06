@@ -22,7 +22,9 @@ process, inherits the Pi worker model/provider unless explicitly overridden,
 and reads provider configuration from `PI_CODING_AGENT_DIR`. A qualified
 annotator model (`provider/model`) or `evidence_annotator.pi_provider` can select
 a provider independent of the Search worker. Verifier settlement never waits
-for this process.
+for this process. The same turn produces structured Tool Views for published
+shared-dir tools from bounded, hash-checked snapshot input without executing
+the tool.
 
 `/goal-plus edit`, `/goal-plus resume`, and `/goal-plus-with-final-check` share
 the same goal revision semantics as Codex. Required checks run through a
