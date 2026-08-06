@@ -129,9 +129,19 @@ def test_global_evidence_is_immediate_and_view_is_late_bound(tmp_path: Path) -> 
             }
         )
     )
-    assert runtime.get_global_evidence(first[1])[-1]["view"] == (
+    completed = runtime.get_global_evidence(first[1])
+    assert completed[-1]["view"] == (
         "Changed the candidate value from two to one without altering the evaluator."
     )
+    assert completed[-1]["view_created_at"] == "2026-01-01T00:00:00Z"
+    read = runtime._load_agent_session_by_id(first[1]).global_evidence_reads[-1]
+    assert read.evidence_count == 3
+    assert read.completed_view_count == 1
+    assert read.completed_supplemental_evaluation_count == 0
+    assert read.completed_views[0].candidate_id == second[0]
+    assert read.completed_views[0].iteration == 2
+    assert read.completed_views[0].commit == discarded_commit
+    assert read.completed_views[0].view_created_at == "2026-01-01T00:00:00Z"
     assert (second[2] / "initial_program.py").read_text(encoding="utf-8") == (
         "VALUE = 2\n"
     )
@@ -586,6 +596,56 @@ def test_evidence_commit_captures_change_back_to_source(tmp_path: Path) -> None:
     assert "-VALUE = 1" in context["actual_diff"]
     assert "+VALUE = 0" in context["actual_diff"]
     assert program.read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_evidence_diff_includes_bounded_function_context(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    unchanged_body = "".join(
+        f"    # unchanged context line {index}\n" for index in range(24)
+    )
+    (project / "initial_program.py").write_text(
+        "def calculate():\n"
+        "    initialized_value = 1\n"
+        f"{unchanged_body}"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    (project / "evaluator.py").write_text(
+        "import json\n"
+        "from initial_program import calculate\n"
+        "print(json.dumps({'combined_score': float(calculate())}))\n",
+        encoding="utf-8",
+    )
+    runtime = FileSearchRuntime(tmp_path / ".gp")
+    frozen = runtime.freeze_spec(
+        spec_for(project, max_parallel=1),
+        [project / "evaluator.py"],
+    )
+    run_id = runtime.create_run(frozen.frozen_spec_id)
+    plan = runtime.plan_next(run_id, requested_k=1)
+    task = runtime.start_batch(run_id, plan.plan_id)[0]
+    session = runtime.start_agent_session(run_id, task.candidate_id)
+    program = task.workspace / "initial_program.py"
+    program.write_text(
+        "def calculate():\n"
+        "    initialized_value = 1\n"
+        f"{unchanged_body}"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+
+    runtime.run_verifier(
+        run_id,
+        task.candidate_id,
+        agent_session_id=session.agent_session_id,
+        hypothesis="Return the initialized result",
+    )
+    context = runtime._evidence_annotation_context(run_id, task.candidate_id, 1)
+
+    assert "initialized_value = 1" in context["actual_diff"]
+    assert "initialized_value = 1" in context["candidate_diff"]
+    assert "function context" in context["diff_context_policy"]
+    assert "byte-bounded" in context["diff_context_policy"]
 
 
 def test_evidence_diff_spans_all_manual_commits_in_attempt(tmp_path: Path) -> None:

@@ -147,6 +147,7 @@ redispatch 只用于恢复，并继续使用同一个 candidate 工作区、Git 
   "score": 13350,
   "disposition": "keep",
   "view": "将调度逻辑改为按依赖深度分组。",
+  "view_created_at": "2026-08-06T12:00:00Z",
   "supplemental_evaluation": {
     "summary": "该版本减少了调度扫描，但资源上限仍缺少公开证据。",
     "dimensions": [
@@ -203,6 +204,13 @@ View 只用一句中文客观描述实际做了什么，不评价好坏、不推
 这种评价发生在提交结算之后，因此不会在搜索开始前固定注意力方向。worker 可以把第三方
 观察作为下一轮假设来源，但必须独立核对；评价不产生总分或最终推荐，不能改变硬 score、
 PASS/FAIL、candidate-local 基线、run-wide 排名或 promotion gate。
+
+ViewAgent 收到的累计 diff 使用 Git 函数级上下文和至少 10 行普通上下文，并继续受字节
+上限约束。上下文中未出现某个定义，不代表该定义不存在；这类判断必须降低置信度并写入
+`limitations`。每次 worker 调用 `search_get_global_evidence`，runtime 都会在对应
+`agent_sessions/*.json` 的 `global_evidence_reads` 中记录读取时间、当时 Evidence 数量、
+已完成 View 的 candidate/iteration/commit 引用以及其中是否含 supplemental evaluation。
+该读取记录只用于审计 View 是否在后续 verifier 之前可见，不参与候选结算或最终验收。
 
 `view=null` 只表示 annotation 尚未发布，Evidence 本身已经有效。candidate 可以先按
 自己的方向继续，不应等待、sleep 或轮询 View。

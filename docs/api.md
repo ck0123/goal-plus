@@ -111,6 +111,12 @@ pool job; ordinary overrides remain dispatch-scoped.
 Worker process verifier calls require a one-line `hypothesis` describing the
 realized attempt. `view=null` in Global Evidence means annotation has not been
 published yet; workers continue independently and do not wait or poll.
+Every call persists a `global_evidence_reads` entry on the calling agent
+session. The entry records the read timestamp and exact completed
+candidate/iteration/commit View references visible at that moment, so reports
+can distinguish a View published after the last verifier from one available
+before a later attempt. These receipts are observational and never affect
+settlement, selection, promotion, or hard PASS/FAIL.
 Each worker settlement snapshots the exact attempt base/head, worker host, and
 resolved annotator model/provider into an internal task. Codex runs annotations
 through ephemeral `codex exec`; Pi runs them through ephemeral, tool-free

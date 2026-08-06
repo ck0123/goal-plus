@@ -412,6 +412,37 @@ class EvidenceViewRecord(SearchModel):
         return " ".join(value.strip().split())
 
 
+class GlobalEvidenceViewReference(SearchModel):
+    candidate_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    commit: str = Field(min_length=1)
+    view_created_at: str
+    supplemental_evaluation_present: bool = False
+
+
+class GlobalEvidenceReadRecord(SearchModel):
+    read_at: str
+    evidence_count: int = Field(ge=0)
+    completed_view_count: int = Field(ge=0)
+    completed_supplemental_evaluation_count: int = Field(ge=0)
+    completed_views: list[GlobalEvidenceViewReference] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def counts_match_completed_views(self) -> "GlobalEvidenceReadRecord":
+        if self.completed_view_count != len(self.completed_views):
+            raise ValueError("completed_view_count must match completed_views")
+        supplemental_count = sum(
+            item.supplemental_evaluation_present for item in self.completed_views
+        )
+        if self.completed_supplemental_evaluation_count != supplemental_count:
+            raise ValueError(
+                "completed_supplemental_evaluation_count must match completed_views"
+            )
+        if self.completed_view_count > self.evidence_count:
+            raise ValueError("completed_view_count cannot exceed evidence_count")
+        return self
+
+
 class EvidenceAnnotationTask(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
@@ -970,3 +1001,6 @@ class AgentSessionRecord(SearchModel):
     workspace: Path
     launch: dict[str, Any] = Field(default_factory=dict)
     counters: dict[str, int] = Field(default_factory=dict)
+    global_evidence_reads: list[GlobalEvidenceReadRecord] = Field(
+        default_factory=list
+    )

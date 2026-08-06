@@ -44,6 +44,8 @@ from goal_plus.models import (
     FeedbackPolicy,
     EvidenceViewRecord,
     FrozenSpec,
+    GlobalEvidenceReadRecord,
+    GlobalEvidenceViewReference,
     IterationDisposition,
     PromotionEvidence,
     RunRecord,
@@ -1752,8 +1754,49 @@ class FileSearchRuntime:
     def get_global_evidence(self, agent_session_id: str) -> list[dict[str, Any]]:
         """Return settled worker evidence and any completed objective views."""
         session = self._load_agent_session_by_id(agent_session_id)
-        self._load_run(session.run_id)
-        view = self._global_evidence_view(session.run_id)
+        with self._run_transaction(session.run_id):
+            session = self._load_agent_session_by_id(
+                agent_session_id,
+                run_id=session.run_id,
+            )
+            self._load_run(session.run_id)
+            view = self._global_evidence_view(session.run_id)
+            completed_views = [
+                GlobalEvidenceViewReference(
+                    candidate_id=str(entry["candidate_id"]),
+                    iteration=int(entry["iteration"]),
+                    commit=str(entry["commit"]),
+                    view_created_at=str(entry["view_created_at"]),
+                    supplemental_evaluation_present=(
+                        entry["supplemental_evaluation"] is not None
+                    ),
+                )
+                for entry in view
+                if entry["view"] is not None
+                and entry["commit"] is not None
+                and entry["view_created_at"] is not None
+            ]
+            read_record = GlobalEvidenceReadRecord(
+                read_at=utc_timestamp(),
+                evidence_count=len(view),
+                completed_view_count=len(completed_views),
+                completed_supplemental_evaluation_count=sum(
+                    item.supplemental_evaluation_present
+                    for item in completed_views
+                ),
+                completed_views=completed_views,
+            )
+            self._write_agent_session(
+                session.model_copy(
+                    update={
+                        "updated_at": read_record.read_at,
+                        "global_evidence_reads": [
+                            *session.global_evidence_reads,
+                            read_record,
+                        ],
+                    }
+                )
+            )
         self._kick_evidence_annotator(session.run_id)
         return view
 
@@ -5690,6 +5733,7 @@ class FileSearchRuntime:
             "score": iteration.score,
             "disposition": iteration.disposition,
             "view": view.description if view is not None else None,
+            "view_created_at": view.created_at if view is not None else None,
             "supplemental_evaluation": (
                 view.supplemental_evaluation.model_dump(mode="json")
                 if view is not None and view.supplemental_evaluation is not None
@@ -5829,6 +5873,8 @@ class FileSearchRuntime:
                     "diff",
                     "--full-index",
                     "--no-ext-diff",
+                    "--function-context",
+                    "--unified=10",
                     task.attempt_base_commit,
                     commit,
                     "--",
@@ -5853,6 +5899,8 @@ class FileSearchRuntime:
                     "diff",
                     "--full-index",
                     "--no-ext-diff",
+                    "--function-context",
+                    "--unified=10",
                     candidate_base_commit,
                     commit,
                     "--",
@@ -5894,6 +5942,10 @@ class FileSearchRuntime:
             "candidate_base_commit": candidate_base_commit,
             "candidate_changed_files": candidate_changed_files,
             "candidate_diff": candidate_diff,
+            "diff_context_policy": (
+                "git function context with at least 10 unchanged lines around hunks; "
+                "output remains byte-bounded and may omit definitions outside the diff"
+            ),
             "verifier_result": {
                 "score": iteration.score,
                 "process_passed": iteration.process_passed,
