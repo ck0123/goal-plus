@@ -169,7 +169,7 @@ and `confidence`. Missing scope defaults to candidate-local. A worker's
 
 | Tool | Purpose |
 |---|---|
-| `search_run_verifier` | commit and verify the exact attempt, return candidate-local `keep`/`discard`/`failure`, restore best code after non-improvements, then append exactly one inherited `workspace/results.tsv` row; worker calls pass the exact `run_id`, `candidate_id`, `agent_session_id`, and an objective `hypothesis`, while parent fallback verification omits the session id and does not require a hypothesis |
+| `search_run_verifier` | commit and verify the exact attempt, return candidate-local `keep`/`retain`/`discard`/`failure`, keep the latest equal-score attempt, restore best code after regressions or verifier failures, then append exactly one inherited `workspace/results.tsv` row; worker calls pass the exact `run_id`, `candidate_id`, `agent_session_id`, and an objective `hypothesis`, while parent fallback verification omits the session id and does not require a hypothesis |
 | `search_select` | restore ranked commits and select the first final-verifier passing state |
 | `search_report` | generate final `report.md` and self-contained `report.html`; linked Goal Plus records must already be terminal |
 | `search_promote` | export the selected commit as a patch; normal Goal Plus flow has no report to refresh yet |

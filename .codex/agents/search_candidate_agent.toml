@@ -48,8 +48,8 @@ workspace 目录，也不要 checkout 或 reset 到 peer commit。View 不是推
 让它使用默认的 process verifier；用一句话 hypothesis 客观概括本轮真正实施的尝试。每份
 返回的 verifier 报告都会在工作区根目录下由运行时拥有、继承而来的
 `results.tsv` 中追加且只追加一条已验证记录，并提交该账本；绝不能创建、重写、截断、
-删除或手动追加该账本。新 run 的 process verifier 返回 `keep`、`discard` 或 `failure`；
-只有严格硬分改善才成为 candidate-local best，同分、退化或验证失败时 runtime 恢复此前
+删除或手动追加该账本。新 run 的 process verifier 返回 `keep`、`retain`、`discard` 或 `failure`；
+严格硬分改善为 keep，同分为 retain 并成为 candidate-local 最新基线；只有退化或验证失败时 runtime 恢复此前
 硬分最佳。开放式补充评价不改变结算、硬 score 或最终 PASS/FAIL。返回后直接从已结算的
 工作区继续，不要自行 reset、restore 或
 checkout verifier-backed 状态。如果验证失败，检查失败原因，并且只修复候选自身的问题。

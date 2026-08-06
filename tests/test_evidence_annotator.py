@@ -153,7 +153,7 @@ def test_drainer_serially_describes_pending_evidence(tmp_path: Path) -> None:
     assert annotator.max_active == 1
     view = runtime.get_global_evidence(session.agent_session_id)
     assert annotator.commits == [entry["commit"] for entry in view]
-    assert annotator.dispositions == ["keep", "discard"]
+    assert annotator.dispositions == ["keep", "retain"]
     assert [entry["view"] for entry in view] == [
         "Changed the candidate value stored in initial_program.py.",
         "Changed the candidate value stored in initial_program.py.",

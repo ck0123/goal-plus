@@ -2097,7 +2097,6 @@ class FileSearchRuntime:
                 iteration,
                 prior_best,
                 frozen.spec.metric_direction,
-                retain_equal=frozen.spec.acceptance_view is not None,
             )
             iteration.disposition = disposition
 
@@ -2237,7 +2236,6 @@ class FileSearchRuntime:
             run,
             records,
             frozen.spec.metric_direction,
-            prefer_latest_hard_tie=frozen.spec.acceptance_view is not None,
         )
         if not options:
             self._mark_selection_blocked(
@@ -2468,7 +2466,6 @@ class FileSearchRuntime:
             best_iteration = self._best_iteration_record(
                 record,
                 frozen.spec.metric_direction,
-                prefer_latest_hard_tie=frozen.spec.acceptance_view is not None,
             )
             if best_iteration is not None:
                 score = "" if best_iteration.score is None else str(best_iteration.score)
@@ -3196,7 +3193,7 @@ class FileSearchRuntime:
             "把 context.agent_session_id 传给 search_run_verifier，并省略 scope 以使用 process verifier；同时用一句话 hypothesis 客观概括本轮实际尝试。",
             "每次 run_verifier 调用都会记录一个 iteration。在配置的 host 预算内工作。尽早完成并验证候选，在达到限制前停止启动新的优化 iteration，并留出足够时间返回简洁摘要。",
             "search_run_verifier 会在运行 verifier 前自动提交已修改的候选产物文件；使用 git status、git diff 和 git log 检查 iteration provenance。",
-            "process verifier 对新 run 返回 keep/discard/failure disposition；只有严格硬分改善才成为 candidate-local best，同分、退化或验证失败都会恢复此前硬分最佳。开放式补充评价和 peer 比较不改变结算、硬分或最终验收。下一轮直接从返回后的已结算工作区继续。",
+            "process verifier 对新 run 返回 keep/retain/discard/failure disposition；严格硬分改善为 keep，同分为 retain 并成为 candidate-local 最新基线，只有退化或验证失败才恢复此前硬分最佳。开放式补充评价和 peer 比较不改变结算、硬分或最终验收。下一轮直接从返回后的已结算工作区继续。",
             "规划另一个变体前，检查 workspace/results.tsv 中继承的 iteration 日志。运行时拥有并提交这份仅追加账本，会验证已有记录未被修改，并为每份返回的 verifier 报告添加且只添加一条记录；绝不能重写、截断、删除或手动追加它。",
             "Global Evidence 展示 peer 的 verifier commit、硬分、disposition、可能延迟的客观 View，以及 ViewAgent 基于实际 Evidence 生成的开放式 supplemental_evaluation。它会动态比较 annotation task 创建时其他已结算候选，但不使用 FrozenSpec 软标准、不参与结算或最终验收。将它视为第三方观察而非推荐；任一 View 为 null 都不要求等待。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
         ]
@@ -3603,7 +3600,6 @@ class FileSearchRuntime:
         best_iteration = self._best_iteration_record(
             record,
             spec.metric_direction,
-            prefer_latest_hard_tie=spec.acceptance_view is not None,
         )
         if best_iteration is not None:
             return best_iteration.score
@@ -4224,8 +4220,6 @@ class FileSearchRuntime:
         iteration: IterationRecord,
         prior_best: IterationRecord | None,
         metric_direction: Literal["maximize", "minimize"],
-        *,
-        retain_equal: bool = False,
     ) -> IterationDisposition:
         if not cls._git_iteration_eligible(iteration):
             return "failure"
@@ -4239,7 +4233,7 @@ class FileSearchRuntime:
         )
         if improved:
             return "keep"
-        if retain_equal and iteration.score == prior_best.score:
+        if iteration.score == prior_best.score:
             return "retain"
         return "discard"
 
@@ -4268,15 +4262,15 @@ class FileSearchRuntime:
             return None
         reverse = metric_direction == "maximize"
         return sorted(
-            selectable, key=lambda iteration: iteration.score, reverse=reverse
+            reversed(selectable),
+            key=lambda iteration: iteration.score,
+            reverse=reverse,
         )[0]
 
     def _best_iteration_record(
         self,
         record: CandidateRecord,
         metric_direction: Literal["maximize", "minimize"],
-        *,
-        prefer_latest_hard_tie: bool = False,
     ) -> IterationRecord | None:
         scored = [
             iteration
@@ -4289,9 +4283,8 @@ class FileSearchRuntime:
         if not scored:
             return None
         reverse = metric_direction == "maximize"
-        ordered = reversed(scored) if prefer_latest_hard_tie else iter(scored)
         return sorted(
-            ordered,
+            reversed(scored),
             key=lambda iteration: iteration.score,
             reverse=reverse,
         )[0]
@@ -4321,8 +4314,6 @@ class FileSearchRuntime:
         run: RunRecord,
         records: list[CandidateRecord],
         metric_direction: Literal["maximize", "minimize"],
-        *,
-        prefer_latest_hard_tie: bool = False,
     ) -> list[tuple[float, CandidateRecord, int | None, str | None]]:
         options: list[tuple[float, CandidateRecord, int | None, str | None]] = []
         for record in records:
@@ -4333,11 +4324,7 @@ class FileSearchRuntime:
                 record.task.workspace, current_changed
             )
             report_is_represented = False
-            iterations = (
-                reversed(record.iterations)
-                if prefer_latest_hard_tie
-                else iter(record.iterations)
-            )
+            iterations = reversed(record.iterations)
             for iteration in iterations:
                 if (
                     iteration.process_passed is not True
@@ -4500,7 +4487,6 @@ class FileSearchRuntime:
             best_iteration = self._best_iteration_record(
                 record,
                 spec.metric_direction,
-                prefer_latest_hard_tie=spec.acceptance_view is not None,
             )
             score = self._record_ranking_score(record, spec)
             best_git_head = best_iteration.git_head if best_iteration else None
@@ -4663,7 +4649,6 @@ class FileSearchRuntime:
         best_iteration = self._best_iteration_record(
             record,
             spec.metric_direction,
-            prefer_latest_hard_tie=spec.acceptance_view is not None,
         )
         evidence_score = (
             best_iteration.score

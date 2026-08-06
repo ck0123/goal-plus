@@ -75,7 +75,7 @@ SearchSpec 的创建者负责。隐藏数据只能作为明确声明的近似项
 Benchmark 机制消融由 controller 设置
 `GOAL_PLUS_SUPPLEMENTAL_EVALUATION_ENABLED` 和
 `GOAL_PLUS_SUPPLEMENTAL_EVALUATION_REQUIRED`。它们只决定 annotation task 是否要求开放式
-补充评价，不向 FrozenSpec 注入 criterion。ON/OFF 都不改变硬分、同分回滚、selection、
+补充评价，不向 FrozenSpec 注入 criterion。ON/OFF 都不改变硬分、同分保留、selection、
 promotion gate 或最终验收。
 
 Evidence annotator 默认继承 Search 的 `worker_host`。需要把 ViewAgent 作为独立机制控制
@@ -168,10 +168,9 @@ verifier 会同步发布 `candidate_id`、`iteration`、`commit`、`score` 和
 `disposition`。`disposition` 取值为：
 
 - `keep`：尝试有效，并且严格改善该 candidate 的历史最佳；
-- `discard`：尝试有效但分数更差或相同；
+- `retain`：尝试有效、硬分同分，并成为该 candidate 的最新工作基线；
+- `discard`：尝试有效但分数更差；
 - `failure`：尝试未产生可用于排名的 verifier Evidence。
-
-`retain` 只可能出现在迁移前已经冻结的历史运行中；新 run 不再用软机制保留硬分同分版本。
 
 Global Evidence 只包含 worker 的 process-verifier 尝试。parent fallback verification
 与 promotion verification 不会成为 peer Evidence。视图也不会暴露 peer transcript、
@@ -237,12 +236,13 @@ Runtime 会在验证前提交所有 candidate-controlled 修改，并要求 arti
 干净。candidate 可以包含多个手工 commit；annotation 使用完整
 `settled-base..attempt` 范围，而不是只查看最后一个 commit。
 
-每次 process-verifier 尝试都会永久保留。新 run 只有严格改善才更新 candidate-local best；
-同分、退化或失败时，Runtime 会先把代码恢复到此前硬分最佳，再追加不可变的
+每次 process-verifier 尝试都会永久保留。严格改善和同分分别以 `keep`、`retain` 更新
+candidate-local 最新最佳；只有退化或失败时，Runtime 才把代码恢复到此前硬分最佳，再追加不可变的
 `results.tsv` ledger：
 
 ```text
 keep:     settled -> attempt -> ledger
+retain:   settled -> equal-score attempt -> ledger
 discard:  settled -> attempt -> restore-best -> ledger
 ```
 

@@ -58,7 +58,7 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
         "软 rubric 或预设评价维度",
         "开放式补充评价发生在每次 Evidence 结算之后",
         "也不改变硬",
-        "candidate-local 同分回滚",
+        "candidate-local 同分保留",
     ):
         assert expected in text
     assert "mode_hint" not in text
@@ -315,7 +315,7 @@ def test_codex_search_uses_open_posthoc_evaluation_as_non_gating_feedback() -> N
 
     assert "不来自 FrozenSpec" in combined
     assert "动态比较" in combined
-    assert "同分版本成为工作基线" in combined
+    assert "同分版本会由硬分结算规则成为最新工作基线" in combined
     assert "不改变结算、硬 score 或最终 PASS/FAIL" in combined
 
 

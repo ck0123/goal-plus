@@ -60,7 +60,7 @@ ranking verifier 必须输出一个最终 JSON 对象，其中包含有限数值
 `acceptance_view` 会被 runtime 拒绝。开放式补充评价发生在每次 Evidence 结算之后：
 独立 ViewAgent 根据当前候选累计 diff 和当时其他已结算候选的快照，自行提出与任务实际
 相关的观察维度并动态比较。它不读取 hidden 数据，不产生总分或最终推荐，也不改变硬
-PASS/FAIL、数值排名、candidate-local 同分回滚、selection 或 promotion。MainAgent
+PASS/FAIL、数值排名、candidate-local 同分保留、selection 或 promotion。MainAgent
 不负责定义这些维度，也不要根据 benchmark 类型向 ViewAgent 预埋固定清单。
 
 如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="pi-rpc")`，将用户
@@ -331,9 +331,9 @@ worker 独立判断确有必要时，才在当前 workspace 使用
 也不 checkout/reset peer commit。worker verifier 用一句话 `hypothesis` 客观概括本轮实际
 尝试。运行时校验工作区根目录
 `results.tsv`，为每份返回报告追加且只追加一条记录，并提交账本。worker 绝不直接编辑它。
-process verifier 同时返回 candidate-local `disposition`：严格改善为 `keep`；同分以及
-所有退化尝试为 `discard`；无有效排名证据为 `failure`。开放式补充评价不改变结算、硬
-score 或最终 PASS/FAIL。runtime 保留实际被测 commit，并在 `discard`/`failure` 后恢复
+process verifier 同时返回 candidate-local `disposition`：严格改善为 `keep`；同分为
+`retain` 并成为最新工作基线；所有退化尝试为 `discard`；无有效排名证据为 `failure`。开放式补充评价不改变结算、硬
+score 或最终 PASS/FAIL。runtime 保留实际被测 commit，并只在 `discard`/`failure` 后恢复
 candidate best；worker 不得自行 reset verifier-backed 状态。
 如果 worker 提供 handoff，后续 iteration history 会包含最新结构化 `research_summary`；
 应使用其中任务特定的结果和问题，避免重复失败变体。
