@@ -55,11 +55,10 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
         'fork_turns="none"',
         "绝不能代表审查员提交结论",
         "`acceptance_view`",
-        '`tie_policy="retain_latest"`',
-        "`affects_final_result=false`",
-        "Goal Mode 始终不创建它",
-        "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED=1",
-        "不能退化成没有软标准的 ON 组",
+        "软 rubric 或预设评价维度",
+        "开放式补充评价发生在每次 Evidence 结算之后",
+        "也不改变硬",
+        "candidate-local 同分回滚",
     ):
         assert expected in text
     assert "mode_hint" not in text
@@ -81,8 +80,8 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
         "OPENAI_API_KEY",
         "SFORGE_AGENT_API_KEY",
         "GOAL_PLUS_OUTER_DEADLINE_AT",
-        "GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED",
-        "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED",
+        "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_ENABLED",
+        "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_REQUIRED",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_MODEL",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_REASONING_EFFORT",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_BASE_URL",
@@ -305,7 +304,7 @@ def test_codex_search_reuses_exact_worker_evidence_before_parent_verification() 
     assert 'search_run_verifier(hypothesis="主流程完成验证")' not in text
 
 
-def test_codex_search_uses_acceptance_view_as_non_gating_search_feedback() -> None:
+def test_codex_search_uses_open_posthoc_evaluation_as_non_gating_feedback() -> None:
     skill = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
         encoding="utf-8"
     )
@@ -314,9 +313,10 @@ def test_codex_search_uses_acceptance_view_as_non_gating_search_feedback() -> No
     )
     combined = "\n".join((skill, agent))
 
-    assert "covered/partial/missing/unknown/not_applicable" in combined
-    assert "`retain`" in combined
-    assert "不改变硬 score 或最终" in combined
+    assert "不来自 FrozenSpec" in combined
+    assert "动态比较" in combined
+    assert "同分版本成为工作基线" in combined
+    assert "不改变结算、硬 score 或最终 PASS/FAIL" in combined
 
 
 def test_codex_goal_plus_defers_report_until_terminal_state() -> None:

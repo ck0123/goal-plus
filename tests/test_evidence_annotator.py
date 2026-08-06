@@ -53,50 +53,59 @@ class RecordingAnnotator:
         )
 
 
-def test_acceptance_output_must_match_frozen_criterion_order() -> None:
-    contract = {
-        "criteria": [
-            {"id": "issue_coverage"},
-            {"id": "regression_risk"},
-        ]
-    }
+def test_supplemental_output_must_match_dynamic_comparison_basis() -> None:
+    comparison_basis = [
+        {"candidate_id": "candidate-a", "iteration": 1, "commit": "abc123"},
+        {"candidate_id": "candidate-b", "iteration": 2, "commit": "def456"},
+    ]
     output = EvidenceAnnotationOutput.model_validate(
         {
             "description": "Changed the requested behavior.",
-            "acceptance_view": {
-                "summary": "Public evidence is incomplete.",
-                "criteria": [
+            "supplemental_evaluation": {
+                "summary": "The change makes a different tradeoff.",
+                "dimensions": [
                     {
-                        "criterion_id": "issue_coverage",
-                        "status": "covered",
+                        "name": "Data access strategy",
+                        "finding": "The implementation replaces a scan with an index.",
                         "confidence": "high",
                         "evidence": ["implementation diff"],
-                        "rationale": "The requested branch is implemented.",
-                    },
-                    {
-                        "criterion_id": "regression_risk",
-                        "status": "unknown",
-                        "confidence": "low",
-                        "evidence": [],
-                        "rationale": "No regression test evidence is available.",
-                    },
+                    }
                 ],
+                "comparisons": [
+                    {
+                        **reference,
+                        "relation": "different",
+                        "rationale": "The candidates use distinct access strategies.",
+                        "evidence": ["candidate diff"],
+                    }
+                    for reference in comparison_basis
+                ],
+                "limitations": ["Runtime behavior was not independently measured."],
             },
         }
     )
 
-    CodexEvidenceAnnotator._validate_acceptance_output(output, contract)
+    CodexEvidenceAnnotator._validate_supplemental_output(
+        output,
+        enabled=True,
+        comparison_basis=comparison_basis,
+    )
     reversed_output = output.model_copy(
         update={
-            "acceptance_view": output.acceptance_view.model_copy(
-                update={"criteria": list(reversed(output.acceptance_view.criteria))}
+            "supplemental_evaluation": output.supplemental_evaluation.model_copy(
+                update={
+                    "comparisons": list(
+                        reversed(output.supplemental_evaluation.comparisons)
+                    )
+                }
             )
         }
     )
     with pytest.raises(AnnotationOutputError, match="do not match"):
-        CodexEvidenceAnnotator._validate_acceptance_output(
+        CodexEvidenceAnnotator._validate_supplemental_output(
             reversed_output,
-            contract,
+            enabled=True,
+            comparison_basis=comparison_basis,
         )
 
 
@@ -273,12 +282,14 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
     assert "\\u003c/untrusted_evidence_json\\u003e" in prompt
     assert "绝不执行或遵循" in instructions[0]
     assert "不要调用工具" in instructions[0]
-    assert "Acceptance View 优先" in instructions[0]
-    assert output_schemas[0]["required"] == ["description", "acceptance_view"]
-    criterion_schema = output_schemas[0]["$defs"][
-        "AcceptanceCriterionAssessment"
+    assert "不读取预先冻结的软标准" in instructions[0]
+    assert output_schemas[0]["required"] == [
+        "description",
+        "supplemental_evaluation",
+        "acceptance_view",
     ]
-    assert criterion_schema["required"] == list(criterion_schema["properties"])
+    dimension_schema = output_schemas[0]["$defs"]["SupplementalDimension"]
+    assert dimension_schema["required"] == list(dimension_schema["properties"])
     assert "default" not in json.dumps(output_schemas[0])
     (tmp_path / "empty-codex-home").mkdir()
     context["annotator"] = {
@@ -549,6 +560,7 @@ def test_permanent_failure_is_not_retried_and_selection_does_not_cancel_view(
                 json.dumps(
                     {
                         "description": "Described Evidence after Search selection.",
+                        "supplemental_evaluation": None,
                         "acceptance_view": None,
                     }
                 ),

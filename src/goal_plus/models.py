@@ -310,12 +310,95 @@ class AcceptanceViewAssessment(SearchModel):
         return " ".join(value.strip().split())
 
 
+ComparisonRelation = Literal[
+    "similar",
+    "different",
+    "tradeoff",
+    "complementary",
+    "unknown",
+]
+
+
+class SupplementalDimension(SearchModel):
+    name: str = Field(min_length=1, max_length=120)
+    finding: str = Field(min_length=1, max_length=1000)
+    confidence: AcceptanceConfidence
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("name", "finding", mode="before")
+    @classmethod
+    def text_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("supplemental evaluation text must be one line")
+        return " ".join(value.strip().split())
+
+
+class EvidenceComparisonReference(SearchModel):
+    candidate_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    commit: str = Field(min_length=1)
+
+
+class PeerComparison(EvidenceComparisonReference):
+    relation: ComparisonRelation
+    rationale: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def rationale_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("peer comparison rationale must be one line")
+        return " ".join(value.strip().split())
+
+
+class SupplementalEvaluation(SearchModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    dimensions: list[SupplementalDimension] = Field(min_length=1, max_length=8)
+    comparisons: list[PeerComparison] = Field(default_factory=list, max_length=8)
+    limitations: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def summary_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("supplemental evaluation summary must be one line")
+        return " ".join(value.strip().split())
+
+    @field_validator("limitations", mode="before")
+    @classmethod
+    def limitations_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        normalized = []
+        for item in value:
+            if not isinstance(item, str):
+                normalized.append(item)
+                continue
+            if "\n" in item or "\r" in item:
+                raise ValueError("supplemental evaluation limitation must be one line")
+            normalized.append(" ".join(item.strip().split()))
+        return normalized
+
+
 class EvidenceViewRecord(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
     attempt_commit: str = Field(min_length=1)
     description: str = Field(min_length=1, max_length=1000)
+    supplemental_evaluation: SupplementalEvaluation | None = None
+    comparison_basis: list[EvidenceComparisonReference] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    # Legacy field retained so completed pre-migration runs remain readable.
     acceptance_view: AcceptanceViewAssessment | None = None
     created_at: str
 
@@ -336,6 +419,20 @@ class EvidenceAnnotationTask(SearchModel):
     attempt_base_commit: str = Field(min_length=1)
     attempt_commit: str = Field(min_length=1)
     attempt_changed_files: list[str] = Field(default_factory=list)
+    task_context_source: Literal[
+        "goal_plus_raw_goal",
+        "frozen_objective",
+    ] | None = None
+    task_context_ref: str | None = None
+    task_context_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    supplemental_evaluation_enabled: bool = False
+    comparison_basis: list[EvidenceComparisonReference] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     profile: ResolvedEvidenceAnnotatorProfile | None = None
     outer_deadline_at: str | None = None
     state: Literal["pending", "retry_wait", "completed", "terminal_error"] = (

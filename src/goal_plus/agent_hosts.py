@@ -224,8 +224,9 @@ CODEX_WORKER_BOUNDARY = (
     "父级运行的规划、选择、报告、提升和最终审计不属于你的职责。如果 verifier 返回 "
     "failure_class=VerifierWorkspaceSideEffect 或 candidate_action=stop_and_report，"
     "不要清理 verifier 输出或重试；记录基础设施阻塞原因并立即返回。"
-    "process verifier 返回 keep/retain/discard/failure disposition；Acceptance View 启用时"
-    "同硬分有效尝试会保留为新基线，否则非严格改善会恢复 candidate-local best；"
+    "新 run 的 process verifier 返回 keep/discard/failure disposition；只有严格硬分改善"
+    "会成为新基线，同分或退化会恢复 candidate-local best。开放式补充评价和动态 peer "
+    "比较不改变结算；"
     "不要自行 reset、restore 或 checkout verifier-backed 状态。"
 )
 

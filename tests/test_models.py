@@ -24,9 +24,9 @@ from goal_plus.models import (
     ModelSpec,
 )
 from goal_plus.runtime import (
-    ACCEPTANCE_VIEW_ENABLED_ENV,
-    ACCEPTANCE_VIEW_REQUIRED_ENV,
     FileSearchRuntime,
+    SUPPLEMENTAL_EVALUATION_ENABLED_ENV,
+    SUPPLEMENTAL_EVALUATION_REQUIRED_ENV,
 )
 from tests._runtime_helpers import make_project
 
@@ -67,7 +67,7 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert "models" not in dumped["strategy"]
 
 
-def test_search_spec_freezes_non_gating_acceptance_view() -> None:
+def test_search_spec_loads_legacy_non_gating_acceptance_view() -> None:
     data = valid_spec_dict()
     data["acceptance_view"] = {
         "rubric_name": "SWE issue coverage",
@@ -125,8 +125,8 @@ def test_acceptance_view_rejects_gating_or_ambiguous_criteria() -> None:
         SearchSpec.model_validate(data)
 
 
-def test_acceptance_view_ablation_is_enforced_at_freeze(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_new_freeze_rejects_legacy_acceptance_view(
+    tmp_path: Path,
 ) -> None:
     project = make_project(tmp_path)
     data = valid_spec_dict()
@@ -142,95 +142,45 @@ def test_acceptance_view_ablation_is_enforced_at_freeze(
             }
         ],
     }
-    monkeypatch.setenv(ACCEPTANCE_VIEW_ENABLED_ENV, "0")
+    with pytest.raises(ValueError, match="acceptance_view is retired"):
+        FileSearchRuntime(tmp_path / ".gp").freeze_spec(
+            SearchSpec.model_validate(data), [project / "evaluator.py"]
+        )
+
+
+def test_required_supplemental_evaluation_rejects_disabled_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    data = valid_spec_dict()
+    data["source_path"] = str(project)
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_ENABLED_ENV, "0")
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_REQUIRED_ENV, "1")
+
+    with pytest.raises(
+        ValueError,
+        match="requires GOAL_PLUS_SUPPLEMENTAL_EVALUATION_ENABLED=1",
+    ):
+        FileSearchRuntime(tmp_path / ".gp-missing").freeze_spec(
+            SearchSpec.model_validate(data), [project / "evaluator.py"]
+        )
+
+
+def test_supplemental_evaluation_does_not_change_frozen_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    data = valid_spec_dict()
+    data["source_path"] = str(project)
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_ENABLED_ENV, "1")
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_REQUIRED_ENV, "1")
 
     frozen = FileSearchRuntime(tmp_path / ".gp").freeze_spec(
         SearchSpec.model_validate(data), [project / "evaluator.py"]
     )
 
     assert frozen.spec.acceptance_view is None
-
-
-def test_required_acceptance_view_rejects_missing_or_underspecified_contract(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    data = valid_spec_dict()
-    data["source_path"] = str(project)
-    monkeypatch.setenv(ACCEPTANCE_VIEW_REQUIRED_ENV, "1")
-
-    with pytest.raises(ValueError, match="requires SearchSpec.acceptance_view"):
-        FileSearchRuntime(tmp_path / ".gp-missing").freeze_spec(
-            SearchSpec.model_validate(data), [project / "evaluator.py"]
-        )
-
-    data["acceptance_view"] = {
-        "rubric_name": "SWE issue coverage",
-        "benchmark_context": "The hard process metric is sparse.",
-        "criteria": [
-            {
-                "id": "issue_requirements",
-                "category": "issue_coverage",
-                "description": "Cover each behavior requested by the issue.",
-            }
-        ],
-    }
-    with pytest.raises(ValueError, match="requires 3 to 8 acceptance criteria"):
-        FileSearchRuntime(tmp_path / ".gp-small").freeze_spec(
-            SearchSpec.model_validate(data), [project / "evaluator.py"]
-        )
-
-
-def test_required_acceptance_view_freezes_three_task_specific_criteria(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    data = valid_spec_dict()
-    data["source_path"] = str(project)
-    data["acceptance_view"] = {
-        "rubric_name": "SWE issue coverage",
-        "benchmark_context": "The official evaluator remains hidden.",
-        "criteria": [
-            {
-                "id": "issue_requirements",
-                "category": "issue_coverage",
-                "description": "Cover each behavior requested by the issue.",
-            },
-            {
-                "id": "boundary_inputs",
-                "category": "boundary_inputs",
-                "description": "Handle adjacent public boundary cases.",
-            },
-            {
-                "id": "regression_risk",
-                "category": "regression",
-                "description": "Preserve adjacent behavior and API compatibility.",
-            },
-        ],
-    }
-    monkeypatch.setenv(ACCEPTANCE_VIEW_REQUIRED_ENV, "1")
-
-    frozen = FileSearchRuntime(tmp_path / ".gp").freeze_spec(
-        SearchSpec.model_validate(data), [project / "evaluator.py"]
-    )
-
-    assert frozen.spec.acceptance_view is not None
-    assert len(frozen.spec.acceptance_view.criteria) == 3
-
-
-def test_required_acceptance_view_rejects_disabled_ablation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    data = valid_spec_dict()
-    data["source_path"] = str(project)
-    monkeypatch.setenv(ACCEPTANCE_VIEW_ENABLED_ENV, "0")
-    monkeypatch.setenv(ACCEPTANCE_VIEW_REQUIRED_ENV, "1")
-
-    with pytest.raises(ValueError, match="requires GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED=1"):
-        FileSearchRuntime(tmp_path / ".gp").freeze_spec(
-            SearchSpec.model_validate(data), [project / "evaluator.py"]
-        )
+    assert "supplemental_evaluation" not in frozen.spec.model_dump(mode="json")
 
 
 def test_goal_plus_spec_draft_exposes_typed_partial_search_spec() -> None:

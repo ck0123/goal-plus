@@ -86,6 +86,8 @@ VERIFIER_OUTPUT_LIMIT_BYTES = 64 * 1024
 VERIFIER_LOG_LIMIT_BYTES = VERIFIER_OUTPUT_LIMIT_BYTES * 2 + 8192
 VERIFIER_TERM_GRACE_SECONDS = 0.5
 MAX_EVIDENCE_ANNOTATION_DIFF_BYTES = 1024 * 1024
+MAX_EVIDENCE_COMPARISON_PEERS = 8
+MAX_EVIDENCE_PEER_DIFF_BYTES = 64 * 1024
 EVIDENCE_ANNOTATOR_MODEL_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_MODEL"
 EVIDENCE_ANNOTATOR_REASONING_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_REASONING_EFFORT"
 EVIDENCE_ANNOTATOR_BASE_URL_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_BASE_URL"
@@ -94,8 +96,12 @@ EVIDENCE_ANNOTATOR_PROVIDER_NAME_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_PROVIDER_NA
 EVIDENCE_ANNOTATOR_API_KEY_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_API_KEY_ENV"
 EVIDENCE_ANNOTATOR_WIRE_API_ENV = "GOAL_PLUS_EVIDENCE_ANNOTATOR_WIRE_API"
 OUTER_DEADLINE_ENV = "GOAL_PLUS_OUTER_DEADLINE_AT"
-ACCEPTANCE_VIEW_ENABLED_ENV = "GOAL_PLUS_ACCEPTANCE_VIEW_ENABLED"
-ACCEPTANCE_VIEW_REQUIRED_ENV = "GOAL_PLUS_ACCEPTANCE_VIEW_REQUIRED"
+SUPPLEMENTAL_EVALUATION_ENABLED_ENV = (
+    "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_ENABLED"
+)
+SUPPLEMENTAL_EVALUATION_REQUIRED_ENV = (
+    "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_REQUIRED"
+)
 
 
 def _boolean_environment_value(
@@ -116,17 +122,21 @@ def _boolean_environment_value(
     raise ValueError(f"{name} must be a boolean value, found {raw!r}")
 
 
-def acceptance_view_enabled(environment: dict[str, str] | None = None) -> bool:
+def supplemental_evaluation_enabled(
+    environment: dict[str, str] | None = None,
+) -> bool:
     return _boolean_environment_value(
-        ACCEPTANCE_VIEW_ENABLED_ENV,
-        default=True,
+        SUPPLEMENTAL_EVALUATION_ENABLED_ENV,
+        default=False,
         environment=environment,
     )
 
 
-def acceptance_view_required(environment: dict[str, str] | None = None) -> bool:
+def supplemental_evaluation_required(
+    environment: dict[str, str] | None = None,
+) -> bool:
     return _boolean_environment_value(
-        ACCEPTANCE_VIEW_REQUIRED_ENV,
+        SUPPLEMENTAL_EVALUATION_REQUIRED_ENV,
         default=False,
         environment=environment,
     )
@@ -592,26 +602,19 @@ class FileSearchRuntime:
             process.wait()
 
     def freeze_spec(self, spec: SearchSpec, verifier_artifacts: list[Path]) -> FrozenSpec:
-        view_enabled = acceptance_view_enabled()
-        view_required = acceptance_view_required()
-        if view_required and not view_enabled:
+        supplemental_enabled = supplemental_evaluation_enabled()
+        supplemental_required = supplemental_evaluation_required()
+        if supplemental_required and not supplemental_enabled:
             raise ValueError(
-                f"{ACCEPTANCE_VIEW_REQUIRED_ENV}=1 requires "
-                f"{ACCEPTANCE_VIEW_ENABLED_ENV}=1"
+                f"{SUPPLEMENTAL_EVALUATION_REQUIRED_ENV}=1 requires "
+                f"{SUPPLEMENTAL_EVALUATION_ENABLED_ENV}=1"
             )
-        if not view_enabled and spec.acceptance_view is not None:
-            spec = spec.model_copy(update={"acceptance_view": None})
-        if view_required:
-            if spec.acceptance_view is None:
-                raise ValueError(
-                    f"{ACCEPTANCE_VIEW_REQUIRED_ENV}=1 requires SearchSpec.acceptance_view"
-                )
-            criterion_count = len(spec.acceptance_view.criteria)
-            if not 3 <= criterion_count <= 8:
-                raise ValueError(
-                    f"{ACCEPTANCE_VIEW_REQUIRED_ENV}=1 requires 3 to 8 "
-                    f"acceptance criteria, found {criterion_count}"
-                )
+        if spec.acceptance_view is not None:
+            raise ValueError(
+                "SearchSpec.acceptance_view is retired for new runs; "
+                "ViewAgent now performs open-ended supplemental evaluation "
+                "after Evidence settlement"
+            )
         spec = _normalize_verifier_cwds_for_candidate_workspace(spec)
         spec = self._normalize_strategy_models(spec)
         self._validate_strategy_config(spec.strategy)
@@ -3150,9 +3153,9 @@ class FileSearchRuntime:
             "把 context.agent_session_id 传给 search_run_verifier，并省略 scope 以使用 process verifier；同时用一句话 hypothesis 客观概括本轮实际尝试。",
             "每次 run_verifier 调用都会记录一个 iteration。在配置的 host 预算内工作。尽早完成并验证候选，在达到限制前停止启动新的优化 iteration，并留出足够时间返回简洁摘要。",
             "search_run_verifier 会在运行 verifier 前自动提交已修改的候选产物文件；使用 git status、git diff 和 git log 检查 iteration provenance。",
-            "process verifier 返回 keep/retain/discard/failure disposition；启用 Acceptance View 时，同硬分有效尝试为 retain 并成为下一轮基线，否则非严格改善或验证失败时恢复 candidate-local best。Acceptance View 不改变硬分或最终验收。下一轮直接从返回后的已结算工作区继续。",
+            "process verifier 对新 run 返回 keep/discard/failure disposition；只有严格硬分改善才成为 candidate-local best，同分、退化或验证失败都会恢复此前硬分最佳。开放式补充评价和 peer 比较不改变结算、硬分或最终验收。下一轮直接从返回后的已结算工作区继续。",
             "规划另一个变体前，检查 workspace/results.tsv 中继承的 iteration 日志。运行时拥有并提交这份仅追加账本，会验证已有记录未被修改，并为每份返回的 verifier 报告添加且只添加一条记录；绝不能重写、截断、删除或手动追加它。",
-            "Global Evidence 展示 peer 的 verifier commit、硬分、disposition、可能延迟的客观 View 和可选的任务特定 Acceptance View。软项中的 missing、partial 或 unknown 可用于形成新假设，但不参与最终验收。任一 View 为 null 都不要求等待；可先按自己的方向探索。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
+            "Global Evidence 展示 peer 的 verifier commit、硬分、disposition、可能延迟的客观 View，以及 ViewAgent 基于实际 Evidence 生成的开放式 supplemental_evaluation。它会动态比较 annotation task 创建时其他已结算候选，但不使用 FrozenSpec 软标准、不参与结算或最终验收。将它视为第三方观察而非推荐；任一 View 为 null 都不要求等待。只有代码级证据确有必要且当前 Git 能解析该 commit 时，才在当前 workspace 使用 git diff HEAD <commit> -- <allowed-file> 做只读比较；解析不了时依赖 Evidence/View，不要访问或 fetch peer workspace，也不要 checkout/reset peer commit。",
         ]
         if plan.worker_policy.get("worker_agent_type"):
             instructions.append(
@@ -5631,6 +5634,19 @@ class FileSearchRuntime:
                 error = "annotation outer deadline already expired"
                 profile = None
         now = utc_timestamp()
+        supplemental_enabled = supplemental_evaluation_enabled()
+        if supplemental_evaluation_required() and not supplemental_enabled:
+            error = (
+                f"{SUPPLEMENTAL_EVALUATION_REQUIRED_ENV}=1 requires "
+                f"{SUPPLEMENTAL_EVALUATION_ENABLED_ENV}=1"
+            )
+            profile = None
+        task_context, task_context_source, task_context_ref = (
+            self._evidence_task_context(
+                run_id,
+                fallback=frozen.spec.objective,
+            )
+        )
         task = EvidenceAnnotationTask(
             run_id=run_id,
             candidate_id=candidate_id,
@@ -5638,6 +5654,18 @@ class FileSearchRuntime:
             attempt_base_commit=iteration.attempt_base_git_head,
             attempt_commit=iteration.git_head,
             attempt_changed_files=list(iteration.attempt_changed_files),
+            task_context_source=task_context_source,
+            task_context_ref=task_context_ref,
+            task_context_sha256=sha256_text(task_context),
+            supplemental_evaluation_enabled=supplemental_enabled,
+            comparison_basis=(
+                self._evidence_comparison_basis(
+                    run_id,
+                    target_candidate_id=candidate_id,
+                )
+                if supplemental_enabled
+                else []
+            ),
             profile=profile,
             outer_deadline_at=outer_deadline,
             state="terminal_error" if error else "pending",
@@ -5662,6 +5690,11 @@ class FileSearchRuntime:
             "score": iteration.score,
             "disposition": iteration.disposition,
             "view": view.description if view is not None else None,
+            "supplemental_evaluation": (
+                view.supplemental_evaluation.model_dump(mode="json")
+                if view is not None and view.supplemental_evaluation is not None
+                else None
+            ),
             "acceptance_view": (
                 view.acceptance_view.model_dump(mode="json")
                 if view is not None and view.acceptance_view is not None
@@ -5827,6 +5860,29 @@ class FileSearchRuntime:
                 ],
                 max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
             )
+        peer_evidence = self._evidence_comparison_peers(
+            run_id,
+            comparison_basis=task.comparison_basis,
+        )
+        task_context = frozen.spec.objective
+        task_context_source = "frozen_objective"
+        if task.task_context_source is not None:
+            resolved_context, resolved_source, resolved_ref = (
+                self._evidence_task_context(
+                    run_id,
+                    fallback=frozen.spec.objective,
+                )
+            )
+            if (
+                resolved_source != task.task_context_source
+                or resolved_ref != task.task_context_ref
+                or sha256_text(resolved_context) != task.task_context_sha256
+            ):
+                raise RuntimeError(
+                    "annotation task context no longer matches its snapshot"
+                )
+            task_context = resolved_context
+            task_context_source = resolved_source
         return {
             "run_id": run_id,
             "candidate_id": candidate_id,
@@ -5856,6 +5912,15 @@ class FileSearchRuntime:
                 for command in frozen.spec.process_verifiers
             ],
             "objective": frozen.spec.objective,
+            "task_context": task_context,
+            "task_context_source": task_context_source,
+            "supplemental_evaluation_enabled": (
+                task.supplemental_evaluation_enabled
+            ),
+            "peer_evidence": peer_evidence,
+            "comparison_basis": [
+                item.model_dump(mode="json") for item in task.comparison_basis
+            ],
             "acceptance_contract": (
                 frozen.spec.acceptance_view.model_dump(mode="json")
                 if frozen.spec.acceptance_view is not None
@@ -5865,6 +5930,182 @@ class FileSearchRuntime:
             "outer_deadline_at": task.outer_deadline_at,
             "runtime_root": str(self.root_dir),
         }
+
+    def _evidence_task_context(
+        self,
+        run_id: str,
+        *,
+        fallback: str,
+    ) -> tuple[
+        str,
+        Literal["goal_plus_raw_goal", "frozen_objective"],
+        str,
+    ]:
+        matches: list[tuple[str, str]] = []
+        for path in sorted((self.root_dir / "goal-plus").glob("*/goal.json")):
+            try:
+                payload = load_json(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            search_tasks = payload.get("search_tasks")
+            tasks = search_tasks if isinstance(search_tasks, list) else []
+            linked = payload.get("linked_search")
+            if isinstance(linked, dict):
+                tasks = [*tasks, linked]
+            revision = next(
+                (
+                    item.get("goal_revision")
+                    for item in reversed(tasks)
+                    if isinstance(item, dict) and item.get("run_id") == run_id
+                ),
+                None,
+            )
+            if not isinstance(revision, int):
+                continue
+            revisions = payload.get("goal_revisions")
+            raw_goal = None
+            if isinstance(revisions, list):
+                raw_goal = next(
+                    (
+                        item.get("raw_goal")
+                        for item in revisions
+                        if isinstance(item, dict)
+                        and item.get("revision") == revision
+                    ),
+                    None,
+                )
+            if not isinstance(raw_goal, str) or not raw_goal.strip():
+                if payload.get("goal_revision") == revision:
+                    raw_goal = payload.get("raw_goal")
+            if isinstance(raw_goal, str) and raw_goal.strip():
+                goal_plus_id = str(payload.get("goal_plus_id") or path.parent.name)
+                matches.append(
+                    (raw_goal, f"goal_plus:{goal_plus_id}:revision:{revision}")
+                )
+        unique = list(dict.fromkeys(matches))
+        if len(unique) == 1:
+            raw_goal, reference = unique[0]
+            return raw_goal, "goal_plus_raw_goal", reference
+        return fallback, "frozen_objective", f"frozen_objective:{run_id}"
+
+    def _evidence_comparison_basis(
+        self,
+        run_id: str,
+        *,
+        target_candidate_id: str,
+    ) -> list[dict[str, Any]]:
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        reverse = frozen.spec.metric_direction == "maximize"
+        settled = []
+        for record in self._load_candidate_records(run_id):
+            if record.candidate_id == target_candidate_id:
+                continue
+            eligible = [
+                iteration
+                for iteration in record.iterations
+                if iteration.agent_session_id is not None
+                and self._git_iteration_eligible(iteration)
+                and iteration.disposition in {None, "keep", "retain"}
+            ]
+            if not eligible:
+                continue
+            best = sorted(
+                eligible,
+                key=lambda iteration: iteration.score,
+                reverse=reverse,
+            )[0]
+            settled.append((best.created_at, record, best))
+        settled.sort(
+            key=lambda item: (
+                item[0],
+                item[1].candidate_id,
+                item[2].iteration,
+            )
+        )
+        return [
+            {
+                "candidate_id": record.candidate_id,
+                "iteration": iteration.iteration,
+                "commit": iteration.git_head,
+            }
+            for _, record, iteration in settled[-MAX_EVIDENCE_COMPARISON_PEERS:]
+        ]
+
+    def _evidence_comparison_peers(
+        self,
+        run_id: str,
+        *,
+        comparison_basis: list[Any],
+    ) -> list[dict[str, Any]]:
+        peers: list[dict[str, Any]] = []
+        records = {
+            record.candidate_id: record
+            for record in self._load_candidate_records(run_id)
+        }
+        for reference in comparison_basis:
+            record = records.get(reference.candidate_id)
+            if record is None:
+                raise RuntimeError("annotation comparison candidate is unavailable")
+            iteration = next(
+                (
+                    item
+                    for item in record.iterations
+                    if item.iteration == reference.iteration
+                    and item.git_head == reference.commit
+                ),
+                None,
+            )
+            if iteration is None or iteration.git_head is None:
+                raise RuntimeError("annotation comparison Evidence is unavailable")
+            assert iteration.git_head is not None
+            base_commit = (
+                record.task.workspace_base_revision
+                or iteration.attempt_base_git_head
+            )
+            changed_files: list[str] = []
+            peer_diff: str | None = None
+            diff_omitted: str | None = None
+            if base_commit:
+                try:
+                    changed_files = self._git_changed_files(
+                        record.task.workspace,
+                        base_commit,
+                        iteration.git_head,
+                    )
+                    if changed_files:
+                        peer_diff = self._git_output_bounded(
+                            record.task.workspace,
+                            [
+                                "git",
+                                "diff",
+                                "--full-index",
+                                "--no-ext-diff",
+                                base_commit,
+                                iteration.git_head,
+                                "--",
+                                *changed_files,
+                            ],
+                            max_bytes=MAX_EVIDENCE_PEER_DIFF_BYTES,
+                        )
+                except (RuntimeError, subprocess.CalledProcessError) as exc:
+                    diff_omitted = f"{type(exc).__name__}: {exc}"[:500]
+                    peer_diff = None
+            peers.append(
+                {
+                    "candidate_id": record.candidate_id,
+                    "iteration": iteration.iteration,
+                    "commit": iteration.git_head,
+                    "score": iteration.score,
+                    "process_passed": iteration.process_passed,
+                    "disposition": iteration.disposition,
+                    "agent_summary": iteration.hypothesis,
+                    "changed_files": changed_files,
+                    "candidate_diff": peer_diff,
+                    "diff_omitted": diff_omitted,
+                }
+            )
+        return peers
 
     def _kick_evidence_annotator(self, run_id: str) -> None:
         try:
