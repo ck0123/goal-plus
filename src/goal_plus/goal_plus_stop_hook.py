@@ -1145,6 +1145,21 @@ def _agent_lifecycle_target_identity(
                 nested = value.get(nested_key)
                 if isinstance(nested, str) and nested:
                     return nested
+    for key in ("receiver_thread_ids", "receiverThreadIds"):
+        value = tool_input.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and item:
+                return item
+            if isinstance(item, dict):
+                nested = (
+                    item.get("agent_id")
+                    or item.get("agentId")
+                    or item.get("id")
+                )
+                if isinstance(nested, str) and nested:
+                    return nested
     return None
 
 

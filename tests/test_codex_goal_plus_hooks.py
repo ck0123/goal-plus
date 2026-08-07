@@ -891,6 +891,22 @@ def test_search_candidate_autoresearch_lease_blocks_until_runtime_then_releases(
     assert "不能由父 Agent" in close_payload["permissionDecisionReason"]
     assert "SubagentStop" in close_payload["permissionDecisionReason"]
 
+    receiver_close = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "parent-session",
+            "tool_name": "close_agent",
+            "tool_input": {"receiver_thread_ids": [agent_identity]},
+        },
+    )
+    receiver_payload = json.loads(receiver_close.stdout)["hookSpecificOutput"]
+    assert receiver_payload["permissionDecision"] == "deny"
+    assert (
+        "不能由父 Agent" in receiver_payload["permissionDecisionReason"]
+    )
+
     evidence["started_at"] = (
         datetime.now(timezone.utc) - timedelta(seconds=301)
     ).isoformat().replace("+00:00", "Z")
