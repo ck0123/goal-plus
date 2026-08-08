@@ -876,6 +876,37 @@ def test_search_candidate_autoresearch_lease_blocks_until_runtime_then_releases(
     assert evidence["lease_precedes_parent_closeout"] is True
     assert evidence["lease_precedes_parent_hard_deadline"] is True
 
+    parent_close = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "parent-session",
+            "tool_name": "close_agent",
+            "tool_input": {"target": agent_identity},
+        },
+    )
+    close_payload = json.loads(parent_close.stdout)["hookSpecificOutput"]
+    assert close_payload["permissionDecision"] == "deny"
+    assert "不能由父 Agent" in close_payload["permissionDecisionReason"]
+    assert "SubagentStop" in close_payload["permissionDecisionReason"]
+
+    receiver_close = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "parent-session",
+            "tool_name": "close_agent",
+            "tool_input": {"receiver_thread_ids": [agent_identity]},
+        },
+    )
+    receiver_payload = json.loads(receiver_close.stdout)["hookSpecificOutput"]
+    assert receiver_payload["permissionDecision"] == "deny"
+    assert (
+        "不能由父 Agent" in receiver_payload["permissionDecisionReason"]
+    )
+
     evidence["started_at"] = (
         datetime.now(timezone.utc) - timedelta(seconds=301)
     ).isoformat().replace("+00:00", "Z")
@@ -904,6 +935,18 @@ def test_search_candidate_autoresearch_lease_blocks_until_runtime_then_releases(
     assert released["released_within_max_runtime"] is True
     assert released["blocked_stop_attempts"] == 1
     assert released["stop_attempts"] == 2
+
+    released_close = _run_hook(
+        tmp_path,
+        search_root,
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "parent-session",
+            "tool_name": "interrupt_agent",
+            "tool_input": {"target": agent_identity},
+        },
+    )
+    assert released_close.stdout == ""
 
 
 def test_ordinary_subagent_stop_does_not_inherit_parent_next_action(

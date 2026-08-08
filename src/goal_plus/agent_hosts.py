@@ -224,7 +224,9 @@ CODEX_WORKER_BOUNDARY = (
     "父级运行的规划、选择、报告、提升和最终审计不属于你的职责。如果 verifier 返回 "
     "failure_class=VerifierWorkspaceSideEffect 或 candidate_action=stop_and_report，"
     "不要清理 verifier 输出或重试；记录基础设施阻塞原因并立即返回。"
-    "process verifier 返回 disposition，并在非严格改善时自动恢复 candidate-local best；"
+    "新 run 的 process verifier 返回 keep/retain/discard/failure disposition；严格硬分改善"
+    "为 keep，同分为 retain 并成为最新基线，只有退化或失败会恢复 candidate-local best。开放式补充评价和动态 peer "
+    "比较不改变结算；"
     "不要自行 reset、restore 或 checkout verifier-backed 状态。"
 )
 
@@ -643,9 +645,9 @@ class PiRpcAdapter:
                 "closeout 或 time-advisory 消息属于上一次派发，已不再生效。"
                 "只遵守本次 launch 之后收到的警告。"
                 "在收到本次 closeout 或 deadline 警告前，不要仅因公开指标达到上限、"
-                "当前没有未验证改动或同分会被回滚而结束本次派发。刷新运行时证据后，"
+                "当前没有未验证改动或同分而结束本次派发。刷新运行时证据后，"
                 "至少完成一个实质性的泛化、反例、结构边界或简化 probe 并用 verifier "
-                "验证；同分或回滚的 Evidence 仍有信息价值。"
+                "验证；同分保留或回滚的 Evidence 仍有信息价值。"
             )
         return f"{header}\n\nLaunch 标签：{labels}"
 

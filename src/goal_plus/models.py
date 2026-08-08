@@ -58,7 +58,7 @@ class Budget(SearchModel):
 
 
 WorkspaceBackend = Literal["copy", "git_worktree"]
-IterationDisposition = Literal["keep", "discard", "failure"]
+IterationDisposition = Literal["keep", "retain", "discard", "failure"]
 VerifierInvalidationReason = Literal[
     "verifier_contract_invalid",
     "verifier_coverage_inadequate",
@@ -168,6 +168,7 @@ class SelectedModel(SearchModel):
 
 
 class EvidenceAnnotatorSpec(SearchModel):
+    host: AgentHostKind | None = None
     model: str | None = None
     pi_provider: str | None = None
     reasoning_effort: str | None = None
@@ -229,12 +230,176 @@ class ResolvedEvidenceAnnotatorProfile(SearchModel):
     provider: ResolvedCodexProvider | None = None
 
 
+AcceptanceCriterionStatus = Literal[
+    "covered",
+    "partial",
+    "missing",
+    "unknown",
+    "not_applicable",
+]
+AcceptanceConfidence = Literal["high", "medium", "low"]
+
+
+class AcceptanceCriterion(SearchModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    category: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    importance: Literal["high", "medium", "low"] = "medium"
+    evidence_hints: list[str] = Field(default_factory=list)
+
+    @field_validator("category", "description")
+    @classmethod
+    def text_must_be_nonempty(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("acceptance criterion text must be non-empty")
+        return normalized
+
+
+class AcceptanceViewSpec(SearchModel):
+    rubric_name: str = Field(min_length=1)
+    benchmark_context: str = Field(min_length=1)
+    criteria: list[AcceptanceCriterion] = Field(min_length=1, max_length=12)
+    tie_policy: Literal["retain_latest"] = "retain_latest"
+    affects_final_result: Literal[False] = False
+
+    @field_validator("rubric_name", "benchmark_context")
+    @classmethod
+    def text_must_be_nonempty(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("acceptance view text must be non-empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def criterion_ids_must_be_unique(self) -> "AcceptanceViewSpec":
+        criterion_ids = [criterion.id for criterion in self.criteria]
+        if len(criterion_ids) != len(set(criterion_ids)):
+            raise ValueError("acceptance criterion ids must be unique")
+        return self
+
+
+class AcceptanceCriterionAssessment(SearchModel):
+    criterion_id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    status: AcceptanceCriterionStatus
+    confidence: AcceptanceConfidence
+    evidence: list[str] = Field(default_factory=list)
+    rationale: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def rationale_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("acceptance rationale must be one line")
+        return " ".join(value.strip().split())
+
+
+class AcceptanceViewAssessment(SearchModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    criteria: list[AcceptanceCriterionAssessment] = Field(min_length=1)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def summary_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("acceptance summary must be one line")
+        return " ".join(value.strip().split())
+
+
+ComparisonRelation = Literal[
+    "similar",
+    "different",
+    "tradeoff",
+    "complementary",
+    "unknown",
+]
+
+
+class SupplementalDimension(SearchModel):
+    name: str = Field(min_length=1, max_length=120)
+    finding: str = Field(min_length=1, max_length=1000)
+    confidence: AcceptanceConfidence
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("name", "finding", mode="before")
+    @classmethod
+    def text_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("supplemental evaluation text must be one line")
+        return " ".join(value.strip().split())
+
+
+class EvidenceComparisonReference(SearchModel):
+    candidate_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    commit: str = Field(min_length=1)
+
+
+class PeerComparison(EvidenceComparisonReference):
+    relation: ComparisonRelation
+    rationale: str = Field(min_length=1, max_length=1000)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def rationale_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("peer comparison rationale must be one line")
+        return " ".join(value.strip().split())
+
+
+class SupplementalEvaluation(SearchModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    dimensions: list[SupplementalDimension] = Field(min_length=1, max_length=8)
+    comparisons: list[PeerComparison] = Field(default_factory=list, max_length=8)
+    limitations: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def summary_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("supplemental evaluation summary must be one line")
+        return " ".join(value.strip().split())
+
+    @field_validator("limitations", mode="before")
+    @classmethod
+    def limitations_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        normalized = []
+        for item in value:
+            if not isinstance(item, str):
+                normalized.append(item)
+                continue
+            if "\n" in item or "\r" in item:
+                raise ValueError("supplemental evaluation limitation must be one line")
+            normalized.append(" ".join(item.strip().split()))
+        return normalized
+
+
 class EvidenceViewRecord(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
     attempt_commit: str = Field(min_length=1)
     description: str = Field(min_length=1, max_length=1000)
+    supplemental_evaluation: SupplementalEvaluation | None = None
+    comparison_basis: list[EvidenceComparisonReference] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    # Legacy field retained so completed pre-migration runs remain readable.
+    acceptance_view: AcceptanceViewAssessment | None = None
     created_at: str
 
     @field_validator("description", mode="before")
@@ -247,6 +412,37 @@ class EvidenceViewRecord(SearchModel):
         return " ".join(value.strip().split())
 
 
+class GlobalEvidenceViewReference(SearchModel):
+    candidate_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    commit: str = Field(min_length=1)
+    view_created_at: str
+    supplemental_evaluation_present: bool = False
+
+
+class GlobalEvidenceReadRecord(SearchModel):
+    read_at: str
+    evidence_count: int = Field(ge=0)
+    completed_view_count: int = Field(ge=0)
+    completed_supplemental_evaluation_count: int = Field(ge=0)
+    completed_views: list[GlobalEvidenceViewReference] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def counts_match_completed_views(self) -> "GlobalEvidenceReadRecord":
+        if self.completed_view_count != len(self.completed_views):
+            raise ValueError("completed_view_count must match completed_views")
+        supplemental_count = sum(
+            item.supplemental_evaluation_present for item in self.completed_views
+        )
+        if self.completed_supplemental_evaluation_count != supplemental_count:
+            raise ValueError(
+                "completed_supplemental_evaluation_count must match completed_views"
+            )
+        if self.completed_view_count > self.evidence_count:
+            raise ValueError("completed_view_count cannot exceed evidence_count")
+        return self
+
+
 class EvidenceAnnotationTask(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
@@ -254,6 +450,20 @@ class EvidenceAnnotationTask(SearchModel):
     attempt_base_commit: str = Field(min_length=1)
     attempt_commit: str = Field(min_length=1)
     attempt_changed_files: list[str] = Field(default_factory=list)
+    task_context_source: Literal[
+        "goal_plus_raw_goal",
+        "frozen_objective",
+    ] | None = None
+    task_context_ref: str | None = None
+    task_context_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    supplemental_evaluation_enabled: bool = False
+    comparison_basis: list[EvidenceComparisonReference] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     profile: ResolvedEvidenceAnnotatorProfile | None = None
     outer_deadline_at: str | None = None
     state: Literal["pending", "retry_wait", "completed", "terminal_error"] = (
@@ -349,6 +559,10 @@ class SearchSpec(SearchModel):
     promotion_verifiers: list[VerifierCommand] = Field(default_factory=list)
     constraints: dict[str, Any] = Field(default_factory=dict)
     root_hypotheses: list[str] = Field(default_factory=list)
+    acceptance_view: AcceptanceViewSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     strategy: StrategySpec = Field(default_factory=StrategySpec)
     workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
 
@@ -373,6 +587,10 @@ class SearchSpecDraft(SearchModel):
     promotion_verifiers: list[VerifierCommand] | None = None
     constraints: dict[str, Any] | None = None
     root_hypotheses: list[str] | None = None
+    acceptance_view: AcceptanceViewSpec | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     strategy: StrategySpec | None = None
     workspace: WorkspaceSpec | None = None
 
@@ -783,3 +1001,6 @@ class AgentSessionRecord(SearchModel):
     workspace: Path
     launch: dict[str, Any] = Field(default_factory=dict)
     counters: dict[str, int] = Field(default_factory=dict)
+    global_evidence_reads: list[GlobalEvidenceReadRecord] = Field(
+        default_factory=list
+    )

@@ -54,6 +54,11 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
         "spawn_agent",
         'fork_turns="none"',
         "绝不能代表审查员提交结论",
+        "`acceptance_view`",
+        "软 rubric 或预设评价维度",
+        "开放式补充评价发生在每次 Evidence 结算之后",
+        "也不改变硬",
+        "candidate-local 同分保留",
     ):
         assert expected in text
     assert "mode_hint" not in text
@@ -75,6 +80,8 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
         "OPENAI_API_KEY",
         "SFORGE_AGENT_API_KEY",
         "GOAL_PLUS_OUTER_DEADLINE_AT",
+        "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_ENABLED",
+        "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_REQUIRED",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_MODEL",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_REASONING_EFFORT",
         "GOAL_PLUS_EVIDENCE_ANNOTATOR_BASE_URL",
@@ -295,6 +302,21 @@ def test_codex_search_reuses_exact_worker_evidence_before_parent_verification() 
     assert "准确 worker Evidence" in text
     assert "仅在没有匹配 Evidence 时" in text
     assert 'search_run_verifier(hypothesis="主流程完成验证")' not in text
+
+
+def test_codex_search_uses_open_posthoc_evaluation_as_non_gating_feedback() -> None:
+    skill = (ROOT / ".codex" / "skills" / "search" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    agent = (ROOT / ".codex" / "agents" / "search_candidate_agent.toml").read_text(
+        encoding="utf-8"
+    )
+    combined = "\n".join((skill, agent))
+
+    assert "不来自 FrozenSpec" in combined
+    assert "动态比较" in combined
+    assert "同分版本会由硬分结算规则成为最新工作基线" in combined
+    assert "不改变结算、硬 score 或最终 PASS/FAIL" in combined
 
 
 def test_codex_goal_plus_defers_report_until_terminal_state() -> None:

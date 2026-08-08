@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from goal_plus.models import SearchSpec
-from goal_plus.runtime import FileSearchRuntime
+from goal_plus.runtime import (
+    FileSearchRuntime,
+    SUPPLEMENTAL_EVALUATION_ENABLED_ENV,
+)
 from tests._runtime_helpers import make_project, spec_for
 
 
@@ -74,8 +77,8 @@ def test_process_verifier_settles_workspace_to_candidate_best(
         "seed": "seed",
         "improved": "improved",
         "worse": "improved",
-        "equal": "improved",
-        "broken": "improved",
+        "equal": "equal",
+        "broken": "equal",
     }
     for value in ("seed", "improved", "worse", "equal", "broken"):
         program.write_text(f"VALUE = {value!r}\n", encoding="utf-8")
@@ -94,23 +97,23 @@ def test_process_verifier_settles_workspace_to_candidate_best(
         "keep",
         "keep",
         "discard",
-        "discard",
+        "retain",
         "failure",
     ]
-    assert [report.best_iteration for report in reports] == [1, 2, 2, 2, 2]
+    assert [report.best_iteration for report in reports] == [1, 2, 2, 4, 4]
 
     record = runtime._load_candidate_record(run_id, candidate_id)
     assert [iteration.disposition for iteration in record.iterations] == [
         "keep",
         "keep",
         "discard",
-        "discard",
+        "retain",
         "failure",
     ]
     assert all(iteration.git_head for iteration in record.iterations)
     assert record.iterations[-1].process_passed is False
     history = runtime.list_history(run_id, top_n=1)["candidates"][0]
-    assert history["best_iteration"] == 2
+    assert history["best_iteration"] == 4
     assert history["latest_disposition"] == "failure"
     assert (
         history["workspace_git_head_after_settlement"] == record.results_ledger_git_head
@@ -146,7 +149,7 @@ def test_process_verifier_settles_workspace_to_candidate_best(
         == ""
     )
     messages = _git(workspace, "log", "--format=%s").splitlines()
-    assert sum(message.startswith("goal-plus restore") for message in messages) == 3
+    assert sum(message.startswith("goal-plus restore") for message in messages) == 2
 
 
 def test_first_failed_iteration_restores_pre_attempt_workspace(
@@ -179,6 +182,60 @@ def test_first_failed_iteration_restores_pre_attempt_workspace(
         cwd=workspace,
         check=True,
     )
+
+
+def test_supplemental_evaluation_does_not_change_hard_score_ties(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_ENABLED_ENV, "true")
+    runtime, run_id, candidate_id, workspace = _candidate(
+        tmp_path, backend="git_worktree"
+    )
+    session = runtime.start_agent_session(run_id, candidate_id)
+    program = workspace / "initial_program.py"
+
+    def fake_verify(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        value = program.read_text(encoding="utf-8").split("'", 2)[1]
+        score = 1.0 if value in {"first", "broader"} else 0.0
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            f'{{"combined_score": {score}}}\n',
+            "",
+        )
+
+    monkeypatch.setattr(runtime, "_execute_verifier_process", fake_verify)
+    reports = []
+    for value in ("first", "broader", "worse"):
+        program.write_text(f"VALUE = {value!r}\n", encoding="utf-8")
+        reports.append(
+            runtime.run_verifier(
+                run_id,
+                candidate_id,
+                agent_session_id=session.agent_session_id,
+                hypothesis=f"try {value}",
+            )
+        )
+
+    assert [report.disposition for report in reports] == [
+        "keep",
+        "retain",
+        "discard",
+    ]
+    assert [report.best_iteration for report in reports] == [1, 2, 2]
+    assert program.read_text(encoding="utf-8") == "VALUE = 'broader'\n"
+
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, 2)
+    assert task is not None
+    assert task.supplemental_evaluation_enabled is True
+
+    selected = runtime.select(run_id)
+    assert selected["selected_iteration"] == 2
+    assert selected["selected_score"] == 1.0
+    assert program.read_text(encoding="utf-8") == "VALUE = 'broader'\n"
 
 
 def test_select_and_promote_keep_all_iteration_commits_reachable(

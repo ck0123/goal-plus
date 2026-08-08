@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from goal_plus.models import (
+    AcceptanceViewSpec,
     AgentHostHandle,
     AgentSessionRecord,
     Budget,
@@ -22,6 +23,12 @@ from goal_plus.models import (
     WorkerBudget,
     ModelSpec,
 )
+from goal_plus.runtime import (
+    FileSearchRuntime,
+    SUPPLEMENTAL_EVALUATION_ENABLED_ENV,
+    SUPPLEMENTAL_EVALUATION_REQUIRED_ENV,
+)
+from tests._runtime_helpers import make_project
 
 
 def valid_spec_dict() -> dict:
@@ -58,6 +65,122 @@ def test_search_spec_parses_nested_models_and_serializes_enums() -> None:
     assert dumped["strategy"]["orchestration_mode"] == "parallel_loops"
     assert dumped["strategy"]["worker_host"] == "codex"
     assert "models" not in dumped["strategy"]
+
+
+def test_search_spec_loads_legacy_non_gating_acceptance_view() -> None:
+    data = valid_spec_dict()
+    data["acceptance_view"] = {
+        "rubric_name": "SWE issue coverage",
+        "benchmark_context": "The process gate only checks for a valid patch.",
+        "criteria": [
+            {
+                "id": "issue_requirements",
+                "category": "issue_coverage",
+                "description": "Cover each behavior requested by the issue.",
+                "importance": "high",
+                "evidence_hints": ["changed implementation", "focused tests"],
+            },
+            {
+                "id": "regression_risk",
+                "category": "regression",
+                "description": "Preserve adjacent behavior and API compatibility.",
+            },
+        ],
+    }
+
+    spec = SearchSpec.model_validate(data)
+
+    assert isinstance(spec.acceptance_view, AcceptanceViewSpec)
+    assert spec.acceptance_view.affects_final_result is False
+    assert spec.acceptance_view.tie_policy == "retain_latest"
+    dumped = spec.model_dump(mode="json")["acceptance_view"]
+    assert dumped["criteria"][0]["id"] == "issue_requirements"
+    assert "required" not in dumped["criteria"][0]
+
+
+def test_acceptance_view_rejects_gating_or_ambiguous_criteria() -> None:
+    data = valid_spec_dict()
+    data["acceptance_view"] = {
+        "rubric_name": "invalid",
+        "benchmark_context": "invalid contract",
+        "affects_final_result": True,
+        "criteria": [
+            {
+                "id": "coverage",
+                "category": "coverage",
+                "description": "Inspect coverage.",
+                "required": True,
+            }
+        ],
+    }
+    with pytest.raises(ValidationError):
+        SearchSpec.model_validate(data)
+
+    del data["acceptance_view"]["affects_final_result"]
+    del data["acceptance_view"]["criteria"][0]["required"]
+    data["acceptance_view"]["criteria"].append(
+        dict(data["acceptance_view"]["criteria"][0])
+    )
+    with pytest.raises(ValidationError, match="ids must be unique"):
+        SearchSpec.model_validate(data)
+
+
+def test_new_freeze_rejects_legacy_acceptance_view(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    data = valid_spec_dict()
+    data["source_path"] = str(project)
+    data["acceptance_view"] = {
+        "rubric_name": "SWE issue coverage",
+        "benchmark_context": "The hard process metric is sparse.",
+        "criteria": [
+            {
+                "id": "issue_requirements",
+                "category": "issue_coverage",
+                "description": "Cover each behavior requested by the issue.",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="acceptance_view is retired"):
+        FileSearchRuntime(tmp_path / ".gp").freeze_spec(
+            SearchSpec.model_validate(data), [project / "evaluator.py"]
+        )
+
+
+def test_required_supplemental_evaluation_rejects_disabled_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    data = valid_spec_dict()
+    data["source_path"] = str(project)
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_ENABLED_ENV, "0")
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_REQUIRED_ENV, "1")
+
+    with pytest.raises(
+        ValueError,
+        match="requires GOAL_PLUS_SUPPLEMENTAL_EVALUATION_ENABLED=1",
+    ):
+        FileSearchRuntime(tmp_path / ".gp-missing").freeze_spec(
+            SearchSpec.model_validate(data), [project / "evaluator.py"]
+        )
+
+
+def test_supplemental_evaluation_does_not_change_frozen_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    data = valid_spec_dict()
+    data["source_path"] = str(project)
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_ENABLED_ENV, "1")
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_REQUIRED_ENV, "1")
+
+    frozen = FileSearchRuntime(tmp_path / ".gp").freeze_spec(
+        SearchSpec.model_validate(data), [project / "evaluator.py"]
+    )
+
+    assert frozen.spec.acceptance_view is None
+    assert "supplemental_evaluation" not in frozen.spec.model_dump(mode="json")
 
 
 def test_goal_plus_spec_draft_exposes_typed_partial_search_spec() -> None:
@@ -296,8 +419,16 @@ def test_evidence_annotator_config_is_optional_and_overridable() -> None:
             "pi_provider": "deepseek",
         },
     )
+    independent_codex = StrategySpec(
+        worker_host="pi-rpc",
+        evidence_annotator={
+            "host": "codex",
+            "model": "gpt-5.6-luna",
+        },
+    )
 
     assert inherited.model_dump(mode="json")["evidence_annotator"] == {
+        "host": None,
         "model": None,
         "pi_provider": None,
         "reasoning_effort": None,
@@ -308,6 +439,7 @@ def test_evidence_annotator_config_is_optional_and_overridable() -> None:
     with pytest.raises(ValidationError):
         StrategySpec(evidence_annotator={"timeout_seconds": 1801})
     assert explicit.model_dump(mode="json")["evidence_annotator"] == {
+        "host": None,
         "model": "gpt-5.6-sol",
         "pi_provider": None,
         "reasoning_effort": "medium",
@@ -321,12 +453,14 @@ def test_evidence_annotator_config_is_optional_and_overridable() -> None:
         },
     }
     assert pi_explicit.model_dump(mode="json")["evidence_annotator"] == {
+        "host": None,
         "model": "deepseek-chat",
         "pi_provider": "deepseek",
         "reasoning_effort": None,
         "timeout_seconds": 1800,
         "provider": None,
     }
+    assert independent_codex.evidence_annotator.host == "codex"
 
 
 def test_worker_budget_requires_runtime_or_turn_limit() -> None:

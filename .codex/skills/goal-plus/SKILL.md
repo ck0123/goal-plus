@@ -46,6 +46,13 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
    `workspace.backend="git_worktree"`，以便候选共享 Git object database 并解析彼此的
    Evidence commit；只有用户明确要求兼容隔离时才能设置 `copy`。使用
    `goal_plus_save_spec_draft` 保存完整契约。
+   不要在 SearchSpec 中生成 `acceptance_view`、软 rubric 或预设评价维度。Spec Discovery
+   只能冻结硬 metric、verifier、编辑范围、预算和 promotion 合同；新 run 若包含旧式
+   `acceptance_view` 会被 runtime 拒绝。开放式补充评价发生在每次 Evidence 结算之后：
+   独立 ViewAgent 根据当前候选累计 diff 和当时其他已结算候选的快照，自行提出与任务实际
+   相关的观察维度并动态比较。它不读取 hidden 数据，不产生总分或最终推荐，也不改变硬
+   PASS/FAIL、数值排名、candidate-local 同分保留、selection 或 promotion。MainAgent
+   不负责定义这些维度，也不要根据 benchmark 类型向 ViewAgent 预埋固定清单。
    如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="codex")`，
    将用户填写的名称解析为唯一可用模型并冻结到 `strategy.models`；不存在或不唯一时，
    在创建 run 前直接返回错误。`models=A,B max_parallel=4` 表示按 A、B、A、B 轮转；

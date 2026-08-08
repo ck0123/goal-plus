@@ -220,7 +220,8 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "固定产物数量" in text
     assert "理论或结构限制" in text
     assert "公开指标饱和" in text
-    assert "同分或回滚的 Evidence 仍有信息价值" in text
+    assert "同分版本会保留为最新硬分基线" in text
+    assert "补充评价仍保留在 Global Evidence" in text
     assert "10-15 distinct verifier-recorded artifacts" not in text
     assert "verifier 是评估器，不是分析服务" in text
     assert (
@@ -379,6 +380,8 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "parameters: JsonArgs" not in text
     assert "goal_plus_record_triage: Type.Object" in text
     assert "const SearchSpecSchema = Type.Object" in text
+    assert "const AcceptanceViewSpec = Type.Object" not in text
+    assert "acceptance_view: Type.Optional" not in text
     assert 'Type.Literal("parallel_loops")' in text
     assert "search_invalidate_run: Type.Object" in text
     assert "source_run_id: Type.Optional(" in text
@@ -450,6 +453,22 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "isEnvironmentFailure" in text
     assert "ModuleNotFoundError" in text
     assert "INSTALL_HINT" in text
+
+
+def test_pi_assets_use_open_posthoc_evaluation_as_non_gating_feedback() -> None:
+    skill = (ROOT / ".pi" / "skills" / "goal-plus" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    worker = (ROOT / ".pi" / "prompts" / "search-candidate-worker.md").read_text(
+        encoding="utf-8"
+    )
+    combined = "\n".join((skill, worker))
+
+    assert "软 rubric 或预设评价维度" in skill
+    assert "开放式补充评价发生在每次 Evidence 结算之后" in skill
+    assert "不来自 FrozenSpec" in combined
+    assert "动态比较" in combined
+    assert "不改变结算、硬 score 或最终 PASS/FAIL" in combined
 
 
 def test_pi_docs_record_runner_logs_and_native_stop_gate() -> None:

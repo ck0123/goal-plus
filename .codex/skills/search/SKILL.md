@@ -152,14 +152,15 @@ strategy:
 `run.best_score` 和 `run.best_candidate_id`。父 agent 必须在每次完成验证后观察它，
 但不能把比较结果变为是否继续的决策。
 
-每个 process verifier 结果还包含 candidate-local `disposition`。只有严格改善为
-`keep`；同分或退化为 `discard`，无有效排名证据为 `failure`。runtime 保留本轮实际
-被测 commit，并在 `discard`/`failure` 后自动恢复该 candidate 的 best 代码。worker
+每个 process verifier 结果还包含 candidate-local `disposition`。严格改善为 `keep`；
+同分为 `retain` 并成为最新工作基线；退化尝试为 `discard`；无有效排名证据为 `failure`。runtime 保留本轮实际
+被测 commit，并只在 `discard`/`failure` 后自动恢复该 candidate 的 best 代码。worker
 不得自行 reset verifier-backed 状态；下一轮直接使用返回后的 settled workspace。
 
 - 更好结果：将其保留为最新 verifier 支持的答案；全局停止 policy 为 false 时，
   恢复同一 worker。
-- 更差或相同结果：保留早期最佳；全局停止 policy 为 false 时，仍恢复同一 worker。
+- 相同结果：保留最新 verifier 支持的版本；全局停止 policy 为 false 时，仍恢复同一 worker。
+- 更差结果：恢复此前硬分最佳；全局停止 policy 为 false 时，仍恢复同一 worker。
 - 最终选择：只能在所有 worker drain 后运行。
 
 ## Worker 预算控制
@@ -199,7 +200,11 @@ candidate-local history 由运行时拥有，不是 `plan.md` 文件。worker �
 `context.results_tsv`、工作区 Git 状态和有界 handoff metadata。其他 candidate 的尝试
 只通过窄 `search_get_global_evidence` 视图披露。每轮修改前读取一次；`view=null` 只表示
 annotator 尚未更新，worker 可先依据 commit、score、disposition 和自己的推理独立探索，
-不等待或轮询。只有代码级证据确有必要时，才在当前 workspace 使用
+不等待或轮询。启用开放式补充评价时，每行还包含 ViewAgent 根据当前累计 diff 和 annotation
+task 创建时其他已结算候选快照生成的 `supplemental_evaluation`。其中维度由 ViewAgent
+根据实际 Evidence 后验提出，不来自 FrozenSpec；动态比较、置信度与 limitations 只是第三方
+观察，不是分数、推荐或 promotion gate；同分版本会由硬分结算规则成为最新工作基线，而不是由 View 决定。worker 可以据此
+形成自己的下一轮假设，但应独立核对。只有代码级证据确有必要时，才在当前 workspace 使用
 `git diff HEAD <commit> -- <allowed-file>` 做只读比较，不访问其他 candidate workspace，
 也不 checkout/reset peer commit。修改完成后，worker 在 `search_run_verifier` 中用一句话
 `hypothesis` 客观概括实际尝试。

@@ -1127,6 +1127,90 @@ def _should_gate_tool(tool_name: str) -> bool:
     )
 
 
+def _is_agent_lifecycle_tool(tool_name: str) -> bool:
+    normalized = tool_name.strip().lower().replace("-", "_")
+    return normalized.rsplit("__", 1)[-1] in {"close_agent", "interrupt_agent"}
+
+
+def _agent_lifecycle_target_identity(
+    hook_input: dict[str, Any],
+) -> str | None:
+    tool_input = _tool_input(hook_input)
+    for key in ("target", "agent_id", "agentId", "id"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            for nested_key in ("agent_id", "agentId", "agent", "id"):
+                nested = value.get(nested_key)
+                if isinstance(nested, str) and nested:
+                    return nested
+    for key in ("receiver_thread_ids", "receiverThreadIds"):
+        value = tool_input.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and item:
+                return item
+            if isinstance(item, dict):
+                nested = (
+                    item.get("agent_id")
+                    or item.get("agentId")
+                    or item.get("id")
+                )
+                if isinstance(nested, str) and nested:
+                    return nested
+    return None
+
+
+def _active_autoresearch_lifecycle_block(
+    search_root: Path,
+    hook_input: dict[str, Any],
+) -> str | None:
+    identity = _agent_lifecycle_target_identity(hook_input)
+    if identity is None:
+        return None
+    mapping = _read_json_object(_identity_path(search_root, identity))
+    agent_session_id = mapping.get("agent_session_id") if mapping else None
+    session = (
+        find_agent_session(search_root, agent_session_id)
+        if isinstance(agent_session_id, str) and agent_session_id
+        else None
+    )
+    if session is None:
+        session = _candidate_session_from_native_identity(
+            search_root,
+            {"agent_id": identity},
+        )
+    if (
+        session is None
+        or session.host != "codex"
+        or not is_search_candidate_session(session)
+    ):
+        return None
+    evidence = _read_json_object(
+        _autoresearch_lease_path(search_root, session.agent_session_id)
+    )
+    if evidence is None or evidence.get("status") != "active":
+        return None
+    if _candidate_requires_immediate_stop(search_root, session):
+        return None
+    started_at = _utc_datetime(evidence.get("started_at"))
+    max_runtime_seconds = evidence.get("max_runtime_seconds")
+    if (
+        started_at is not None
+        and isinstance(max_runtime_seconds, int)
+        and (_utc_now() - started_at).total_seconds() >= max_runtime_seconds
+    ):
+        return None
+    return (
+        f"Search worker {session.agent_session_id} 的 AutoResearch lease 仍为 active，"
+        "不能由父 Agent 使用 close_agent/interrupt_agent 绕过 SubagentStop gate。"
+        "保持同一 worker 运行并等待其自然触发 SubagentStop；最低运行时间和 verifier "
+        "次数满足后，SubagentStop 会释放 lease。"
+    )
+
+
 def _handle_post_tool_use(
     runtime: Any,
     hook_input: dict[str, Any],
@@ -1271,7 +1355,15 @@ def _handle_pre_tool_use(
     search_root: Path,
     hook_input: dict[str, Any],
 ) -> None:
-    if _is_subagent_context(hook_input) or not _should_gate_tool(_tool_name(hook_input)):
+    if _is_subagent_context(hook_input):
+        return
+    tool_name = _tool_name(hook_input)
+    if _is_agent_lifecycle_tool(tool_name):
+        reason = _active_autoresearch_lifecycle_block(search_root, hook_input)
+        if reason is not None:
+            _emit_pre_tool_block(reason)
+        return
+    if not _should_gate_tool(tool_name):
         return
     goal_id = _select_hook_goal_id(search_root, hook_input)
     if goal_id is None:
