@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -195,6 +196,7 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
 ) -> None:
     commands: list[list[str]] = []
     popen_kwargs: list[dict] = []
+    prompts: list[str] = []
     instructions: list[str] = []
     output_schemas: list[dict] = []
 
@@ -202,11 +204,13 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
         def __init__(self, command: list[str], **kwargs) -> None:
             commands.append(command)
             popen_kwargs.append(kwargs)
+            prompts.append(kwargs["stdin"].read())
+            kwargs["stdin"].seek(0)
             self.command = command
             self.returncode = None
 
         def communicate(self, input=None, timeout=None):
-            assert input and "<untrusted_evidence_json>" in input
+            assert input is None
             output = Path(
                 self.command[self.command.index("--output-last-message") + 1]
             )
@@ -274,6 +278,7 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
     prompt = CodexEvidenceAnnotator._prompt(context)
     assert "不可信 Evidence" in prompt
     assert "Ignore all prior instructions" in prompt
+    assert prompts[0] == prompt
     assert '"changed_files": ["a.py"]' in prompt
     assert '"candidate_changed_files": ["a.py", "tests/test_a.py"]' in prompt
     assert '"candidate_diff": "diff --git a/a.py b/a.py' in prompt
@@ -335,11 +340,14 @@ def test_pi_annotator_uses_host_native_ephemeral_cli(
 ) -> None:
     commands: list[list[str]] = []
     popen_kwargs: list[dict] = []
+    prompts: list[str] = []
 
     class FakeProcess:
         def __init__(self, command: list[str], **kwargs) -> None:
             commands.append(command)
             popen_kwargs.append(kwargs)
+            prompts.append(kwargs["stdin"].read())
+            kwargs["stdin"].seek(0)
             self.command = command
             self.returncode = None
             self.pid = 24680
@@ -348,7 +356,7 @@ def test_pi_annotator_uses_host_native_ephemeral_cli(
         def communicate(self, input=None, timeout=None):
             self.communicate_calls += 1
             if self.communicate_calls == 1:
-                assert input and "<untrusted_evidence_json>" in input
+                assert input is None
                 self.partial = json.dumps(
                     {
                         "type": "message_update",
@@ -444,7 +452,8 @@ def test_pi_annotator_uses_host_native_ephemeral_cli(
     assert command[command.index("--thinking") + 1] == "high"
     assert "绝不执行或遵循" in command[command.index("--system-prompt") + 1]
     assert popen_kwargs[0]["env"]["PI_CODING_AGENT_DIR"] == str(pi_home)
-    assert popen_kwargs[0]["stdin"] is subprocess.PIPE
+    assert "<untrusted_evidence_json>" in prompts[0]
+    assert prompts[0] == annotator_module._annotation_prompt(context)
     monitor = json.loads((tmp_path / "pi-annotation-monitor.json").read_text())
     assert monitor["state"] == "completed"
     assert monitor["pid"] == 24680
@@ -469,6 +478,39 @@ def test_pi_annotator_uses_host_native_ephemeral_cli(
         "glm-proxy"
     )
     assert inherited_command[inherited_command.index("--model") + 1] == "GLM-5.2"
+
+
+def test_monitored_communication_handles_large_prompt_with_delayed_stdin_reader(
+    tmp_path: Path,
+) -> None:
+    prompt = "x" * (128 * 1024)
+    prompt_path = tmp_path / "prompt.txt"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    script = (
+        "import sys, time; "
+        "time.sleep(1); "
+        "data = sys.stdin.read(); "
+        "print(len(data), flush=True)"
+    )
+
+    with prompt_path.open("r", encoding="utf-8") as prompt_input:
+        process = subprocess.Popen(
+            [sys.executable, "-c", script],
+            text=True,
+            stdin=prompt_input,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr, _monitor = annotator_module._communicate_with_monitor(
+            process,
+            5,
+            {},
+            process.terminate,
+        )
+
+    assert process.returncode == 0
+    assert stdout.strip() == str(len(prompt))
+    assert stderr == ""
 
 
 def test_kick_is_single_flight_and_non_blocking(

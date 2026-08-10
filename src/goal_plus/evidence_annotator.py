@@ -427,7 +427,6 @@ def _collect_after_termination(
 
 def _communicate_with_monitor(
     process: subprocess.Popen[str],
-    prompt: str,
     timeout: float,
     context: dict[str, Any],
     terminate: Any,
@@ -435,7 +434,6 @@ def _communicate_with_monitor(
     monitor = _AnnotationProcessMonitor(context)
     stdout = ""
     stderr = ""
-    first_communicate = True
     started = time.monotonic()
     monitor.observe("running", process=process, force=True)
     while True:
@@ -455,7 +453,7 @@ def _communicate_with_monitor(
             raise TransientAnnotationError(detail)
         try:
             observed_stdout, observed_stderr = process.communicate(
-                input=prompt if first_communicate else None,
+                input=None,
                 timeout=min(0.5, remaining),
             )
             stdout = _prefer_complete_output(stdout, observed_stdout)
@@ -469,7 +467,6 @@ def _communicate_with_monitor(
             )
             return stdout, stderr, monitor
         except subprocess.TimeoutExpired as exc:
-            first_communicate = False
             stdout = _prefer_complete_output(stdout, _timeout_output(exc, "output"))
             stderr = _prefer_complete_output(stderr, _timeout_output(exc, "stderr"))
             monitor.observe(
@@ -842,26 +839,28 @@ class CodexEvidenceAnnotator:
             if codex_home:
                 environment["CODEX_HOME"] = str(codex_home)
 
-            process = subprocess.Popen(
-                command,
-                text=True,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=environment,
-            )
-            self._active_process = process
             prompt = self._prompt(context)
-            try:
-                stdout, stderr, monitor = _communicate_with_monitor(
-                    process,
-                    prompt,
-                    timeout,
-                    context,
-                    self.terminate,
+            prompt_path = request_dir / "prompt.txt"
+            prompt_path.write_text(prompt, encoding="utf-8")
+            with prompt_path.open("r", encoding="utf-8") as prompt_input:
+                process = subprocess.Popen(
+                    command,
+                    text=True,
+                    stdin=prompt_input,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=environment,
                 )
-            finally:
-                self._active_process = None
+                self._active_process = process
+                try:
+                    stdout, stderr, monitor = _communicate_with_monitor(
+                        process,
+                        timeout,
+                        context,
+                        self.terminate,
+                    )
+                finally:
+                    self._active_process = None
             if process.returncode != 0:
                 detail = (stderr or stdout).strip()[-2000:]
                 error = f"codex exec exited {process.returncode}: {detail}"
@@ -1100,27 +1099,29 @@ class PiEvidenceAnnotator:
             if pi_home:
                 environment["PI_CODING_AGENT_DIR"] = str(pi_home)
 
-            process = subprocess.Popen(
-                command,
-                cwd=request_dir,
-                text=True,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=environment,
-            )
-            self._active_process = process
             prompt = _annotation_prompt(context)
-            try:
-                stdout, stderr, monitor = _communicate_with_monitor(
-                    process,
-                    prompt,
-                    timeout,
-                    context,
-                    self.terminate,
+            prompt_path = request_dir / "prompt.txt"
+            prompt_path.write_text(prompt, encoding="utf-8")
+            with prompt_path.open("r", encoding="utf-8") as prompt_input:
+                process = subprocess.Popen(
+                    command,
+                    cwd=request_dir,
+                    text=True,
+                    stdin=prompt_input,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=environment,
                 )
-            finally:
-                self._active_process = None
+                self._active_process = process
+                try:
+                    stdout, stderr, monitor = _communicate_with_monitor(
+                        process,
+                        timeout,
+                        context,
+                        self.terminate,
+                    )
+                finally:
+                    self._active_process = None
             if process.returncode != 0:
                 detail = (stderr or stdout).strip()[-2000:]
                 error = f"pi exited {process.returncode}: {detail}"
