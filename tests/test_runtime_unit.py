@@ -956,6 +956,7 @@ def test_promote_patch_round_trips_file_without_trailing_newline(tmp_path: Path)
     assert ">promoted</span>" in html_report_path.read_text(encoding="utf-8")
     apply_target = tmp_path / "apply-target"
     copy_source_tree(project, apply_target)
+    assert initialize_workspace_git_baseline(apply_target) is not None
     subprocess.run(
         ["git", "apply", "--check", str(patch_path)],
         cwd=apply_target,
@@ -1269,6 +1270,7 @@ def test_promote_patch_uses_selected_commit_after_evidence_check(
     patch_path = runtime.promote(run_id, task.candidate_id)
     apply_target = tmp_path / "apply-target"
     copy_source_tree(project, apply_target)
+    assert initialize_workspace_git_baseline(apply_target) is not None
     subprocess.run(["git", "apply", str(patch_path)], cwd=apply_target, check=True)
 
     assert task.workspace.joinpath("initial_program.py").read_text(
@@ -3308,8 +3310,24 @@ def test_select_can_recover_best_iteration_after_artifact_changed(
 def test_run_verifier_rejects_missing_results_ledger_git_history(
     tmp_path: Path,
 ) -> None:
-    project = make_project(tmp_path)
-    runtime = FileSearchRuntime(tmp_path / ".search")
+    outer_repository = tmp_path / "outer"
+    outer_repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=outer_repository, check=True)
+    (outer_repository / ".gitignore").write_text(".tmp/\n", encoding="utf-8")
+    project = make_project(outer_repository)
+    outer_head_before = git_commit_all(outer_repository, "outer baseline")
+    outer_status_before = subprocess.check_output(
+        ["git", "status", "--porcelain=v1"],
+        cwd=outer_repository,
+        text=True,
+    )
+    outer_files_before = subprocess.check_output(
+        ["git", "ls-files"],
+        cwd=outer_repository,
+        text=True,
+    )
+
+    runtime = FileSearchRuntime(outer_repository / ".tmp" / ".search")
     frozen = runtime.freeze_spec(spec_for(project), [project / "evaluator.py"])
     run_id = runtime.create_run(frozen.frozen_spec_id)
     plan = runtime.plan_next(run_id, requested_k=1)
@@ -3326,6 +3344,21 @@ def test_run_verifier_rejects_missing_results_ledger_git_history(
         encoding="utf-8"
     ) == results_before
     assert runtime.list_iterations(run_id, tasks[0].candidate_id) == []
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=outer_repository,
+        text=True,
+    ).strip() == outer_head_before
+    assert subprocess.check_output(
+        ["git", "status", "--porcelain=v1"],
+        cwd=outer_repository,
+        text=True,
+    ) == outer_status_before
+    assert subprocess.check_output(
+        ["git", "ls-files"],
+        cwd=outer_repository,
+        text=True,
+    ) == outer_files_before
 
 
 def test_run_verifier_records_real_git_commit_for_iteration(
