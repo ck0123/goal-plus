@@ -569,7 +569,20 @@ def test_copy_receipts_accumulate_keep_and_discard_for_all_loops(
         run_id,
         annotator=AdoptionAnnotator(),
     ) == 3
-    global_evidence = runtime.get_global_evidence(producer.agent_session_id)
+    page = runtime.list_global_evidence(
+        producer.agent_session_id,
+        candidate_id=consumer.candidate_id,
+        limit=20,
+    )
+    global_evidence = [
+        runtime.get_global_evidence_entry(
+            producer.agent_session_id,
+            item["candidate_id"],
+            item["iteration"],
+            item["commit"],
+        )
+        for item in page["items"]
+    ]
     adoption_views = [
         entry["view"]
         for entry in global_evidence
@@ -578,7 +591,14 @@ def test_copy_receipts_accumulate_keep_and_discard_for_all_loops(
     ]
     assert any("discard" in view for view in adoption_views)
     assert any("keep" in view for view in adoption_views)
-    assert "evidence_summary" not in global_evidence[0]["shared_tools"][0]
+    published_views = runtime.get_global_evidence(consumer.agent_session_id)
+    [tool] = [
+        tool
+        for entry in published_views
+        for tool in entry["shared_tools"]
+        if tool["tool_id"] == published["tool_id"]
+    ]
+    assert "evidence_summary" not in tool
 
 
 def test_confounded_adoption_is_visible_but_excluded_from_tool_statistics(

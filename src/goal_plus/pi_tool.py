@@ -35,6 +35,8 @@ SEARCH_TOOL_NAMES = {
     "search_continue_agent_session",
     "search_get_agent_context",
     "search_get_global_evidence",
+    "search_list_global_evidence",
+    "search_get_global_evidence_entry",
     "search_stage_shared_tool",
     "search_copy_shared_tool",
     "search_get_evidence_detail",

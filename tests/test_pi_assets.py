@@ -201,6 +201,13 @@ def test_pi_worker_prompt_requires_runtime_context_and_verifier() -> None:
     assert "search_get_global_evidence" in text
     assert "每完成 3 次 `search_run_verifier` iteration 刷新一次" in text
     assert "global_evidence_snapshot` 已完成本次刷新" in text
+    assert "search_list_global_evidence" in text
+    assert "search_get_global_evidence_entry" in text
+    assert "search_list_evidence_topics" not in text
+    assert "search_compare_evidence" not in text
+    assert "comparison_gist" in text
+    assert "每 candidate 最多 2 条" in text
+    assert "不要批量" in text
     assert "search_submit_iteration_plan" not in text
     assert "search_run_verifier" in text
     assert "不得直接运行任务自带的 `runner`、`evaluator` 或 `grader`" in text
@@ -415,6 +422,9 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert "search_get_agent_context:" in text
     assert "search_copy_shared_tool:" in text
     assert "search_stage_shared_tool:" in text
+    assert "search_list_evidence_topics: Type.Object" not in text
+    assert "search_compare_evidence: Type.Object" not in text
+    assert "EvidenceObservationReference" not in text
     assert "candidate_task.share_out_dir 非空表示已启用 shared_dir" in text
     assert "repeated_sequence、domain_probe、parser_or_trace 或 peer_setup_reduction" in text
     assert "toolization_decision：staged 至少包含一个正向 signal" in text
@@ -466,6 +476,8 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     assert '"search_get_agent_observability"' in main_tools
     worker_tools = text.split("const workerTools = [", 1)[1].split("];", 1)[0]
     assert '"search_stage_shared_tool"' in worker_tools
+    assert '"search_list_evidence_topics"' not in worker_tools
+    assert '"search_compare_evidence"' not in worker_tools
     assert "final_verify: Type.Optional(Type.Boolean())" in text
     assert "triage: GoalPlusTriage" in text
     assert "is_optimization: Type.Boolean()" in text
@@ -487,7 +499,7 @@ def test_pi_assets_use_open_posthoc_evaluation_as_non_gating_feedback() -> None:
     assert "软 rubric 或预设评价维度" in skill
     assert "开放式补充评价发生在每次 Evidence 结算之后" in skill
     assert "不来自 FrozenSpec" in combined
-    assert "动态比较" in combined
+    assert "search_get_global_evidence_entry" in combined
     assert "不改变结算、硬 score 或最终 PASS/FAIL" in combined
 
 

@@ -278,7 +278,14 @@ def test_codex_worker_agent_calls_context_and_verifier() -> None:
     assert "search_get_agent_context" in text
     assert "search_get_global_evidence" in text
     assert "每完成 3 次 `search_run_verifier` iteration" in text
-    assert "global_evidence_snapshot` 已完成本次刷新" in text
+    assert "global_evidence_snapshot" in text
+    assert "search_list_global_evidence" in text
+    assert "search_get_global_evidence_entry" in text
+    assert "search_list_evidence_topics" not in text
+    assert "search_compare_evidence" not in text
+    assert "comparison_gist" in text
+    assert "每 candidate 最多 2 条" in text
+    assert "不要批量" in text
     assert "search_submit_iteration_plan" not in text
     assert "search_run_verifier" in text
     assert "不得直接运行任务自带的 `runner`、`evaluator` 或 `grader`" in text
@@ -337,7 +344,7 @@ def test_codex_search_uses_open_posthoc_evaluation_as_non_gating_feedback() -> N
     combined = "\n".join((skill, agent))
 
     assert "不来自 FrozenSpec" in combined
-    assert "动态比较" in combined
+    assert "search_get_global_evidence_entry" in combined
     assert "不改变硬分结算规则" in combined
     assert "不改变结算、硬 score" in combined
     assert "或最终 PASS/FAIL" in combined

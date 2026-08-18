@@ -26,7 +26,7 @@ from goal_plus.evidence_annotator import (
     drain_evidence_annotations,
     kick_evidence_annotator,
 )
-from goal_plus.models import SearchSpec
+from goal_plus.models import EvidenceViewRecord, SearchSpec, SupplementalEvaluation
 from goal_plus.runtime import FileSearchRuntime
 from tests._runtime_helpers import make_project, spec_for
 
@@ -105,60 +105,81 @@ def test_annotator_instructions_require_tool_views_and_adoption_analysis() -> No
     assert "不要汇总工具收益" in ANNOTATOR_INSTRUCTIONS
 
 
-def test_supplemental_output_must_match_dynamic_comparison_basis() -> None:
-    comparison_basis = [
-        {"candidate_id": "candidate-a", "iteration": 1, "commit": "abc123"},
-        {"candidate_id": "candidate-b", "iteration": 2, "commit": "def456"},
-    ]
-    output = EvidenceAnnotationOutput.model_validate(
+def test_supplemental_model_migrates_legacy_peer_comparisons() -> None:
+    evaluation_model = SupplementalEvaluation.model_validate(
         {
-            "description": "Changed the requested behavior.",
-            "supplemental_evaluation": {
-                "summary": "The change makes a different tradeoff.",
-                "dimensions": [
-                    {
-                        "name": "Data access strategy",
-                        "finding": "The implementation replaces a scan with an index.",
-                        "confidence": "high",
-                        "evidence": ["implementation diff"],
-                    }
-                ],
-                "comparisons": [
-                    {
-                        **reference,
-                        "relation": "different",
-                        "rationale": "The candidates use distinct access strategies.",
-                        "evidence": ["candidate diff"],
-                    }
-                    for reference in comparison_basis
-                ],
-                "limitations": ["Runtime behavior was not independently measured."],
-            },
+            "summary": "The change makes a different tradeoff.",
+            "dimensions": [
+                {
+                    "name": "Data access strategy",
+                    "finding": "The implementation replaces a scan with an index.",
+                    "confidence": "high",
+                    "evidence": ["implementation diff"],
+                }
+            ],
+            "comparisons": [
+                {
+                    "candidate_id": "candidate-a",
+                    "iteration": 1,
+                    "commit": "abc123",
+                    "relation": "different",
+                    "rationale": "The candidates use distinct access strategies.",
+                    "evidence": ["candidate diff"],
+                }
+            ],
+            "limitations": ["Runtime behavior was not independently measured."],
         }
     )
 
-    CodexEvidenceAnnotator._validate_supplemental_output(
-        output,
-        enabled=True,
-        comparison_basis=comparison_basis,
-    )
-    reversed_output = output.model_copy(
-        update={
-            "supplemental_evaluation": output.supplemental_evaluation.model_copy(
-                update={
-                    "comparisons": list(
-                        reversed(output.supplemental_evaluation.comparisons)
-                    )
+    evaluation = evaluation_model.model_dump(mode="json")
+    assert set(evaluation) == {"observations"}
+    assert [item["state"] for item in evaluation["observations"]] == [
+        "supported",
+        "unresolved",
+    ]
+    assert evaluation["observations"][0]["label"] == "Data access strategy"
+    assert evaluation["observations"][1]["label"] == "Legacy evidence limitation"
+    assert "comparisons" not in evaluation
+    assert "confidence" not in json.dumps(evaluation)
+
+
+def test_v1_view_is_readable_without_rewriting_its_file(tmp_path: Path) -> None:
+    legacy = {
+        "schema_version": 1,
+        "run_id": "run_1",
+        "candidate_id": "c001",
+        "iteration": 1,
+        "attempt_commit": "abc123",
+        "description": "Changed the requested behavior.",
+        "supplemental_evaluation": {
+            "summary": "Legacy summary.",
+            "dimensions": [
+                {
+                    "name": "Boundary behavior",
+                    "finding": "The visible boundary passes.",
+                    "confidence": "high",
+                    "evidence": ["x" * 700],
                 }
-            )
-        }
-    )
-    with pytest.raises(AnnotationOutputError, match="do not match"):
-        CodexEvidenceAnnotator._validate_supplemental_output(
-            reversed_output,
-            enabled=True,
-            comparison_basis=comparison_basis,
-        )
+            ],
+            "limitations": ["y" * 1200],
+        },
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    path = tmp_path / "legacy-view.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    original = path.read_text(encoding="utf-8")
+
+    view = EvidenceViewRecord.model_validate_json(original)
+
+    assert view.schema_version == 1
+    assert view.supplemental_evaluation is not None
+    assert [item.state for item in view.supplemental_evaluation.observations] == [
+        "supported",
+        "unresolved",
+    ]
+    assert len(view.supplemental_evaluation.observations[0].evidence[0].excerpt) == 500
+    assert len(view.supplemental_evaluation.observations[1].text) == 1000
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_outer_deadline_accepts_unix_epoch() -> None:
@@ -203,10 +224,10 @@ def test_drainer_serially_describes_pending_evidence(tmp_path: Path) -> None:
         )
     assert sum(results) == 2
     assert annotator.max_active == 1
-    view = runtime.get_global_evidence(session.agent_session_id)
-    assert annotator.commits == [entry["commit"] for entry in view]
+    history = runtime.list_global_evidence(session.agent_session_id, limit=20)
+    assert annotator.commits == [entry["commit"] for entry in history["items"]]
     assert annotator.dispositions == ["keep", "retain"]
-    assert [entry["view"] for entry in view] == [
+    assert [entry["view"] for entry in history["items"]] == [
         "Changed the candidate value stored in initial_program.py.",
         "Changed the candidate value stored in initial_program.py.",
     ]
@@ -348,8 +369,17 @@ def test_codex_annotator_uses_resolved_options_and_default_cli_inheritance(
         "supplemental_evaluation",
         "tool_views",
     ]
-    dimension_schema = output_schemas[0]["$defs"]["SupplementalDimension"]
-    assert dimension_schema["required"] == list(dimension_schema["properties"])
+    observation_schema = output_schemas[0]["$defs"]["SupplementalObservationOutput"]
+    assert observation_schema["required"] == list(observation_schema["properties"])
+    evidence_schema = output_schemas[0]["$defs"]["AnnotationObservationEvidence"]
+    assert evidence_schema["required"] == list(evidence_schema["properties"])
+    assert "legacy_annotation" not in json.dumps(evidence_schema)
+    serialized_schema = json.dumps(output_schemas[0])
+    assert '"confidence"' not in serialized_schema
+    supplemental_schema = json.dumps(
+        output_schemas[0]["$defs"]["SupplementalEvaluationOutput"]
+    )
+    assert '"summary"' not in supplemental_schema
     assert "default" not in json.dumps(output_schemas[0])
     (tmp_path / "empty-codex-home").mkdir()
     context["annotator"] = {

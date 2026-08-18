@@ -48,8 +48,9 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
    `goal_plus_save_spec_draft` 保存完整契约。
    不要在 SearchSpec 中生成软 rubric 或预设评价维度。Spec Discovery 只能冻结硬 metric、
    verifier、编辑范围、预算和 promotion 合同。开放式补充评价发生在每次 Evidence 结算之后：
-   独立 annotator 根据当前候选累计 diff 和当时其他已结算候选的快照，自行提出与任务实际
-   相关的观察维度并动态比较。它不读取 hidden 数据，不产生总分或最终推荐，也不改变硬
+   独立 annotator 根据当前候选累计 diff，自行提出与任务实际相关的观察维度。worker 通过
+   有界 Global Evidence 索引自行选择需要展开的其他候选历史。它不读取 hidden 数据，不产生
+   总分或最终推荐，也不改变硬
    PASS/FAIL、数值排名、candidate-local 结算、selection 或 promotion。MainAgent
    不负责定义这些维度，也不要根据 benchmark 类型向 annotator 预埋固定清单。
    如果原始命令包含 `models=...`，先调用 `goal_plus_list_models(host="codex")`，

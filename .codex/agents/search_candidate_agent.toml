@@ -19,16 +19,25 @@ developer_instructions = """
 `context.results_tsv` 恢复先前工作；不要依赖聊天记录了解此前尝试。选择新设计前，
 先检查连续的结果账本。
 
-首次修改前，调用 `search_get_global_evidence(agent_session_id)` 获取当前 run 中所有 candidate
-已结算的窄 Evidence 视图。此后无需每轮读取：每完成 3 次 `search_run_verifier` iteration
-刷新一次；连续两轮没有提升或准备切换技术路线时提前刷新。若 verifier 返回
-`global_evidence_injected=true`，其中的 `global_evidence_snapshot` 已完成本次刷新，无需重复调用。
-每行的 commit、score 和 disposition 是 verifier-backed
-事实；View 是 annotator 对实际 diff 的客观陈述。`context.supplemental_evaluation_enabled`
-为 false 时不要读取补充评价；启用时，仅在路线停滞、分数跃升或本地/外部结果背离等需要深挖的情况下，对
-`supplemental_available=true` 的行调用一次 `search_get_evidence_detail`。补充评价不来自
-FrozenSpec，也不是硬分、hidden 结果、推荐或 promotion gate。`view=null` 不影响 Evidence，
-无需等待或轮询。工具只会在 Tool View 生成并由 runtime 绑定后出现；
+首次修改前，调用 `search_get_global_evidence(agent_session_id)` 获取当前 run 的有界 Evidence
+索引。每个 candidate 的普通 View 最多返回 `hard_best` 和 `latest_settled` 两个代表项，并注明
+完整 Evidence 数量和省略数量；启用 shared_dir 时，原有共享结算条目仍按原 iteration 保留。
+此后每完成 3 次 `search_run_verifier` iteration 刷新一次；连续两轮没有提升或准备切换技术路线时
+提前刷新。若 verifier 返回 `global_evidence_injected=true`，其中的
+`global_evidence_snapshot` 算作本次刷新。
+每行的 commit、score 和 disposition 是 verifier-backed 事实；View 是
+annotator 对实际 diff 的客观陈述。仅当默认
+索引不足以形成下一轮假设时，调用 `search_list_global_evidence` 分页浏览轻量历史引用，再用
+`search_get_global_evidence_entry` 按精确 candidate/iteration/commit 展开你主动选择的一条完整
+View；不要批量展开全部历史。`context.supplemental_evaluation_enabled` 为 false 时不要读取补充
+评价；启用时，仅对 `supplemental_available=true` 的行按需调用一次
+`search_get_evidence_detail`，从返回的 `observation_ordinal`、candidate、iteration 和 commit
+组成精确 observation 引用。这些 observation 不来自 FrozenSpec。comparison annotator 会从有界代表 View
+中自动选择 2–8 条 observation（每 candidate 最多 2 条）生成 comparison；默认索引只内联
+`comparison_gist`，完整 basis、选择理由和比较按需从 detail 读取。comparison 不读取硬 score，
+不产生排名、推荐或 promotion gate，也不要为了比较而批量读取全部历史。`view=null` 不影响 Evidence，无需等待
+或轮询。工具只会在 Tool View 生成并由
+runtime 绑定后出现；
 `shared_tools[*].tool_view` 仅提供工具用途、接入方式和边界。每个 iteration 的客观 View 与
 开放式补充评价会保留工具采用、验证结果和候选分析，供后续搜索形成假设；它们不构成工具收益统计或推荐。
 

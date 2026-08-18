@@ -21,7 +21,10 @@ run-scoped drainer uses an ephemeral `pi --mode json --no-session --no-tools`
 process, inherits the Pi worker model/provider unless explicitly overridden,
 and reads provider configuration from `PI_CODING_AGENT_DIR`. A qualified
 annotator model (`provider/model`) or `evidence_annotator.pi_provider` can select
-a provider independent of the Search worker. Verifier settlement never waits
+a provider independent of the Search worker. The dedicated annotator model and
+reasoning environment variables are also explicit overrides and take precedence
+over worker inheritance; a qualified environment model also supplies the
+authoritative annotator provider. Verifier settlement never waits
 for this process. The same turn also produces shared-dir Tool Views. The
 host-neutral lifecycle is documented in
 [`shared-plane.md`](shared-plane.md#工具复制与采用结算).

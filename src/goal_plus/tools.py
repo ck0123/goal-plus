@@ -157,6 +157,34 @@ class SearchTools:
     ) -> list[dict[str, Any]]:
         return self.runtime.get_global_evidence(agent_session_id)
 
+    def search_list_global_evidence(
+        self,
+        agent_session_id: str,
+        candidate_id: str | None = None,
+        cursor: int = 0,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        return self.runtime.list_global_evidence(
+            agent_session_id,
+            candidate_id=candidate_id,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    def search_get_global_evidence_entry(
+        self,
+        agent_session_id: str,
+        candidate_id: str,
+        iteration: int,
+        commit: str,
+    ) -> dict[str, Any]:
+        return self.runtime.get_global_evidence_entry(
+            agent_session_id,
+            candidate_id,
+            iteration,
+            commit,
+        )
+
     def search_copy_shared_tool(
         self,
         agent_session_id: str,

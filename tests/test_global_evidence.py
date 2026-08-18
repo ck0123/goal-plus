@@ -7,6 +7,11 @@ import subprocess
 
 import pytest
 
+from goal_plus.evidence_annotator import (
+    EvidenceComparisonOutput,
+    EvidenceComparisonResult,
+    drain_evidence_annotations,
+)
 from goal_plus.models import (
     EvidenceViewRecord,
     SearchSpec,
@@ -57,6 +62,35 @@ def _search_with_candidates(
 
 def _git(workspace: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=workspace, text=True).strip()
+
+
+def _complete_supplemental_view(
+    runtime: FileSearchRuntime,
+    run_id: str,
+    candidate_id: str,
+    iteration: int,
+    observations: list[dict],
+) -> None:
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, iteration)
+    assert task is not None
+    runtime._write_evidence_annotation_task(
+        task.model_copy(
+            update={
+                "state": "completed",
+                "view": EvidenceViewRecord(
+                    run_id=run_id,
+                    candidate_id=candidate_id,
+                    iteration=iteration,
+                    attempt_commit=task.attempt_commit,
+                    description=f"Observed candidate {candidate_id}.",
+                    supplemental_evaluation=SupplementalEvaluation.model_validate(
+                        {"observations": observations}
+                    ),
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+            }
+        )
+    )
 
 
 def test_global_evidence_is_immediate_and_view_is_late_bound(tmp_path: Path) -> None:
@@ -304,7 +338,7 @@ def test_post_verifier_injection_respects_global_evidence_mode(
     assert [report["global_evidence_entry_count"] for report in reports] == [1, 2]
 
 
-def test_global_evidence_presents_open_evaluation_with_dynamic_peer_basis(
+def test_global_evidence_presents_open_evaluation_without_peer_basis(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -348,11 +382,10 @@ def test_global_evidence_presents_open_evaluation_with_dynamic_peer_basis(
 
     first_task = runtime._load_evidence_annotation_task(run_id, first[0], 1)
     task = runtime._load_evidence_annotation_task(run_id, second[0], 1)
-    assert first_task is not None and first_task.comparison_basis == []
+    assert first_task is not None
     assert task is not None and task.supplemental_evaluation_enabled is True
-    assert [item.candidate_id for item in task.comparison_basis] == [first[0]]
-    assert [item.iteration for item in task.comparison_basis] == [2]
     task_payload = task.model_dump(mode="json")
+    assert "comparison_basis" not in task_payload
     assert "task_context" not in task_payload
     assert task.task_context_source == "goal_plus_raw_goal"
     assert task.task_context_ref == "goal_plus:gp_test:revision:1"
@@ -366,12 +399,9 @@ def test_global_evidence_presents_open_evaluation_with_dynamic_peer_basis(
     assert context["changed_files"] == ["initial_program.py"]
     assert context["verifier_contract"][0]["role"] == "ranking_signal"
     assert context["verifier_contract"][0]["command"][-1] == "evaluator.py"
-    assert context["comparison_basis"] == [
-        item.model_dump(mode="json") for item in task.comparison_basis
-    ]
-    assert context["peer_evidence"][0]["candidate_id"] == first[0]
+    assert "comparison_basis" not in context
+    assert "peer_evidence" not in context
 
-    peer = task.comparison_basis[0]
     runtime._write_evidence_annotation_task(
         task.model_copy(
             update={
@@ -384,27 +414,34 @@ def test_global_evidence_presents_open_evaluation_with_dynamic_peer_basis(
                     description="Changed the implementation to use a cached value.",
                     supplemental_evaluation=SupplementalEvaluation.model_validate(
                         {
-                            "summary": "The cache is faster but adds invalidation risk.",
-                            "dimensions": [
+                            "observations": [
                                 {
-                                    "name": "Cache coherence",
-                                    "finding": "The diff introduces a cache without an invalidation path.",
-                                    "confidence": "medium",
-                                    "evidence": ["initial_program.py diff"],
-                                }
-                            ],
-                            "comparisons": [
+                                    "state": "supported",
+                                    "label": "Cache coherence",
+                                    "text": "The diff introduces a cache without an invalidation path.",
+                                    "evidence": [
+                                        {
+                                            "source": "candidate_diff",
+                                            "locator": "initial_program.py",
+                                            "excerpt": "VALUE is read through the new cache.",
+                                        }
+                                    ],
+                                },
                                 {
-                                    **peer.model_dump(mode="json"),
-                                    "relation": "tradeoff",
-                                    "rationale": "This version scores higher but has more stateful risk.",
-                                    "evidence": ["hard score", "candidate diff"],
-                                }
-                            ],
-                            "limitations": ["No hidden evaluator evidence is available."],
+                                    "state": "unresolved",
+                                    "label": "Hidden evaluator coverage",
+                                    "text": "No hidden evaluator evidence is available.",
+                                    "evidence": [
+                                        {
+                                            "source": "evidence_scope",
+                                            "locator": "visible verifier results",
+                                            "excerpt": "Only the visible evaluator was run.",
+                                        }
+                                    ],
+                                },
+                            ]
                         }
                     ),
-                    comparison_basis=task.comparison_basis,
                     created_at="2026-01-01T00:00:00Z",
                 ),
             }
@@ -420,13 +457,29 @@ def test_global_evidence_presents_open_evaluation_with_dynamic_peer_basis(
     assert "supplemental_evaluation" not in entry
 
     detail = runtime.get_evidence_detail(first[1], second[0], 1)
+    assert detail["schema_version"] == 2
     assert detail["commit"] == task.attempt_commit
-    assert detail["supplemental_evaluation"]["dimensions"][0]["name"] == (
-        "Cache coherence"
+    observations = detail["supplemental_evaluation"]["observations"]
+    assert observations[0]["observation_ordinal"] == 1
+    assert observations[0]["topic_id"].startswith("topic_")
+    assert observations[0]["label"] == "Cache coherence"
+    assert observations[1]["state"] == "unresolved"
+    assert "summary" not in detail["supplemental_evaluation"]
+    assert "comparisons" not in detail["supplemental_evaluation"]
+
+    history = runtime.list_global_evidence(
+        second[1], candidate_id=second[0], limit=20
     )
-    assert detail["supplemental_evaluation"]["comparisons"][0][
-        "candidate_id"
-    ] == first[0]
+    reference = history["items"][0]
+    assert reference["shared_tool_publish_status"] == "not_staged"
+    expanded = runtime.get_global_evidence_entry(
+        second[1],
+        reference["candidate_id"],
+        reference["iteration"],
+        reference["commit"],
+    )
+    assert expanded["supplemental_available"] is True
+    assert "supplemental_evaluation" not in expanded
 
     completed_task = runtime._load_evidence_annotation_task(run_id, second[0], 1)
     assert completed_task is not None and completed_task.view is not None
@@ -442,6 +495,141 @@ def test_global_evidence_presents_open_evaluation_with_dynamic_peer_basis(
     )
     with pytest.raises(RuntimeError, match="does not match iteration"):
         runtime.get_evidence_detail(first[1], second[0], 1)
+
+
+def test_comparison_annotator_automatically_selects_bounded_peer_observations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(SUPPLEMENTAL_EVALUATION_ENABLED_ENV, "1")
+    runtime, run_id, candidates = _search_with_candidates(tmp_path, 2)
+    for index, (candidate_id, session_id, workspace) in enumerate(
+        candidates,
+        start=1,
+    ):
+        (workspace / "initial_program.py").write_text(
+            f"VALUE = {index}\n",
+            encoding="utf-8",
+        )
+        report = runtime.run_verifier(
+            run_id,
+            candidate_id,
+            agent_session_id=session_id,
+            hypothesis=f"Exercise strategy {index}",
+        )
+        assert report.aggregate_score == float(index)
+        _complete_supplemental_view(
+            runtime,
+            run_id,
+            candidate_id,
+            1,
+            [
+                {
+                    "state": "supported",
+                    "label": "Implementation strategy",
+                    "text": f"Candidate {index} uses strategy {index}.",
+                    "evidence": [
+                        {
+                            "source": "candidate_diff",
+                            "locator": "initial_program.py",
+                            "excerpt": f"VALUE = {index}",
+                        }
+                    ],
+                }
+            ],
+        )
+
+    class AutomaticComparisonAnnotator:
+        contexts: list[dict] = []
+
+        def compare(self, context: dict) -> EvidenceComparisonResult:
+            self.contexts.append(context)
+            serialized = json.dumps(context["comparison_catalog"], sort_keys=True)
+            assert '"score"' not in serialized
+            assert '"evidence"' not in serialized
+            target_identity = context["comparison_catalog"]["target"]
+            observations = [
+                observation
+                for view in context["comparison_catalog"]["views"]
+                for observation in view["observations"]
+            ]
+            target = next(
+                item
+                for item in observations
+                if all(
+                    item["reference"][field] == target_identity[field]
+                    for field in ("candidate_id", "iteration", "commit")
+                )
+            )
+            peer = next(
+                item
+                for item in observations
+                if item["reference"]["candidate_id"]
+                != target_identity["candidate_id"]
+            )
+            references = [target["reference"], peer["reference"]]
+            return EvidenceComparisonResult(
+                output=EvidenceComparisonOutput.model_validate(
+                    {
+                        "gist": (
+                            f"{target_identity['candidate_id']} 与 peer 采用不同的可见实现策略。"
+                        ),
+                        "selections": [
+                            {
+                                "reference": reference,
+                                "reason": "覆盖当前实现与一个可核对的 peer 对照。",
+                            }
+                            for reference in references
+                        ],
+                        "agreements": [],
+                        "differences": [
+                            {
+                                "text": "两条 observation 描述了不同实现策略。",
+                                "observation_refs": references,
+                            }
+                        ],
+                        "unique_observations": [],
+                        "unresolved": [],
+                    }
+                ),
+                usage={"input_tokens": 11, "output_tokens": 7},
+            )
+
+    annotator = AutomaticComparisonAnnotator()
+    assert drain_evidence_annotations(
+        runtime.root_dir,
+        run_id,
+        annotator=annotator,
+    ) == 0
+    assert len(annotator.contexts) == 2
+    assert all(
+        context["selection_contract"]["score_available"] is False
+        and context["selection_contract"]["must_include_target_view"] is True
+        for context in annotator.contexts
+    )
+
+    for candidate_id, _, _ in candidates:
+        task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
+        assert task is not None
+        assert task.state == "completed"
+        assert task.comparison_state == "completed"
+        assert task.comparison_attempts == 1
+        assert task.comparison is not None
+        assert len(task.comparison.selections) == 2
+        assert task.comparison.catalog_view_count == 2
+
+    entries = runtime.get_global_evidence(candidates[0][1])
+    assert all(entry["comparison_available"] is True for entry in entries)
+    assert all(entry["comparison_gist"] for entry in entries)
+    assert all("selections" not in entry for entry in entries)
+    detail = runtime.get_evidence_detail(
+        candidates[0][1],
+        candidates[1][0],
+        1,
+    )
+    assert detail["comparison"]["gist"]
+    assert len(detail["comparison"]["selections"]) == 2
+    assert runtime.list_iterations(run_id, candidates[1][0])[0]["score"] == 2.0
 
 
 def test_supplemental_capability_and_detail_respect_disabled_and_independent_modes(
@@ -508,6 +696,119 @@ def test_worker_hypothesis_is_required_and_parent_evidence_is_private(
             hypothesis="Mutate after promotion",
         )
     assert runtime.get_global_evidence(session_id) == before
+
+
+def test_global_evidence_index_stays_bounded_after_101_rounds_per_candidate() -> None:
+    archive = [
+        {
+            "candidate_id": f"c{candidate:03d}",
+            "iteration": iteration,
+            "commit": f"{candidate:02d}{iteration:04d}",
+            "score": float(100 if iteration == 50 else iteration % 10),
+            "disposition": "keep" if iteration == 50 else "retain",
+            "view": f"candidate {candidate} iteration {iteration}",
+            "view_created_at": "2026-08-13T00:00:00Z",
+            "supplemental_evaluation": None,
+            "shared_tools": [],
+        }
+        for candidate in range(1, 5)
+        for iteration in range(1, 102)
+    ]
+
+    index = FileSearchRuntime._global_evidence_index(
+        archive,
+        metric_direction="maximize",
+    )
+
+    assert len(index) == 8
+    assert {entry["representative_role"] for entry in index} == {
+        "hard_best",
+        "latest_settled",
+    }
+    assert {entry["candidate_evidence_count"] for entry in index} == {101}
+    assert {entry["candidate_omitted_count"] for entry in index} == {99}
+    assert {
+        entry["iteration"]
+        for entry in index
+        if entry["representative_role"] == "hard_best"
+    } == {50}
+    assert {
+        entry["iteration"]
+        for entry in index
+        if entry["representative_role"] == "latest_settled"
+    } == {101}
+
+
+def test_global_evidence_index_preserves_shared_tool_publication_rows() -> None:
+    archive = [
+        {
+            "candidate_id": "c001",
+            "iteration": iteration,
+            "commit": f"commit-{iteration}",
+            "score": float(iteration),
+            "disposition": "keep",
+            "view": f"iteration {iteration}",
+            "view_created_at": "2026-08-13T00:00:00Z",
+            "supplemental_evaluation": None,
+            "shared_tools": (
+                [{"tool_id": "tool-2", "snapshot_hash": "hash-2"}]
+                if iteration == 2
+                else []
+            ),
+        }
+        for iteration in range(1, 5)
+    ]
+
+    index = FileSearchRuntime._global_evidence_index(
+        archive,
+        metric_direction="maximize",
+    )
+
+    assert [entry["iteration"] for entry in index] == [2, 4]
+    assert [entry["representative_role"] for entry in index] == [
+        "shared_dir_settlement",
+        "hard_best_and_latest",
+    ]
+    assert index[0]["shared_tools"] == archive[1]["shared_tools"]
+
+
+def test_global_evidence_hard_best_excludes_discarded_scores() -> None:
+    archive = [
+        {
+            "candidate_id": "c001",
+            "iteration": 1,
+            "commit": "kept",
+            "score": 1.0,
+            "disposition": "keep",
+            "view": "kept view",
+            "view_created_at": "2026-08-13T00:00:00Z",
+            "supplemental_evaluation": None,
+            "shared_tools": [],
+        },
+        {
+            "candidate_id": "c001",
+            "iteration": 2,
+            "commit": "discarded",
+            "score": 100.0,
+            "disposition": "discard",
+            "view": "discarded view",
+            "view_created_at": "2026-08-13T00:00:01Z",
+            "supplemental_evaluation": None,
+            "shared_tools": [],
+        },
+    ]
+
+    index = FileSearchRuntime._global_evidence_index(
+        archive,
+        metric_direction="maximize",
+    )
+
+    assert [entry["representative_role"] for entry in index] == [
+        "hard_best",
+        "latest_settled",
+    ]
+    assert index[0]["commit"] == "kept"
+    assert index[1]["commit"] == "discarded"
 
 
 def test_annotator_config_overrides_then_inherits_worker_launch(
@@ -618,6 +919,52 @@ def test_pi_worker_model_is_inherited_by_pi_annotator(
     assert task.profile.provider is None
     context = runtime._evidence_annotation_context(run_id, candidate_id, 1)
     assert context["annotator"]["pi_provider"] == "bench-openai"
+
+
+def test_annotator_environment_overrides_pi_worker_model_and_stale_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pi_home = tmp_path / "pi-home"
+    pi_home.mkdir()
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(pi_home))
+    monkeypatch.setenv("PI_PROVIDER", "deepseek")
+    monkeypatch.setenv(
+        "GOAL_PLUS_EVIDENCE_ANNOTATOR_MODEL",
+        "bench-openai/gpt-5.6-sol",
+    )
+    monkeypatch.setenv(
+        "GOAL_PLUS_EVIDENCE_ANNOTATOR_REASONING_EFFORT",
+        "medium",
+    )
+    runtime, run_id, [candidate] = _search_with_candidates(
+        tmp_path,
+        1,
+        strategy_updates={
+            "worker_host": "pi-rpc",
+            "worker_budget": {"max_runtime_seconds": 60},
+            "worker_launch": {
+                "model": "deepseek/deepseek-v4-flash",
+                "reasoning_effort": "high",
+            },
+            "evidence_annotator": {"pi_provider": "pi-rpc"},
+        },
+    )
+    candidate_id, session_id, workspace = candidate
+    (workspace / "initial_program.py").write_text("VALUE = 1\n", encoding="utf-8")
+    runtime.run_verifier(
+        run_id,
+        candidate_id,
+        agent_session_id=session_id,
+        hypothesis="Set the Pi candidate value",
+    )
+
+    task = runtime._load_evidence_annotation_task(run_id, candidate_id, 1)
+    assert task is not None and task.profile is not None
+    assert task.profile.host == "pi-rpc"
+    assert task.profile.model == "bench-openai/gpt-5.6-sol"
+    assert task.profile.pi_provider == "bench-openai"
+    assert task.profile.reasoning_effort == "medium"
 
 
 def test_pi_worker_can_use_an_independent_codex_annotator(

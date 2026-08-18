@@ -254,84 +254,121 @@ class ResolvedEvidenceAnnotatorProfile(SearchModel):
     provider: ResolvedCodexProvider | None = None
 
 
-EvaluationConfidence = Literal["high", "medium", "low"]
-
-
-ComparisonRelation = Literal[
-    "similar",
-    "different",
-    "tradeoff",
-    "complementary",
-    "unknown",
+ObservationState = Literal["supported", "unresolved"]
+ObservationEvidenceSource = Literal[
+    "actual_diff",
+    "candidate_diff",
+    "verifier_result",
+    "task_context",
+    "evidence_scope",
+    "legacy_annotation",
 ]
 
 
-class SupplementalDimension(SearchModel):
-    name: str = Field(min_length=1, max_length=120)
-    finding: str = Field(min_length=1, max_length=1000)
-    confidence: EvaluationConfidence
-    evidence: list[str] = Field(default_factory=list, max_length=8)
+class ObservationEvidence(SearchModel):
+    source: ObservationEvidenceSource
+    locator: str = Field(min_length=1, max_length=300)
+    excerpt: str = Field(min_length=1, max_length=500)
 
-    @field_validator("name", "finding", mode="before")
+    @field_validator("locator", "excerpt", mode="before")
     @classmethod
     def text_must_be_one_line(cls, value: Any) -> Any:
         if not isinstance(value, str):
             return value
         if "\n" in value or "\r" in value:
-            raise ValueError("supplemental evaluation text must be one line")
+            raise ValueError("observation evidence text must be one line")
         return " ".join(value.strip().split())
 
 
-class EvidenceComparisonReference(SearchModel):
-    candidate_id: str = Field(min_length=1)
-    iteration: int = Field(ge=1)
-    commit: str = Field(min_length=1)
+class SupplementalObservation(SearchModel):
+    state: ObservationState
+    label: str = Field(min_length=1, max_length=120)
+    text: str = Field(min_length=1, max_length=1000)
+    evidence: list[ObservationEvidence] = Field(min_length=1, max_length=4)
 
-
-class PeerComparison(EvidenceComparisonReference):
-    relation: ComparisonRelation
-    rationale: str = Field(min_length=1, max_length=1000)
-    evidence: list[str] = Field(default_factory=list, max_length=8)
-
-    @field_validator("rationale", mode="before")
+    @field_validator("label", "text", mode="before")
     @classmethod
-    def rationale_must_be_one_line(cls, value: Any) -> Any:
+    def text_must_be_one_line(cls, value: Any) -> Any:
         if not isinstance(value, str):
             return value
         if "\n" in value or "\r" in value:
-            raise ValueError("peer comparison rationale must be one line")
+            raise ValueError("supplemental observation text must be one line")
         return " ".join(value.strip().split())
 
 
 class SupplementalEvaluation(SearchModel):
-    summary: str = Field(min_length=1, max_length=1000)
-    dimensions: list[SupplementalDimension] = Field(min_length=1, max_length=8)
-    comparisons: list[PeerComparison] = Field(default_factory=list, max_length=8)
-    limitations: list[str] = Field(default_factory=list, max_length=8)
+    observations: list[SupplementalObservation] = Field(min_length=1, max_length=16)
 
-    @field_validator("summary", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def summary_must_be_one_line(cls, value: Any) -> Any:
-        if not isinstance(value, str):
+    def migrate_legacy_evaluation(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
             return value
-        if "\n" in value or "\r" in value:
-            raise ValueError("supplemental evaluation summary must be one line")
-        return " ".join(value.strip().split())
+        if "observations" in value:
+            observations = value["observations"]
+            if isinstance(observations, list) and len(observations) > 8:
+                raise ValueError("new supplemental evaluations allow at most 8 observations")
+            return {"observations": value["observations"]}
 
-    @field_validator("limitations", mode="before")
-    @classmethod
-    def limitations_must_be_one_line(cls, value: Any) -> Any:
-        if not isinstance(value, list):
-            return value
-        normalized = []
-        for item in value:
-            if not isinstance(item, str):
-                normalized.append(item)
+        payload = dict(value)
+        observations: list[dict[str, Any]] = []
+
+        def legacy_text(item: str, limit: int) -> str:
+            return " ".join(item.strip().split())[:limit]
+
+        for index, dimension in enumerate(payload.get("dimensions") or [], start=1):
+            if not isinstance(dimension, dict):
                 continue
-            if "\n" in item or "\r" in item:
-                raise ValueError("supplemental evaluation limitation must be one line")
-            normalized.append(" ".join(item.strip().split()))
-        return normalized
+            finding = dimension.get("finding")
+            label = dimension.get("name")
+            if not isinstance(finding, str) or not finding.strip():
+                continue
+            if not isinstance(label, str) or not label.strip():
+                label = f"Legacy observation {index}"
+            legacy_evidence = dimension.get("evidence") or []
+            evidence = [
+                {
+                    "source": "legacy_annotation",
+                    "locator": f"dimensions[{index - 1}].evidence",
+                    "excerpt": legacy_text(item, 500),
+                }
+                for item in legacy_evidence[:4]
+                if isinstance(item, str) and legacy_text(item, 500)
+            ]
+            if not evidence:
+                evidence = [
+                    {
+                        "source": "legacy_annotation",
+                        "locator": f"dimensions[{index - 1}].finding",
+                        "excerpt": legacy_text(finding, 500),
+                    }
+                ]
+            observations.append(
+                {
+                    "state": "supported",
+                    "label": label,
+                    "text": finding,
+                    "evidence": evidence,
+                }
+            )
+        for index, limitation in enumerate(payload.get("limitations") or [], start=1):
+            if not isinstance(limitation, str) or not limitation.strip():
+                continue
+            observations.append(
+                {
+                    "state": "unresolved",
+                    "label": "Legacy evidence limitation",
+                    "text": legacy_text(limitation, 1000),
+                    "evidence": [
+                        {
+                            "source": "legacy_annotation",
+                            "locator": f"limitations[{index - 1}]",
+                            "excerpt": legacy_text(limitation, 500),
+                        }
+                    ],
+                }
+            )
+        return {"observations": observations}
 
 
 class ToolViewRef(SearchModel):
@@ -399,16 +436,13 @@ class ToolCopyReceipt(SearchModel):
 
 
 class EvidenceViewRecord(SearchModel):
+    schema_version: Literal[1, 2] = 2
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
     attempt_commit: str = Field(min_length=1)
     description: str = Field(min_length=1, max_length=1000)
     supplemental_evaluation: SupplementalEvaluation | None = None
-    comparison_basis: list[EvidenceComparisonReference] = Field(
-        default_factory=list,
-        max_length=8,
-    )
     tool_views: list[ToolViewRecord] = Field(default_factory=list)
     created_at: str
 
@@ -428,6 +462,108 @@ class GlobalEvidenceViewReference(SearchModel):
     commit: str = Field(min_length=1)
     view_created_at: str
     supplemental_evaluation_present: bool = False
+
+
+class GlobalEvidenceObservationReference(SearchModel):
+    candidate_id: str = Field(min_length=1)
+    iteration: int = Field(ge=1)
+    commit: str = Field(min_length=1)
+    observation_ordinal: int = Field(ge=1)
+
+
+class EvidenceComparisonSelection(SearchModel):
+    reference: GlobalEvidenceObservationReference
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class EvidenceComparisonClaim(SearchModel):
+    text: str = Field(min_length=1, max_length=1000)
+    observation_refs: list[GlobalEvidenceObservationReference] = Field(
+        min_length=1,
+        max_length=8,
+    )
+
+
+class EvidenceComparisonViewRecord(SearchModel):
+    schema_version: Literal[1] = 1
+    gist: str = Field(min_length=1, max_length=500)
+    selections: list[EvidenceComparisonSelection] = Field(
+        min_length=2,
+        max_length=8,
+    )
+    agreements: list[EvidenceComparisonClaim] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    differences: list[EvidenceComparisonClaim] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    unique_observations: list[EvidenceComparisonClaim] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    unresolved: list[EvidenceComparisonClaim] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    catalog_view_count: int = Field(ge=2)
+    catalog_observation_count: int = Field(ge=2)
+    catalog_truncated: bool = False
+    created_at: str
+
+    @field_validator("gist", mode="before")
+    @classmethod
+    def gist_must_be_one_line(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if "\n" in value or "\r" in value:
+            raise ValueError("comparison gist must be one line")
+        return " ".join(value.strip().split())
+
+    @model_validator(mode="after")
+    def comparison_contract_is_consistent(self) -> "EvidenceComparisonViewRecord":
+        refs = [item.reference for item in self.selections]
+        identities = {
+            (
+                item.candidate_id,
+                item.iteration,
+                item.commit,
+                item.observation_ordinal,
+            )
+            for item in refs
+        }
+        if len(identities) != len(refs):
+            raise ValueError("comparison selections must be unique")
+        candidate_counts: dict[str, int] = {}
+        for item in refs:
+            candidate_counts[item.candidate_id] = (
+                candidate_counts.get(item.candidate_id, 0) + 1
+            )
+        if len(candidate_counts) < 2:
+            raise ValueError("comparison must select at least two candidates")
+        if any(count > 2 for count in candidate_counts.values()):
+            raise ValueError("comparison allows at most 2 observations per candidate")
+        for claim in [
+            *self.agreements,
+            *self.differences,
+            *self.unique_observations,
+            *self.unresolved,
+        ]:
+            claim_identities = {
+                (
+                    item.candidate_id,
+                    item.iteration,
+                    item.commit,
+                    item.observation_ordinal,
+                )
+                for item in claim.observation_refs
+            }
+            if len(claim_identities) != len(claim.observation_refs):
+                raise ValueError("comparison claim references must be unique")
+            if not claim_identities.issubset(identities):
+                raise ValueError("comparison claim references must be selected")
+        return self
 
 
 class GlobalEvidenceReadRecord(SearchModel):
@@ -470,10 +606,6 @@ class EvidenceAnnotationTask(SearchModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     supplemental_evaluation_enabled: bool = False
-    comparison_basis: list[EvidenceComparisonReference] = Field(
-        default_factory=list,
-        max_length=8,
-    )
     profile: ResolvedEvidenceAnnotatorProfile | None = None
     outer_deadline_at: str | None = None
     state: Literal["pending", "retry_wait", "completed", "terminal_error"] = (
@@ -486,9 +618,22 @@ class EvidenceAnnotationTask(SearchModel):
     attempt_history: list[dict[str, Any]] = Field(default_factory=list)
     usage: dict[str, int | float] = Field(default_factory=dict)
     view: EvidenceViewRecord | None = None
+    comparison_state: Literal[
+        "pending",
+        "retry_wait",
+        "completed",
+        "terminal_error",
+        "not_applicable",
+    ] = "pending"
+    comparison_attempts: int = Field(default=0, ge=0)
+    comparison_next_attempt_at: str | None = None
+    comparison_error_fingerprint: str | None = None
+    comparison_last_error: str | None = None
+    comparison_attempt_history: list[dict[str, Any]] = Field(default_factory=list)
+    comparison_usage: dict[str, int | float] = Field(default_factory=dict)
+    comparison: EvidenceComparisonViewRecord | None = None
     created_at: str
     updated_at: str
-
 
 class StrategySpec(SearchModel):
     name: str = "agent_guided"

@@ -53,6 +53,28 @@ def test_pi_tool_calls_context_verifier_and_iterations(tmp_path: Path) -> None:
     )
     assert report["candidate_id"] == task.candidate_id
 
+    page = call_pi_tool(
+        runtime_root,
+        "search_list_global_evidence",
+        {
+            "agent_session_id": session.agent_session_id,
+            "candidate_id": task.candidate_id,
+        },
+    )
+    assert page["total"] == 1
+    reference = page["items"][0]
+    expanded = call_pi_tool(
+        runtime_root,
+        "search_get_global_evidence_entry",
+        {
+            "agent_session_id": session.agent_session_id,
+            "candidate_id": reference["candidate_id"],
+            "iteration": reference["iteration"],
+            "commit": reference["commit"],
+        },
+    )
+    assert expanded["commit"] == reference["commit"]
+
     iterations = call_pi_tool(
         runtime_root,
         "search_list_iterations",

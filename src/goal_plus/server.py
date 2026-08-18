@@ -246,14 +246,44 @@ def create_mcp(
     def search_get_global_evidence(
         agent_session_id: str,
     ) -> list[dict[str, Any]]:
-        """返回当前 run 的窄 Global Evidence 视图。
+        """返回当前 run 的有界 Global Evidence 索引。
 
-        每项只包含 candidate_id、iteration、score、keep/retain/discard/failure disposition、
-        verifier attempt commit、可能延迟的客观 View，以及可选 supplemental evaluation
-        的可用标记；启用 shared_dir 时还可包含已绑定 Tool View 的共享工具。任何 View 为 null
-        都不影响 verifier Evidence；worker 不需要等待，可先依据 Evidence 独立探索。
+        每个 candidate 的普通 View 最多返回 hard_best 与 latest_settled 两个代表项，并带完整
+        Evidence 数量和省略数量。启用 shared_dir 时，原有共享结算条目仍按原 iteration 保留。
+        每项只标记 supplemental evaluation 是否可用；worker 可分页浏览轻量历史引用，再按精确
+        identity 展开任意完整 View，补充评价通过独立工具按需读取。
         """
         return tools.search_get_global_evidence(agent_session_id)
+
+    @mcp.tool()
+    def search_list_global_evidence(
+        agent_session_id: str,
+        candidate_id: str | None = None,
+        cursor: int = 0,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """分页列出 Global Evidence 轻量历史引用，不展开完整软评价。"""
+        return tools.search_list_global_evidence(
+            agent_session_id,
+            candidate_id,
+            cursor,
+            limit,
+        )
+
+    @mcp.tool()
+    def search_get_global_evidence_entry(
+        agent_session_id: str,
+        candidate_id: str,
+        iteration: int,
+        commit: str,
+    ) -> dict[str, Any]:
+        """按 candidate、iteration 和 commit 精确展开一个不可变完整 View。"""
+        return tools.search_get_global_evidence_entry(
+            agent_session_id,
+            candidate_id,
+            iteration,
+            commit,
+        )
 
     @mcp.tool()
     def search_copy_shared_tool(

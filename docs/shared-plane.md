@@ -38,7 +38,7 @@ main agent
 | candidate worker | 选择自己的技术方向、修改自己的工作区、调用 verifier、提交 handoff |
 | main agent | triage、spec discovery、初始 candidate 分配、全局停止、最终收尾、确认 verifier 失效 |
 | Codex 或 Pi 宿主 | 实际 worker 启动、等待、续跑、deadline、interrupt 和原生 transcript |
-| Evidence annotator | 对每个已结算尝试生成客观描述，并基于动态 Evidence 快照生成开放式补充评价与 peer 比较 |
+| Evidence annotator | 对每个已结算尝试生成客观描述，并基于该候选累计 Evidence 生成开放式补充评价 |
 
 Search runtime 不是 worker supervisor。`AgentSessionRecord` 只记录上下文、来源和
 宿主 launch payload，不表示进程是否存活。Pi 的 pool 状态因此单独保存在
@@ -84,9 +84,8 @@ host-native 默认路径。
 
 每条 Global Evidence View 同时保留本轮 `actual_diff` 与从候选初始基线到当前提交的
 累计 `candidate_diff`。description 只描述本轮增量；开放式补充评价使用累计候选证据。
-annotation task 创建时还会快照最多 8 个其他 candidate 的当前硬分最佳结算版本，每个
-candidate 最多一个，固定其 candidate、iteration 和 commit，后续推理基于这份可审计
-比较基线。
+annotation task 不读取其他 candidate 的 diff 或 View。候选之间的选择性阅读由 Global
+Evidence 的有界索引、分页轻量引用和精确 View 展开接口提供。
 
 为判断代码变化与原始请求是否相关，annotation task 记录与当前 Search run 绑定的准确
 Goal revision 引用和 SHA-256，而不复制 `raw_goal`。annotator 启动时临时解析该 revision
@@ -151,7 +150,13 @@ redispatch 只用于恢复，并继续使用同一个 candidate 工作区、Git 
 
 ## Global Evidence
 
-`search_get_global_evidence` 将当前 run 中已结算的 worker iteration 投影为窄表：
+完整 Global Evidence archive 保留当前 run 中所有已结算的 worker iteration，不删除历史。
+`search_get_global_evidence` 默认只投影一个有界索引：每个 candidate 的普通 View 最多返回
+硬分最佳 `hard_best` 和最新结算 `latest_settled` 两个代表项；两者相同时只返回一项。每项还
+记录该 candidate 的完整 Evidence 数量和省略数量，因此未启用 shared_dir 时默认上下文随
+candidate 数量而不是总轮次增长。启用 shared_dir 时，为保持既有发现与结算规则，发生共享
+发布、去重、拒绝或错误的原始 iteration 继续以 `shared_dir_settlement` 条目原样可见，不把
+工具或结算状态挪到其他代表 View：
 
 ```json
 {
@@ -162,9 +167,18 @@ redispatch 只用于恢复，并继续使用同一个 candidate 工作区、Git 
   "disposition": "keep",
   "view": "将调度逻辑改为按依赖深度分组。",
   "view_created_at": "2026-08-06T12:00:00Z",
-  "supplemental_available": true
+  "supplemental_available": true,
+  "representative_role": "hard_best",
+  "candidate_evidence_count": 101,
+  "candidate_omitted_count": 99
 }
 ```
+
+worker 需要追溯时，先调用 `search_list_global_evidence` 按 candidate 和 cursor 分页列出轻量
+引用；列表不展开完整 supplemental evaluation 或 Tool View。选定精确的
+`candidate_id / iteration / commit` 后，再调用 `search_get_global_evidence_entry` 读取该条
+完整不可变 Evidence/View。补充评价仍由 `search_get_evidence_detail` 按需读取。worker 可以
+选择 archive 中任意 View，但不应批量展开全部历史。
 
 冻结 spec 显式启用 `shared_dir` 时，已发布工具还会以 `shared_tools` 出现在同一条
 Global Evidence 中。每项包含 runtime 绑定的 `tool_view`、`tool_id`、`snapshot_hash` 与
@@ -232,26 +246,57 @@ View 只用一句中文客观描述实际做了什么，不评价好坏、不推
 步。事实来源是 actual diff，而不是 candidate 的自述。Changed files、verifier command
 和 metrics 只提供验证上下文；命令名称本身或失败的测试不能证明目标行为已经实现。
 
-`supplemental_evaluation` 不读取 FrozenSpec 软标准。annotator 只依据当前候选累计 diff、
-公开 verifier Evidence 和 annotation task 创建时固定的 peer 快照，自行提出 1–8 个与当前
-任务实际相关的观察维度。它逐项给出 finding、证据与置信度，并对比较基线中的每个 peer
-返回非定向的 `similar`、`different`、`tradeoff`、`complementary` 或 `unknown`，不能借此
-选择赢家。没有 peer 时 comparisons 为空。limitations 明确列出公开 Evidence 无法判断的
-事项。
+`supplemental_evaluation` 不读取 FrozenSpec 软标准，也不读取其他 candidate 的 diff 或 View。
+annotator 只依据当前候选累计 diff 和公开 verifier Evidence，自行提出 1–8 个与当前任务实际
+相关的原子 observation。每项包含 `supported` 或 `unresolved` 状态、开放式 label、客观 text，
+以及 1–4 个结构化 Evidence 引用。View v2 不生成 summary、confidence 或内嵌 peer comparison；
+公开 Evidence 无法判断的事项必须写成 `unresolved` observation。worker 通过有界 Global
+Evidence 索引自行选择需要阅读的其他候选历史。
 
 这种评价发生在提交结算之后，因此不会在搜索开始前固定注意力方向。worker 可以把第三方
 观察作为下一轮假设来源，但必须独立核对；评价不产生总分或最终推荐，不能改变硬 score、
 PASS/FAIL、candidate-local 基线、run-wide 排名或 promotion gate。
 
 annotator 收到的累计 diff 使用 Git 函数级上下文和至少 10 行普通上下文，并继续受字节
-上限约束。上下文中未出现某个定义，不代表该定义不存在；这类判断必须降低置信度并写入
-`limitations`。每次 worker 调用 `search_get_global_evidence`，runtime 都会在对应
+上限约束。上下文中未出现某个定义，不代表该定义不存在；这类事项必须标记为 `unresolved`。
+每次 worker 调用 `search_get_global_evidence`，runtime 都会在对应
 `agent_sessions/*.json` 的 `global_evidence_reads` 中记录读取时间、当时 Evidence 数量、
 已完成 View 的 candidate/iteration/commit 引用以及其中是否含 supplemental evaluation。
 该读取记录只用于审计 View 是否在后续 verifier 之前可见，不参与候选结算或最终验收。
 
+原始 Self View 保持不变。comparison annotator 在 peer observations 可用后，从当前 View 与
+peer hard-best/latest 代表 View 的有界目录中自动选择 2–8 条，每个 candidate 最多 2 条。
+选择理由、精确引用和 comparison claims 持久化在对应 annotation task；目录不向 annotator
+提供硬 score。默认 Global Evidence 仅公开 comparison 可用性和一行 gist，完整 basis 由
+`search_get_evidence_detail` 按需返回。worker 不承担 observation 选取，也没有独立 compare 工具。
+
 `view=null` 只表示 annotation 尚未发布，Evidence 本身已经有效。candidate 可以先按
 自己的方向继续，不应等待、sleep 或轮询 View。
+
+## Global Evidence 长程上下文优化 TODO
+
+以下工作以 PR #24 的按需 supplemental disclosure 和当前有界代表索引为基线，不改变
+verifier settlement、硬 score、promotion gate 或 shared_dir 的既有发布与结算规则：
+
+- [x] 完整原始 View 已作为不可变 archive 保存；任何后续聚类、gist 或压缩结果都只能是
+  可重建的派生索引，并继续保留到原始 `candidate_id / iteration / commit` 的精确引用。
+- [x] 完整 supplemental evaluation 已通过 `search_get_evidence_detail` 按需读取，不再内联到
+  默认 Global Evidence 索引或每次周期刷新中。
+- [x] 引入 View v2：停止生成 `summary` 和 observation `confidence`，将当前 dimensions 与
+  limitations 规范化为可独立引用的 supported/unresolved observations；历史 v1 文件不重写。
+- [x] observation 不持久化额外 opaque id。派生索引使用
+  `candidate_id / iteration / commit / observation_ordinal` 作为透明、稳定的精确引用。
+- [ ] 在 observation 数量增大后自动进行主题聚类。聚类应依据 View 自身内容和证据生成，
+  不预先固定 benchmark 专属的人工类别，也不删除少数、未知或冲突观察。
+- [ ] 为每个 worker 增加基于单调 Evidence revision 的增量读取，只交付上次成功读取后新增或
+  变化的派生索引项。不能只使用 archive 数组 offset，因为异步 View 可能晚于 settlement 发布。
+- [ ] 将分层 gist tree 与增量读取绑定：短期增量保留原文，达到历史阈值后才生成可展开的
+  主题级和时间段级 gist；每个 gist 必须能追溯到未改写的原始 View。
+- [x] comparison annotator 从有界代表 View 自动选择 2–8 条 observation，精确保存 basis 与
+  选择理由；worker 不新增选择工具，默认只接收一行 gist，并按需展开完整比较。
+
+语义聚类索引和增量 revision 必须分别落地和测试。当前 exact-label topic 是可重建索引，不是
+权威 Evidence；gist 在具备原始引用和防摘要坍缩约束前不作为 worker 输入。
 
 verifier settlement 和 Evidence 读取都可以触发 run-scoped annotator。一个 drainer
 串行处理 backlog，但 verifier、selection 和 promotion 都不等待它。重试状态、解析后的
@@ -304,7 +349,7 @@ candidate 不应 checkout、reset 或修改 peer revision。最终 promotion art
 ## 选择、Promotion 与失效
 
 run-wide best 从有效 iteration record 的硬 score 中计算，与各 candidate-local best 分开。
-`search_select` 不读取补充评价或 peer 比较来改变排名；硬分并列按原有稳定顺序选择。它将
+`search_select` 不读取补充评价来改变排名；硬分并列按原有稳定顺序选择。它将
 结果绑定到一个精确、通过验证的 worker Evidence commit。只有旧状态
 或当前产物没有对应 durable Evidence 时，parent 才补做 process verifier。
 

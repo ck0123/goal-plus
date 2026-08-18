@@ -198,16 +198,20 @@ continuation 预算根据外层剩余时间和最终收尾预留推导，而不�
 candidate-local history 由运行时拥有，不是 `plan.md` 文件。worker 通过
 `search_get_agent_context` 恢复自己的 `context.iterations`、`context.results`、
 `context.results_tsv`、工作区 Git 状态和有界 handoff metadata。其他 candidate 的尝试
-只通过窄 `search_get_global_evidence` 视图披露。每轮修改前读取一次；`view=null` 只表示
-annotator 尚未更新，worker 可先依据 commit、score、disposition 和自己的推理独立探索，
-不等待或轮询。`context.supplemental_evaluation_enabled=false` 时不要等待或
-尝试读取补充评价；启用时仅以 `supplemental_available` 标记可展开的行。worker 仅在
-路线停滞、结构性分数跃升、hidden 泛化风险或
-官方/本地结果背离时，通过 `search_get_evidence_detail` 按需读取完整评价，且不重复读取同一
-不可变行。完整内容由 annotator 根据当前累计 diff 和 annotation task 创建时其他已结算候选
-快照生成。其中维度由 annotator
-根据实际 Evidence 后验提出，不来自 FrozenSpec；动态比较、置信度与 limitations 只是第三方
-观察，不是分数、推荐或 promotion gate；它不改变硬分结算规则。worker 可以据此
+只通过 Global Evidence 披露。首次修改前读取一次有界 `search_get_global_evidence` 索引；
+此后每完成三次 verifier iteration 刷新一次，连续两轮没有提升或切换路线时提前刷新；
+每个 candidate 的普通 View 最多出现 hard-best/latest 两个代表项；启用 shared_dir 时，原有
+共享结算条目仍按原 iteration 保留。默认索引不足时，先用
+`search_list_global_evidence` 分页选择轻量引用，再用 `search_get_global_evidence_entry` 精确
+展开一条完整 View，不批量读取全部历史。`view=null` 只表示 annotator 尚未更新，worker 可先
+依据 commit、score、disposition 和自己的推理独立探索，不等待或轮询。
+`context.supplemental_evaluation_enabled=false` 时不要读取补充评价；启用时以
+`supplemental_available` 标记可展开行，并通过 `search_get_evidence_detail` 按需读取一次。
+detail 提供 supported/unresolved observations；它们不来自 FrozenSpec，也不生成 summary 或
+confidence。comparison annotator 会从有界代表 View 自动选择 2–8 条 observation（每 candidate 最多 2 条）
+生成 comparison。默认索引只显示可用性和一行 gist；完整 basis、选择理由及比较由
+`search_get_evidence_detail` 按需返回。比较不使用硬 score，不是分数、推荐或 promotion gate，
+也不改变硬分结算规则。worker 可以据此
 形成自己的下一轮假设，但应独立核对。只有代码级证据确有必要时，才在当前 workspace 使用
 `git diff HEAD <commit> -- <allowed-file>` 做只读比较，不访问其他 candidate workspace，
 也不 checkout/reset peer commit。修改完成后，worker 在 `search_run_verifier` 中用一句话
