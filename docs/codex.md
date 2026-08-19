@@ -14,18 +14,22 @@ cp .codex/config.example.toml .codex/config.toml
 The local config starts:
 
 ```toml
-[mcp_servers.gp-runtime]
+[mcp_servers.goal-plus]
 command = "goal-plus"
 args = ["--root", ".gp"]
 startup_timeout_sec = 10
 tool_timeout_sec = 300
 enabled = true
+default_tools_approval_mode = "approve"
 ```
 
 Keep `.codex/config.toml` untracked and omit MCP `cwd`; `codex -C` should decide
 the project root for both MCP state and hooks. The example explicitly forwards
 the annotator's named environment variables. Add any custom API-key variable
 named by `GOAL_PLUS_EVIDENCE_ANNOTATOR_API_KEY_ENV` to the same `env_vars` list.
+The server-level approval setting lets non-interactive Ultra runs advance the
+Goal Plus state machine without pausing for every MCP transition; filesystem
+and shell operations remain governed by the Codex sandbox and approval policy.
 The same ephemeral annotator turn also produces shared-dir Tool Views; verifier
 settlement never waits for it. The host-neutral lifecycle is documented in
 [`shared-plane.md`](shared-plane.md#工具复制与采用结算).
@@ -55,6 +59,13 @@ show separate Stop/SubagentStop counts and a per-subagent breakdown from that
 durable evidence.
 
 Use the `goal-plus` skill as the user entry. The `search` skill is internal.
+
+For ordinary Goal Mode work, `/goal-plus` uses the host-neutral
+[`goal-plus-ultra-v1`](ultra.md) work DAG and Codex collaboration tools. Run the
+main thread with Codex reasoning effort `max`: hooks record
+`native_reasoning_effort=max`
+but cannot change an already-started first turn. Search candidate lifecycle
+below remains a separate specialized path.
 
 ## Parallel Loop Flow
 
@@ -172,6 +183,12 @@ The `PostToolUse` hook may also inject one informational timing advisory when
 the remaining outer/worker time is below observed verifier-submission time.
 It never stops the worker. Evidence is visible through
 `goal_plus_monitor_snapshot`.
+
+For ordinary Ultra work, the optional `orchestration` monitor feature reads
+namespaced work-event metadata and preserves Codex operations such as
+`spawn_agent`, `wait_agent`, and `followup_task`. It is a read-only projection;
+Codex still owns every worker thread and lifecycle action. See
+[Monitor Feature Plugins](feature-plugins.md).
 
 For one worker, call `search_get_agent_observability(agent_session_id)`. Codex
 uses the `SubagentStop.agent_transcript_path` when present and otherwise

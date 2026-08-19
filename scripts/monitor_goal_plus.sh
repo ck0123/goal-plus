@@ -454,6 +454,7 @@ def render_verbose_goal(bundle: dict[str, Any]) -> None:
         action = next_action.get("kind") or next_action.get("action") or "pending"
         detail = next_action.get("instruction") or next_action.get("reason") or next_action
         print(f"  next: {action} | {short(detail, 170)}")
+    render_orchestration(primary, verbose=True)
     final_check = goal.get("latest_final_check")
     if isinstance(final_check, dict):
         print(
@@ -747,6 +748,58 @@ def compact_worker_state(subagent: dict[str, Any]) -> str:
     return str(subagent.get("liveness") or "-")
 
 
+def render_orchestration(primary: dict[str, Any], *, verbose: bool) -> None:
+    features = primary.get("feature_plugins")
+    payload = features.get("orchestration") if isinstance(features, dict) else None
+    if not isinstance(payload, dict):
+        return
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if not summary.get("subagent_items_total"):
+        return
+    host = payload.get("host") if isinstance(payload.get("host"), dict) else {}
+    statuses = summary.get("subagent_statuses") or {}
+    status_text = ",".join(f"{key}={value}" for key, value in sorted(statuses.items())) or "none"
+    print(
+        f"  orchestration: plugin=v{payload.get('schema_version', '-')} "
+        f"host={host.get('host_id') or '-'} "
+        f"subagents={summary.get('subagent_items_total', 0)} [{status_text}] "
+        f"events={summary.get('interaction_events_total', 0)}"
+    )
+    for item in payload.get("work_items") or []:
+        if not isinstance(item, dict):
+            continue
+        packet = item.get("task_packet") if isinstance(item.get("task_packet"), dict) else {}
+        worker = item.get("worker") if isinstance(item.get("worker"), dict) else {}
+        attempt = item.get("attempt") if isinstance(item.get("attempt"), dict) else {}
+        events = [event for event in item.get("events") or [] if isinstance(event, dict)]
+        flow = ">".join(str(event.get("semantic_event") or "-") for event in events) or "planned"
+        operations = list(
+            dict.fromkeys(
+                str(event["native_operation"])
+                for event in events
+                if event.get("native_operation")
+            )
+        )
+        print(
+            f"    {item.get('work_item_id')}: status={item.get('status')} "
+            f"generation={attempt.get('generation', '-')} "
+            f"launch={attempt.get('launch_state') or '-'} "
+            f"stale={attempt.get('stale_results', 0)} "
+            f"worker={worker.get('agent_id') or worker.get('task_name') or '-'} "
+            f"native={','.join(operations) or '-'} flow={flow}"
+        )
+        if not verbose:
+            continue
+        print(f"      objective: {short(packet.get('objective'), 170)}")
+        for event in events:
+            print(
+                f"      [{event.get('sequence')}] {event.get('semantic_event')} "
+                f"{event.get('direction')} gen={event.get('generation') or '-'} "
+                f"via={event.get('native_operation') or '-'} "
+                f"| {short(event.get('summary'), 145)}"
+            )
+
+
 def render_compact_goal(bundle: dict[str, Any]) -> None:
     primary = bundle["primary"]
     goal = primary.get("goal_plus")
@@ -768,6 +821,7 @@ def render_compact_goal(bundle: dict[str, Any]) -> None:
         action = next_action.get("kind") or next_action.get("action") or "pending"
         detail = next_action.get("instruction") or next_action.get("reason") or next_action
         print(f"  next: {action} | {short(detail, 165)}")
+    render_orchestration(primary, verbose=False)
 
 
 def render_compact_pools(pools: list[dict[str, Any]]) -> None:

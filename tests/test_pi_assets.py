@@ -51,6 +51,7 @@ def test_pi_goal_plus_prompt_starts_with_create_call() -> None:
     assert "GOAL_PLUS_VERIFIER_TMPDIR" in text
     assert "固定的 `/tmp`" in text
     assert "`goal_plus_record_triage` 之前不要读取或审计目标文件" in text
+    assert "feature_plugins=[\"orchestration\"]" in text
     assert ".goal-plus-verifiers/" in text
     assert "`expected_outputs` 只列出" in text
     assert "{{input}}" not in text
@@ -439,6 +440,13 @@ def test_pi_extension_has_precise_tool_schemas_and_error_classification() -> Non
     ].split("const ModelSpec = Type.Object", 1)[0]
     assert "pi_provider: Type.Optional(NullableString)" in annotator_schema
     assert "goal_plus_monitor_snapshot: Type.Object" in text
+    assert 'Type.Literal("bind")' in text
+    assert "goal_plus_work_item" in text
+    assert "sessionId = String(workItem.agent_id)" in text
+    assert "feature_plugins: Type.Optional" in text
+    assert 'native_operation: "pi_goal_plus_run_work_item"' in text
+    assert 'native_operation: "goal-plus-pi-worker"' in text
+    assert "orchestration_monitor" in text
     assert "search_get_agent_observability: Type.Object" in text
     assert "goal_plus_update_goal: Type.Object" in text
     assert "goal_plus_prepare_final_check: Type.Object" in text

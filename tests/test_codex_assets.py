@@ -53,6 +53,7 @@ def test_codex_goal_plus_skill_records_modes_and_mcp_tools() -> None:
         "goal_plus_submit_final_check",
         "spawn_agent",
         'fork_turns="none"',
+        "`work_item_id`、`title`、`objective`",
         "绝不能代表审查员提交结论",
         "软 rubric 或预设评价维度",
         "开放式补充评价发生在每次 Evidence 结算之后",
@@ -74,6 +75,7 @@ def test_codex_mcp_config_registers_search_runtime() -> None:
     assert "[mcp_servers.goal-plus]" in text
     assert 'command = "goal-plus"' in text
     assert 'args = ["--root", ".gp"]' in text
+    assert 'default_tools_approval_mode = "approve"' in text
     for variable in (
         "CODEX_HOME",
         "OPENAI_API_KEY",

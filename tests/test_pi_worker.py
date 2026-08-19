@@ -8,9 +8,72 @@ from typing import Any
 import pytest
 
 from goal_plus import pi_worker
+from goal_plus.goal_plus import FileGoalPlusRuntime
 
 
 pytestmark = pytest.mark.pi
+
+
+def test_pi_worker_binds_claimed_work_item_after_host_launch(tmp_path: Path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".gp")
+    goal = runtime.create_goal(
+        "Run a Pi subagent",
+        policy={
+            "execution": {
+                "host": {
+                    "host_id": "pi",
+                    "native_reasoning_effort": "xhigh",
+                    "enforcement": "host",
+                    "operations": ["spawn", "wait", "observe"],
+                }
+            }
+        },
+    )
+    runtime.record_triage(
+        goal.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+    runtime.upsert_work_items(
+        goal.goal_plus_id,
+        [
+            {
+                "work_item_id": "worker",
+                "title": "Worker",
+                "objective": "Run the bounded task",
+                "route": "subagent",
+            }
+        ],
+    )
+    claimed = runtime.record_work_event(
+        goal.goal_plus_id,
+        "worker",
+        "dispatch",
+        "Pi claimed the launch.",
+        host="pi",
+    ).work_items[0]
+
+    pi_worker._bind_goal_plus_work_item(
+        {
+            "goal_plus_work_item": {
+                "goal_plus_id": goal.goal_plus_id,
+                "work_item_id": "worker",
+                "attempt_id": claimed.attempt_id,
+                "generation": claimed.generation,
+                "host": "pi",
+            }
+        },
+        root=runtime.root_dir,
+        session_id="pi-session-1",
+    )
+
+    bound = runtime.status(goal.goal_plus_id).work_items[0]
+    assert bound.status == "active"
+    assert bound.agent_id == "pi-session-1"
+    assert bound.bound_at is not None
 
 
 def _assistant_usage(

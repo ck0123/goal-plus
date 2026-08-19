@@ -227,6 +227,13 @@ for full per-worker usage, identity, directive, handoff, advisory, and artifact
 details. Use `--json` when the assembled monitor/API payload is more useful
 than either human view.
 
+When the `orchestration` feature plugin is enabled, the goal section also shows
+ordinary subagent task status, opaque worker handle, native host operations,
+attempt generation, launching/bound state, stale-result count, and the
+normalized assignment/result/decision flow. `--verbose` adds the sanitized
+objective and directional event summaries; it never prints the worker
+transcript path or content.
+
 The snapshot summarizes the complete Goal Plus search-task history and the
 selected run's detailed state. `search_tasks` contains per-run state, frozen
 spec, strategy, and round summaries;

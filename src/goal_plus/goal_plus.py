@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import re
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,6 +14,7 @@ from goal_plus.models import (
     GoalPlusActiveSession,
     GoalPlusFinalCheck,
     GoalPlusFinalCheckerHost,
+    GoalPlusExecutionPolicy,
     GoalPlusGateEvent,
     GoalPlusGateResult,
     GoalPlusGoalRevision,
@@ -22,13 +25,49 @@ from goal_plus.models import (
     GoalPlusSpecDraftInput,
     GoalPlusStatus,
     GoalPlusTriage,
+    GoalPlusWorkEventKind,
+    GoalPlusWorkItem,
+    GoalPlusWorkItemInput,
     SearchSpec,
     SearchSpecDraft,
 )
 from goal_plus.paths import DEFAULT_RUNTIME_ROOT
+from goal_plus.runtime import exclusive_file_lock
 
 
 TERMINAL_STATUSES: set[GoalPlusStatus] = {"blocked", "complete", "abandoned"}
+DEFAULT_EXECUTION_POLICY = GoalPlusExecutionPolicy().model_dump(mode="json")
+DEFAULT_WORK_LAUNCH_TTL_SECONDS = 120
+WORK_EVENT_STATUS = {
+    "bind": "active",
+    "result": "result_ready",
+    "rework": "active",
+    "accepted": "accepted",
+    "blocked": "blocked",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "search_routed": "active",
+}
+
+WORK_EVENT_ALLOWED_STATUSES = {
+    "dispatch": {"planned", "launching", "blocked", "failed"},
+    "bind": {"launching"},
+    "message": {"active"},
+    "result": {"active"},
+    "rework": {"result_ready", "blocked", "failed"},
+    "accepted": {"result_ready"},
+    "blocked": {"planned", "launching", "active"},
+    "failed": {"launching", "active"},
+    "cancelled": {
+        "planned",
+        "launching",
+        "active",
+        "result_ready",
+        "blocked",
+        "failed",
+    },
+    "search_routed": {"planned", "blocked", "failed"},
+}
 EXPLORATION_MODES = {"autonomous", "probe"}
 EXPLORATION_MODE_LINE_PREFIX = "Goal Plus 探索模式："
 LEGACY_EXPLORATION_MODE_LINE_PREFIX = "Goal Plus exploration mode:"
@@ -82,8 +121,45 @@ MUTATING_TOOL_SUFFIXES = (
 )
 
 
+def serialized_goal_mutation(method):
+    @wraps(method)
+    def wrapped(
+        self: "FileGoalPlusRuntime",
+        goal_plus_id: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        with exclusive_file_lock(self._goal_dir(goal_plus_id) / "goal.lock"):
+            return method(self, goal_plus_id, *args, **kwargs)
+
+    return wrapped
+
+
 def utc_timestamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _work_result_digest(
+    summary: str,
+    *,
+    agent_id: str | None,
+    transcript_path: str | None,
+    evidence: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> str:
+    payload = json.dumps(
+        {
+            "summary": summary,
+            "agent_id": agent_id,
+            "transcript_path": transcript_path,
+            "evidence": evidence,
+            "metadata": metadata,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def exploration_mode_from_raw_goal(raw_goal: str) -> str | None:
@@ -289,6 +365,7 @@ class FileGoalPlusRuntime:
     def status(self, goal_plus_id: str) -> GoalPlusRecord:
         return self._load_record(goal_plus_id)
 
+    @serialized_goal_mutation
     def update_goal(
         self,
         goal_plus_id: str,
@@ -319,6 +396,13 @@ class FileGoalPlusRuntime:
             else check.model_copy(deep=True)
             for check in record.final_checks
         ]
+        work_items = [
+            item.model_copy(update={"status": "superseded", "updated_at": now})
+            if item.goal_revision == record.goal_revision
+            and item.status not in {"accepted", "cancelled", "superseded"}
+            else item.model_copy(deep=True)
+            for item in record.work_items
+        ]
         revision = GoalPlusGoalRevision(
             revision=next_revision,
             raw_goal=updated_raw_goal,
@@ -331,6 +415,7 @@ class FileGoalPlusRuntime:
                 "goal_revision": next_revision,
                 "goal_revisions": [*record.goal_revisions, revision],
                 "final_checks": checks,
+                "work_items": work_items,
                 "status": "active",
                 "phase": "intake",
                 "triage": None,
@@ -361,6 +446,7 @@ class FileGoalPlusRuntime:
         )
         return updated
 
+    @serialized_goal_mutation
     def activate_session(
         self,
         goal_plus_id: str,
@@ -411,6 +497,7 @@ class FileGoalPlusRuntime:
         )
         return updated
 
+    @serialized_goal_mutation
     def record_session_gate_skipped(
         self,
         goal_plus_id: str,
@@ -447,6 +534,7 @@ class FileGoalPlusRuntime:
                     events.append(json.loads(line))
         return events
 
+    @serialized_goal_mutation
     def record_triage(
         self,
         goal_plus_id: str,
@@ -469,6 +557,337 @@ class FileGoalPlusRuntime:
         self._append_event(goal_plus_id, "triage_recorded", parsed.model_dump(mode="json"))
         return updated
 
+    @serialized_goal_mutation
+    def upsert_work_items(
+        self,
+        goal_plus_id: str,
+        work_items: list[GoalPlusWorkItemInput | dict[str, Any]],
+    ) -> GoalPlusRecord:
+        if not work_items:
+            raise ValueError("work_items must not be empty")
+        record = self._load_record(goal_plus_id)
+        if record.status != "active":
+            raise RuntimeError("work items can only be changed for an active Goal Plus record")
+        if record.phase == "intake":
+            raise RuntimeError("record triage before planning Goal Plus work items")
+
+        parsed = [
+            item
+            if isinstance(item, GoalPlusWorkItemInput)
+            else GoalPlusWorkItemInput.model_validate(item)
+            for item in work_items
+        ]
+        item_ids = [item.work_item_id for item in parsed]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("work_item_id values must be unique within one update")
+
+        now = utc_timestamp()
+        all_items = list(record.work_items)
+        current_indexes = {
+            item.work_item_id: index
+            for index, item in enumerate(all_items)
+            if item.goal_revision == record.goal_revision
+        }
+        for item in parsed:
+            index = current_indexes.get(item.work_item_id)
+            if index is None:
+                current_indexes[item.work_item_id] = len(all_items)
+                all_items.append(
+                    GoalPlusWorkItem(
+                        **item.model_dump(mode="python"),
+                        goal_revision=record.goal_revision,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                continue
+            existing = all_items[index]
+            if (
+                existing.status != "planned"
+                and existing.model_dump(
+                    include=set(GoalPlusWorkItemInput.model_fields)
+                )
+                != item.model_dump()
+            ):
+                raise RuntimeError("cannot change a work item after it has started")
+            all_items[index] = existing.model_copy(
+                update={**item.model_dump(mode="python"), "updated_at": now}
+            )
+
+        current_items = [
+            item for item in all_items if item.goal_revision == record.goal_revision
+        ]
+        self._validate_work_graph(current_items)
+        next_action = self._execution_next_action(current_items)
+        phase = record.phase
+        if phase in {"goal", "final_audit"}:
+            phase = "final_audit" if self._work_items_resolved(current_items) else "goal"
+        updated = record.model_copy(
+            update={
+                "work_items": all_items,
+                "phase": phase,
+                "next_action": next_action,
+                "updated_at": now,
+            }
+        )
+        self._write_record(updated)
+        self._append_event(
+            goal_plus_id,
+            "execution_plan_updated",
+            {
+                "goal_revision": record.goal_revision,
+                "work_item_ids": item_ids,
+                "current_work_items_total": len(current_items),
+            },
+        )
+        return updated
+
+    @serialized_goal_mutation
+    def record_work_event(
+        self,
+        goal_plus_id: str,
+        work_item_id: str,
+        event: GoalPlusWorkEventKind,
+        summary: str,
+        *,
+        host: str | None = None,
+        task_name: str | None = None,
+        agent_id: str | None = None,
+        transcript_path: str | None = None,
+        search_run_id: str | None = None,
+        evidence: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
+        attempt_id: str | None = None,
+        generation: int | None = None,
+        launch_ttl_seconds: int = DEFAULT_WORK_LAUNCH_TTL_SECONDS,
+    ) -> GoalPlusRecord:
+        summary = summary.strip()
+        if not summary:
+            raise ValueError("work event summary must not be empty")
+        if len(summary) > 4000:
+            raise ValueError("work event summary must not exceed 4000 characters")
+        if event == "search_routed" and not search_run_id:
+            raise ValueError("search_routed requires search_run_id")
+        if generation is not None and generation < 1:
+            raise ValueError("work attempt generation must be positive")
+
+        record = self._load_record(goal_plus_id)
+        if record.status != "active":
+            raise RuntimeError("work events require an active Goal Plus record")
+        index, item = self._current_work_item(record, work_item_id)
+        if event not in WORK_EVENT_ALLOWED_STATUSES:
+            raise ValueError(f"unknown work event: {event}")
+        if event == "search_routed" and item.route != "search":
+            raise RuntimeError("search_routed requires a work item with route='search'")
+        if event == "dispatch" and item.route == "subagent" and not host:
+            raise ValueError("subagent dispatch requires a host id")
+        if event == "bind" and item.route != "subagent":
+            raise RuntimeError("bind requires a work item with route='subagent'")
+        execution = record.policy.get("execution")
+        bound_host = execution.get("host") if isinstance(execution, dict) else None
+        bound_host_id = (
+            bound_host.get("host_id") if isinstance(bound_host, dict) else None
+        )
+        if host and bound_host_id and host != bound_host_id:
+            raise RuntimeError(
+                f"work event host {host!r} does not match bound Ultra host {bound_host_id!r}"
+            )
+
+        supplied_evidence = evidence or []
+        supplied_metadata = metadata or {}
+        fenced_event = item.route == "subagent" and event in {
+            "bind",
+            "message",
+            "result",
+            "failed",
+        }
+        if fenced_event:
+            if not attempt_id or generation is None:
+                raise ValueError(
+                    f"subagent {event} requires attempt_id and generation"
+                )
+            if attempt_id != item.attempt_id or generation != item.generation:
+                if event not in {"result", "failed"}:
+                    raise RuntimeError(
+                        f"work attempt mismatch for {work_item_id}: "
+                        f"expected {item.attempt_id}/{item.generation}"
+                    )
+                self._append_event(
+                    goal_plus_id,
+                    "execution_work_event",
+                    {
+                        "goal_revision": record.goal_revision,
+                        "work_item_id": work_item_id,
+                        "event": "stale_result",
+                        "submitted_event": event,
+                        "summary": summary,
+                        "host": host,
+                        "task_name": task_name,
+                        "agent_id": agent_id,
+                        "search_run_id": search_run_id,
+                        "attempt_id": attempt_id,
+                        "generation": generation,
+                        "current_attempt_id": item.attempt_id,
+                        "current_generation": item.generation,
+                        "evidence": supplied_evidence,
+                        "metadata": supplied_metadata,
+                    },
+                )
+                return record
+            if event == "bind" and not agent_id:
+                raise ValueError("subagent bind requires an agent_id")
+            if event != "bind" and agent_id and item.agent_id and agent_id != item.agent_id:
+                raise RuntimeError(
+                    f"work event agent {agent_id!r} does not match bound agent "
+                    f"{item.agent_id!r}"
+                )
+
+        result_digest: str | None = None
+        if event == "result":
+            result_digest = _work_result_digest(
+                summary,
+                agent_id=agent_id or item.agent_id,
+                transcript_path=transcript_path or item.transcript_path,
+                evidence=supplied_evidence,
+                metadata=supplied_metadata,
+            )
+            if item.status in {"result_ready", "accepted"}:
+                if item.result_digest == result_digest:
+                    return record
+                raise RuntimeError(
+                    f"conflicting result for work attempt {item.attempt_id}/{item.generation}"
+                )
+
+        if item.status not in WORK_EVENT_ALLOWED_STATUSES[event]:
+            raise RuntimeError(
+                f"cannot record {event} while work item {work_item_id} is {item.status}"
+            )
+        if event in {"dispatch", "search_routed"}:
+            unresolved_dependencies = [
+                dependency
+                for dependency in item.depends_on
+                if self._current_work_item(record, dependency)[1].status != "accepted"
+            ]
+            if unresolved_dependencies:
+                raise RuntimeError(
+                    "cannot start work before dependencies are accepted: "
+                    + ", ".join(unresolved_dependencies)
+                )
+
+        now = utc_timestamp()
+        update: dict[str, Any] = {
+            "updated_at": now,
+            "result_summary": summary if event in {"result", "accepted"} else item.result_summary,
+            "evidence": [*item.evidence, *supplied_evidence],
+            "metadata": {**item.metadata, **supplied_metadata},
+        }
+        if event == "dispatch" and item.route == "subagent":
+            if attempt_id is not None or generation is not None:
+                raise ValueError("subagent dispatch creates its own attempt identity")
+            if agent_id is not None:
+                raise ValueError("subagent dispatch must bind agent_id after host launch")
+            if not 1 <= launch_ttl_seconds <= 3600:
+                raise ValueError("launch_ttl_seconds must be between 1 and 3600")
+            if item.status == "launching" and item.launch_deadline:
+                deadline = calendar.timegm(
+                    time.strptime(item.launch_deadline, "%Y-%m-%dT%H:%M:%SZ")
+                )
+                if time.time() < deadline:
+                    raise RuntimeError(
+                        f"work attempt {item.attempt_id}/{item.generation} is still launching"
+                    )
+            attempt_id = f"attempt_{uuid4().hex}"
+            generation = item.generation + 1
+            update.update(
+                {
+                    "status": "launching",
+                    "attempt_id": attempt_id,
+                    "generation": generation,
+                    "launch_deadline": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime(time.time() + launch_ttl_seconds),
+                    ),
+                    "bound_at": None,
+                    "agent_id": None,
+                    "transcript_path": None,
+                    "result_summary": None,
+                    "result_digest": None,
+                }
+            )
+        elif event == "dispatch":
+            update["status"] = "active"
+        else:
+            status = WORK_EVENT_STATUS.get(event)
+            if status is not None:
+                update["status"] = status
+        if event == "rework" and item.route == "subagent" and item.status != "result_ready":
+            update.update(
+                {
+                    "status": "planned",
+                    "agent_id": None,
+                    "bound_at": None,
+                    "launch_deadline": None,
+                    "result_digest": None,
+                }
+            )
+        if event == "bind":
+            update.update({"agent_id": agent_id, "bound_at": now})
+        if event == "message" and item.route == "subagent":
+            update["result_digest"] = None
+        if result_digest is not None:
+            update["result_digest"] = result_digest
+        for key, value in {
+            "host": host,
+            "task_name": task_name,
+            "transcript_path": transcript_path,
+            "search_run_id": search_run_id,
+        }.items():
+            if value is not None:
+                update[key] = value
+        if item.route != "subagent" and agent_id is not None:
+            update["agent_id"] = agent_id
+
+        all_items = list(record.work_items)
+        all_items[index] = item.model_copy(update=update)
+        current_items = [
+            candidate
+            for candidate in all_items
+            if candidate.goal_revision == record.goal_revision
+        ]
+        next_action = self._execution_next_action(current_items)
+        phase = record.phase
+        if phase in {"goal", "final_audit"}:
+            phase = "final_audit" if self._work_items_resolved(current_items) else "goal"
+        updated = record.model_copy(
+            update={
+                "work_items": all_items,
+                "phase": phase,
+                "next_action": next_action,
+                "updated_at": now,
+            }
+        )
+        self._write_record(updated)
+        self._append_event(
+            goal_plus_id,
+            "execution_work_event",
+            {
+                "goal_revision": record.goal_revision,
+                "work_item_id": work_item_id,
+                "event": event,
+                "summary": summary,
+                "host": host,
+                "task_name": task_name,
+                "agent_id": agent_id,
+                "search_run_id": search_run_id,
+                "attempt_id": attempt_id,
+                "generation": generation,
+                "evidence": supplied_evidence,
+                "metadata": supplied_metadata,
+            },
+        )
+        return updated
+
+    @serialized_goal_mutation
     def save_spec_draft(
         self,
         goal_plus_id: str,
@@ -505,6 +924,7 @@ class FileGoalPlusRuntime:
         self._append_event(goal_plus_id, "spec_draft_saved", parsed.model_dump(mode="json"))
         return updated
 
+    @serialized_goal_mutation
     def link_search_run(
         self,
         goal_plus_id: str,
@@ -574,6 +994,7 @@ class FileGoalPlusRuntime:
         )
         return updated
 
+    @serialized_goal_mutation
     def record_search_result(
         self,
         goal_plus_id: str,
@@ -691,6 +1112,7 @@ class FileGoalPlusRuntime:
                 return str(patch_path.resolve())
         return fallback
 
+    @serialized_goal_mutation
     def prepare_final_check(
         self,
         goal_plus_id: str,
@@ -705,6 +1127,7 @@ class FileGoalPlusRuntime:
             raise RuntimeError(
                 "Finish intake, spec discovery, and Search Mode before starting final check."
             )
+        self._require_resolved_execution(record, "start final check")
 
         current = self._latest_final_check(record)
         if (
@@ -763,6 +1186,7 @@ class FileGoalPlusRuntime:
             "launch": self._final_check_launch(record, check),
         }
 
+    @serialized_goal_mutation
     def submit_final_check(
         self,
         goal_plus_id: str,
@@ -805,6 +1229,8 @@ class FileGoalPlusRuntime:
         normalized_evidence = evidence or []
         if verdict == "pass" and not normalized_evidence:
             raise ValueError("a passing final check requires concrete evidence")
+        if verdict == "pass":
+            self._require_resolved_execution(record, "pass final check")
 
         now = utc_timestamp()
         completed = check.model_copy(
@@ -889,6 +1315,7 @@ class FileGoalPlusRuntime:
             )
         return updated
 
+    @serialized_goal_mutation
     def set_status(
         self,
         goal_plus_id: str,
@@ -898,6 +1325,8 @@ class FileGoalPlusRuntime:
         next_action: GoalPlusNextAction | dict[str, Any] | None = None,
     ) -> GoalPlusRecord:
         record = self._load_record(goal_plus_id)
+        if status == "complete":
+            self._require_resolved_execution(record, "complete Goal Plus")
         if status == "complete" and self._final_check_mode(record) == "required":
             final_check = self._latest_final_check(record)
             if (
@@ -928,6 +1357,7 @@ class FileGoalPlusRuntime:
         )
         return updated
 
+    @serialized_goal_mutation
     def gate(
         self,
         goal_plus_id: str,
@@ -1063,9 +1493,11 @@ class FileGoalPlusRuntime:
             return (
                 "goal",
                 GoalPlusNextAction(
-                    kind="work_goal_like",
-                    description="使用当前工作区证据，按普通 goal 类任务继续。",
-                    required=False,
+                    kind="plan_orchestrated_execution",
+                    description=(
+                        "规划可审计工作项；主 Agent 保留关键路径，并把适合并行的独立工作委派给 subagent。"
+                    ),
+                    required=True,
                 ),
             )
         missing = ", ".join(triage.missing) if triage.missing else "spec 细节"
@@ -1081,6 +1513,122 @@ class FileGoalPlusRuntime:
                 required=True,
                 metadata={"missing": triage.missing},
             ),
+        )
+
+    def _current_work_item(
+        self,
+        record: GoalPlusRecord,
+        work_item_id: str,
+    ) -> tuple[int, GoalPlusWorkItem]:
+        for index, item in enumerate(record.work_items):
+            if (
+                item.goal_revision == record.goal_revision
+                and item.work_item_id == work_item_id
+            ):
+                return index, item
+        raise FileNotFoundError(
+            f"work item not found for goal revision {record.goal_revision}: {work_item_id}"
+        )
+
+    def _validate_work_graph(self, items: list[GoalPlusWorkItem]) -> None:
+        by_id = {item.work_item_id: item for item in items}
+        for item in items:
+            missing = [
+                dependency
+                for dependency in item.depends_on
+                if dependency not in by_id
+            ]
+            if missing:
+                raise ValueError(
+                    f"work item {item.work_item_id} has unknown dependencies: {', '.join(missing)}"
+                )
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(work_item_id: str) -> None:
+            if work_item_id in visiting:
+                raise ValueError(f"work item dependency cycle includes {work_item_id}")
+            if work_item_id in visited:
+                return
+            visiting.add(work_item_id)
+            for dependency in by_id[work_item_id].depends_on:
+                visit(dependency)
+            visiting.remove(work_item_id)
+            visited.add(work_item_id)
+
+        for work_item_id in by_id:
+            visit(work_item_id)
+
+    def _unresolved_work_items(
+        self,
+        record_or_items: GoalPlusRecord | list[GoalPlusWorkItem],
+    ) -> list[GoalPlusWorkItem]:
+        if isinstance(record_or_items, GoalPlusRecord):
+            items = [
+                item
+                for item in record_or_items.work_items
+                if item.goal_revision == record_or_items.goal_revision
+            ]
+        else:
+            items = record_or_items
+        return [
+            item
+            for item in items
+            if item.status != "accepted"
+            and not (not item.required and item.status in {"cancelled", "superseded"})
+        ]
+
+    def _work_items_resolved(self, items: list[GoalPlusWorkItem]) -> bool:
+        return bool(items) and not self._unresolved_work_items(items)
+
+    def _require_resolved_execution(
+        self,
+        record: GoalPlusRecord,
+        action: str,
+    ) -> None:
+        current_items = [
+            item
+            for item in record.work_items
+            if item.goal_revision == record.goal_revision
+        ]
+        if not current_items:
+            execution = record.policy.get("execution")
+            host = execution.get("host") if isinstance(execution, dict) else None
+            if host is not None:
+                raise RuntimeError(
+                    f"cannot {action}; bound Ultra execution requires a work item plan"
+                )
+            return
+        unresolved = self._unresolved_work_items(current_items)
+        if unresolved:
+            detail = ", ".join(
+                f"{item.work_item_id}={item.status}" for item in unresolved
+            )
+            raise RuntimeError(f"cannot {action}; unresolved work items: {detail}")
+
+    def _execution_next_action(
+        self,
+        items: list[GoalPlusWorkItem],
+    ) -> GoalPlusNextAction:
+        if not items:
+            return GoalPlusNextAction(
+                kind="plan_orchestrated_execution",
+                description="创建当前目标修订版的可审计工作项计划。",
+                required=True,
+            )
+        unresolved = self._unresolved_work_items(items)
+        if unresolved:
+            return GoalPlusNextAction(
+                kind="drive_orchestrated_execution",
+                description="推进、集成或返工尚未验收的 Goal Plus 工作项。",
+                required=True,
+                metadata={"work_item_ids": [item.work_item_id for item in unresolved]},
+            )
+        return GoalPlusNextAction(
+            kind="audit_raw_goal",
+            description="所有工作项已验收；对照原始目标执行整体测试和最终审计。",
+            required=True,
         )
 
     def _record_gate(
@@ -1121,6 +1669,19 @@ class FileGoalPlusRuntime:
             if self._final_check_mode(record) == "required"
             else "policy 不要求独立最终检查。"
         )
+        current_items = [
+            item
+            for item in record.work_items
+            if item.goal_revision == record.goal_revision
+        ]
+        unresolved = self._unresolved_work_items(current_items)
+        execution_text = (
+            ", ".join(f"{item.work_item_id}={item.status}" for item in unresolved)
+            if unresolved
+            else "无；当前修订版工作项均已验收。"
+            if current_items
+            else "尚未建立工作项计划。"
+        )
         return (
             "Goal Plus 仍处于 active。顶层 agent 只有在记录真实终态后才能停止。\n\n"
             "该修订版的完整原始目标：\n"
@@ -1133,6 +1694,8 @@ class FileGoalPlusRuntime:
             f"- elapsed: {elapsed}\n\n"
             f"当前 phase：{record.phase}\n"
             f"当前 next action：{action_text}\n"
+            f"编排 policy：{record.policy.get('execution', DEFAULT_EXECUTION_POLICY)}\n"
+            f"未验收工作项：{execution_text}\n"
             f"最终检查 policy：{final_check_text}\n\n"
             "对照持久证据审计完整原始目标中的每项要求。如果原始目标包含时间限制，使用上述"
             "时间戳进行判断：只要仍有可用时间且目标未完成，就继续工作；达到或超过时间条件时，"
@@ -1230,6 +1793,12 @@ class FileGoalPlusRuntime:
 
     def _normalize_policy(self, policy: dict[str, Any] | None) -> dict[str, Any]:
         normalized = dict(policy or {})
+        execution = normalized.get("execution", {})
+        if not isinstance(execution, dict):
+            raise ValueError("policy.execution must be an object")
+        normalized["execution"] = GoalPlusExecutionPolicy.model_validate(
+            {**DEFAULT_EXECUTION_POLICY, **execution}
+        ).model_dump(mode="json", exclude_none=True)
         final_check = normalized.get("final_check")
         if final_check is None:
             return normalized

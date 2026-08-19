@@ -19,3 +19,4 @@ env_vars = [
 startup_timeout_sec = 10
 tool_timeout_sec = 300
 enabled = true
+default_tools_approval_mode = "approve"

@@ -1,6 +1,14 @@
 首先调用 `goal_plus_create(raw_goal="$ARGUMENTS")`，必须在 triage、规划、编辑或 Search 之前调用。
 除了加载 goal-plus skill 之外，在调用 `goal_plus_record_triage` 之前不要读取或审计目标文件。
 
+入口已把逻辑 Main `thinking=max` 映射到 Pi 原生最高档。triage 后调用
+`goal_plus_upsert_work_items` 建立当前修订版的
+编排计划。普通独立工作项通过 `pi_goal_plus_run_work_item` 执行；用
+`goal_plus_record_work_event` 记录验收或返工。只有可量化、具有确定性 verifier、隔离编辑面
+和多个有价值假设的工作项才路由到 Search。
+普通工作项的 Pi wrapper 会把原生下发与返回操作写入 `orchestration_monitor` metadata；
+`goal_plus_monitor_snapshot(feature_plugins=["orchestration"])` 提供与 Codex 可比较的语义链。
+
 原生入口若注入了已解析的显式角色模型，严格使用该路由：`main=` 已由入口切换；
 `annotator=` 写入 `strategy.evidence_annotator.model`；`workers=` 或兼容别名
 `models=` 按现有分配规则写入 `strategy.models`。未显式指定的角色保持现有默认或继承语义。

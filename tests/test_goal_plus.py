@@ -362,8 +362,8 @@ def test_goal_like_triage_blocks_stop_until_terminal_status(tmp_path) -> None:
     )
 
     assert updated.phase == "goal"
-    assert updated.next_action.kind == "work_goal_like"  # type: ignore[union-attr]
-    assert updated.next_action.required is False  # type: ignore[union-attr]
+    assert updated.next_action.kind == "plan_orchestrated_execution"  # type: ignore[union-attr]
+    assert updated.next_action.required is True  # type: ignore[union-attr]
 
     gate = runtime.gate(updated.goal_plus_id, event="stop", context={})
     assert gate.decision == "block"

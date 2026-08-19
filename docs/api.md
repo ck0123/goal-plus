@@ -12,6 +12,8 @@ index and ownership guide.
 | `goal_plus_status` | read goal phase, revision, linked tasks, and evidence |
 | `goal_plus_update_goal` | replace the complete effective objective and start a revision |
 | `goal_plus_record_triage` | choose ordinary goal work or verifier/spec discovery |
+| `goal_plus_upsert_work_items` | create or update the current revision's host-neutral work DAG |
+| `goal_plus_record_work_event` | claim/bind fenced subagent attempts and record results, decisions, or Search routing |
 | `goal_plus_save_spec_draft` | persist the typed candidate Search spec |
 | `goal_plus_list_models` | list the selected Codex or Pi host's currently available models |
 | `goal_plus_link_search_run` | append a frozen Search run to the goal |
@@ -24,6 +26,14 @@ index and ownership guide.
 `goal_plus_update_goal` requires `expected_revision`, preventing a stale agent
 from overwriting a newer objective. Search results are keyed by `run_id`, so one
 goal can retain multiple search tasks.
+
+For `route="subagent"`, `dispatch` returns the generated `attempt_id`,
+`generation`, and launch deadline. The host records `bind` after native launch,
+then includes that attempt identity on `message`, `result`, and `failed`.
+
+Every record defaults to the Ultra execution policy documented in
+[Ultra Orchestration](ultra.md). Work events are durable coordination facts;
+the host still owns launch, wait, messaging, interruption, and native logs.
 
 ## Search Tools
 
@@ -184,6 +194,13 @@ content-free usage delta since Goal Plus creation, and `statistics.total_usage`
 combines that delta with worker usage. Per-task statistics are also retained in
 `search_tasks[].statistics` and aggregated under
 `search_task_aggregate.statistics`.
+
+`goal_plus_monitor_snapshot.feature_plugins` contains optional, read-only
+derived views. The built-in `orchestration` plugin normalizes ordinary
+Main/subagent task packets and assignment/result/decision events while keeping
+Codex and Pi native operation names distinct. Pass
+`feature_plugins=["orchestration"]` to select it or `feature_plugins=[]` to
+disable feature projections. See [Monitor Feature Plugins](feature-plugins.md).
 
 Worker handoffs remain one bounded protocol. `key_results` supplies feature
 ledger entries (artifact, code surface/change, portability/dependencies,

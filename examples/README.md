@@ -111,6 +111,7 @@ python examples/workspace-backends/run_demo.py --runtime-root .tmp/worktree-demo
 
 ## Scenario Guides
 
+- [Codex/Pi orchestration monitor comparison](orchestration-monitor/README.md)
 - [AscendC Direct Search](ascendc-direct-search/README.md)
 - [CANNBench TileLang Ascend](cannbench-tilelang-ascend/README.md)
 - [EdgeBench Ad Placement](edgebench-ad-placement/README.md)

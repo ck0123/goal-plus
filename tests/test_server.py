@@ -48,6 +48,8 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "goal_plus_monitor_snapshot",
         "goal_plus_list_models",
         "goal_plus_record_triage",
+        "goal_plus_upsert_work_items",
+        "goal_plus_record_work_event",
         "goal_plus_save_spec_draft",
         "goal_plus_link_search_run",
         "goal_plus_record_search_result",
@@ -255,6 +257,7 @@ def test_goal_plus_monitor_snapshot_exposes_read_only_schema(tmp_path: Path) -> 
     assert "goal_plus_id" in schema["properties"]
     assert "run_id" in schema["properties"]
     assert "stale_after_seconds" in schema["properties"]
+    assert "feature_plugins" in schema["properties"]
 
 
 def test_agent_observability_exposes_read_only_schema(tmp_path: Path) -> None:

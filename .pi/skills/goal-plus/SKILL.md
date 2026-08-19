@@ -8,6 +8,8 @@ description: 当 Pi 收到可能需要 Goal Mode、Spec Discovery Mode、有界 
 ## 入口契约
 
 原生 Pi `/goal-plus` 命令会在模型轮次开始前创建 Goal Plus 记录。
+入口在 Main 模型选择后把逻辑 `thinking=max` 映射为 Pi `xhigh` 请求，并记录 Pi 按模型能力
+钳制后的实际档位；如果 reasoning 被钳制为 `off`，则拒绝启动，不静默降级。
 `/goal-plus-with-final-check` 创建记录时会设置 `policy.final_check.mode="required"`。
 `/goal-plus edit <完整的修订目标>` 对 active 记录调用 `goal_plus_update_goal` 并递增
 `goal_revision`；最新原始目标取代旧修订版。Pi 轮次中断后，`/goal-plus resume`
@@ -33,7 +35,17 @@ lease、外层剩余时间和收尾预留来确定探索时间，并使用可续
 
 当请求尚不是可验证的优化/Search 任务时使用 Goal Mode。使用
 `goal_plus_record_triage({ goal_plus_id, triage: { is_optimization, confidence, recommended_phase, identified_at, scenario, reasons, missing } })`
-记录 triage，并将面向用户的目标与实现猜测分开。Goal Mode 下不要创建 SearchSpec。
+记录 triage，并将面向用户的目标与实现猜测分开。随后用 `goal_plus_upsert_work_items`
+建立当前修订版工作项 DAG。主 Agent 保留关键路径与最终集成；独立工作项使用
+`route="subagent"`。Goal Mode 下不要创建 SearchSpec。
+
+Pi 普通 subagent 通过 `pi_goal_plus_run_work_item` 在隔离的 Pi RPC 子进程运行；该工具会
+创建 launch attempt，在 RPC 进程启动后绑定实际 session，并用同一 generation 提交 `result`
+或 `failed`。它不会为仍 active 的工作项另建 session；过期 launching attempt 才能被下一
+generation 接管。该工具对 child 请求 Pi `xhigh`、等待返回并记录实际档位。同一模型轮次可
+并发调用多个无依赖工作项。主 Agent 必须检查返回证据并记录 `accepted` 或 `rework`。runtime
+进程；生命周期属于 Pi extension。包装器把原生操作写入 `orchestration_monitor` metadata，
+供只读 feature plugin 归一化 Main/worker 交互。不要保存私有推理或完整 transcript。
 
 如果原始目标明确要求 verifier 引导的 Search Mode，并提供可度量的 verifier 或 metric，
 将其分类为优化/Search；不要仅因请求的 run 较小就将其降级为普通 Goal Mode。
@@ -101,6 +113,9 @@ A1B3，数量之和必须等于
 ## Search Mode
 
 目标已准备好进入 Search 时：
+
+只有工作项具备可量化 metric、确定性 verifier、隔离编辑面、多个有价值假设和足够预算时，
+才使用 `route="search"`。创建并链接 run 后记录 `search_routed`。
 
 `origin="initial"` 和 `origin="in_progress"` 仅表示 provenance，遵循相同的自主准入规则。
 
@@ -233,6 +248,7 @@ subagent 负责其候选工作区内的瓶颈分析、假设选择、特性迁�
 顶层 stop gate 会阻止每条仍处于 active 的 Goal Plus 记录，并返回完整当前原始目标以及
 创建/检查时间戳和已用时间。使用该 prompt 审计全部要求和目标中已有的任何时间条件。
 未完成时继续；否则在停止前记录真实终态。不要编造单独的 Goal Plus deadline。
+当前修订版存在工作项时，未 `accepted` 的必需工作项会阻止最终检查和 `complete`。
 
 ### 结果后的 Spec 重新评估
 

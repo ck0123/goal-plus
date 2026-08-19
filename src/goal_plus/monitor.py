@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from goal_plus.agent_hosts import get_agent_host_adapter
+from goal_plus.feature_plugins import collect_goal_monitor_features
 from goal_plus.goal_plus import FileGoalPlusRuntime
 from goal_plus.host_observability import collect_codex_transcript_observability
 from goal_plus.models import (
@@ -610,6 +611,7 @@ def goal_plus_monitor_snapshot(
     goal_plus_id: str | None = None,
     run_id: str | None = None,
     stale_after_seconds: int = 600,
+    feature_plugins: list[str] | None = None,
 ) -> dict[str, Any]:
     """Read-only monitoring snapshot for Goal Plus/Search runs.
 
@@ -1107,11 +1109,24 @@ def goal_plus_monitor_snapshot(
     if orchestrator_observability is None:
         unavailable_metrics.append("orchestrator_token_usage")
 
+    goal_events = (
+        FileGoalPlusRuntime(root).list_events(goal_record.goal_plus_id)
+        if goal_record is not None
+        else []
+    )
+    feature_payloads = collect_goal_monitor_features(
+        root,
+        goal_record,
+        goal_events,
+        feature_plugins,
+    )
+
     return {
         "ok": True,
         "snapshot_at": utc_timestamp(),
         "root_dir": str(root),
         "goal_plus": _goal_payload(goal_record),
+        "feature_plugins": feature_payloads,
         "selected_run_id": run_id,
         "search_tasks": search_tasks,
         "search_task_aggregate": search_task_aggregate,

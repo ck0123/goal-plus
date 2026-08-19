@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 from goal_plus.runtime import FileSearchRuntime
 from tests._runtime_helpers import make_project, spec_for
@@ -10,6 +11,7 @@ from tests._runtime_helpers import make_project, spec_for
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "monitor_goal_plus.sh"
+COMPARISON = ROOT / "examples" / "orchestration-monitor" / "compare_hosts.py"
 
 
 def _search_fixture(tmp_path: Path) -> tuple[Path, str, str]:
@@ -88,6 +90,42 @@ def test_monitor_script_json_mode_returns_assembled_snapshot(tmp_path: Path) -> 
     assert run["candidate_records"][candidate_id]["iterations"][0]["hypothesis"] == (
         "monitor script verifier evidence"
     )
+
+
+def test_monitor_script_renders_orchestration_feature_plugin(tmp_path: Path) -> None:
+    output_dir = tmp_path / "comparison"
+    example = subprocess.run(
+        [sys.executable, str(COMPARISON), str(output_dir)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert example.returncode == 0, example.stderr
+    comparison = json.loads(example.stdout)
+    assert comparison["task_packet_equal"] is True
+    assert comparison["semantic_flow_equal"] is True
+
+    result = subprocess.run(
+        [
+            str(SCRIPT),
+            "--once",
+            "--verbose",
+            "--goal",
+            "gp_0001",
+            str(output_dir / "codex"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "orchestration: plugin=v2 host=codex" in result.stdout
+    assert "native=spawn_agent,wait_agent" in result.stdout
+    assert "generation=1 launch=bound stale=0" in result.stdout
+    assert "flow=assignment>worker_update>result>decision" in result.stdout
+    assert "assignment main_to_subagent gen=1 via=spawn_agent" in result.stdout
 
 
 def test_monitor_script_reports_missing_runtime_root(tmp_path: Path) -> None:

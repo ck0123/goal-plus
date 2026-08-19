@@ -90,6 +90,8 @@ Host changes require proportional evidence:
   the matching real-host ST;
 - hook/extension or `/goal-plus` lifecycle changes: host asset tests plus a
   native lifecycle ST;
+- monitor feature projections: focused plugin tests plus the deterministic
+  host-comparison example and terminal renderer test;
 - planner or round changes: a multi-candidate/multi-round scenario;
 - verifier/workspace changes: runtime integration tests that restore and
   re-verify exact candidate commits.
@@ -98,6 +100,12 @@ ST prompts end with a fenced `st_report` JSON block. The shared required fields
 are `scenario`, `run_id`, candidate summaries, `selected_candidate_id`,
 `best_score`, and `report_path`; scenario additions are documented in
 `tests/st/prompts/_schema.md`.
+
+The checked-in `fixtures/ultra_smoke_codex/` directory preserves source and a
+sanitized evidence projection from one real Codex Goal Plus orchestration run.
+It records model/effort, the native worker handle, event ordering, pytest
+counts, and the local transcript digest. Raw `.gp` state and transcript content
+remain untracked.
 
 ## Layout
 

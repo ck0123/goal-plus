@@ -30,6 +30,16 @@ host-neutral lifecycle is documented in
 the same goal revision semantics as Codex. Required checks run through a
 separate read-only Pi RPC reviewer.
 
+The command maps logical Main `thinking=max` to Pi's native `xhigh` request and
+records the level after Pi clamps it to the selected model. A resulting `off`
+level is rejected. Ordinary `route="subagent"` work runs through
+`pi_goal_plus_run_work_item`, which applies the same rule to an isolated Pi RPC
+child, binds its durable launch attempt after the RPC process starts, waits for
+it, and submits the result with the same attempt generation. It rejects an
+already-active item instead of creating a replacement session. Multiple
+independent tool calls can execute concurrently. Main still owns acceptance,
+rework, integration, and completion. See [Ultra Orchestration](ultra.md).
+
 Use `/goal-plus mode=autonomous <goal>` for substantial renewable candidate
 exploration (the default), or `/goal-plus mode=probe <goal>` for short
 feasibility/potential/blocker probes. The choice is normalized into the final
@@ -205,6 +215,12 @@ goal-plus-pi-tool goal_plus_monitor_snapshot \
 `goal_plus_monitor_snapshot` is read-only and also exists on MCP. It never
 starts, waits for, or stops a worker. The complete concise tool index is in
 [API](api.md).
+
+For ordinary Ultra work, Pi's wrapper records
+`pi_goal_plus_run_work_item`/`goal-plus-pi-worker` under namespaced event
+metadata. The optional `orchestration` feature projects those events into the
+same task/result/Main-decision contract used by Codex without changing Pi RPC
+process ownership. See [Monitor Feature Plugins](feature-plugins.md).
 
 Use `search_get_agent_observability(agent_session_id)` for the same normalized
 per-worker schema used by Codex. Pi maps the existing `pi_metrics` model,
