@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -27,6 +27,7 @@ class RunState(str, Enum):
     SELECTION_BLOCKED = "selection_blocked"
     READY_TO_PROMOTE = "ready_to_promote"
     PROMOTED = "promoted"
+    NEEDS_RECOVERY = "needs_recovery"
     ABORTED = "aborted"
     FAILED = "failed"
 
@@ -102,7 +103,23 @@ class EditSurface(SearchModel):
     max_file_changes: int | None = Field(default=None, gt=0)
 
 
-AgentHostKind = Literal["codex", "pi-rpc"]
+AgentHostKind = Literal["codex", "pi-rpc", "pi-thinkthread"]
+
+
+class GitCommitArtifactRef(SearchModel):
+    kind: Literal["git_commit"] = "git_commit"
+    commit: str = Field(min_length=1)
+
+
+class FsSnapshotArtifactRef(SearchModel):
+    kind: Literal["fs_snapshot"] = "fs_snapshot"
+    snapshot_id: str = Field(pattern=r"^fsnap-[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+ArtifactRef = Annotated[
+    GitCommitArtifactRef | FsSnapshotArtifactRef,
+    Field(discriminator="kind"),
+]
 
 
 class AgentHostHandle(SearchModel):
@@ -285,7 +302,21 @@ class SupplementalDimension(SearchModel):
 class EvidenceComparisonReference(SearchModel):
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
-    commit: str = Field(min_length=1)
+    artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def require_artifact_identity(self) -> "EvidenceComparisonReference":
+        if self.artifact_ref is None and self.commit is None:
+            raise ValueError("comparison Evidence requires artifact_ref or commit")
+        return self
 
 
 class PeerComparison(EvidenceComparisonReference):
@@ -368,8 +399,22 @@ class ToolViewRef(SearchModel):
 
 class ToolViewRecord(ToolViewRef):
     snapshot_hash: str = Field(min_length=1)
-    source_commit: str = Field(min_length=1)
+    source_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    source_commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     evidence_scope: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_source_artifact(self) -> "ToolViewRecord":
+        if self.source_artifact_ref is None and self.source_commit is None:
+            raise ValueError("Tool View requires a source artifact")
+        return self
 
 
 class ToolAdoptionRecord(SearchModel):
@@ -389,20 +434,59 @@ class ToolAdoptionRecord(SearchModel):
 
 class ToolCopyReceipt(SearchModel):
     receipt_id: str = Field(min_length=1)
+    rpc_request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     tool_id: str = Field(min_length=1)
     snapshot_hash: str = Field(min_length=1)
+    source_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     source_commit: str | None = None
     agent_session_id: str = Field(min_length=1)
-    candidate_base_git_head: str = Field(min_length=1)
-    inbox_path: Path
+    candidate_base_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    candidate_base_git_head: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
+    inbox_path: Path | None = None
+    target_snapshot_id: str | None = Field(
+        default=None,
+        pattern=r"^fsnap-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        exclude_if=lambda value: value is None,
+    )
     copied_at: str
+
+    @model_validator(mode="after")
+    def require_candidate_base(self) -> "ToolCopyReceipt":
+        if (
+            self.candidate_base_artifact_ref is None
+            and self.candidate_base_git_head is None
+        ):
+            raise ValueError("tool copy receipt requires a candidate base artifact")
+        return self
 
 
 class EvidenceViewRecord(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
-    attempt_commit: str = Field(min_length=1)
+    attempt_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    attempt_commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     description: str = Field(min_length=1, max_length=1000)
     supplemental_evaluation: SupplementalEvaluation | None = None
     comparison_basis: list[EvidenceComparisonReference] = Field(
@@ -421,13 +505,33 @@ class EvidenceViewRecord(SearchModel):
             raise ValueError("evidence view description must be one line")
         return " ".join(value.strip().split())
 
+    @model_validator(mode="after")
+    def require_attempt_artifact(self) -> "EvidenceViewRecord":
+        if self.attempt_ref is None and self.attempt_commit is None:
+            raise ValueError("Evidence View requires an attempt artifact")
+        return self
+
 
 class GlobalEvidenceViewReference(SearchModel):
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
-    commit: str = Field(min_length=1)
+    artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     view_created_at: str
     supplemental_evaluation_present: bool = False
+
+    @model_validator(mode="after")
+    def require_artifact_identity(self) -> "GlobalEvidenceViewReference":
+        if self.artifact_ref is None and self.commit is None:
+            raise ValueError("Global Evidence reference requires an artifact")
+        return self
 
 
 class GlobalEvidenceReadRecord(SearchModel):
@@ -457,8 +561,24 @@ class EvidenceAnnotationTask(SearchModel):
     run_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
-    attempt_base_commit: str = Field(min_length=1)
-    attempt_commit: str = Field(min_length=1)
+    attempt_base_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    attempt_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    attempt_base_commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
+    attempt_commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     attempt_changed_files: list[str] = Field(default_factory=list)
     task_context_source: Literal[
         "goal_plus_raw_goal",
@@ -488,6 +608,14 @@ class EvidenceAnnotationTask(SearchModel):
     view: EvidenceViewRecord | None = None
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def require_attempt_artifacts(self) -> "EvidenceAnnotationTask":
+        if self.attempt_base_ref is None and self.attempt_base_commit is None:
+            raise ValueError("annotation task requires a base artifact")
+        if self.attempt_ref is None and self.attempt_commit is None:
+            raise ValueError("annotation task requires an attempt artifact")
+        return self
 
 
 class StrategySpec(SearchModel):
@@ -579,8 +707,35 @@ class SearchSpec(SearchModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     root_hypotheses: list[str] = Field(default_factory=list)
     strategy: StrategySpec = Field(default_factory=StrategySpec)
-    workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
+    workspace: WorkspaceSpec | None = Field(
+        default_factory=WorkspaceSpec,
+        exclude_if=lambda value: value is None,
+    )
     shared_dir: SharedDirSpec = Field(default_factory=SharedDirSpec)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_host_workspace_contract(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        strategy = value.get("strategy")
+        worker_host = (
+            strategy.worker_host
+            if isinstance(strategy, StrategySpec)
+            else strategy.get("worker_host")
+            if isinstance(strategy, dict)
+            else None
+        )
+        if worker_host != "pi-thinkthread":
+            return value
+        if "workspace" in value:
+            raise ValueError(
+                "pi-thinkthread SearchSpec must omit workspace; ThinkThread fs "
+                "attachment is selected by the Profile and host"
+            )
+        payload = dict(value)
+        payload["workspace"] = None
+        return payload
 
     @field_validator("source_path")
     @classmethod
@@ -792,6 +947,10 @@ class SharedToolRecord(SearchModel):
     tool_id: str = Field(min_length=1)
     candidate_id: str = Field(min_length=1)
     iteration: int = Field(ge=1)
+    source_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     source_commit: str | None = None
     snapshot_hash: str = Field(min_length=1)
     name: str = Field(min_length=1)
@@ -821,10 +980,23 @@ class CandidateTask(SearchModel):
     base_candidate_id: str | None = None
     plan_id: str | None = None
     hypothesis: str
-    workspace: Path
-    workspace_backend: WorkspaceBackend = "copy"
+    workspace: Path | None = None
+    workspace_backend: WorkspaceBackend | None = Field(
+        default="copy",
+        exclude_if=lambda value: value is None,
+    )
     workspace_branch: str | None = None
     workspace_base_revision: str | None = None
+    fs_branch_id: str | None = Field(
+        default=None,
+        pattern=r"^fsbranch-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        exclude_if=lambda value: value is None,
+    )
+    fs_base_snapshot_id: str | None = Field(
+        default=None,
+        pattern=r"^fsnap-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        exclude_if=lambda value: value is None,
+    )
     share_out_dir: Path | None = None
     allowed_files: list[str]
     denied_files: list[str]
@@ -847,6 +1019,13 @@ class CandidateTask(SearchModel):
         payload = dict(value)
         payload.pop("shared_dir", None)
         return payload
+
+    @model_validator(mode="after")
+    def require_workspace_for_git_hosts(self) -> "CandidateTask":
+        worker_host = self.strategy_metadata.get("worker_host")
+        if worker_host != "pi-thinkthread" and self.workspace is None:
+            raise ValueError("non-ThinkThread CandidateTask requires workspace")
+        return self
 
 
 class CandidateProposal(SearchModel):
@@ -964,6 +1143,14 @@ class ScoreReport(SearchModel):
     hardcoding_suspected: bool = False
     disposition: IterationDisposition | None = None
     best_iteration: int | None = Field(default=None, ge=1)
+    best_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    workspace_artifact_after_settlement: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     best_git_head: str | None = None
     workspace_git_head_after_settlement: str | None = None
     shared_tool_staged_entries: list[str] | None = None
@@ -985,6 +1172,14 @@ class ScoreReport(SearchModel):
 
 class PromotionEvidence(SearchModel):
     candidate_id: str
+    selected_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     selected_git_head: str | None = None
     git_head: str | None = None
     artifact_hash: str
@@ -994,6 +1189,11 @@ class PromotionEvidence(SearchModel):
 
 class IterationRecord(SearchModel):
     iteration: int
+    rpc_request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     agent_session_id: str | None = None
     selected_model: str | None = Field(
         default=None,
@@ -1004,6 +1204,30 @@ class IterationRecord(SearchModel):
     model_provenance: dict[str, Any] = Field(default_factory=dict)
     score: float | None = None
     process_passed: bool | None = None
+    attempt_base_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    attempt_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    settled_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    verifier_request_ids: list[str] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    actual_diff: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    cumulative_diff: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     git_head: str | None = None
     attempt_base_git_head: str | None = None
     attempt_changed_files: list[str] = Field(default_factory=list)
@@ -1065,6 +1289,10 @@ class ResultLedgerEntry(SearchModel):
     source_run_id: str
     source_candidate_id: str
     iteration: int | None = Field(default=None, ge=1)
+    artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     git_head: str | None = None
     ledger_git_head: str | None = None
     metric_name: str = Field(min_length=1)
@@ -1091,17 +1319,117 @@ class RunSummary(SearchModel):
 
 
 class BestArtifactRecord(SearchModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     run_id: str
     candidate_id: str
     iteration: int = Field(ge=1)
-    commit: str = Field(min_length=1)
+    artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    commit: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     score: float
     metric_name: str = Field(min_length=1)
     metric_direction: Literal["minimize", "maximize"]
     artifact_hash: str = Field(min_length=1)
-    workspace: str = Field(min_length=1)
+    workspace: str | None = Field(
+        default=None,
+        min_length=1,
+        exclude_if=lambda value: value is None,
+    )
     changed_files: list[str] = Field(default_factory=list)
+    updated_at: str
+
+    @model_validator(mode="after")
+    def require_artifact(self) -> "BestArtifactRecord":
+        if self.artifact_ref is None and self.commit is None:
+            raise ValueError("best artifact record requires artifact_ref or commit")
+        return self
+
+
+class FsRequestRecord(SearchModel):
+    request_id: str = Field(pattern=r"^req-[A-Za-z0-9][A-Za-z0-9_-]*$")
+    operation: Literal[
+        "run",
+        "apply",
+        "replace",
+        "root_snapshot",
+        "branch_snapshot",
+        "snapshot_patch",
+        "snapshot_remove",
+    ]
+    state: Literal[
+        "prepared",
+        "accepted",
+        "running",
+        "needs_recovery",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "closed",
+    ] = "prepared"
+    context: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    error: dict[str, Any] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    created_at: str
+    updated_at: str
+    closed_at: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+
+class FsSnapshotCreationIntent(SearchModel):
+    intent_id: str = Field(min_length=1)
+    operation: Literal["root_snapshot", "branch_snapshot"]
+    request_id: str | None = Field(
+        default=None,
+        pattern=r"^req-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        exclude_if=lambda value: value is None,
+    )
+    branch_id: str | None = Field(
+        default=None,
+        pattern=r"^fsbranch-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        exclude_if=lambda value: value is None,
+    )
+    state: Literal[
+        "prepared",
+        "platform_mutation_started",
+        "created",
+        "failed",
+        "needs_recovery",
+        "cleaned",
+    ] = "prepared"
+    snapshot_id: str | None = Field(
+        default=None,
+        pattern=r"^fsnap-[A-Za-z0-9][A-Za-z0-9_-]*$",
+        exclude_if=lambda value: value is None,
+    )
+    purpose: str = Field(min_length=1)
+    created_at: str
+    updated_at: str
+
+
+class PublicationIntent(SearchModel):
+    state: Literal["prepared", "outcome_unknown", "committed"] = "prepared"
+    base_ref: FsSnapshotArtifactRef
+    target_ref: FsSnapshotArtifactRef
+    request_id: str = Field(pattern=r"^req-[A-Za-z0-9][A-Za-z0-9_-]*$")
+    manifest: dict[str, Any] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    created_at: str
     updated_at: str
 
 
@@ -1110,6 +1438,10 @@ class RunRecord(SearchModel):
     state: RunState
     frozen_spec_id: str
     source_path: str
+    fs_source_relative_path: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     created_at: str
     next_candidate_index: int = 1
     next_plan_index: int = 1
@@ -1121,8 +1453,32 @@ class RunRecord(SearchModel):
     selected_candidate_id: str | None = None
     selected_score: float | None = None
     selected_iteration: int | None = None
+    baseline_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    selected_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     selected_git_head: str | None = None
     selected_artifact_hash: str | None = None
+    publication: PublicationIntent | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    fs_requests: list[FsRequestRecord] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    fs_snapshot_intents: list[FsSnapshotCreationIntent] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    fs_cleanup: list[dict[str, Any]] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
     budget_used: dict[str, Any] = Field(default_factory=dict)
     source_run_id: str | None = None
     inherited_research: dict[str, Any] = Field(default_factory=dict)
@@ -1148,9 +1504,21 @@ class CandidateRecord(SearchModel):
     promotion_report: ScoreReport | None = None
     promotion_evidence: PromotionEvidence | None = None
     pending_tool_copies: list[ToolCopyReceipt] = Field(default_factory=list, exclude_if=lambda value: not value)
+    pending_fs_tool_stages: list[dict[str, Any]] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
     iterations: list[IterationRecord] = Field(default_factory=list)
     results_ledger: list[ResultLedgerEntry] = Field(default_factory=list)
     results_ledger_git_head: str | None = None
+    settled_artifact_ref: ArtifactRef | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    fs_snapshot_intents: list[FsSnapshotCreationIntent] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
 
 
 class AgentSessionRecord(SearchModel):
@@ -1167,9 +1535,15 @@ class AgentSessionRecord(SearchModel):
         exclude_if=lambda value: value is None,
     )
     model_provenance: dict[str, Any] = Field(default_factory=dict)
-    workspace: Path
+    workspace: Path | None = None
     launch: dict[str, Any] = Field(default_factory=dict)
     counters: dict[str, int] = Field(default_factory=dict)
     global_evidence_reads: list[GlobalEvidenceReadRecord] = Field(
         default_factory=list
     )
+
+    @model_validator(mode="after")
+    def require_workspace_for_git_hosts(self) -> "AgentSessionRecord":
+        if self.host != "pi-thinkthread" and self.workspace is None:
+            raise ValueError("non-ThinkThread AgentSessionRecord requires workspace")
+        return self

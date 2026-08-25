@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import base64
 import calendar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -20,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib
 import uuid
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 try:
@@ -44,9 +46,13 @@ from goal_plus.models import (
     EvidenceAnnotationTask,
     FeedbackPolicy,
     EvidenceViewRecord,
+    FsSnapshotArtifactRef,
+    FsSnapshotCreationIntent,
+    FsRequestRecord,
     FrozenSpec,
     GlobalEvidenceReadRecord,
     GlobalEvidenceViewReference,
+    GitCommitArtifactRef,
     IterationDisposition,
     PromotionEvidence,
     RunRecord,
@@ -54,6 +60,7 @@ from goal_plus.models import (
     RunSummary,
     IterationRecord,
     ModelSpec,
+    PublicationIntent,
     SelectedModel,
     ResultLedgerEntry,
     ResolvedCodexProvider,
@@ -80,6 +87,7 @@ from goal_plus.shared_dir import (
     TOOL_INBOX_RELATIVE_PATH,
     TOOL_VIEW_MAX_CONTENT_BYTES,
     SharedDirManager,
+    SharedDirSettlement,
 )
 from goal_plus.workspaces import (
     IGNORED_NAMES,
@@ -89,6 +97,16 @@ from goal_plus.workspaces import (
     list_files,
     list_source_files,
     materialize_candidate_workspace,
+)
+from goal_plus.thinkthread_agent_posix import (
+    AgentPosixBridgeError,
+    AgentPosixSdkClient,
+    new_request_id,
+)
+from goal_plus.artifacts import (
+    FsSnapshotArtifactReader,
+    GitArtifactReader,
+    fs_path_text,
 )
 
 
@@ -118,6 +136,7 @@ SUPPLEMENTAL_EVALUATION_ENABLED_ENV = (
 SUPPLEMENTAL_EVALUATION_REQUIRED_ENV = (
     "GOAL_PLUS_SUPPLEMENTAL_EVALUATION_REQUIRED"
 )
+_UNSET = object()
 
 
 def _boolean_environment_value(
@@ -171,6 +190,20 @@ class _CandidateArtifactState:
     git_artifact_clean: bool
 
 
+@dataclass(frozen=True)
+class _FsAttemptState:
+    base_ref: FsSnapshotArtifactRef
+    attempt_ref: FsSnapshotArtifactRef
+    changed_files: list[str]
+    actual_diff: str
+    cumulative_diff: str
+    touched_denied_files: bool
+    changed_outside_allowed: bool
+    artifact_hash: str
+    continuation_required: bool
+    snapshot_request_id: str | None = None
+
+
 class _BoundedOutput:
     def __init__(self, limit: int = VERIFIER_OUTPUT_LIMIT_BYTES) -> None:
         self.limit = limit
@@ -204,6 +237,17 @@ def _bounded_log(value: str) -> str:
     marker = b"[... log truncated ...]\n"
     tail = encoded[-(VERIFIER_LOG_LIMIT_BYTES - len(marker)) :]
     return (marker + tail).decode("utf-8", errors="replace")
+
+
+def _bounded_projection(value: str | None, max_bytes: int) -> str | None:
+    if value is None:
+        return None
+    encoded = value.encode("utf-8", errors="replace")
+    if len(encoded) <= max_bytes:
+        return value
+    marker = b"\n[diff projection truncated]\n"
+    retained = encoded[: max(0, max_bytes - len(marker))]
+    return (retained + marker).decode("utf-8", errors="replace")
 
 
 def _verifier_output_tail_detail(stdout: str, stderr: str) -> str:
@@ -390,7 +434,7 @@ class FileSearchRuntime:
 
     def list_available_models(
         self,
-        host: Literal["codex", "pi-rpc"],
+        host: Literal["codex", "pi-rpc", "pi-thinkthread"],
         query: str | None = None,
     ) -> dict[str, Any]:
         adapter = get_agent_host_adapter(host)
@@ -399,6 +443,10 @@ class FileSearchRuntime:
             "adapter_version": adapter.adapter_version,
             "models": adapter.list_available_models(query),
         }
+
+    @staticmethod
+    def _agent_posix_client() -> AgentPosixSdkClient:
+        return AgentPosixSdkClient()
 
     @staticmethod
     def _match_available_model(
@@ -490,6 +538,7 @@ class FileSearchRuntime:
         capture_output: bool,
         timeout: int,
         check: bool,
+        start_new_session: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         if not text or not capture_output:
             raise ValueError("verifier processes require text capture")
@@ -500,7 +549,7 @@ class FileSearchRuntime:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
+            start_new_session=start_new_session,
         )
         stdout_capture = _BoundedOutput()
         stderr_capture = _BoundedOutput()
@@ -754,6 +803,9 @@ class FileSearchRuntime:
                                 capture_output=True,
                                 timeout=command.timeout_seconds,
                                 check=False,
+                                start_new_session=(
+                                    spec.strategy.worker_host != "pi-thinkthread"
+                                ),
                             )
                 except subprocess.TimeoutExpired as exc:
                     stdout = exc.stdout if isinstance(exc.stdout, str) else ""
@@ -919,6 +971,157 @@ class FileSearchRuntime:
             return None
         return plan.selected_models[slot - 1]
 
+    @staticmethod
+    def _capability_ids(view: dict[str, Any]) -> set[str]:
+        raw = view.get("capabilities")
+        if not isinstance(raw, list):
+            return set()
+        return {
+            str(item["id"])
+            for item in raw
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+
+    @staticmethod
+    def _fs_source_relative_path(source_path: str) -> str:
+        source = Path(source_path).resolve()
+        execution_root = Path.cwd().resolve()
+        try:
+            relative = source.relative_to(execution_root)
+        except ValueError as exc:
+            raise ValueError(
+                "pi-thinkthread source_path must be within the Root execution "
+                f"workspace {execution_root}: {source}"
+            ) from exc
+        return relative.as_posix() if relative.parts else "."
+
+    def _create_pi_thinkthread_baseline(self, run: RunRecord) -> RunRecord:
+        now = utc_timestamp()
+        request_id = new_request_id()
+        intent = FsSnapshotCreationIntent(
+            intent_id=f"snapshot-intent-{uuid.uuid4()}",
+            operation="root_snapshot",
+            request_id=request_id,
+            state="prepared",
+            purpose="initial_baseline",
+            created_at=now,
+            updated_at=now,
+        )
+        run.fs_source_relative_path = self._fs_source_relative_path(run.source_path)
+        run.fs_snapshot_intents.append(intent)
+        run.fs_requests.append(
+            FsRequestRecord(
+                request_id=request_id,
+                operation="root_snapshot",
+                context={"purpose": "initial_baseline"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        self._write_run(run)
+
+        client = self._agent_posix_client()
+        client.preflight()
+        self_view = client.self_view()
+        if self_view.get("parentThinkthreadId") is not None:
+            raise RuntimeError(
+                "pi-thinkthread Search run baseline must be created by a Root Agent"
+            )
+        missing = {
+            "thinkthread.child",
+            "thinkthread.message",
+            "thinkthread.fs",
+        } - self._capability_ids(self_view)
+        if missing:
+            raise RuntimeError(
+                "pi-thinkthread Root lacks required capabilities: "
+                + ", ".join(sorted(missing))
+            )
+        fs_view = client.invoke("fs.stat")
+        if fs_view.get("kind") != "direct":
+            raise RuntimeError(
+                "pi-thinkthread Root Profile must use rootFsMode=direct"
+            )
+
+        intent.state = "platform_mutation_started"
+        intent.updated_at = utc_timestamp()
+        self._write_run(run)
+        try:
+            snapshot = self._invoke_durable_fs_operation(
+                client=client,
+                run_id=run.run_id,
+                request_id=request_id,
+                method="fs.snapshot.create",
+                params={"requestId": request_id},
+                timeout_seconds=120,
+            )
+        except AgentPosixBridgeError as exc:
+            with self._run_transaction(run.run_id):
+                latest = self._load_run(run.run_id)
+                current_intent = next(
+                    item
+                    for item in latest.fs_snapshot_intents
+                    if item.intent_id == intent.intent_id
+                )
+                current_intent.state = "failed"
+                current_intent.updated_at = utc_timestamp()
+                latest.state = RunState.FAILED
+                latest.budget_used["baseline_snapshot_error"] = {
+                    "request_id": request_id,
+                    "error_code": exc.code,
+                    "message": str(exc),
+                }
+                self._write_run(latest)
+            raise
+        except RuntimeError:
+            with self._run_transaction(run.run_id):
+                latest = self._load_run(run.run_id)
+                current_intent = next(
+                    item
+                    for item in latest.fs_snapshot_intents
+                    if item.intent_id == intent.intent_id
+                )
+                current_intent.state = "needs_recovery"
+                current_intent.updated_at = utc_timestamp()
+                self._write_run(latest)
+            raise
+        snapshot_id = snapshot.get("snapshotId")
+        if not isinstance(snapshot_id, str) or not snapshot_id.startswith("fsnap-"):
+            with self._run_transaction(run.run_id):
+                latest = self._load_run(run.run_id)
+                current_intent = next(
+                    item
+                    for item in latest.fs_snapshot_intents
+                    if item.intent_id == intent.intent_id
+                )
+                current_intent.state = "needs_recovery"
+                current_intent.updated_at = utc_timestamp()
+                latest.state = RunState.NEEDS_RECOVERY
+                latest.budget_used["needs_recovery_reason"] = (
+                    f"fs.snapshot.create request {request_id} returned no snapshotId"
+                )
+                self._write_run(latest)
+            raise RuntimeError(
+                f"pi-thinkthread run {run.run_id} baseline snapshot omitted snapshotId"
+            )
+        with self._run_transaction(run.run_id):
+            latest = self._load_run(run.run_id)
+            current_intent = next(
+                item
+                for item in latest.fs_snapshot_intents
+                if item.intent_id == intent.intent_id
+            )
+            current_intent.state = "created"
+            current_intent.snapshot_id = snapshot_id
+            current_intent.updated_at = utc_timestamp()
+            latest.baseline_artifact_ref = FsSnapshotArtifactRef(
+                snapshot_id=snapshot_id
+            )
+            latest.budget_used.pop("needs_recovery_reason", None)
+            self._write_run(latest)
+        self._close_fs_requests_after_evidence(run.run_id, [request_id], client)
+        return self._load_run(run.run_id)
+
     def create_run(
         self,
         frozen_spec_id: str,
@@ -953,9 +1156,12 @@ class FileSearchRuntime:
         )
         self._write_run(run)
         (self._run_dir(run_id) / "candidates").mkdir(parents=True, exist_ok=True)
-        (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
+        if frozen.spec.strategy.worker_host != "pi-thinkthread":
+            (self._run_dir(run_id) / "workspace").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "plans").mkdir(parents=True, exist_ok=True)
         (self._run_dir(run_id) / "agent_sessions").mkdir(parents=True, exist_ok=True)
+        if frozen.spec.strategy.worker_host == "pi-thinkthread":
+            run = self._create_pi_thinkthread_baseline(run)
         if source_run_id:
             with self._run_transaction(source_run_id):
                 source_run = self._load_run(source_run_id)
@@ -1210,7 +1416,8 @@ class FileSearchRuntime:
             key=lambda record: record.candidate_id,
         )
         for record in plan_records:
-            self._ensure_results_tsv(record, frozen.spec.metric_name)
+            if frozen.spec.strategy.worker_host != "pi-thinkthread":
+                self._ensure_results_tsv(record, frozen.spec.metric_name)
             self._write_candidate_record(run_id, record)
         if all_records:
             highest_index = max(
@@ -1287,7 +1494,12 @@ class FileSearchRuntime:
                 task=task,
                 results_ledger=self._inherited_results_ledger(run, task),
             )
-            self._ensure_results_tsv(record, frozen.spec.metric_name)
+            if frozen.spec.strategy.worker_host != "pi-thinkthread":
+                self._ensure_results_tsv(record, frozen.spec.metric_name)
+                if record.results_ledger_git_head is not None:
+                    record.settled_artifact_ref = GitCommitArtifactRef(
+                        commit=record.results_ledger_git_head
+                    )
             self._write_candidate_record(run_id, record)
             tasks.append(task)
             run.next_candidate_index += 1
@@ -1458,7 +1670,7 @@ class FileSearchRuntime:
                 worker_budget_override=worker_budget_override,
             )
             host = frozen.spec.strategy.worker_host
-            if host == "pi-rpc":
+            if host in {"pi-rpc", "pi-thinkthread"}:
                 launch["run_id"] = run_id
             host_handle = AgentHostHandle(host=host)
             if host == "codex":
@@ -1470,6 +1682,15 @@ class FileSearchRuntime:
                     update={
                         "external_id": launch.get("session_id", agent_session_id),
                         "metadata": {"continuation": "native_session"},
+                    }
+                )
+            elif host == "pi-thinkthread":
+                host_handle = host_handle.model_copy(
+                    update={
+                        "metadata": {
+                            "continuation": "retained_child_session",
+                            "fs_base_snapshot_id": candidate_record.task.fs_base_snapshot_id,
+                        },
                     }
                 )
             session = AgentSessionRecord(
@@ -1548,7 +1769,12 @@ class FileSearchRuntime:
                     "source": "bound_metadata",
                 }
 
-        model_handoff, handoff_error = self._workspace_model_handoff(session.workspace)
+        model_handoff: dict[str, Any] | None = None
+        handoff_error: str | None = None
+        if session.workspace is not None:
+            model_handoff, handoff_error = self._workspace_model_handoff(
+                session.workspace
+            )
         if model_handoff is not None:
             progress_payload = dict(progress) if isinstance(progress, dict) else {}
             progress_payload.update(
@@ -1707,14 +1933,42 @@ class FileSearchRuntime:
                     ),
                 }
             )
-        results_were_initialized = candidate_record.results_ledger_git_head is not None
-        results_tsv = self._ensure_results_tsv(
-            candidate_record,
-            frozen.spec.metric_name,
-        )
-        if not results_were_initialized:
-            self._write_candidate_record(session.run_id, candidate_record)
-        workspace_status = self._git_status(candidate_record.task.workspace)
+        is_thinkthread = frozen.spec.strategy.worker_host == "pi-thinkthread"
+        results_tsv: Path | None = None
+        if not is_thinkthread:
+            results_were_initialized = (
+                candidate_record.results_ledger_git_head is not None
+            )
+            results_tsv = self._ensure_results_tsv(
+                candidate_record,
+                frozen.spec.metric_name,
+            )
+            if not results_were_initialized:
+                self._write_candidate_record(session.run_id, candidate_record)
+            workspace_status = self._git_status(candidate_record.task.workspace)
+            workspace_resume = {
+                "git_head": self._git_head(candidate_record.task.workspace),
+                "git_status": workspace_status,
+                "dirty": bool(workspace_status),
+                "changed_files": self._detect_changed_files(
+                    Path(run.source_path), candidate_record.task.workspace
+                ),
+            }
+        else:
+            workspace_resume = {
+                "fs_branch_id": candidate_record.task.fs_branch_id,
+                "baseline_artifact_ref": (
+                    run.baseline_artifact_ref.model_dump(mode="json")
+                    if run.baseline_artifact_ref is not None
+                    else None
+                ),
+                "settled_artifact_ref": (
+                    candidate_record.settled_artifact_ref.model_dump(mode="json")
+                    if candidate_record.settled_artifact_ref is not None
+                    else None
+                ),
+                "changed_files": list(candidate_record.detected_changed_files),
+            }
         dispatch_count = session.host_handle.metadata.get("dispatch_count")
         dispatch_count = dispatch_count if isinstance(dispatch_count, int) else 0
         continuation_mode = session.launch.get("continuation")
@@ -1734,13 +1988,13 @@ class FileSearchRuntime:
             "host": session.host,
             "host_handle": session.host_handle.model_dump(mode="json"),
             "directive": session.directive,
-            "workspace": str(session.workspace),
+            "workspace": "." if is_thinkthread else str(session.workspace),
             "objective": frozen.spec.objective,
             "metric_name": frozen.spec.metric_name,
             "metric_direction": frozen.spec.metric_direction,
             "run_budget": frozen.spec.budget.model_dump(mode="json"),
             "candidate_task": candidate_record.task.model_dump(mode="json"),
-            "results_tsv": str(results_tsv),
+            "results_tsv": None if results_tsv is None else str(results_tsv),
             "results": [
                 entry.model_dump(mode="json")
                 for entry in candidate_record.results_ledger
@@ -1752,14 +2006,7 @@ class FileSearchRuntime:
                 "dispatch_count": dispatch_count,
                 "previous_sessions": previous_sessions,
                 "latest_handoff": latest_handoff,
-                "workspace": {
-                    "git_head": self._git_head(candidate_record.task.workspace),
-                    "git_status": workspace_status,
-                    "dirty": bool(workspace_status),
-                    "changed_files": self._detect_changed_files(
-                        Path(run.source_path), candidate_record.task.workspace
-                    ),
-                },
+                "workspace": workspace_resume,
             },
             "iterations": self.list_iterations(session.run_id, session.candidate_id),
         }
@@ -1787,7 +2034,12 @@ class FileSearchRuntime:
                 GlobalEvidenceViewReference(
                     candidate_id=str(entry["candidate_id"]),
                     iteration=int(entry["iteration"]),
-                    commit=str(entry["commit"]),
+                    artifact_ref=entry.get("artifact_ref"),
+                    commit=(
+                        str(entry["commit"])
+                        if entry.get("commit") is not None
+                        else None
+                    ),
                     view_created_at=str(entry["view_created_at"]),
                     supplemental_evaluation_present=(
                         bool(entry.get("supplemental_available"))
@@ -1795,7 +2047,10 @@ class FileSearchRuntime:
                 )
                 for entry in view
                 if entry["view"] is not None
-                and entry["commit"] is not None
+                and (
+                    entry.get("artifact_ref") is not None
+                    or entry.get("commit") is not None
+                )
                 and entry["view_created_at"] is not None
             ]
             read_record = GlobalEvidenceReadRecord(
@@ -1865,6 +2120,12 @@ class FileSearchRuntime:
             or task.candidate_id != candidate_id
             or task.iteration != iteration
             or task.attempt_commit != entry["commit"]
+            or (
+                task.attempt_ref.model_dump(mode="json")
+                if task.attempt_ref is not None
+                else None
+            )
+            != entry.get("artifact_ref")
         ):
             raise RuntimeError("supplemental Evidence identity does not match iteration")
         if view.supplemental_evaluation is None:
@@ -1873,6 +2134,7 @@ class FileSearchRuntime:
         return {
             "candidate_id": candidate_id,
             "iteration": iteration,
+            "artifact_ref": entry.get("artifact_ref"),
             "commit": entry["commit"],
             "supplemental_evaluation": view.supplemental_evaluation.model_dump(
                 mode="json"
@@ -1902,6 +2164,7 @@ class FileSearchRuntime:
         summary: str,
         entrypoint: str,
         candidate_relative_source_paths: list[str],
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         session = self._load_agent_session_by_id(agent_session_id)
         lock_path = self._candidate_dir(session.run_id, session.candidate_id) / "verifier.lock"
@@ -1916,6 +2179,19 @@ class FileSearchRuntime:
                 if record.status not in {"created", "evaluated"}:
                     raise RuntimeError(
                         f"cannot stage a tool for candidate in status {record.status}"
+                    )
+                if frozen.spec.strategy.worker_host == "pi-thinkthread":
+                    return self._stage_pi_thinkthread_shared_tool(
+                        run=run,
+                        frozen=frozen,
+                        record=record,
+                        name=name,
+                        summary=summary,
+                        entrypoint=entrypoint,
+                        candidate_relative_source_paths=(
+                            candidate_relative_source_paths
+                        ),
+                        idempotency_key=idempotency_key,
                     )
                 if record.task.share_out_dir is None:
                     raise RuntimeError("shared-dir candidate has no share-out directory")
@@ -1934,8 +2210,116 @@ class FileSearchRuntime:
                     max_depth=limits.max_depth,
                 )
 
+    def _stage_pi_thinkthread_shared_tool(
+        self,
+        *,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        record: CandidateRecord,
+        name: str,
+        summary: str,
+        entrypoint: str,
+        candidate_relative_source_paths: list[str],
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_name = " ".join(name.split()).strip()
+        normalized_summary = " ".join(summary.split()).strip()
+        normalized_entrypoint = entrypoint.strip()
+        if not normalized_name or len(normalized_name) > 120:
+            raise ValueError("tool name must contain 1-120 characters")
+        if not normalized_summary or len(normalized_summary) > 500:
+            raise ValueError("tool summary must contain 1-500 characters")
+        if not normalized_entrypoint or len(normalized_entrypoint) > 300:
+            raise ValueError("tool entrypoint must contain 1-300 characters")
+        limits = frozen.spec.shared_dir
+        if not candidate_relative_source_paths:
+            raise ValueError("candidate_relative_source_paths must not be empty")
+        if len(candidate_relative_source_paths) > limits.max_files_per_iteration:
+            raise ValueError("tool source list exceeds shared_dir file limit")
+        prefix = PurePosixPath(TOOL_DRAFTS_RELATIVE_PATH)
+        normalized_paths: list[str] = []
+        for raw_path in candidate_relative_source_paths:
+            path = PurePosixPath(raw_path)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError("tool source paths must be relative without '..'")
+            try:
+                relative = path.relative_to(prefix)
+            except ValueError as exc:
+                raise ValueError(
+                    f"tool sources must be under {TOOL_DRAFTS_RELATIVE_PATH}"
+                ) from exc
+            if str(relative) == ".":
+                raise ValueError("select explicit entries below the tool draft directory")
+            normalized_paths.append(path.as_posix())
+        if len(normalized_paths) != len(set(normalized_paths)):
+            raise ValueError("tool source paths must be unique")
+        for left_index, left in enumerate(normalized_paths):
+            left_path = PurePosixPath(left)
+            for right in normalized_paths[left_index + 1 :]:
+                right_path = PurePosixPath(right)
+                if left_path in right_path.parents or right_path in left_path.parents:
+                    raise ValueError("tool source paths must be non-overlapping")
+        if idempotency_key is not None:
+            existing = next(
+                (
+                    item
+                    for item in record.pending_fs_tool_stages
+                    if item.get("rpc_request_id") == idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                expected = {
+                    "name": normalized_name,
+                    "summary": normalized_summary,
+                    "entrypoint": normalized_entrypoint,
+                    "source_paths": normalized_paths,
+                }
+                if any(existing.get(key) != value for key, value in expected.items()):
+                    raise RuntimeError(
+                        "shared tool idempotency key was reused with new content"
+                    )
+                return {
+                    **existing,
+                    "staging_path": f"snapshot://next/{existing['staged_name']}",
+                    "file_count": None,
+                    "size_bytes": None,
+                    "path_count": None,
+                }
+        if len(record.pending_fs_tool_stages) >= limits.max_tools_per_iteration:
+            raise ValueError("pending shared tools exceed max_tools_per_iteration")
+        stage_id = f"stage_{uuid.uuid4().hex}"
+        staged_name = f"tool-{sha256_text(normalized_name)[:12]}-{stage_id[-8:]}"
+        stage = {
+            "stage_id": stage_id,
+            "staged_name": staged_name,
+            "name": normalized_name,
+            "summary": normalized_summary,
+            "entrypoint": normalized_entrypoint,
+            "source_paths": normalized_paths,
+            "staged_at": utc_timestamp(),
+            **(
+                {"rpc_request_id": idempotency_key}
+                if idempotency_key is not None
+                else {}
+            ),
+        }
+        record.pending_fs_tool_stages.append(stage)
+        self._write_candidate_record(run.run_id, record)
+        return {
+            **stage,
+            "staging_path": f"snapshot://next/{staged_name}",
+            "file_count": None,
+            "size_bytes": None,
+            "path_count": None,
+        }
+
     def copy_shared_tool(
-        self, agent_session_id: str, tool_id: str, snapshot_hash: str
+        self,
+        agent_session_id: str,
+        tool_id: str,
+        snapshot_hash: str,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         session = self._load_agent_session_by_id(agent_session_id)
         lock_path = self._candidate_dir(session.run_id, session.candidate_id) / "verifier.lock"
@@ -1953,11 +2337,53 @@ class FileSearchRuntime:
                 ):
                     raise ValueError("pending tool copies exceed shared_dir max_tools_per_iteration")
                 if any(item.tool_id == tool_id for item in record.pending_tool_copies):
+                    existing = next(
+                        item
+                        for item in record.pending_tool_copies
+                        if item.tool_id == tool_id
+                    )
+                    if (
+                        idempotency_key is not None
+                        and existing.rpc_request_id == idempotency_key
+                        and existing.snapshot_hash == snapshot_hash
+                    ):
+                        return {
+                            **existing.model_dump(mode="json"),
+                            "state": "copy_required_at_turn_boundary",
+                            "logical_inbox": (
+                                f"{TOOL_INBOX_RELATIVE_PATH}/{existing.receipt_id}"
+                            ),
+                        }
                     raise ValueError(
                         "tool already copied for the next verifier iteration: "
                         f"{tool_id}"
                     )
                 tool = self._resolve_shared_tool(session.run_id, tool_id, snapshot_hash)
+                if frozen.spec.strategy.worker_host == "pi-thinkthread":
+                    base_ref = self._fs_snapshot_ref(
+                        record.settled_artifact_ref or run.baseline_artifact_ref,
+                        field="tool copy candidate base",
+                    )
+                    receipt = ToolCopyReceipt(
+                        receipt_id=f"copy_{uuid.uuid4().hex[:24]}",
+                        rpc_request_id=idempotency_key,
+                        tool_id=tool.tool_id,
+                        snapshot_hash=tool.snapshot_hash,
+                        source_artifact_ref=tool.source_artifact_ref,
+                        source_commit=tool.source_commit,
+                        agent_session_id=agent_session_id,
+                        candidate_base_artifact_ref=base_ref,
+                        copied_at=utc_timestamp(),
+                    )
+                    record.pending_tool_copies.append(receipt)
+                    self._write_candidate_record(session.run_id, record)
+                    return {
+                        **receipt.model_dump(mode="json"),
+                        "state": "copy_required_at_turn_boundary",
+                        "logical_inbox": (
+                            f"{TOOL_INBOX_RELATIVE_PATH}/{receipt.receipt_id}"
+                        ),
+                    }
                 if record.results_ledger_git_head is None:
                     raise RuntimeError("tool copy requires a Git-backed candidate")
                 receipt_id = f"copy_{uuid.uuid4().hex[:24]}"
@@ -1972,8 +2398,19 @@ class FileSearchRuntime:
                     receipt_id=receipt_id,
                     tool_id=tool.tool_id,
                     snapshot_hash=tool.snapshot_hash,
+                    source_artifact_ref=(
+                        tool.source_artifact_ref
+                        or (
+                            GitCommitArtifactRef(commit=tool.source_commit)
+                            if tool.source_commit is not None
+                            else None
+                        )
+                    ),
                     source_commit=tool.source_commit,
                     agent_session_id=agent_session_id,
+                    candidate_base_artifact_ref=GitCommitArtifactRef(
+                        commit=record.results_ledger_git_head
+                    ),
                     candidate_base_git_head=record.results_ledger_git_head,
                     inbox_path=inbox_path,
                     copied_at=utc_timestamp(),
@@ -1990,11 +2427,51 @@ class FileSearchRuntime:
         agent_session_id: str | None = None,
         hypothesis: str | None = None,
         toolization_decision: ToolizationDecision | dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> ScoreReport:
         if scope not in {"process", "promotion"}:
             raise ValueError("verifier scope must be 'process' or 'promotion'")
         lock_path = self._candidate_dir(run_id, candidate_id) / "verifier.lock"
         with exclusive_file_lock(lock_path):
+            if idempotency_key is not None:
+                record = self._load_candidate_record(run_id, candidate_id)
+                matching = [
+                    item
+                    for item in record.iterations
+                    if item.rpc_request_id == idempotency_key
+                ]
+                if len(matching) > 1:
+                    raise RuntimeError(
+                        "verifier idempotency key is bound to multiple iterations"
+                    )
+                if matching:
+                    if (
+                        matching[0] is not record.iterations[-1]
+                        or record.score_report is None
+                    ):
+                        raise RuntimeError(
+                            "verifier idempotency replay cannot recover its exact report"
+                        )
+                    run = self._load_run(run_id)
+                    frozen = self._load_frozen_spec(run.frozen_spec_id)
+                    if frozen.spec.strategy.worker_host != "pi-thinkthread":
+                        raise RuntimeError(
+                            "verifier idempotency keys are reserved for pi-thinkthread"
+                        )
+                    self._reconcile_pi_thinkthread_iteration_replay(
+                        run_id=run_id,
+                        candidate_id=candidate_id,
+                        iteration=matching[0],
+                        report=record.score_report,
+                    )
+                    if scope == "process" and agent_session_id is not None:
+                        self._kick_evidence_annotator(run_id)
+                    self._close_fs_requests_after_evidence(
+                        run_id,
+                        list(matching[0].verifier_request_ids),
+                        self._agent_posix_client(),
+                    )
+                    return record.score_report
             if scope == "process" and agent_session_id is None:
                 with self._run_transaction(run_id):
                     record = self._load_candidate_record(run_id, candidate_id)
@@ -2010,10 +2487,218 @@ class FileSearchRuntime:
                 agent_session_id=agent_session_id,
                 hypothesis=hypothesis,
                 toolization_decision=toolization_decision,
+                idempotency_key=idempotency_key,
             )
         if scope == "process" and agent_session_id is not None:
             self._kick_evidence_annotator(run_id)
         return report
+
+    def _reconcile_pi_thinkthread_iteration_replay(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        iteration: IterationRecord,
+        report: ScoreReport,
+    ) -> None:
+        """Repair run-derived state after candidate Evidence won a crash race.
+
+        ``candidate.json`` and ``run.json`` are separate atomic files. A worker
+        RPC replay can therefore observe the exact durable iteration before
+        the corresponding run best/restore intent was written. Rebuild only
+        the idempotent derived state bound to that iteration before returning
+        its saved report.
+        """
+
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            frozen = self._load_frozen_spec(run.frozen_spec_id)
+            record = self._load_candidate_record(run_id, candidate_id)
+            exact = next(
+                (
+                    item
+                    for item in record.iterations
+                    if item.rpc_request_id == iteration.rpc_request_id
+                    and item.iteration == iteration.iteration
+                    and item.attempt_ref == iteration.attempt_ref
+                ),
+                None,
+            )
+            if exact is None or exact is not record.iterations[-1]:
+                raise RuntimeError(
+                    "verifier idempotency replay lost its exact candidate Evidence"
+                )
+
+            replay_requests = [
+                item
+                for item in run.fs_requests
+                if item.request_id in exact.verifier_request_ids
+            ]
+            reason = str(run.budget_used.get("needs_recovery_reason") or "")
+            if (
+                run.state == RunState.NEEDS_RECOVERY
+                and replay_requests
+                and all(
+                    item.state in {"succeeded", "failed", "cancelled", "closed"}
+                    for item in replay_requests
+                )
+                and any(item.request_id in reason for item in replay_requests)
+            ):
+                previous = run.budget_used.pop(
+                    "fs_recovery_previous_state", RunState.RUNNING.value
+                )
+                run.budget_used.pop("needs_recovery_reason", None)
+                run.state = RunState(str(previous))
+
+            if exact.disposition in {"discard", "failure"}:
+                attempt = self._fs_snapshot_ref(
+                    exact.attempt_ref,
+                    field="replayed restore attempt",
+                )
+                target = self._fs_snapshot_ref(
+                    exact.settled_ref,
+                    field="replayed restore target",
+                )
+                branch_id = record.task.fs_branch_id
+                if not isinstance(branch_id, str):
+                    raise RuntimeError("replayed restore omitted candidate branch")
+                if not any(
+                    item.get("kind") == "branch_restore"
+                    and item.get("candidate_id") == candidate_id
+                    and item.get("branch_id") == branch_id
+                    and item.get("attempt_snapshot_id") == attempt.snapshot_id
+                    and item.get("target_snapshot_id") == target.snapshot_id
+                    for item in run.fs_cleanup
+                ):
+                    run.fs_cleanup.append(
+                        {
+                            "kind": "branch_restore",
+                            "state": "restore_required",
+                            "candidate_id": candidate_id,
+                            "branch_id": branch_id,
+                            "attempt_snapshot_id": attempt.snapshot_id,
+                            "target_snapshot_id": target.snapshot_id,
+                            "created_at": utc_timestamp(),
+                        }
+                    )
+
+            should_write_best = False
+            if (
+                exact.disposition in {"keep", "retain"}
+                and report.aggregate_score is not None
+            ):
+                if run.best_score is None:
+                    should_write_best = True
+                else:
+                    better = (
+                        report.aggregate_score > run.best_score
+                        if frozen.spec.metric_direction == "maximize"
+                        else report.aggregate_score < run.best_score
+                    )
+                    if better or run.best_candidate_id == candidate_id:
+                        should_write_best = True
+                    elif report.aggregate_score == run.best_score:
+                        best_path = self._run_dir(run_id) / "best.json"
+                        if not best_path.exists():
+                            should_write_best = True
+                        else:
+                            prior = BestArtifactRecord.model_validate(
+                                load_json(best_path)
+                            )
+                            should_write_best = prior.updated_at <= exact.created_at
+                if should_write_best:
+                    run.best_score = report.aggregate_score
+                    run.best_candidate_id = candidate_id
+                    self._write_best_fs_artifact(
+                        run,
+                        frozen.spec,
+                        record,
+                        exact,
+                    )
+
+            run.candidates_evaluated = len(
+                [
+                    item
+                    for item in self._load_candidate_records(run_id)
+                    if item.status == "evaluated"
+                ]
+            )
+            self._write_run(run)
+            try:
+                self._create_evidence_annotation_task(
+                    run_id,
+                    frozen,
+                    candidate_id,
+                    exact,
+                )
+            except Exception:
+                pass
+
+        if exact.agent_session_id is not None:
+            session = self._load_agent_session_by_id(
+                exact.agent_session_id,
+                run_id=run_id,
+            )
+            expected_runs = sum(
+                1
+                for item in record.iterations
+                if item.agent_session_id == exact.agent_session_id
+            )
+            counters = dict(session.counters)
+            counters["verifier_runs"] = max(
+                int(counters.get("verifier_runs", 0)),
+                expected_runs,
+            )
+            session.counters = counters
+            session.updated_at = utc_timestamp()
+            self._write_agent_session(session)
+
+    def finalize_pi_thinkthread_candidate(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        agent_session_id: str,
+        idempotency_key: str | None = None,
+    ) -> ScoreReport:
+        """Bind a turn-boundary verifier to the retained Child session.
+
+        The pool calls this only after ThinkThread reports that the Child
+        execution is absent.  It captures the private branch once more so edits
+        made after the worker's last verifier cannot escape exact-snapshot
+        settlement.
+        """
+
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        if frozen.spec.strategy.worker_host != "pi-thinkthread":
+            raise RuntimeError(
+                "turn-boundary exact verification requires worker_host=pi-thinkthread"
+            )
+        session = self._load_agent_session_by_id(agent_session_id, run_id=run_id)
+        if session.candidate_id != candidate_id or session.host != "pi-thinkthread":
+            raise PermissionError(
+                "turn-boundary verifier session does not match the ThinkThread candidate"
+            )
+        child_id = session.host_handle.external_id
+        if not child_id:
+            raise RuntimeError("turn-boundary verifier has no retained Child id")
+        child = self._agent_posix_client().invoke(
+            "thinkthread.get",
+            {"id": child_id},
+        )
+        if child.get("executionState") != "absent":
+            raise RuntimeError(
+                "turn-boundary verifier requires absent Child execution"
+            )
+        return self.run_verifier(
+            run_id,
+            candidate_id,
+            scope="process",
+            agent_session_id=agent_session_id,
+            hypothesis="parent turn-boundary exact snapshot verification",
+            idempotency_key=idempotency_key,
+        )
 
     def _run_verifier(
         self,
@@ -2023,6 +2708,7 @@ class FileSearchRuntime:
         agent_session_id: str | None = None,
         hypothesis: str | None = None,
         toolization_decision: ToolizationDecision | dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> ScoreReport:
         """Subagent self-score with ``agent_session_id``; main final verify
         without it. Process calls record ranking iterations; promotion calls
@@ -2031,7 +2717,16 @@ class FileSearchRuntime:
         with self._run_transaction(run_id):
             run = self._load_run(run_id)
             if scope == "process":
-                self._assert_worker_iteration_allowed(run, "run verifier")
+                recovery_replay = bool(
+                    idempotency_key is not None
+                    and run.state == RunState.NEEDS_RECOVERY
+                    and any(
+                        item.context.get("rpc_request_id") == idempotency_key
+                        for item in run.fs_requests
+                    )
+                )
+                if not recovery_replay:
+                    self._assert_worker_iteration_allowed(run, "run verifier")
             else:
                 self._assert_run_not_invalidated(run, "run verifier")
         frozen = self._load_frozen_spec(run.frozen_spec_id)
@@ -2070,14 +2765,19 @@ class FileSearchRuntime:
                     "promotion verification is parent-owned and cannot be "
                     "called from a candidate agent session"
                 )
+            selected_identity_present = (
+                isinstance(run.selected_artifact_ref, FsSnapshotArtifactRef)
+                if frozen.spec.strategy.worker_host == "pi-thinkthread"
+                else bool(run.selected_git_head)
+            )
             if (
                 run.state != RunState.READY_TO_PROMOTE
                 or run.selected_candidate_id != candidate_id
-                or not run.selected_git_head
+                or not selected_identity_present
             ):
                 raise RuntimeError(
                     "promotion verification requires the candidate and immutable "
-                    "Git revision selected by search_select"
+                    "artifact selected by search_select"
                 )
 
         session: AgentSessionRecord | None = None
@@ -2122,6 +2822,18 @@ class FileSearchRuntime:
                         f"use {verifier_seconds:.1f}s and closeout reserves "
                         f"{closeout_seconds:.1f}s"
                     )
+
+        if frozen.spec.strategy.worker_host == "pi-thinkthread":
+            return self._run_pi_thinkthread_verifier(
+                run=run,
+                frozen=frozen,
+                record=record,
+                scope=scope,
+                session=session,
+                hypothesis=hypothesis,
+                toolization_decision=normalized_toolization_decision,
+                idempotency_key=idempotency_key,
+            )
 
         results_were_initialized = record.results_ledger_git_head is not None
         self._ensure_results_tsv(record, frozen.spec.metric_name)
@@ -2209,8 +2921,15 @@ class FileSearchRuntime:
                 record = self._load_candidate_record(run_id, candidate_id)
                 self._apply_candidate_artifact_state(record, state)
                 record.promotion_report = report
+                selected_ref = (
+                    GitCommitArtifactRef(commit=run.selected_git_head)
+                    if run.selected_git_head is not None
+                    else None
+                )
                 record.promotion_evidence = PromotionEvidence(
                     candidate_id=candidate_id,
+                    selected_artifact_ref=selected_ref,
+                    artifact_ref=selected_ref,
                     selected_git_head=run.selected_git_head,
                     git_head=run.selected_git_head,
                     artifact_hash=state.artifact_hash,
@@ -2232,6 +2951,2292 @@ class FileSearchRuntime:
                         run.state = RunState.FAILED
                         self._write_run(run)
             raise
+
+    @staticmethod
+    def _fs_snapshot_ref(
+        reference: object,
+        *,
+        field: str,
+    ) -> FsSnapshotArtifactRef:
+        if not isinstance(reference, FsSnapshotArtifactRef):
+            raise RuntimeError(
+                f"pi-thinkthread {field} must be an exact FsSnapshot artifact"
+            )
+        return reference
+
+    @staticmethod
+    def _fs_join_path(prefix: str, path: str) -> str:
+        normalized_prefix = PurePosixPath(prefix or ".")
+        normalized_path = PurePosixPath(path)
+        if normalized_path.is_absolute() or ".." in normalized_path.parts:
+            raise ValueError(f"invalid fs-relative path: {path!r}")
+        joined = (
+            normalized_path
+            if str(normalized_prefix) == "."
+            else normalized_prefix / normalized_path
+        )
+        return joined.as_posix()
+
+    @staticmethod
+    def _fs_source_projected_path(source_prefix: str, path: str) -> str:
+        prefix = PurePosixPath(source_prefix or ".")
+        candidate = PurePosixPath(path)
+        if str(prefix) == ".":
+            return candidate.as_posix()
+        try:
+            return candidate.relative_to(prefix).as_posix()
+        except ValueError:
+            return f"@workspace/{candidate.as_posix()}"
+
+    def _mark_fs_recovery(
+        self,
+        run_id: str,
+        *,
+        reason: str,
+    ) -> None:
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if run.state != RunState.NEEDS_RECOVERY:
+                run.budget_used.setdefault(
+                    "fs_recovery_previous_state",
+                    (
+                        run.state.value
+                        if isinstance(run.state, RunState)
+                        else str(run.state)
+                    ),
+                )
+            run.state = RunState.NEEDS_RECOVERY
+            run.budget_used["needs_recovery_reason"] = reason
+            self._write_run(run)
+
+    def _append_fs_request(
+        self,
+        run_id: str,
+        request: FsRequestRecord,
+    ) -> None:
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if any(item.request_id == request.request_id for item in run.fs_requests):
+                raise RuntimeError(f"duplicate fs request id: {request.request_id}")
+            run.fs_requests.append(request)
+            self._write_run(run)
+
+    def _update_fs_request(
+        self,
+        run_id: str,
+        request_id: str,
+        *,
+        state: str,
+        result: dict[str, Any] | None | object = _UNSET,
+        error: dict[str, Any] | None | object = _UNSET,
+        closed_at: str | None = None,
+    ) -> None:
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            request = next(
+                (item for item in run.fs_requests if item.request_id == request_id),
+                None,
+            )
+            if request is None:
+                raise RuntimeError(f"fs request is not persisted: {request_id}")
+            request.state = state  # type: ignore[assignment]
+            if result is not _UNSET:
+                request.result = result  # type: ignore[assignment]
+            if error is not _UNSET:
+                request.error = error  # type: ignore[assignment]
+            request.updated_at = utc_timestamp()
+            request.closed_at = closed_at
+            self._write_run(run)
+
+    def _recover_fs_request_result(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        run_id: str,
+        request_id: str,
+        operation: str,
+        deadline: float,
+    ) -> dict[str, Any] | None:
+        while True:
+            try:
+                status = client.invoke(
+                    "fs.request.status",
+                    {"requestId": request_id},
+                )
+            except AgentPosixBridgeError as exc:
+                if exc.code == "RequestNotFound":
+                    return None
+                self._update_fs_request(
+                    run_id,
+                    request_id,
+                    state="needs_recovery",
+                    error={
+                        "message": str(exc),
+                        "code": exc.code,
+                        "delivery": exc.delivery,
+                    },
+                )
+                self._mark_fs_recovery(
+                    run_id,
+                    reason=(
+                        f"cannot inspect outcome of {operation} request {request_id}: "
+                        f"{exc}"
+                    ),
+                )
+                raise RuntimeError(
+                    f"ThinkThreadRequestNeedsRecovery: {request_id}"
+                ) from exc
+            if status.get("requestId") != request_id or status.get("method") != operation:
+                raise RuntimeError(
+                    f"fs.request.status identity mismatch for {request_id}"
+                )
+            state = status.get("state")
+            if state in {"accepted", "running"}:
+                self._update_fs_request(
+                    run_id,
+                    request_id,
+                    state="running" if state == "running" else "accepted",
+                )
+                if time.monotonic() >= deadline:
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="needs_recovery",
+                        error={"message": "request remained non-terminal at deadline"},
+                    )
+                    self._mark_fs_recovery(
+                        run_id,
+                        reason=f"{operation} request {request_id} remained {state}",
+                    )
+                    raise RuntimeError(
+                        f"ThinkThreadRequestNeedsRecovery: {request_id} is {state}"
+                    )
+                time.sleep(0.05)
+                continue
+            if state == "succeeded" or state == "cancelled":
+                result = status.get("result")
+                if not isinstance(result, dict):
+                    raise RuntimeError(
+                        f"terminal fs request {request_id} omitted result"
+                    )
+                self._update_fs_request(
+                    run_id,
+                    request_id,
+                    state="cancelled" if state == "cancelled" else "succeeded",
+                    result=result,
+                )
+                return result
+            if state == "failed":
+                error = status.get("error")
+                normalized = error if isinstance(error, dict) else {}
+                self._update_fs_request(
+                    run_id,
+                    request_id,
+                    state="failed",
+                    error=normalized,
+                )
+                raise AgentPosixBridgeError(
+                    f"ThinkThread {operation} request failed: {request_id}",
+                    error={"rejection": {"error": normalized}},
+                )
+            self._update_fs_request(
+                run_id,
+                request_id,
+                state="needs_recovery",
+                error={"message": f"request state is {state!r}"},
+            )
+            self._mark_fs_recovery(
+                run_id,
+                reason=f"{operation} request {request_id} is {state!r}",
+            )
+            raise RuntimeError(
+                f"ThinkThreadRequestNeedsRecovery: {request_id} is {state!r}"
+            )
+
+    def _invoke_durable_fs_operation(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        run_id: str,
+        request_id: str,
+        method: str,
+        params: dict[str, Any],
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds + 30.0
+        try:
+            result = client.invoke(
+                method,
+                params,
+                timeout_seconds=timeout_seconds + 30.0,
+            )
+        except AgentPosixBridgeError as exc:
+            if not exc.completion_unknown and exc.code != "RequestInProgress":
+                try:
+                    recovered = self._recover_fs_request_result(
+                        client=client,
+                        run_id=run_id,
+                        request_id=request_id,
+                        operation=method,
+                        deadline=deadline,
+                    )
+                except AgentPosixBridgeError:
+                    raise
+                if recovered is None:
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="failed",
+                        error={
+                            "message": str(exc),
+                            "code": exc.code,
+                            "delivery": exc.delivery,
+                        },
+                    )
+                    raise
+                return recovered
+            recovered = self._recover_fs_request_result(
+                client=client,
+                run_id=run_id,
+                request_id=request_id,
+                operation=method,
+                deadline=deadline,
+            )
+            if recovered is not None:
+                return recovered
+            # Inspection proved that admission did not persist the operation.
+            # Reusing the same RequestId preserves idempotency.
+            try:
+                result = client.invoke(
+                    method,
+                    params,
+                    timeout_seconds=timeout_seconds + 30.0,
+                )
+            except AgentPosixBridgeError as retry_exc:
+                recovered = self._recover_fs_request_result(
+                    client=client,
+                    run_id=run_id,
+                    request_id=request_id,
+                    operation=method,
+                    deadline=deadline,
+                )
+                if recovered is None:
+                    if (
+                        retry_exc.completion_unknown
+                        or retry_exc.code == "RequestInProgress"
+                    ):
+                        self._update_fs_request(
+                            run_id,
+                            request_id,
+                            state="needs_recovery",
+                            error={
+                                "message": str(retry_exc),
+                                "code": retry_exc.code,
+                                "delivery": retry_exc.delivery,
+                            },
+                        )
+                        self._mark_fs_recovery(
+                            run_id,
+                            reason=(
+                                f"{method} request {request_id} remained "
+                                "unobservable after idempotent replay"
+                            ),
+                        )
+                        raise RuntimeError(
+                            f"ThinkThreadRequestNeedsRecovery: {request_id}"
+                        ) from retry_exc
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="failed",
+                        error={
+                            "message": str(retry_exc),
+                            "code": retry_exc.code,
+                            "delivery": retry_exc.delivery,
+                        },
+                    )
+                    raise
+                return recovered
+        self._update_fs_request(
+            run_id,
+            request_id,
+            state="succeeded",
+            result=result,
+        )
+        return result
+
+    def _invoke_durable_fs_run(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        run_id: str,
+        request_id: str,
+        params: dict[str, Any],
+        timeout_seconds: int,
+    ) -> dict[str, Any]:
+        return self._invoke_durable_fs_operation(
+            client=client,
+            run_id=run_id,
+            request_id=request_id,
+            method="fs.run",
+            params=params,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @staticmethod
+    def _decode_fs_run_output(result: dict[str, Any]) -> tuple[str, str]:
+        chunks = result.get("outputChunks")
+        if not isinstance(chunks, list):
+            raise ValueError("fs.run omitted outputChunks")
+        ordered: list[tuple[int, str, bytes]] = []
+        seen: set[int] = set()
+        for raw in chunks:
+            if not isinstance(raw, dict):
+                raise ValueError("fs.run output chunk is not an object")
+            sequence = raw.get("sequence")
+            stream = raw.get("stream")
+            encoded = raw.get("dataBase64")
+            if (
+                not isinstance(sequence, int)
+                or sequence < 0
+                or sequence in seen
+                or stream not in {"stdout", "stderr"}
+                or not isinstance(encoded, str)
+            ):
+                raise ValueError("fs.run returned an invalid output chunk")
+            seen.add(sequence)
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except ValueError as exc:
+                raise ValueError("fs.run returned invalid output base64") from exc
+            ordered.append((sequence, stream, data))
+        ordered.sort(key=lambda item: item[0])
+        stdout = b"".join(data for _, stream, data in ordered if stream == "stdout")
+        stderr = b"".join(data for _, stream, data in ordered if stream == "stderr")
+        return (
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
+
+    @staticmethod
+    def _fs_exit_status(result: dict[str, Any]) -> tuple[int | None, str | None]:
+        exit_status = result.get("exit")
+        if not isinstance(exit_status, dict):
+            return None, "VerifierInfrastructureFailure"
+        kind = exit_status.get("kind")
+        if kind == "code" and isinstance(exit_status.get("code"), int):
+            return int(exit_status["code"]), None
+        if kind == "signal" and isinstance(exit_status.get("signal"), int):
+            return -int(exit_status["signal"]), "VerifierSignal"
+        return {
+            "timeout": (None, "Timeout"),
+            "killed": (None, "VerifierKilled"),
+            "cancelled": (None, "VerifierCancelled"),
+        }.get(str(kind), (None, "VerifierInfrastructureFailure"))
+
+    def _fs_internal_verifier(
+        self,
+        *,
+        reader: FsSnapshotArtifactReader,
+        artifact: FsSnapshotArtifactRef,
+        source_prefix: str,
+        frozen: FrozenSpec,
+        command: VerifierCommand,
+    ) -> VerifierResult:
+        if len(command.command) < 2 or command.command[1] != "check-frozen-hashes":
+            return VerifierResult(
+                name=command.name,
+                role=command.role,
+                passed=False,
+                score=0.0,
+                metrics={"error": "unknown internal command"},
+                failure_class="UnknownInternalCommand",
+            )
+        failures = self._fs_frozen_hash_failures(
+            reader=reader,
+            artifact=artifact,
+            source_prefix=source_prefix,
+            frozen=frozen,
+        )
+        return VerifierResult(
+            name=command.name,
+            role=command.role,
+            passed=not failures,
+            score=1.0 if not failures else 0.0,
+            metrics={"hash_failures": failures},
+            failure_class=None if not failures else "FrozenVerifierModified",
+        )
+
+    def _fs_frozen_hash_failures(
+        self,
+        *,
+        reader: FsSnapshotArtifactReader,
+        artifact: FsSnapshotArtifactRef,
+        source_prefix: str,
+        frozen: FrozenSpec,
+    ) -> dict[str, dict[str, str | None]]:
+        failures: dict[str, dict[str, str | None]] = {}
+        for relative_path, expected in frozen.verifier_hashes.items():
+            try:
+                data = reader.read_file(
+                    artifact,
+                    self._fs_join_path(source_prefix, relative_path),
+                    max_bytes=64 * 1024 * 1024,
+                )
+            except (AgentPosixBridgeError, ValueError):
+                actual = None
+            else:
+                actual = hashlib.sha256(data).hexdigest()
+            if actual != expected:
+                failures[relative_path] = {
+                    "expected": expected,
+                    "actual": actual,
+                }
+        return failures
+
+    def _fs_run_verifier_command(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        reader: FsSnapshotArtifactReader,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        record: CandidateRecord,
+        artifact: FsSnapshotArtifactRef,
+        command: VerifierCommand,
+        verifier_phase: Literal["candidate", "promotion"],
+        idempotency_key: str | None = None,
+    ) -> tuple[VerifierResult, str | None]:
+        if command.command[0] == "goal-plus-internal":
+            return (
+                self._fs_internal_verifier(
+                    reader=reader,
+                    artifact=artifact,
+                    source_prefix=run.fs_source_relative_path or ".",
+                    frozen=frozen,
+                    command=command,
+                ),
+                None,
+            )
+        current_run = self._load_run(run.run_id)
+        existing = next(
+            (
+                item
+                for item in current_run.fs_requests
+                if idempotency_key is not None
+                and item.operation == "run"
+                and item.context.get("rpc_request_id") == idempotency_key
+                and item.context.get("verifier") == command.name
+                and item.context.get("phase") == verifier_phase
+            ),
+            None,
+        )
+        if existing is None:
+            request_id = new_request_id()
+            now = utc_timestamp()
+            self._append_fs_request(
+                run.run_id,
+                FsRequestRecord(
+                    request_id=request_id,
+                    operation="run",
+                    context={
+                        "candidate_id": record.candidate_id,
+                        "snapshot_id": artifact.snapshot_id,
+                        "verifier": command.name,
+                        "phase": verifier_phase,
+                        **(
+                            {"rpc_request_id": idempotency_key}
+                            if idempotency_key is not None
+                            else {}
+                        ),
+                    },
+                    created_at=now,
+                    updated_at=now,
+                ),
+            )
+            existing_result: dict[str, Any] | None = None
+        else:
+            if (
+                existing.context.get("candidate_id") != record.candidate_id
+                or existing.context.get("snapshot_id") != artifact.snapshot_id
+            ):
+                raise RuntimeError(
+                    "verifier idempotency key changed candidate or snapshot"
+                )
+            request_id = existing.request_id
+            existing_result = (
+                existing.result
+                if existing.state in {"succeeded", "closed"}
+                and isinstance(existing.result, dict)
+                else None
+            )
+        logs_dir = (
+            self._candidate_dir(run.run_id, record.candidate_id)
+            / "logs"
+            / ("process" if verifier_phase == "candidate" else "promotion")
+        )
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / (
+            f"iteration-{len(record.iterations) + 1:04d}-"
+            f"{safe_verifier_name(command.name)}-{uuid.uuid4().hex[:8]}.log"
+        )
+        source_prefix = run.fs_source_relative_path or "."
+        argv = [
+            sys.executable,
+            "-m",
+            "goal_plus.revision_verifier",
+            "--source-path",
+            source_prefix,
+            "--cwd",
+            command.cwd,
+            "--phase",
+            verifier_phase,
+            "--",
+            *command.command,
+        ]
+        fs_environment = {"PATH": os.environ.get("PATH", os.defpath)}
+        virtual_env = os.environ.get("VIRTUAL_ENV")
+        if virtual_env:
+            fs_environment["VIRTUAL_ENV"] = virtual_env
+        params = {
+            "snapshotId": artifact.snapshot_id,
+            "invocation": {
+                "argv": argv,
+                "cwd": ".",
+                "environment": fs_environment,
+            },
+            "writes": "discard",
+            "limits": {
+                "timeoutMs": command.timeout_seconds * 1000,
+                "maxOutputBytes": VERIFIER_OUTPUT_LIMIT_BYTES,
+            },
+            "requestId": request_id,
+        }
+        start = time.perf_counter()
+        try:
+            with verifier_resource_lock(command.resource_lock):
+                result = existing_result or self._invoke_durable_fs_run(
+                    client=client,
+                    run_id=run.run_id,
+                    request_id=request_id,
+                    params=params,
+                    timeout_seconds=command.timeout_seconds,
+                )
+                stdout, stderr = self._decode_fs_run_output(result)
+                elapsed = time.perf_counter() - start
+                metrics = self._parse_metrics(stdout)
+                returncode, exit_failure = self._fs_exit_status(result)
+                metrics.setdefault("returncode", returncode)
+                metrics.setdefault("elapsed_seconds", elapsed)
+                metrics["fs_execution_metrics"] = result.get("metrics", {})
+                metrics["retained_output_bytes"] = result.get("retainedOutputBytes")
+                metrics["observed_output_bytes"] = result.get("observedOutputBytes")
+                truncated = result.get("outputTruncated") is True
+                score = self._score_from_metrics(frozen.spec.metric_name, metrics)
+                has_verifier_error = self._has_verifier_error(metrics)
+                missing_numeric_metric = (
+                    returncode == 0
+                    and not has_verifier_error
+                    and command.role == VerifierRole.RANKING_SIGNAL
+                    and score is None
+                )
+                if missing_numeric_metric:
+                    metrics["expected_metric_name"] = frozen.spec.metric_name
+                if truncated:
+                    metrics["infrastructure_failure"] = True
+                    metrics["candidate_action"] = "stop_and_report"
+                passed = bool(
+                    returncode == 0
+                    and exit_failure is None
+                    and not truncated
+                    and not has_verifier_error
+                    and not missing_numeric_metric
+                )
+                failure_class = (
+                    None
+                    if passed
+                    else "VerifierInfrastructureFailure"
+                    if truncated
+                    else "MissingNumericMetric"
+                    if missing_numeric_metric
+                    else exit_failure
+                    or "VerifierCommandFailed"
+                )
+                if not passed:
+                    self._add_visible_verifier_feedback(
+                        command,
+                        metrics,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+                log_path.write_text(
+                    _bounded_log(
+                        "\n".join(
+                            [
+                                f"$ {' '.join(command.command)}",
+                                f"snapshot: {artifact.snapshot_id}",
+                                f"request_id: {request_id}",
+                                f"returncode: {returncode}",
+                                f"exit: {result.get('exit')}",
+                                f"output_truncated: {truncated}",
+                                "",
+                                "## stdout",
+                                stdout,
+                                "## stderr",
+                                stderr,
+                            ]
+                        )
+                    ),
+                    encoding="utf-8",
+                )
+                return (
+                    VerifierResult(
+                        name=command.name,
+                        role=command.role,
+                        passed=passed,
+                        score=score,
+                        metrics=metrics,
+                        log_path=log_path,
+                        failure_class=failure_class,
+                    ),
+                    request_id,
+                )
+        except AgentPosixBridgeError as exc:
+            # The durable request record already distinguishes a terminal
+            # platform failure from completion-unknown recovery. Surface the
+            # former as verifier infrastructure Evidence so the worker can
+            # react and the terminal RequestId can be closed after that
+            # Evidence is persisted. RuntimeError remains reserved for the
+            # explicit needs_recovery path below.
+            log_path.write_text(_bounded_log(str(exc)), encoding="utf-8")
+            return (
+                VerifierResult(
+                    name=command.name,
+                    role=command.role,
+                    passed=False,
+                    score=0.0,
+                    metrics={
+                        "error": str(exc),
+                        "error_code": exc.code,
+                        "retryable": exc.retryable,
+                        "infrastructure_failure": True,
+                        "candidate_action": "stop_and_report",
+                    },
+                    log_path=log_path,
+                    failure_class="VerifierInfrastructureFailure",
+                ),
+                request_id,
+            )
+        except RuntimeError:
+            raise
+        except ValueError as exc:
+            log_path.write_text(_bounded_log(str(exc)), encoding="utf-8")
+            return (
+                VerifierResult(
+                    name=command.name,
+                    role=command.role,
+                    passed=False,
+                    score=0.0,
+                    metrics={
+                        "error": str(exc),
+                        "infrastructure_failure": True,
+                        "candidate_action": "stop_and_report",
+                    },
+                    log_path=log_path,
+                    failure_class="VerifierInfrastructureFailure",
+                ),
+                request_id,
+            )
+
+    def _fs_score_report(
+        self,
+        *,
+        run: RunRecord,
+        record: CandidateRecord,
+        frozen: FrozenSpec,
+        results: list[VerifierResult],
+        scope: Literal["process", "promotion"],
+        touched_denied_files: bool,
+        changed_outside_allowed: bool,
+    ) -> ScoreReport:
+        hard_failed = any(
+            not result.passed
+            and result.role
+            in {
+                VerifierRole.VALIDITY_GATE,
+                VerifierRole.PROCESS_GATE,
+                VerifierRole.PROMOTION_GATE,
+                VerifierRole.ANTI_CHEAT_GATE,
+            }
+            for result in results
+        )
+        process_passed = not hard_failed and all(
+            result.passed or result.role == VerifierRole.DIAGNOSTIC_SIGNAL
+            for result in results
+        )
+        score = self._aggregate_score(frozen.spec.metric_name, results)
+        if not process_passed:
+            score = 0.0
+        return ScoreReport(
+            run_id=run.run_id,
+            candidate_id=record.candidate_id,
+            parent_id=record.task.parent_id,
+            validity_passed=process_passed,
+            process_passed=process_passed,
+            promotion_passed=process_passed if scope == "promotion" else None,
+            aggregate_score=score,
+            verifier_results=results,
+            touched_denied_files=touched_denied_files,
+            changed_outside_allowed=changed_outside_allowed,
+            hardcoding_suspected=False,
+        )
+
+    def _materialize_fs_tool_path(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        snapshot_id: str,
+        snapshot_path: str,
+        destination: Path,
+        usage: dict[str, int],
+        max_files: int,
+        max_bytes: int,
+        max_path_entries: int,
+        max_depth: int,
+        depth: int,
+    ) -> None:
+        if depth > max_depth:
+            raise ValueError(f"shared tool exceeds max depth {max_depth}")
+        entry = client.invoke(
+            "fs.snapshot.stat",
+            {"snapshotId": snapshot_id, "path": snapshot_path},
+        )
+        kind = entry.get("kind")
+        usage["paths"] += 1
+        if usage["paths"] > max_path_entries:
+            raise ValueError("shared tool exceeds path-entry limit")
+        if kind == "symlink":
+            raise ValueError("shared tool sources cannot contain symbolic links")
+        if kind == "file":
+            usage["files"] += 1
+            if usage["files"] > max_files:
+                raise ValueError("shared tool exceeds file limit")
+            remaining = max_bytes - usage["bytes"]
+            if remaining < 0:
+                raise ValueError("shared tool exceeds byte limit")
+            data = client.snapshot_read_file(
+                snapshot_id,
+                snapshot_path,
+                max_bytes=remaining,
+            )
+            usage["bytes"] += len(data)
+            if usage["bytes"] > max_bytes:
+                raise ValueError("shared tool exceeds byte limit")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+            mode = entry.get("mode")
+            if isinstance(mode, int):
+                destination.chmod(mode & 0o777)
+            return
+        if kind != "directory":
+            raise ValueError(f"unsupported shared tool entry kind: {kind!r}")
+        destination.mkdir(parents=True, exist_ok=True)
+        for child in client.snapshot_readdir_all(snapshot_id, snapshot_path):
+            child_path = fs_path_text(child.get("path"))
+            child_posix = PurePosixPath(child_path)
+            if child_posix.parent != PurePosixPath(snapshot_path):
+                raise ValueError("snapshot readdir returned a non-immediate child")
+            self._materialize_fs_tool_path(
+                client=client,
+                snapshot_id=snapshot_id,
+                snapshot_path=child_path,
+                destination=destination / child_posix.name,
+                usage=usage,
+                max_files=max_files,
+                max_bytes=max_bytes,
+                max_path_entries=max_path_entries,
+                max_depth=max_depth,
+                depth=depth + 1,
+            )
+
+    def _settle_pi_thinkthread_shared_tools(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        record: CandidateRecord,
+        attempt_ref: FsSnapshotArtifactRef,
+        iteration: int,
+        settlement_id: str | None = None,
+    ) -> SharedDirSettlement | None:
+        stages = list(record.pending_fs_tool_stages)
+        if not stages:
+            return None
+        limits = frozen.spec.shared_dir
+        run_dir = self._run_dir(run.run_id)
+        with tempfile.TemporaryDirectory(
+            prefix=f"fs-share-{record.candidate_id}-",
+            dir=run_dir,
+        ) as temporary:
+            share_out = Path(temporary) / "share-out"
+            share_out.mkdir()
+            usage = {"files": 0, "bytes": 0, "paths": 0}
+            for stage in stages:
+                destination = share_out / str(stage["staged_name"])
+                destination.mkdir()
+                usage["paths"] += 1
+                manifest = {
+                    "name": stage["name"],
+                    "summary": stage["summary"],
+                    "entrypoint": stage["entrypoint"],
+                }
+                manifest_bytes = (
+                    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+                ).encode("utf-8")
+                usage["files"] += 1
+                usage["paths"] += 1
+                usage["bytes"] += len(manifest_bytes)
+                if (
+                    usage["files"] > limits.max_files_per_iteration
+                    or usage["paths"] > limits.max_path_entries_per_iteration
+                    or usage["bytes"] > limits.max_bytes_per_iteration
+                ):
+                    raise ValueError("staged shared tools exceed configured limits")
+                (destination / "manifest.json").write_bytes(manifest_bytes)
+                draft_prefix = PurePosixPath(TOOL_DRAFTS_RELATIVE_PATH)
+                for relative_source in stage["source_paths"]:
+                    source_path = PurePosixPath(relative_source)
+                    relative = source_path.relative_to(draft_prefix)
+                    snapshot_path = self._fs_join_path(
+                        run.fs_source_relative_path or ".",
+                        source_path.as_posix(),
+                    )
+                    self._materialize_fs_tool_path(
+                        client=client,
+                        snapshot_id=attempt_ref.snapshot_id,
+                        snapshot_path=snapshot_path,
+                        destination=destination / relative.as_posix(),
+                        usage=usage,
+                        max_files=limits.max_files_per_iteration,
+                        max_bytes=limits.max_bytes_per_iteration,
+                        max_path_entries=limits.max_path_entries_per_iteration,
+                        max_depth=limits.max_depth,
+                        depth=len(relative.parts),
+                    )
+            return SharedDirManager(run_dir).settle_iteration(
+                candidate_id=record.candidate_id,
+                iteration=iteration,
+                source_commit=None,
+                source_artifact_ref=attempt_ref,
+                share_out_dir=share_out,
+                max_tools=limits.max_tools_per_iteration,
+                max_files=limits.max_files_per_iteration,
+                max_bytes=limits.max_bytes_per_iteration,
+                max_path_entries=limits.max_path_entries_per_iteration,
+                max_depth=limits.max_depth,
+                settlement_id=settlement_id,
+            )
+
+    def capture_pi_thinkthread_branch_snapshot(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        branch_id: str,
+        purpose: str,
+        client: AgentPosixSdkClient,
+        intent_id: str | None = None,
+    ) -> tuple[str, str]:
+        """Capture one Child branch behind a durable caller-owned RequestId.
+
+        The Goal Plus request record and creation intent are persisted before
+        invoking ThinkThread. A transport-ambiguous response is reconciled or
+        replayed with the same RequestId, so the platform cannot create an
+        unidentifiable duplicate snapshot.
+        """
+
+        resolved_intent_id = intent_id or f"snapshot_{uuid.uuid4().hex}"
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            record = self._load_candidate_record(run_id, candidate_id)
+            intent = next(
+                (
+                    item
+                    for item in record.fs_snapshot_intents
+                    if item.intent_id == resolved_intent_id
+                ),
+                None,
+            )
+            if intent is None:
+                now = utc_timestamp()
+                request_id = new_request_id()
+                intent = FsSnapshotCreationIntent(
+                    intent_id=resolved_intent_id,
+                    operation="branch_snapshot",
+                    request_id=request_id,
+                    branch_id=branch_id,
+                    purpose=purpose,
+                    created_at=now,
+                    updated_at=now,
+                )
+                record.fs_snapshot_intents.append(intent)
+                run.fs_requests.append(
+                    FsRequestRecord(
+                        request_id=request_id,
+                        operation="branch_snapshot",
+                        context={
+                            "candidate_id": candidate_id,
+                            "branch_id": branch_id,
+                            "intent_id": resolved_intent_id,
+                            "purpose": purpose,
+                        },
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            else:
+                if intent.branch_id != branch_id:
+                    raise RuntimeError(
+                        "branch snapshot intent changed branch during recovery"
+                    )
+                if intent.snapshot_id is not None and intent.state in {
+                    "created",
+                    "cleaned",
+                }:
+                    if intent.request_id is None:
+                        raise RuntimeError(
+                            "legacy branch snapshot intent omitted request_id"
+                        )
+                    return intent.request_id, intent.snapshot_id
+                if intent.request_id is None:
+                    if intent.state != "prepared":
+                        raise RuntimeError(
+                            "legacy branch snapshot mutation cannot be recovered "
+                            "without a RequestId"
+                        )
+                    intent.request_id = new_request_id()
+                request_id = intent.request_id
+                if not any(
+                    item.request_id == request_id for item in run.fs_requests
+                ):
+                    now = utc_timestamp()
+                    run.fs_requests.append(
+                        FsRequestRecord(
+                            request_id=request_id,
+                            operation="branch_snapshot",
+                            context={
+                                "candidate_id": candidate_id,
+                                "branch_id": branch_id,
+                                "intent_id": resolved_intent_id,
+                                "purpose": purpose,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+            intent.state = "platform_mutation_started"
+            intent.updated_at = utc_timestamp()
+            self._write_candidate_record(run_id, record)
+            self._write_run(run)
+
+        try:
+            result = self._invoke_durable_fs_operation(
+                client=client,
+                run_id=run_id,
+                request_id=request_id,
+                method="fs.branch.snapshot",
+                params={"branchId": branch_id, "requestId": request_id},
+                timeout_seconds=60,
+            )
+        except AgentPosixBridgeError:
+            with self._run_transaction(run_id):
+                record = self._load_candidate_record(run_id, candidate_id)
+                intent = next(
+                    item
+                    for item in record.fs_snapshot_intents
+                    if item.intent_id == resolved_intent_id
+                )
+                intent.state = "failed"
+                intent.updated_at = utc_timestamp()
+                self._write_candidate_record(run_id, record)
+            raise
+        except RuntimeError:
+            with self._run_transaction(run_id):
+                record = self._load_candidate_record(run_id, candidate_id)
+                intent = next(
+                    item
+                    for item in record.fs_snapshot_intents
+                    if item.intent_id == resolved_intent_id
+                )
+                intent.state = "needs_recovery"
+                intent.updated_at = utc_timestamp()
+                self._write_candidate_record(run_id, record)
+            raise
+
+        snapshot_id = result.get("snapshotId")
+        if not isinstance(snapshot_id, str) or not snapshot_id.startswith("fsnap-"):
+            self._mark_fs_recovery(
+                run_id,
+                reason=(
+                    f"fs.branch.snapshot request {request_id} returned no snapshotId"
+                ),
+            )
+            with self._run_transaction(run_id):
+                record = self._load_candidate_record(run_id, candidate_id)
+                intent = next(
+                    item
+                    for item in record.fs_snapshot_intents
+                    if item.intent_id == resolved_intent_id
+                )
+                intent.state = "needs_recovery"
+                intent.updated_at = utc_timestamp()
+                self._write_candidate_record(run_id, record)
+            raise RuntimeError("fs.branch.snapshot omitted snapshotId")
+
+        with self._run_transaction(run_id):
+            record = self._load_candidate_record(run_id, candidate_id)
+            intent = next(
+                item
+                for item in record.fs_snapshot_intents
+                if item.intent_id == resolved_intent_id
+            )
+            intent.state = "created"
+            intent.snapshot_id = snapshot_id
+            intent.updated_at = utc_timestamp()
+            self._write_candidate_record(run_id, record)
+        return request_id, snapshot_id
+
+    def recover_pi_thinkthread_snapshot_requests(
+        self,
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Reconcile durable snapshot captures after a Goal Plus process crash."""
+
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        if frozen.spec.strategy.worker_host != "pi-thinkthread":
+            raise ValueError(
+                "snapshot request recovery is only available for pi-thinkthread"
+            )
+        client = self._agent_posix_client()
+        client.preflight()
+        resolved: list[dict[str, str]] = []
+        failed: list[dict[str, str]] = []
+
+        for persisted in list(run.fs_requests):
+            if persisted.operation not in {"root_snapshot", "branch_snapshot"}:
+                continue
+            request_id = persisted.request_id
+            method = (
+                "fs.snapshot.create"
+                if persisted.operation == "root_snapshot"
+                else "fs.branch.snapshot"
+            )
+            branch_id = persisted.context.get("branch_id")
+            params: dict[str, Any] = {"requestId": request_id}
+            if persisted.operation == "branch_snapshot":
+                if not isinstance(branch_id, str):
+                    failed.append(
+                        {
+                            "request_id": request_id,
+                            "error": "branch snapshot request omitted branch_id",
+                        }
+                    )
+                    continue
+                params["branchId"] = branch_id
+
+            result = (
+                persisted.result
+                if persisted.state in {"succeeded", "closed"}
+                and isinstance(persisted.result, dict)
+                else None
+            )
+            try:
+                if result is None:
+                    result = self._invoke_durable_fs_operation(
+                        client=client,
+                        run_id=run_id,
+                        request_id=request_id,
+                        method=method,
+                        params=params,
+                        timeout_seconds=120,
+                    )
+                snapshot_id = result.get("snapshotId")
+                if not isinstance(snapshot_id, str) or not snapshot_id.startswith(
+                    "fsnap-"
+                ):
+                    raise RuntimeError(f"{method} recovery omitted snapshotId")
+
+                if persisted.operation == "root_snapshot":
+                    with self._run_transaction(run_id):
+                        latest = self._load_run(run_id)
+                        intent = next(
+                            (
+                                item
+                                for item in latest.fs_snapshot_intents
+                                if item.request_id == request_id
+                            ),
+                            None,
+                        )
+                        if intent is None:
+                            raise RuntimeError(
+                                "root snapshot request has no durable creation intent"
+                            )
+                        intent.state = "created"
+                        intent.snapshot_id = snapshot_id
+                        intent.updated_at = utc_timestamp()
+                        if intent.purpose == "initial_baseline":
+                            latest.baseline_artifact_ref = FsSnapshotArtifactRef(
+                                snapshot_id=snapshot_id
+                            )
+                        self._write_run(latest)
+                else:
+                    candidate_id = persisted.context.get("candidate_id")
+                    if not isinstance(candidate_id, str):
+                        raise RuntimeError(
+                            "branch snapshot request omitted candidate_id"
+                        )
+                    with self._run_transaction(run_id):
+                        record = self._load_candidate_record(run_id, candidate_id)
+                        intent = next(
+                            (
+                                item
+                                for item in record.fs_snapshot_intents
+                                if item.request_id == request_id
+                            ),
+                            None,
+                        )
+                        if intent is None:
+                            raise RuntimeError(
+                                "branch snapshot request has no durable creation intent"
+                            )
+                        intent.state = "created"
+                        intent.snapshot_id = snapshot_id
+                        intent.updated_at = utc_timestamp()
+                        self._write_candidate_record(run_id, record)
+
+                if persisted.state != "closed":
+                    self._close_fs_requests_after_evidence(
+                        run_id, [request_id], client
+                    )
+                resolved.append(
+                    {"request_id": request_id, "snapshot_id": snapshot_id}
+                )
+            except (AgentPosixBridgeError, RuntimeError) as exc:
+                failed.append({"request_id": request_id, "error": str(exc)})
+
+        with self._run_transaction(run_id):
+            latest = self._load_run(run_id)
+            snapshot_request_ids = {
+                item.request_id
+                for item in latest.fs_requests
+                if item.operation in {"root_snapshot", "branch_snapshot"}
+            }
+            recovery_reason = str(
+                latest.budget_used.get("needs_recovery_reason") or ""
+            )
+            previous = latest.budget_used.get("fs_recovery_previous_state")
+            other_fs_recovery = any(
+                item.operation not in {"root_snapshot", "branch_snapshot"}
+                and item.state in {"accepted", "running", "needs_recovery"}
+                for item in latest.fs_requests
+            )
+            snapshot_recovery_owned = bool(
+                previous is not None
+                and any(request_id in recovery_reason for request_id in snapshot_request_ids)
+            )
+            if (
+                not failed
+                and latest.baseline_artifact_ref is not None
+                and snapshot_recovery_owned
+                and not other_fs_recovery
+                and not (
+                    latest.publication is not None
+                    and latest.publication.state == "outcome_unknown"
+                )
+                and not latest.budget_used.get("fs_cleanup_recovery_active")
+            ):
+                previous = latest.budget_used.pop(
+                    "fs_recovery_previous_state", None
+                )
+                latest.budget_used.pop("needs_recovery_reason", None)
+                if latest.state == RunState.NEEDS_RECOVERY:
+                    if isinstance(previous, str) and previous.startswith(
+                        "RunState."
+                    ):
+                        previous = previous.removeprefix("RunState.").lower()
+                    latest.state = (
+                        RunState(previous)
+                        if isinstance(previous, str)
+                        else RunState.RUNNING
+                    )
+            self._write_run(latest)
+            state = str(latest.state)
+        return {"state": state, "resolved": resolved, "failed": failed}
+
+    def _capture_pi_thinkthread_attempt(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        record: CandidateRecord,
+        session: AgentSessionRecord,
+        idempotency_key: str | None = None,
+    ) -> _FsAttemptState:
+        branch_id = record.task.fs_branch_id
+        if not branch_id:
+            raise RuntimeError("pi-thinkthread candidate has no bound fs branch")
+        child_id = session.host_handle.external_id
+        execution_state_before: str | None = None
+        if child_id:
+            try:
+                child_before = client.invoke("thinkthread.get", {"id": child_id})
+            except AgentPosixBridgeError:
+                pass
+            else:
+                raw_execution_state = child_before.get("executionState")
+                if isinstance(raw_execution_state, str):
+                    execution_state_before = raw_execution_state
+        base_ref = self._fs_snapshot_ref(
+            record.settled_artifact_ref or run.baseline_artifact_ref,
+            field="candidate settled artifact",
+        )
+        request_id, snapshot_id = self.capture_pi_thinkthread_branch_snapshot(
+            run_id=run.run_id,
+            candidate_id=record.candidate_id,
+            branch_id=branch_id,
+            purpose=(
+                f"candidate {record.candidate_id} verifier iteration "
+                f"{len(record.iterations) + 1}"
+            ),
+            client=client,
+            intent_id=(
+                f"rpc-verifier-{idempotency_key}"
+                if idempotency_key is not None
+                else None
+            ),
+        )
+        attempt_ref = FsSnapshotArtifactRef(snapshot_id=snapshot_id)
+
+        continuation_required = False
+        if child_id:
+            try:
+                child = client.invoke(
+                    "thinkthread.get",
+                    {"id": child_id},
+                )
+            except AgentPosixBridgeError:
+                continuation_required = execution_state_before in {None, "running"}
+            else:
+                continuation_required = bool(
+                    execution_state_before in {None, "running"}
+                    and child.get("executionState") != "running"
+                )
+            if continuation_required:
+                latest_session = self._load_agent_session_by_id(
+                    session.agent_session_id,
+                    run_id=run.run_id,
+                )
+                metadata = dict(latest_session.host_handle.metadata)
+                metadata.update(
+                    {
+                        "continuation_state": "needs_recovery",
+                        "continuation_snapshot_id": snapshot_id,
+                    }
+                )
+                latest_session.host_handle.metadata = metadata
+                latest_session.updated_at = utc_timestamp()
+                self._write_agent_session(latest_session)
+
+        reader = FsSnapshotArtifactReader(client)
+        baseline_ref = self._fs_snapshot_ref(
+            run.baseline_artifact_ref,
+            field="run baseline",
+        )
+        source_prefix = run.fs_source_relative_path or "."
+        changed_root_paths = reader.changed_files(base_ref, attempt_ref)
+        changed_files = [
+            self._fs_source_projected_path(source_prefix, path)
+            for path in changed_root_paths
+        ]
+        touched_denied = any(
+            path_matches(path, frozen.spec.edit_surface.deny)
+            for path in changed_files
+        )
+        outside_allowed = any(
+            not path_matches(path, frozen.spec.edit_surface.allow)
+            for path in changed_files
+        )
+        if (
+            frozen.spec.edit_surface.max_file_changes is not None
+            and len(changed_files) > frozen.spec.edit_surface.max_file_changes
+        ):
+            outside_allowed = True
+        return _FsAttemptState(
+            base_ref=base_ref,
+            attempt_ref=attempt_ref,
+            changed_files=changed_files,
+            actual_diff=reader.diff(
+                base_ref,
+                attempt_ref,
+                max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+            ),
+            cumulative_diff=reader.diff(
+                baseline_ref,
+                attempt_ref,
+                max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+            ),
+            touched_denied_files=touched_denied,
+            changed_outside_allowed=outside_allowed,
+            artifact_hash=reader.canonical_digest(baseline_ref, attempt_ref),
+            continuation_required=continuation_required,
+            snapshot_request_id=request_id,
+        )
+
+    @staticmethod
+    def _fs_iteration_eligible(iteration: IterationRecord) -> bool:
+        return bool(
+            iteration.process_passed is True
+            and iteration.score is not None
+            and math.isfinite(iteration.score)
+            and isinstance(iteration.attempt_ref, FsSnapshotArtifactRef)
+            and not iteration.touched_denied_files
+            and not iteration.changed_outside_allowed
+        )
+
+    @classmethod
+    def _fs_iteration_disposition(
+        cls,
+        iteration: IterationRecord,
+        prior_best: IterationRecord | None,
+        metric_direction: Literal["maximize", "minimize"],
+    ) -> IterationDisposition:
+        if not cls._fs_iteration_eligible(iteration):
+            return "failure"
+        if prior_best is None:
+            return "keep"
+        assert iteration.score is not None and prior_best.score is not None
+        improved = (
+            iteration.score > prior_best.score
+            if metric_direction == "maximize"
+            else iteration.score < prior_best.score
+        )
+        if improved:
+            return "keep"
+        if iteration.score == prior_best.score:
+            return "retain"
+        return "discard"
+
+    def _write_best_fs_artifact(
+        self,
+        run: RunRecord,
+        spec: SearchSpec,
+        record: CandidateRecord,
+        iteration: IterationRecord,
+    ) -> None:
+        artifact = self._fs_snapshot_ref(
+            iteration.attempt_ref,
+            field="best iteration",
+        )
+        if iteration.artifact_hash is None or iteration.score is None:
+            raise RuntimeError("run best FsSnapshot iteration is incomplete")
+        best = BestArtifactRecord(
+            schema_version=2,
+            run_id=run.run_id,
+            candidate_id=record.candidate_id,
+            iteration=iteration.iteration,
+            artifact_ref=artifact,
+            score=iteration.score,
+            metric_name=spec.metric_name,
+            metric_direction=spec.metric_direction,
+            artifact_hash=iteration.artifact_hash,
+            changed_files=iteration.changed_files,
+            updated_at=iteration.created_at,
+        )
+        write_json(
+            self._run_dir(run.run_id) / "best.json",
+            best.model_dump(mode="json"),
+        )
+
+    def _close_fs_requests_after_evidence(
+        self,
+        run_id: str,
+        request_ids: list[str],
+        client: AgentPosixSdkClient,
+    ) -> None:
+        self._retry_pending_fs_request_closes(run_id, client)
+        for request_id in request_ids:
+            try:
+                client.invoke("fs.request.close", {"requestId": request_id})
+            except AgentPosixBridgeError as exc:
+                if exc.code == "RequestNotFound":
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="closed",
+                        closed_at=utc_timestamp(),
+                    )
+                    continue
+                with self._run_transaction(run_id):
+                    run = self._load_run(run_id)
+                    pending = next(
+                        (
+                            item
+                            for item in reversed(run.fs_cleanup)
+                            if item.get("kind") == "request_close"
+                            and item.get("request_id") == request_id
+                            and item.get("state") == "needs_recovery"
+                        ),
+                        None,
+                    )
+                    if pending is None:
+                        pending = {
+                            "kind": "request_close",
+                            "state": "needs_recovery",
+                            "request_id": request_id,
+                            "created_at": utc_timestamp(),
+                        }
+                        run.fs_cleanup.append(pending)
+                    pending["error"] = str(exc)
+                    pending["updated_at"] = utc_timestamp()
+                    pending["attempts"] = int(pending.get("attempts", 0)) + 1
+                    self._write_run(run)
+                continue
+            self._update_fs_request(
+                run_id,
+                request_id,
+                state="closed",
+                closed_at=utc_timestamp(),
+            )
+
+    def _retry_pending_fs_request_closes(
+        self,
+        run_id: str,
+        client: AgentPosixSdkClient,
+    ) -> None:
+        run = self._load_run(run_id)
+        pending_ids = list(
+            dict.fromkeys(
+                str(item["request_id"])
+                for item in run.fs_cleanup
+                if item.get("kind") == "request_close"
+                and item.get("state") == "needs_recovery"
+                and isinstance(item.get("request_id"), str)
+            )
+        )
+        for request_id in pending_ids:
+            error: str | None = None
+            try:
+                client.invoke("fs.request.close", {"requestId": request_id})
+            except AgentPosixBridgeError as exc:
+                if exc.code != "RequestNotFound":
+                    error = str(exc)
+            if error is not None:
+                with self._run_transaction(run_id):
+                    latest = self._load_run(run_id)
+                    for item in latest.fs_cleanup:
+                        if (
+                            item.get("kind") == "request_close"
+                            and item.get("request_id") == request_id
+                            and item.get("state") == "needs_recovery"
+                        ):
+                            item["error"] = error
+                            item["updated_at"] = utc_timestamp()
+                            item["attempts"] = int(item.get("attempts", 0)) + 1
+                    self._write_run(latest)
+                continue
+            self._update_fs_request(
+                run_id,
+                request_id,
+                state="closed",
+                closed_at=utc_timestamp(),
+            )
+            with self._run_transaction(run_id):
+                latest = self._load_run(run_id)
+                for item in latest.fs_cleanup:
+                    if (
+                        item.get("kind") == "request_close"
+                        and item.get("request_id") == request_id
+                        and item.get("state") == "needs_recovery"
+                    ):
+                        item["state"] = "closed"
+                        item["recovered_at"] = utc_timestamp()
+                        item.pop("error", None)
+                self._write_run(latest)
+
+    def complete_pi_thinkthread_restore(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        branch_id: str,
+        target_snapshot_id: str,
+    ) -> None:
+        target = FsSnapshotArtifactRef(snapshot_id=target_snapshot_id)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            record = self._load_candidate_record(run_id, candidate_id)
+            if record.task.fs_branch_id != branch_id:
+                raise RuntimeError("restored branch does not match candidate binding")
+            matching = [
+                item
+                for item in run.fs_cleanup
+                if item.get("kind") == "branch_restore"
+                and item.get("candidate_id") == candidate_id
+                and item.get("branch_id") == branch_id
+                and item.get("target_snapshot_id") == target_snapshot_id
+                and item.get("state")
+                in {"restore_required", "restoring", "restored"}
+            ]
+            if not matching:
+                raise RuntimeError("no durable restore intent matches branch reset")
+            matching[-1]["state"] = "restored"
+            matching[-1]["restored_at"] = utc_timestamp()
+            record.settled_artifact_ref = target
+            if record.iterations:
+                latest = record.iterations[-1]
+                if latest.disposition in {"discard", "failure"}:
+                    latest.settled_ref = target
+                    prior = next(
+                        (
+                            item
+                            for item in reversed(record.iterations[:-1])
+                            if item.attempt_ref == target
+                        ),
+                        None,
+                    )
+                    latest.restored_to_iteration = (
+                        prior.iteration if prior is not None else None
+                    )
+            self._write_candidate_record(run_id, record)
+            self._write_run(run)
+
+    def _pi_tool_copy_mutations(
+        self,
+        *,
+        run: RunRecord,
+        record: CandidateRecord,
+        receipt: ToolCopyReceipt,
+    ) -> list[dict[str, Any]]:
+        tool = self._resolve_shared_tool(
+            run.run_id,
+            receipt.tool_id,
+            receipt.snapshot_hash,
+        )
+        manager = SharedDirManager(self._run_dir(run.run_id))
+        manager.tool_view_input(tool, max_content_bytes=0)
+        destination_root = PurePosixPath(
+            self._fs_join_path(
+                run.fs_source_relative_path or ".",
+                f"{TOOL_INBOX_RELATIVE_PATH}/{receipt.receipt_id}",
+            )
+        )
+        directories: set[PurePosixPath] = set()
+        mutations: list[dict[str, Any]] = []
+        source_root = tool.read_only_path.resolve(strict=True)
+        copied_bytes = 0
+        for relative_text in tool.files:
+            relative = PurePosixPath(relative_text)
+            source = (source_root / Path(relative_text)).resolve(strict=True)
+            if not source.is_file() or not source.is_relative_to(source_root):
+                raise ValueError("shared tool source escaped immutable snapshot")
+            target = destination_root / relative
+            parent = target.parent
+            while str(parent) not in {"", "."}:
+                directories.add(parent)
+                parent = parent.parent
+            data = source.read_bytes()
+            copied_bytes += len(data)
+            if copied_bytes > tool.size_bytes:
+                raise ValueError("shared tool changed during copy preparation")
+            mutations.append(
+                {
+                    "kind": "put_file",
+                    "path": target.as_posix(),
+                    "dataBase64": base64.b64encode(data).decode("ascii"),
+                    "mode": source.stat().st_mode & 0o777,
+                }
+            )
+        if copied_bytes != tool.size_bytes:
+            raise ValueError("shared tool copy byte count mismatch")
+        return [
+            {
+                "kind": "make_directory",
+                "path": path.as_posix(),
+                "mode": 0o755,
+            }
+            for path in sorted(directories, key=lambda item: len(item.parts))
+        ] + mutations
+
+    def patch_pi_thinkthread_tool_copy(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        receipt_id: str,
+        source_snapshot_id: str,
+        client: AgentPosixSdkClient,
+    ) -> tuple[str, str]:
+        run = self._load_run(run_id)
+        record = self._load_candidate_record(run_id, candidate_id)
+        receipt = next(
+            (item for item in record.pending_tool_copies if item.receipt_id == receipt_id),
+            None,
+        )
+        if receipt is None:
+            raise RuntimeError(f"unknown pending tool copy receipt: {receipt_id}")
+        existing = next(
+            (
+                item
+                for item in run.fs_requests
+                if item.operation == "snapshot_patch"
+                and item.context.get("receipt_id") == receipt_id
+            ),
+            None,
+        )
+        if existing is None:
+            request_id = new_request_id()
+            now = utc_timestamp()
+            existing = FsRequestRecord(
+                request_id=request_id,
+                operation="snapshot_patch",
+                context={
+                    "candidate_id": candidate_id,
+                    "receipt_id": receipt_id,
+                    "source_snapshot_id": source_snapshot_id,
+                },
+                created_at=now,
+                updated_at=now,
+            )
+            self._append_fs_request(run_id, existing)
+        elif existing.context.get("source_snapshot_id") != source_snapshot_id:
+            raise RuntimeError("tool copy patch source snapshot changed during recovery")
+        request_id = existing.request_id
+        result = existing.result if existing.state in {"succeeded", "closed"} else None
+        params = {
+            "snapshotId": source_snapshot_id,
+            "requestId": request_id,
+            "mutations": self._pi_tool_copy_mutations(
+                run=run,
+                record=record,
+                receipt=receipt,
+            ),
+        }
+        if result is None:
+            if existing.state in {"accepted", "running", "needs_recovery"}:
+                result = self._recover_fs_request_result(
+                    client=client,
+                    run_id=run_id,
+                    request_id=request_id,
+                    operation="fs.snapshot.patch",
+                    deadline=time.monotonic() + 120.0,
+                )
+            if result is None:
+                try:
+                    result = client.invoke(
+                        "workflow.fs.snapshot.patchBytes",
+                        params,
+                        timeout_seconds=120.0,
+                    )
+                except AgentPosixBridgeError as exc:
+                    if not exc.completion_unknown and exc.code != "RequestInProgress":
+                        self._update_fs_request(
+                            run_id,
+                            request_id,
+                            state="failed",
+                            error={"message": str(exc), "code": exc.code},
+                        )
+                        raise
+                    result = self._recover_fs_request_result(
+                        client=client,
+                        run_id=run_id,
+                        request_id=request_id,
+                        operation="fs.snapshot.patch",
+                        deadline=time.monotonic() + 120.0,
+                    )
+                    if result is None:
+                        raise RuntimeError(
+                            "ThinkThread tool copy patch outcome is not recoverable"
+                        ) from exc
+                else:
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="succeeded",
+                        result=result,
+                    )
+        snapshot = result.get("snapshot") if isinstance(result, dict) else None
+        target_snapshot_id = (
+            snapshot.get("snapshotId") if isinstance(snapshot, dict) else None
+        )
+        if not isinstance(target_snapshot_id, str):
+            raise RuntimeError("fs.snapshot.patch omitted target snapshot")
+        return request_id, target_snapshot_id
+
+    def complete_pi_thinkthread_tool_copy(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        receipt_id: str,
+        target_snapshot_id: str,
+        request_id: str,
+        client: AgentPosixSdkClient,
+    ) -> None:
+        target = FsSnapshotArtifactRef(snapshot_id=target_snapshot_id)
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            record = self._load_candidate_record(run_id, candidate_id)
+            receipt = next(
+                (
+                    item
+                    for item in record.pending_tool_copies
+                    if item.receipt_id == receipt_id
+                ),
+                None,
+            )
+            if receipt is None:
+                raise RuntimeError("tool copy receipt disappeared before settlement")
+            receipt.target_snapshot_id = target_snapshot_id
+            record.settled_artifact_ref = target
+            run.fs_cleanup.append(
+                {
+                    "kind": "tool_copy",
+                    "state": "applied",
+                    "candidate_id": candidate_id,
+                    "receipt_id": receipt_id,
+                    "request_id": request_id,
+                    "target_snapshot_id": target_snapshot_id,
+                    "applied_at": utc_timestamp(),
+                }
+            )
+            self._write_candidate_record(run_id, record)
+            self._write_run(run)
+        self._close_fs_requests_after_evidence(run_id, [request_id], client)
+
+    def _run_pi_thinkthread_verifier(
+        self,
+        *,
+        run: RunRecord,
+        frozen: FrozenSpec,
+        record: CandidateRecord,
+        scope: Literal["process", "promotion"],
+        session: AgentSessionRecord | None,
+        hypothesis: str | None,
+        toolization_decision: ToolizationDecision | None,
+        idempotency_key: str | None,
+    ) -> ScoreReport:
+        client = self._agent_posix_client()
+        client.preflight()
+        reader = FsSnapshotArtifactReader(client)
+        if scope == "process":
+            if session is None:
+                raise PermissionError(
+                    "pi-thinkthread process verifier requires a bound Child session"
+                )
+            if any(
+                receipt.target_snapshot_id is None
+                for receipt in record.pending_tool_copies
+            ):
+                raise RuntimeError(
+                    "shared tool copy requires the current Child turn to end before "
+                    "the next verifier attempt"
+                )
+            attempt = self._capture_pi_thinkthread_attempt(
+                client=client,
+                run=run,
+                frozen=frozen,
+                record=record,
+                session=session,
+                idempotency_key=idempotency_key,
+            )
+        else:
+            selected = self._fs_snapshot_ref(
+                run.selected_artifact_ref,
+                field="selected artifact",
+            )
+            baseline = self._fs_snapshot_ref(
+                run.baseline_artifact_ref,
+                field="run baseline",
+            )
+            source_prefix = run.fs_source_relative_path or "."
+            root_paths = reader.changed_files(baseline, selected)
+            changed_files = [
+                self._fs_source_projected_path(source_prefix, path)
+                for path in root_paths
+            ]
+            touched_denied = any(
+                path_matches(path, frozen.spec.edit_surface.deny)
+                for path in changed_files
+            )
+            outside_allowed = any(
+                not path_matches(path, frozen.spec.edit_surface.allow)
+                for path in changed_files
+            )
+            attempt = _FsAttemptState(
+                base_ref=baseline,
+                attempt_ref=selected,
+                changed_files=changed_files,
+                actual_diff=reader.diff(
+                    baseline,
+                    selected,
+                    max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+                ),
+                cumulative_diff=reader.diff(
+                    baseline,
+                    selected,
+                    max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+                ),
+                touched_denied_files=touched_denied,
+                changed_outside_allowed=outside_allowed,
+                artifact_hash=reader.canonical_digest(baseline, selected),
+                continuation_required=False,
+            )
+
+        record.detected_changed_files = list(attempt.changed_files)
+        record.touched_denied_files = attempt.touched_denied_files
+        record.changed_outside_allowed = attempt.changed_outside_allowed
+        results: list[VerifierResult] = []
+        request_ids: list[str] = (
+            [attempt.snapshot_request_id]
+            if attempt.snapshot_request_id is not None
+            else []
+        )
+        if attempt.touched_denied_files or attempt.changed_outside_allowed:
+            results.append(
+                VerifierResult(
+                    name="edit_surface_check",
+                    role=VerifierRole.ANTI_CHEAT_GATE,
+                    passed=False,
+                    score=0.0,
+                    metrics={
+                        "detected_changed_files": attempt.changed_files,
+                        "touched_denied_files": attempt.touched_denied_files,
+                        "changed_outside_allowed": attempt.changed_outside_allowed,
+                    },
+                    failure_class="EditSurfaceViolation",
+                )
+            )
+        else:
+            frozen_hash_failures = self._fs_frozen_hash_failures(
+                reader=reader,
+                artifact=attempt.attempt_ref,
+                source_prefix=run.fs_source_relative_path or ".",
+                frozen=frozen,
+            )
+            if frozen_hash_failures:
+                results.append(
+                    VerifierResult(
+                        name="frozen_hash_check",
+                        role=VerifierRole.ANTI_CHEAT_GATE,
+                        passed=False,
+                        score=0.0,
+                        metrics={"hash_failures": frozen_hash_failures},
+                        failure_class="FrozenVerifierModified",
+                    )
+                )
+        if not results:
+            commands = (
+                frozen.spec.process_verifiers
+                if scope == "process"
+                else frozen.spec.promotion_verifiers or frozen.spec.process_verifiers
+            )
+            phase: Literal["candidate", "promotion"] = (
+                "candidate" if scope == "process" else "promotion"
+            )
+            for command in commands:
+                result, request_id = self._fs_run_verifier_command(
+                    client=client,
+                    reader=reader,
+                    run=run,
+                    frozen=frozen,
+                    record=record,
+                    artifact=attempt.attempt_ref,
+                    command=command,
+                    verifier_phase=phase,
+                    idempotency_key=idempotency_key,
+                )
+                results.append(result)
+                if request_id is not None:
+                    request_ids.append(request_id)
+                if result.failure_class == "VerifierInfrastructureFailure":
+                    break
+        report = self._fs_score_report(
+            run=run,
+            record=record,
+            frozen=frozen,
+            results=results,
+            scope=scope,
+            touched_denied_files=attempt.touched_denied_files,
+            changed_outside_allowed=attempt.changed_outside_allowed,
+        )
+        if scope == "promotion":
+            report = report.model_copy(
+                update={
+                    "best_artifact_ref": attempt.attempt_ref,
+                    "workspace_artifact_after_settlement": attempt.attempt_ref,
+                }
+            )
+            with self._run_transaction(run.run_id):
+                current_run = self._load_run(run.run_id)
+                current_record = self._load_candidate_record(
+                    run.run_id,
+                    record.candidate_id,
+                )
+                current_record.promotion_report = report
+                current_record.promotion_evidence = PromotionEvidence(
+                    candidate_id=record.candidate_id,
+                    selected_artifact_ref=attempt.attempt_ref,
+                    artifact_ref=attempt.attempt_ref,
+                    artifact_hash=attempt.artifact_hash,
+                    passed=bool(report.promotion_passed),
+                    created_at=utc_timestamp(),
+                )
+                self._write_candidate_record(run.run_id, current_record)
+                self._write_run(current_run)
+            self._close_fs_requests_after_evidence(run.run_id, request_ids, client)
+            return report
+
+        shared_settlement: SharedDirSettlement | None = None
+        shared_settlement_error: str | None = None
+        if (
+            frozen.spec.shared_dir.enabled
+            and report.process_passed
+            and session is not None
+            and record.pending_fs_tool_stages
+        ):
+            try:
+                shared_settlement = self._settle_pi_thinkthread_shared_tools(
+                    client=client,
+                    run=run,
+                    frozen=frozen,
+                    record=record,
+                    attempt_ref=attempt.attempt_ref,
+                    iteration=len(record.iterations) + 1,
+                    settlement_id=idempotency_key,
+                )
+            except Exception as exc:
+                shared_settlement_error = (
+                    f"shared tool snapshot failed: {type(exc).__name__}: {exc}"
+                )
+        staged_entries = [
+            str(item.get("staged_name"))
+            for item in record.pending_fs_tool_stages
+            if item.get("staged_name")
+        ]
+        toolization_advisories = []
+        if frozen.spec.shared_dir.enabled and session is not None:
+            if toolization_decision is None:
+                toolization_advisories.append("toolization_review_missing")
+            elif toolization_decision.outcome == "staged" and not staged_entries:
+                toolization_advisories.append("toolization_stage_missing")
+            elif toolization_decision.outcome == "not_applicable" and staged_entries:
+                toolization_advisories.append("toolization_decision_mismatch")
+
+        prior_best = self._best_iteration_record(
+            record,
+            frozen.spec.metric_direction,
+        )
+        iteration_number = len(record.iterations) + 1
+        iteration_hypothesis = self._iteration_hypothesis(
+            hypothesis,
+            record,
+            iteration_number,
+            scope="process",
+            agent_session_id=session.agent_session_id if session else None,
+        )
+        created_at = utc_timestamp()
+        failure_class = next(
+            (
+                result.failure_class
+                for result in report.verifier_results
+                if result.failure_class
+            ),
+            None,
+        )
+        iteration = IterationRecord(
+            iteration=iteration_number,
+            rpc_request_id=idempotency_key,
+            agent_session_id=session.agent_session_id if session else None,
+            selected_model=(
+                session.selected_model.model
+                if session and session.selected_model
+                else None
+            ),
+            exact_model_ref=(
+                session.model_provenance.get("exact_model_ref") if session else None
+            ),
+            adapter_version=(
+                session.model_provenance.get("adapter_version") if session else None
+            ),
+            model_provenance=session.model_provenance if session else {},
+            score=report.aggregate_score,
+            process_passed=report.process_passed,
+            attempt_base_ref=attempt.base_ref,
+            attempt_ref=attempt.attempt_ref,
+            verifier_request_ids=request_ids,
+            actual_diff=attempt.actual_diff,
+            cumulative_diff=attempt.cumulative_diff,
+            attempt_changed_files=attempt.changed_files,
+            failure_class=failure_class,
+            summary=iteration_hypothesis,
+            hypothesis=iteration_hypothesis,
+            changed_files=attempt.changed_files,
+            touched_denied_files=attempt.touched_denied_files,
+            changed_outside_allowed=attempt.changed_outside_allowed,
+            artifact_hash=attempt.artifact_hash,
+            metrics={
+                **{
+                    result.name: result.metrics
+                    for result in report.verifier_results
+                },
+                "thinkthread_continuation_required": attempt.continuation_required,
+            },
+            log_paths=[
+                str(result.log_path)
+                for result in report.verifier_results
+                if result.log_path is not None
+            ],
+            shared_tools=(shared_settlement.tools if shared_settlement else []),
+            shared_tool_errors=(
+                shared_settlement.errors
+                if shared_settlement
+                else [shared_settlement_error]
+                if shared_settlement_error
+                else []
+            ),
+            shared_tool_staged_entries=staged_entries,
+            shared_tool_staged_file_count=(
+                shared_settlement.staged_file_count if shared_settlement else 0
+            ),
+            shared_tool_staged_bytes=(
+                shared_settlement.staged_bytes if shared_settlement else 0
+            ),
+            shared_tool_consumed_entries=(
+                shared_settlement.consumed_entries if shared_settlement else []
+            ),
+            shared_tool_deduplicated_entries=(
+                shared_settlement.deduplicated_entries
+                if shared_settlement
+                else []
+            ),
+            shared_tool_publish_status=(
+                "partially_published"
+                if shared_settlement
+                and shared_settlement.tools
+                and shared_settlement.errors
+                else "published"
+                if shared_settlement and shared_settlement.tools
+                else "consumed_unchanged"
+                if shared_settlement and shared_settlement.consumed_entries
+                else "snapshot_rejected"
+                if shared_settlement and shared_settlement.errors
+                else "snapshot_error"
+                if shared_settlement_error
+                else "skipped_failed_verifier"
+                if staged_entries and not report.process_passed
+                else "not_staged"
+            ),
+            adopted_tools=[
+                ToolAdoptionRecord(
+                    tool_id=receipt.tool_id,
+                    snapshot_hash=receipt.snapshot_hash,
+                    receipt_id=receipt.receipt_id,
+                )
+                for receipt in record.pending_tool_copies
+                if receipt.target_snapshot_id is not None
+            ],
+            adoption_confounded=(
+                None
+                if not record.pending_tool_copies
+                else len(record.pending_tool_copies) != 1
+                or len(attempt.changed_files) > 2
+            ),
+            toolization_decision=toolization_decision,
+            toolization_advisories=toolization_advisories,
+            created_at=created_at,
+        )
+        disposition = self._fs_iteration_disposition(
+            iteration,
+            prior_best,
+            frozen.spec.metric_direction,
+        )
+        iteration.disposition = disposition
+        best_iteration = iteration if disposition in {"keep", "retain"} else prior_best
+        settled_ref = (
+            attempt.attempt_ref
+            if disposition in {"keep", "retain"}
+            else self._fs_snapshot_ref(
+                (
+                    prior_best.attempt_ref
+                    if prior_best is not None
+                    else attempt.base_ref
+                ),
+                field="restore target",
+            )
+        )
+        iteration.settled_ref = settled_ref
+        report = report.model_copy(
+            update={
+                "disposition": disposition,
+                "best_iteration": (
+                    best_iteration.iteration if best_iteration is not None else None
+                ),
+                "best_artifact_ref": (
+                    best_iteration.attempt_ref
+                    if best_iteration is not None
+                    else None
+                ),
+                "workspace_artifact_after_settlement": settled_ref,
+                "shared_tool_staged_entries": iteration.shared_tool_staged_entries,
+                "shared_tool_staged_file_count": (
+                    iteration.shared_tool_staged_file_count
+                ),
+                "shared_tool_staged_bytes": iteration.shared_tool_staged_bytes,
+                "shared_tool_publish_status": iteration.shared_tool_publish_status,
+                "shared_tool_errors": iteration.shared_tool_errors,
+                "shared_tool_consumed_entries": (
+                    iteration.shared_tool_consumed_entries
+                ),
+                "shared_tool_deduplicated_entries": (
+                    iteration.shared_tool_deduplicated_entries
+                ),
+                "toolization_decision": iteration.toolization_decision,
+                "toolization_advisories": iteration.toolization_advisories,
+            }
+        )
+        with self._run_transaction(run.run_id):
+            current_run = self._load_run(run.run_id)
+            if (
+                idempotency_key is not None
+                and current_run.state == RunState.NEEDS_RECOVERY
+            ):
+                replay_requests = [
+                    item
+                    for item in current_run.fs_requests
+                    if item.request_id in request_ids
+                ]
+                reason = str(
+                    current_run.budget_used.get("needs_recovery_reason") or ""
+                )
+                if (
+                    replay_requests
+                    and all(
+                        item.state
+                        in {"succeeded", "failed", "cancelled", "closed"}
+                        for item in replay_requests
+                    )
+                    and any(item.request_id in reason for item in replay_requests)
+                ):
+                    previous = current_run.budget_used.pop(
+                        "fs_recovery_previous_state", RunState.RUNNING.value
+                    )
+                    current_run.budget_used.pop("needs_recovery_reason", None)
+                    current_run.state = RunState(str(previous))
+            self._assert_worker_iteration_allowed(
+                current_run,
+                "record verifier result",
+            )
+            current_record = self._load_candidate_record(
+                run.run_id,
+                record.candidate_id,
+            )
+            current_record.detected_changed_files = list(attempt.changed_files)
+            current_record.touched_denied_files = attempt.touched_denied_files
+            current_record.changed_outside_allowed = attempt.changed_outside_allowed
+            current_record.iterations.append(iteration)
+            consumed_receipts = {
+                item.receipt_id
+                for item in record.pending_tool_copies
+                if item.target_snapshot_id is not None
+            }
+            if consumed_receipts:
+                current_record.pending_tool_copies = [
+                    item
+                    for item in current_record.pending_tool_copies
+                    if item.receipt_id not in consumed_receipts
+                ]
+            if shared_settlement is not None:
+                consumed_stage_names = {
+                    *shared_settlement.consumed_entries,
+                    *shared_settlement.deduplicated_entries,
+                }
+                current_record.pending_fs_tool_stages = [
+                    item
+                    for item in current_record.pending_fs_tool_stages
+                    if item.get("staged_name") not in consumed_stage_names
+                ]
+            current_record.results_ledger.append(
+                ResultLedgerEntry(
+                    source_run_id=run.run_id,
+                    source_candidate_id=record.candidate_id,
+                    iteration=iteration_number,
+                    artifact_ref=attempt.attempt_ref,
+                    metric_name=frozen.spec.metric_name,
+                    score=report.aggregate_score,
+                    status="pass" if report.process_passed else "fail",
+                    hypothesis=iteration_hypothesis,
+                    failure_class=failure_class,
+                    created_at=created_at,
+                )
+            )
+            current_record.status = "evaluated"
+            current_record.score_report = report
+            if disposition in {"keep", "retain"}:
+                current_record.settled_artifact_ref = settled_ref
+            else:
+                current_run.fs_cleanup.append(
+                    {
+                        "kind": "branch_restore",
+                        "state": "restore_required",
+                        "candidate_id": record.candidate_id,
+                        "branch_id": current_record.task.fs_branch_id,
+                        "attempt_snapshot_id": attempt.attempt_ref.snapshot_id,
+                        "target_snapshot_id": settled_ref.snapshot_id,
+                        "created_at": utc_timestamp(),
+                    }
+                )
+            self._write_candidate_record(run.run_id, current_record)
+            if self._update_best_seen(current_run, frozen.spec, report):
+                if best_iteration is None:
+                    raise RuntimeError("run best has no FsSnapshot iteration")
+                self._write_best_fs_artifact(
+                    current_run,
+                    frozen.spec,
+                    current_record,
+                    best_iteration,
+                )
+            current_run.candidates_evaluated = len(
+                [
+                    item
+                    for item in self._load_candidate_records(run.run_id)
+                    if item.status == "evaluated"
+                ]
+            )
+            self._write_run(current_run)
+            try:
+                self._create_evidence_annotation_task(
+                    run.run_id,
+                    frozen,
+                    record.candidate_id,
+                    iteration,
+                )
+            except Exception:
+                pass
+        if session is not None:
+            latest_session = self._load_agent_session_by_id(
+                session.agent_session_id,
+                run_id=run.run_id,
+            )
+            counters = dict(latest_session.counters)
+            counters["verifier_runs"] = counters.get("verifier_runs", 0) + 1
+            latest_session.counters = counters
+            latest_session.updated_at = utc_timestamp()
+            self._write_agent_session(latest_session)
+        self._close_fs_requests_after_evidence(run.run_id, request_ids, client)
+        return report
 
     def _settle_process_verifier(
         self,
@@ -2331,6 +5336,9 @@ class FileSearchRuntime:
                         candidate_id=candidate_id,
                         iteration=iteration_number,
                         source_commit=attempt.git_head,
+                        source_artifact_ref=GitCommitArtifactRef(
+                            commit=attempt.git_head
+                        ),
                         share_out_dir=record.task.share_out_dir,
                         max_tools=limits.max_tools_per_iteration,
                         max_files=limits.max_files_per_iteration,
@@ -2378,6 +5386,10 @@ class FileSearchRuntime:
                 model_provenance=(session.model_provenance if session else {}),
                 score=report.aggregate_score,
                 process_passed=report.process_passed,
+                attempt_base_ref=GitCommitArtifactRef(
+                    commit=pre_attempt_settled_head
+                ),
+                attempt_ref=GitCommitArtifactRef(commit=attempt.git_head),
                 git_head=attempt.git_head,
                 attempt_base_git_head=pre_attempt_settled_head,
                 attempt_changed_files=attempt_changed_files,
@@ -2457,6 +5469,7 @@ class FileSearchRuntime:
 
             if disposition in {"keep", "retain"}:
                 best_iteration = iteration
+                settled_ref = iteration.attempt_ref
             else:
                 target = (
                     prior_best.git_head
@@ -2479,6 +5492,9 @@ class FileSearchRuntime:
                     ),
                 )
                 best_iteration = prior_best
+                settled_ref = GitCommitArtifactRef(commit=target)
+
+            iteration.settled_ref = settled_ref
 
             settled = self._candidate_artifact_state(run, frozen, record)
             if not settled.git_artifact_clean:
@@ -2494,6 +5510,7 @@ class FileSearchRuntime:
                 source_run_id=run_id,
                 source_candidate_id=candidate_id,
                 iteration=iteration_number,
+                artifact_ref=iteration.attempt_ref,
                 git_head=attempt.git_head,
                 metric_name=frozen.spec.metric_name,
                 score=report.aggregate_score,
@@ -2509,6 +5526,7 @@ class FileSearchRuntime:
             )
             iteration.ledger_git_head = ledger_git_head
             iteration.workspace_git_head_after_settlement = ledger_git_head
+            record.settled_artifact_ref = settled_ref
             record.iterations.append(iteration)
             if pending_tool_copies:
                 consumed = {item.receipt_id for item in pending_tool_copies}
@@ -2527,6 +5545,12 @@ class FileSearchRuntime:
                     "best_git_head": (
                         best_iteration.git_head if best_iteration is not None else None
                     ),
+                    "best_artifact_ref": (
+                        best_iteration.attempt_ref
+                        if best_iteration is not None
+                        else None
+                    ),
+                    "workspace_artifact_after_settlement": settled_ref,
                     "workspace_git_head_after_settlement": ledger_git_head,
                     "shared_tool_staged_entries": iteration.shared_tool_staged_entries,
                     "shared_tool_staged_file_count": iteration.shared_tool_staged_file_count,
@@ -2606,6 +5630,8 @@ class FileSearchRuntime:
             run.budget_used.pop("selection_blocked_reason", None)
             self._write_run(run)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
+        if frozen.spec.strategy.worker_host == "pi-thinkthread":
+            return self._select_pi_thinkthread(run_id, frozen)
         records = self._load_candidate_records(run_id)
         options = self._selection_options(run, records, frozen.spec.metric_direction)
         if not options:
@@ -2677,7 +5703,12 @@ class FileSearchRuntime:
                 final_report = report
                 break
 
-        if selected_record is None or selected_score is None:
+        if (
+            selected_record is None
+            or selected_score is None
+            or selected_iteration is None
+            or selected_git_head is None
+        ):
             self._mark_selection_blocked(
                 run_id,
                 "all eligible candidate revisions failed verification",
@@ -2700,6 +5731,9 @@ class FileSearchRuntime:
             run.best_score = selected_score
             run.selected_score = selected_score
             run.selected_iteration = selected_iteration
+            run.selected_artifact_ref = GitCommitArtifactRef(
+                commit=selected_git_head
+            )
             run.selected_git_head = selected_git_head
             run.selected_artifact_hash = selected_artifact_hash
             run.budget_used.pop("selection_blocked_reason", None)
@@ -2749,6 +5783,90 @@ class FileSearchRuntime:
             "best_score": run.best_score,
         }
 
+    def _select_pi_thinkthread(
+        self,
+        run_id: str,
+        frozen: FrozenSpec,
+    ) -> dict[str, Any]:
+        run = self._load_run(run_id)
+        options: list[tuple[float, CandidateRecord, IterationRecord]] = []
+        for record in self._load_candidate_records(run_id):
+            iteration = self._best_iteration_record(
+                record,
+                frozen.spec.metric_direction,
+            )
+            if (
+                iteration is None
+                or not self._fs_iteration_eligible(iteration)
+                or iteration.disposition in {"discard", "failure"}
+                or iteration.score is None
+            ):
+                continue
+            options.append((iteration.score, record, iteration))
+        if not options:
+            with self._run_transaction(run_id):
+                blocked = self._load_run(run_id)
+                blocked.state = RunState.SELECTION_BLOCKED
+                blocked.budget_used["selection_blocked_reason"] = (
+                    "no exact FsSnapshot verifier Evidence is eligible for selection"
+                )
+                self._write_run(blocked)
+            raise RuntimeError("no verified FsSnapshot candidates available")
+        maximize = frozen.spec.metric_direction == "maximize"
+        selected_score, selected_record, selected_iteration = sorted(
+            options,
+            key=lambda item: (
+                item[0] if maximize else -item[0],
+                item[1].candidate_id == run.best_candidate_id,
+            ),
+            reverse=True,
+        )[0]
+        selected_ref = self._fs_snapshot_ref(
+            selected_iteration.attempt_ref,
+            field="selected iteration",
+        )
+        if selected_iteration.artifact_hash is None:
+            raise RuntimeError("selected FsSnapshot Evidence omitted artifact hash")
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            self._assert_run_not_invalidated(run, "record selection")
+            run.state = RunState.READY_TO_PROMOTE
+            run.selected_candidate_id = selected_record.candidate_id
+            run.best_candidate_id = selected_record.candidate_id
+            run.best_score = selected_score
+            run.selected_score = selected_score
+            run.selected_iteration = selected_iteration.iteration
+            run.selected_artifact_ref = selected_ref
+            run.selected_git_head = None
+            run.selected_artifact_hash = selected_iteration.artifact_hash
+            run.budget_used.pop("selection_blocked_reason", None)
+            selected_record = self._load_candidate_record(
+                run_id,
+                selected_record.candidate_id,
+            )
+            selected_record.promotion_report = None
+            selected_record.promotion_evidence = None
+            self._write_candidate_record(run_id, selected_record)
+            self._write_best_fs_artifact(
+                run,
+                frozen.spec,
+                selected_record,
+                selected_iteration,
+            )
+            self._write_run(run)
+        return {
+            "selected_candidate_id": selected_record.candidate_id,
+            "selected_score": selected_score,
+            "selected_iteration": selected_iteration.iteration,
+            "selected_artifact_ref": selected_ref.model_dump(mode="json"),
+            "selected_artifact_hash": selected_iteration.artifact_hash,
+            "selection_basis_score": selected_score,
+            "final_verifier_score": selected_score,
+            "selection_evidence_source": "worker_evidence",
+            "best_candidate_id": selected_record.candidate_id,
+            "best_score": selected_score,
+        }
+
     def _mark_selection_blocked(self, run_id: str, reason: str) -> None:
         run = self._load_run(run_id)
         run.state = RunState.SELECTION_BLOCKED
@@ -2775,6 +5893,506 @@ class FileSearchRuntime:
                 )
         return blocking
 
+    def _pi_thinkthread_pool_cleanup_blockers(
+        self,
+        run_id: str,
+    ) -> list[dict[str, str]]:
+        pool_root = self.root_dir / "host-pools" / "pi"
+        if not pool_root.is_dir():
+            return []
+        blockers: list[dict[str, str]] = []
+        for path in sorted(pool_root.glob("*/pool.json")):
+            try:
+                pool = load_json(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if pool.get("host") != "pi-thinkthread" or pool.get("run_id") != run_id:
+                continue
+            state = str(pool.get("state") or "unknown")
+            if state != "closed":
+                blockers.append(
+                    {
+                        "pool_id": str(pool.get("pool_id") or path.parent.name),
+                        "state": state,
+                    }
+                )
+        return blockers
+
+    def _owned_pi_thinkthread_snapshots(self, run_id: str) -> list[str]:
+        """Return snapshots created by this run, newest first.
+
+        Artifact references are deliberately not scanned recursively: a successor
+        run may carry inherited Evidence that points at an artifact owned by a
+        different run. Creation intents and snapshot-patch results are the local
+        ownership ledger.
+        """
+
+        run = self._load_run(run_id)
+        snapshot_ids: list[str] = []
+
+        def add(snapshot_id: object) -> None:
+            if (
+                isinstance(snapshot_id, str)
+                and snapshot_id.startswith("fsnap-")
+                and snapshot_id not in snapshot_ids
+            ):
+                snapshot_ids.append(snapshot_id)
+
+        for intent in run.fs_snapshot_intents:
+            add(intent.snapshot_id)
+        for record in self._load_candidate_records(run_id):
+            for intent in record.fs_snapshot_intents:
+                add(intent.snapshot_id)
+        for request in run.fs_requests:
+            if request.operation in {"root_snapshot", "branch_snapshot"} and isinstance(
+                request.result, dict
+            ):
+                add(request.result.get("snapshotId"))
+                continue
+            if request.operation != "snapshot_patch" or not isinstance(
+                request.result, dict
+            ):
+                continue
+            snapshot = request.result.get("snapshot")
+            if isinstance(snapshot, dict):
+                add(snapshot.get("snapshotId"))
+
+        # Tool-copy settlement is persisted after the patch response and is a
+        # second ownership source if a legacy request record omitted its result.
+        for item in run.fs_cleanup:
+            if item.get("kind") == "tool_copy":
+                add(item.get("target_snapshot_id"))
+
+        # Delete descendants/attempts before the initial Root baseline. Current
+        # fs v1 snapshots are independent immutable trees, but this order also
+        # remains valid if the backend retains derivation pins in the future.
+        return list(reversed(snapshot_ids))
+
+    def _prepare_pi_thinkthread_snapshot_remove(
+        self,
+        run_id: str,
+        snapshot_id: str,
+    ) -> tuple[str, str]:
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            matching = [
+                item
+                for item in run.fs_cleanup
+                if item.get("kind") == "snapshot_remove"
+                and item.get("snapshot_id") == snapshot_id
+            ]
+            if matching:
+                record = matching[-1]
+                request_id = record.get("request_id")
+                if not isinstance(request_id, str):
+                    raise RuntimeError(
+                        f"snapshot cleanup record omitted request_id: {snapshot_id}"
+                    )
+                return request_id, str(record.get("state") or "prepared")
+
+            request_id = new_request_id()
+            now = utc_timestamp()
+            run.fs_requests.append(
+                FsRequestRecord(
+                    request_id=request_id,
+                    operation="snapshot_remove",
+                    context={"snapshot_id": snapshot_id},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            run.fs_cleanup.append(
+                {
+                    "kind": "snapshot_remove",
+                    "snapshot_id": snapshot_id,
+                    "request_id": request_id,
+                    "state": "prepared",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+            self._write_run(run)
+            return request_id, "prepared"
+
+    def _update_pi_thinkthread_snapshot_cleanup(
+        self,
+        run_id: str,
+        snapshot_id: str,
+        *,
+        state: str,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            record = next(
+                (
+                    item
+                    for item in reversed(run.fs_cleanup)
+                    if item.get("kind") == "snapshot_remove"
+                    and item.get("snapshot_id") == snapshot_id
+                ),
+                None,
+            )
+            if record is None:
+                raise RuntimeError(
+                    f"snapshot cleanup intent is not persisted: {snapshot_id}"
+                )
+            record["state"] = state
+            record["updated_at"] = utc_timestamp()
+            if result is not None:
+                record["result"] = result
+            if error is not None:
+                record["error"] = error
+            elif state in {"removing", "removed", "already_absent"}:
+                record.pop("error", None)
+            if state in {"removed", "already_absent"}:
+                record["removed_at"] = utc_timestamp()
+                for intent in run.fs_snapshot_intents:
+                    if intent.snapshot_id == snapshot_id:
+                        intent.state = "cleaned"
+                        intent.updated_at = utc_timestamp()
+            self._write_run(run)
+
+        if state in {"removed", "already_absent"}:
+            for candidate in self._load_candidate_records(run_id):
+                changed = False
+                for intent in candidate.fs_snapshot_intents:
+                    if intent.snapshot_id == snapshot_id:
+                        intent.state = "cleaned"
+                        intent.updated_at = utc_timestamp()
+                        changed = True
+                if changed:
+                    self._write_candidate_record(run_id, candidate)
+
+    def _record_pi_thinkthread_storage_observation(
+        self,
+        run_id: str,
+        *,
+        state: str,
+        storage: dict[str, Any] | None,
+        error: str | None = None,
+    ) -> None:
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            prior = next(
+                (
+                    item
+                    for item in reversed(run.fs_cleanup)
+                    if item.get("kind") == "storage_observation"
+                ),
+                None,
+            )
+            payload = {
+                "kind": "storage_observation",
+                "state": state,
+                "storage": storage,
+                "observed_at": utc_timestamp(),
+            }
+            if error:
+                payload["error"] = error
+            if prior is None:
+                run.fs_cleanup.append(payload)
+            else:
+                prior.clear()
+                prior.update(payload)
+            self._write_run(run)
+
+    def cleanup_pi_thinkthread_snapshots(self, run_id: str) -> dict[str, Any]:
+        """Durably reclaim every immutable fs snapshot owned by a terminal run.
+
+        Pool/branch cleanup must happen first because fs v1 rejects deletion of
+        a snapshot still pinned by a live or retired private branch. Every
+        mutation reuses one persisted RequestId and its request record is closed
+        only after the matching Goal Plus cleanup fact is durable.
+        """
+
+        run = self._load_run(run_id)
+        frozen = self._load_frozen_spec(run.frozen_spec_id)
+        if frozen.spec.strategy.worker_host != "pi-thinkthread":
+            return {"state": "not_applicable", "removed": [], "pending": []}
+
+        cleanup_recovery = bool(
+            run.budget_used.get("fs_cleanup_recovery_active")
+        )
+        terminal_states = {
+            RunState.PROMOTED,
+            RunState.FAILED,
+            RunState.ABORTED,
+            RunState.SELECTION_BLOCKED,
+        }
+        if run.state not in terminal_states and not (
+            run.state == RunState.NEEDS_RECOVERY and cleanup_recovery
+        ):
+            pending = self._owned_pi_thinkthread_snapshots(run_id)
+            return {
+                "state": "deferred_run_active",
+                "run_state": str(run.state),
+                "removed": [],
+                "pending": pending,
+            }
+        if run.publication is not None and run.publication.state != "committed":
+            pending = self._owned_pi_thinkthread_snapshots(run_id)
+            return {
+                "state": "deferred_publication_recovery",
+                "publication_state": run.publication.state,
+                "removed": [],
+                "pending": pending,
+            }
+
+        blockers = self._pi_thinkthread_pool_cleanup_blockers(run_id)
+        if blockers:
+            with self._run_transaction(run_id):
+                latest = self._load_run(run_id)
+                existing = next(
+                    (
+                        item
+                        for item in reversed(latest.fs_cleanup)
+                        if item.get("kind") == "snapshot_cleanup"
+                    ),
+                    None,
+                )
+                payload = {
+                    "kind": "snapshot_cleanup",
+                    "state": "deferred_pool_open",
+                    "pool_blockers": blockers,
+                    "updated_at": utc_timestamp(),
+                }
+                if existing is None:
+                    payload["created_at"] = payload["updated_at"]
+                    latest.fs_cleanup.append(payload)
+                else:
+                    existing.update(payload)
+                self._write_run(latest)
+            return {
+                "state": "deferred_pool_open",
+                "removed": [],
+                "pending": self._owned_pi_thinkthread_snapshots(run_id),
+                "pool_blockers": blockers,
+            }
+
+        client = self._agent_posix_client()
+        client.preflight()
+        terminal_request_ids = [
+            request.request_id
+            for request in self._load_run(run_id).fs_requests
+            if request.state in {"succeeded", "failed", "cancelled"}
+        ]
+        if terminal_request_ids:
+            self._close_fs_requests_after_evidence(
+                run_id, terminal_request_ids, client
+            )
+        removed: list[str] = []
+        pending: list[str] = []
+        failed: list[dict[str, str]] = []
+        for snapshot_id in self._owned_pi_thinkthread_snapshots(run_id):
+            request_id, cleanup_state = self._prepare_pi_thinkthread_snapshot_remove(
+                run_id, snapshot_id
+            )
+            if cleanup_state in {"removed", "already_absent"}:
+                removed.append(snapshot_id)
+                continue
+
+            persisted = next(
+                item
+                for item in self._load_run(run_id).fs_requests
+                if item.request_id == request_id
+            )
+            if persisted.state in {"succeeded", "closed"}:
+                self._update_pi_thinkthread_snapshot_cleanup(
+                    run_id,
+                    snapshot_id,
+                    state="removed",
+                    result=persisted.result or {},
+                )
+                self._close_fs_requests_after_evidence(
+                    run_id, [request_id], client
+                )
+                removed.append(snapshot_id)
+                continue
+
+            self._update_pi_thinkthread_snapshot_cleanup(
+                run_id, snapshot_id, state="removing"
+            )
+            try:
+                result = client.invoke(
+                    "fs.snapshot.remove",
+                    {"snapshotId": snapshot_id, "requestId": request_id},
+                    timeout_seconds=120.0,
+                )
+            except AgentPosixBridgeError as exc:
+                if exc.code == "FsSnapshotNotFound":
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="succeeded",
+                        result={"alreadyAbsent": True},
+                    )
+                    self._update_pi_thinkthread_snapshot_cleanup(
+                        run_id,
+                        snapshot_id,
+                        state="already_absent",
+                        result={"alreadyAbsent": True},
+                    )
+                    self._close_fs_requests_after_evidence(
+                        run_id, [request_id], client
+                    )
+                    removed.append(snapshot_id)
+                    continue
+                if exc.code == "FsSnapshotInUse":
+                    error = {
+                        "message": str(exc),
+                        "code": str(exc.code),
+                        "retryable": bool(exc.retryable),
+                    }
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="prepared",
+                        error=error,
+                    )
+                    self._update_pi_thinkthread_snapshot_cleanup(
+                        run_id,
+                        snapshot_id,
+                        state="deferred_in_use",
+                        error=error,
+                    )
+                    pending.append(snapshot_id)
+                    continue
+                try:
+                    result = self._recover_fs_request_result(
+                        client=client,
+                        run_id=run_id,
+                        request_id=request_id,
+                        operation="fs.snapshot.remove",
+                        deadline=time.monotonic() + 120.0,
+                    )
+                except (AgentPosixBridgeError, RuntimeError) as recovery_error:
+                    error = {
+                        "message": str(recovery_error),
+                        "code": str(
+                            getattr(recovery_error, "code", None) or exc.code or ""
+                        ),
+                    }
+                    state = (
+                        "needs_recovery"
+                        if exc.completion_unknown
+                        or "NeedsRecovery" in str(recovery_error)
+                        else "failed"
+                    )
+                    self._update_pi_thinkthread_snapshot_cleanup(
+                        run_id,
+                        snapshot_id,
+                        state=state,
+                        error=error,
+                    )
+                    pending.append(snapshot_id)
+                    failed.append({"snapshot_id": snapshot_id, **error})
+                    if state == "needs_recovery":
+                        with self._run_transaction(run_id):
+                            latest = self._load_run(run_id)
+                            if run.state != RunState.NEEDS_RECOVERY:
+                                latest.budget_used.setdefault(
+                                    "fs_cleanup_previous_state",
+                                    str(run.state),
+                                )
+                            latest.budget_used["fs_cleanup_recovery_active"] = True
+                            self._write_run(latest)
+                    continue
+                if result is None:
+                    error = {
+                        "message": str(exc),
+                        "code": str(exc.code or "RequestNotFound"),
+                    }
+                    self._update_fs_request(
+                        run_id,
+                        request_id,
+                        state="failed",
+                        error=error,
+                    )
+                    self._update_pi_thinkthread_snapshot_cleanup(
+                        run_id,
+                        snapshot_id,
+                        state="failed",
+                        error=error,
+                    )
+                    pending.append(snapshot_id)
+                    failed.append({"snapshot_id": snapshot_id, **error})
+                    continue
+            else:
+                self._update_fs_request(
+                    run_id, request_id, state="succeeded", result=result
+                )
+
+            self._update_pi_thinkthread_snapshot_cleanup(
+                run_id, snapshot_id, state="removed", result=result or {}
+            )
+            self._close_fs_requests_after_evidence(run_id, [request_id], client)
+            removed.append(snapshot_id)
+
+        storage: dict[str, Any] | None = None
+        try:
+            observed = client.invoke("fs.stat")
+            raw_storage = observed.get("storage")
+            storage = raw_storage if isinstance(raw_storage, dict) else None
+            self._record_pi_thinkthread_storage_observation(
+                run_id, state="observed", storage=storage
+            )
+        except AgentPosixBridgeError as exc:
+            self._record_pi_thinkthread_storage_observation(
+                run_id,
+                state="needs_recovery",
+                storage=None,
+                error=str(exc),
+            )
+
+        state = "complete" if not pending else "needs_recovery" if failed else "deferred"
+        with self._run_transaction(run_id):
+            latest = self._load_run(run_id)
+            summary = next(
+                (
+                    item
+                    for item in reversed(latest.fs_cleanup)
+                    if item.get("kind") == "snapshot_cleanup"
+                ),
+                None,
+            )
+            payload = {
+                "kind": "snapshot_cleanup",
+                "state": state,
+                "removed": removed,
+                "pending": pending,
+                "failed": failed,
+                "storage": storage,
+                "updated_at": utc_timestamp(),
+            }
+            if summary is None:
+                payload["created_at"] = payload["updated_at"]
+                latest.fs_cleanup.append(payload)
+            else:
+                summary.update(payload)
+                summary.pop("pool_blockers", None)
+            if state == "complete" and latest.budget_used.pop(
+                "fs_cleanup_recovery_active", None
+            ):
+                prior_state = latest.budget_used.pop(
+                    "fs_cleanup_previous_state", None
+                )
+                if (
+                    latest.state == RunState.NEEDS_RECOVERY
+                    and isinstance(prior_state, str)
+                ):
+                    latest.state = RunState(prior_state)
+                    latest.budget_used.pop("needs_recovery_reason", None)
+            self._write_run(latest)
+        return {
+            "state": state,
+            "removed": removed,
+            "pending": pending,
+            "failed": failed,
+            "storage": storage,
+        }
+
     def report(self, run_id: str) -> Path:
         blocking = self._blocking_goal_report_records(run_id)
         if blocking:
@@ -2788,6 +6406,10 @@ class FileSearchRuntime:
             )
         run = self._load_run(run_id)
         frozen = self._load_frozen_spec(run.frozen_spec_id)
+        snapshot_cleanup: dict[str, Any] | None = None
+        if frozen.spec.strategy.worker_host == "pi-thinkthread":
+            snapshot_cleanup = self.cleanup_pi_thinkthread_snapshots(run_id)
+            run = self._load_run(run_id)
         records = self._load_candidate_records(run_id)
         plans = self._load_plans(run_id)
         report_path = self._run_dir(run_id) / "report.md"
@@ -2808,13 +6430,38 @@ class FileSearchRuntime:
             f"- Best score: `{run.best_score}`",
             f"- Selected score: `{run.selected_score}`",
             f"- Selected iteration: `{run.selected_iteration}`",
+            (
+                "- Selected artifact: `"
+                + (
+                    canonical_json(
+                        run.selected_artifact_ref.model_dump(mode="json")
+                    )
+                    if run.selected_artifact_ref is not None
+                    else ""
+                )
+                + "`"
+            ),
             f"- Selected git head: `{run.selected_git_head}`",
+            (
+                "- Publication: `"
+                + (run.publication.state if run.publication is not None else "")
+                + "`"
+            ),
             f"- Invalidated at: `{run.invalidated_at}`",
             f"- Invalidation reason: `{run.invalidation_reason}`",
             f"- Invalidation summary: {run.invalidation_summary or ''}",
             (
                 "- Invalidation evidence: "
                 f"{self._markdown_cell(canonical_json(run.invalidation_evidence))}"
+            ),
+            (
+                "- ThinkThread snapshot cleanup: `"
+                + (
+                    canonical_json(snapshot_cleanup)
+                    if snapshot_cleanup is not None
+                    else ""
+                )
+                + "`"
             ),
             "",
             "## Strategy Plans",
@@ -2836,16 +6483,26 @@ class FileSearchRuntime:
                 "",
                 "## Candidates",
                 "",
-                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Git Head | Best Iteration | Best Score | Best Git Head | Process | Summary | Key Metrics | Changed Files | Results Ledger |",
-                "|---|---|---|---|---|---:|---|---:|---:|---|---|---|---|---|---|",
+                "| Candidate | Plan | Agent Sessions | Parent/Base | Status | Score | Artifact | Git Head | Best Iteration | Best Score | Best Artifact | Best Git Head | Process | Summary | Key Metrics | Changed Files | Results Ledger |",
+                "|---|---|---|---|---|---:|---|---|---:|---:|---|---|---|---|---|---|---|",
             ]
         )
-        ledger_summaries: list[tuple[CandidateRecord, Path, list[ResultLedgerEntry]]] = []
+        ledger_summaries: list[
+            tuple[CandidateRecord, Path | None, list[ResultLedgerEntry]]
+        ] = []
         for record in records:
             score = ""
             passed = ""
             latest_iteration = record.iterations[-1] if record.iterations else None
             git_head = latest_iteration.git_head if latest_iteration else ""
+            artifact_ref = (
+                latest_iteration.attempt_ref if latest_iteration is not None else None
+            )
+            artifact_display = (
+                canonical_json(artifact_ref.model_dump(mode="json"))
+                if artifact_ref is not None
+                else ""
+            )
             payload = self._history_candidate_payload(record, frozen.spec)
             key_metrics = ", ".join(
                 f"{key}={value}" for key, value in payload["key_metrics"].items()
@@ -2874,6 +6531,13 @@ class FileSearchRuntime:
                 else str(best_iteration.score)
             )
             best_git_head = "" if best_iteration is None else best_iteration.git_head or ""
+            best_artifact = (
+                ""
+                if best_iteration is None or best_iteration.attempt_ref is None
+                else canonical_json(
+                    best_iteration.attempt_ref.model_dump(mode="json")
+                )
+            )
             parent_base = ", ".join(
                 part
                 for part in [
@@ -2882,24 +6546,33 @@ class FileSearchRuntime:
                 ]
                 if part
             )
-            results_path = self._results_tsv_path(record.task.workspace)
-            results_entries = self._read_results_tsv(record)
-            ledger_summaries.append((record, results_path, results_entries))
-            try:
-                ledger_link = results_path.relative_to(report_path.parent).as_posix()
-            except ValueError:
-                ledger_link = results_path.as_posix()
-            ledger_display = (
-                f"[results.tsv]({ledger_link}) ({len(results_entries)} rows)"
-                if results_path.is_file()
-                else "missing"
+            results_path = (
+                self._results_tsv_path(record.task.workspace)
+                if record.task.workspace is not None
+                else None
             )
+            results_entries = self._candidate_results_ledger(record)
+            ledger_summaries.append((record, results_path, results_entries))
+            if results_path is not None and results_path.is_file():
+                try:
+                    ledger_link = results_path.relative_to(report_path.parent).as_posix()
+                except ValueError:
+                    ledger_link = results_path.as_posix()
+                ledger_display = (
+                    f"[results.tsv]({ledger_link}) ({len(results_entries)} rows)"
+                )
+            elif record.results_ledger:
+                ledger_display = f"durable ledger ({len(results_entries)} rows)"
+            else:
+                ledger_display = "missing"
             lines.append(
                 f"| `{record.candidate_id}` | `{record.task.plan_id or ''}` | "
                 f"{self._markdown_cell(agent_sessions)} | "
                 f"{self._markdown_cell(parent_base)} | {record.status} | {score} | "
+                f"{self._markdown_cell(artifact_display)} | "
                 f"{self._markdown_cell(git_head or '')} | "
                 f"{best_iteration_value} | {best_score_value} | "
+                f"{self._markdown_cell(best_artifact)} | "
                 f"{self._markdown_cell(best_git_head)} | {passed} | "
                 f"{self._markdown_cell(payload['summary'])} | "
                 f"{self._markdown_cell(key_metrics)} | {self._markdown_cell(changed)} | "
@@ -2910,25 +6583,34 @@ class FileSearchRuntime:
                 "",
                 "## Results Ledgers",
                 "",
-                "Each candidate workspace owns the complete inherited verifier ledger.",
+                "Each candidate owns a durable inherited verifier ledger. Git-backed candidates also materialize results.tsv in their workspace.",
                 "",
-                "| Candidate | Ledger | Rows | Latest Commit | Latest Score | Latest Status | Latest Hypothesis |",
-                "|---|---|---:|---|---:|---|---|",
+                "| Candidate | Ledger | Rows | Latest Artifact | Latest Commit | Latest Score | Latest Status | Latest Hypothesis |",
+                "|---|---|---:|---|---|---:|---|---|",
             ]
         )
         for record, results_path, results_entries in ledger_summaries:
             latest = results_entries[-1] if results_entries else None
-            try:
-                ledger_link = results_path.relative_to(report_path.parent).as_posix()
-            except ValueError:
-                ledger_link = results_path.as_posix()
-            ledger_display = (
-                f"[results.tsv]({ledger_link})" if results_path.is_file() else "missing"
+            if results_path is not None and results_path.is_file():
+                try:
+                    ledger_link = results_path.relative_to(report_path.parent).as_posix()
+                except ValueError:
+                    ledger_link = results_path.as_posix()
+                ledger_display = f"[results.tsv]({ledger_link})"
+            elif record.results_ledger:
+                ledger_display = "durable ledger"
+            else:
+                ledger_display = "missing"
+            latest_artifact = (
+                canonical_json(latest.artifact_ref.model_dump(mode="json"))
+                if latest is not None and latest.artifact_ref is not None
+                else ""
             )
             lines.append(
                 f"| `{record.candidate_id}` | {self._markdown_cell(ledger_display)} | "
                 f"{len(results_entries)} | "
-                f"{self._markdown_cell(latest.git_head if latest else '')} | "
+                f"{self._markdown_cell(latest_artifact)} | "
+                f"{self._markdown_cell((latest.git_head if latest else '') or '')} | "
                 f"{'' if latest is None or latest.score is None else latest.score} | "
                 f"{self._markdown_cell(latest.status if latest else '')} | "
                 f"{self._markdown_cell(latest.hypothesis if latest else '')} |"
@@ -3018,6 +6700,8 @@ class FileSearchRuntime:
                 "cannot promote candidate before search_select selects it"
             )
         frozen = self._load_frozen_spec(run.frozen_spec_id)
+        if frozen.spec.strategy.worker_host == "pi-thinkthread":
+            return self._promote_pi_thinkthread(run_id, candidate_id, frozen)
 
         def reject_promotion(message: str) -> None:
             latest_run = self._load_run(run_id)
@@ -3094,9 +6778,12 @@ class FileSearchRuntime:
             )
             git_head = self._git_head(record.task.workspace)
             evidence = record.promotion_evidence
+            selected_ref = GitCommitArtifactRef(commit=run.selected_git_head)
             evidence_is_current = bool(
                 evidence
                 and evidence.candidate_id == candidate_id
+                and evidence.selected_artifact_ref == selected_ref
+                and evidence.artifact_ref == selected_ref
                 and evidence.selected_git_head == run.selected_git_head
                 and evidence.git_head == run.selected_git_head
                 and evidence.artifact_hash == artifact_hash
@@ -3128,6 +6815,462 @@ class FileSearchRuntime:
         if report_path.exists() and not self._blocking_goal_report_records(run_id):
             self.report(run_id)
         return patch_path
+
+    def _publication_root_match(
+        self,
+        client: AgentPosixSdkClient,
+        snapshot: FsSnapshotArtifactRef,
+    ) -> bool:
+        result = client.invoke(
+            "fs.verify",
+            {
+                "snapshotId": snapshot.snapshot_id,
+                "dependencies": [{"path": ".", "scope": "tree_content"}],
+            },
+            timeout_seconds=60.0,
+        )
+        return result.get("status") == "matched"
+
+    def _invoke_publication_replace(
+        self,
+        *,
+        client: AgentPosixSdkClient,
+        run_id: str,
+        request_id: str,
+        base: FsSnapshotArtifactRef,
+        target: FsSnapshotArtifactRef,
+    ) -> dict[str, Any] | None:
+        params = {
+            "baseSnapshotId": base.snapshot_id,
+            "targetSnapshotId": target.snapshot_id,
+            "requestId": request_id,
+        }
+        deadline = time.monotonic() + 120.0
+        try:
+            result = client.invoke(
+                "fs.replace",
+                params,
+                timeout_seconds=120.0,
+            )
+        except AgentPosixBridgeError as exc:
+            if exc.completion_unknown or exc.code == "RequestInProgress":
+                return self._recover_fs_request_result(
+                    client=client,
+                    run_id=run_id,
+                    request_id=request_id,
+                    operation="fs.replace",
+                    deadline=deadline,
+                )
+            try:
+                recovered = self._recover_fs_request_result(
+                    client=client,
+                    run_id=run_id,
+                    request_id=request_id,
+                    operation="fs.replace",
+                    deadline=deadline,
+                )
+            except AgentPosixBridgeError:
+                raise exc
+            if recovered is None:
+                self._update_fs_request(
+                    run_id,
+                    request_id,
+                    state="failed",
+                    error={
+                        "message": str(exc),
+                        "code": exc.code,
+                        "delivery": exc.delivery,
+                    },
+                )
+                raise
+            return recovered
+        self._update_fs_request(
+            run_id,
+            request_id,
+            state="succeeded",
+            result=result,
+        )
+        return result
+
+    def _rotate_failed_publication_request(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        failed_request_id: str,
+        base: FsSnapshotArtifactRef,
+        target: FsSnapshotArtifactRef,
+        client: AgentPosixSdkClient,
+    ) -> str:
+        """Persist a new publication attempt after a confirmed terminal failure."""
+
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if run.publication is None or run.publication.request_id != failed_request_id:
+                raise RuntimeError("publication request changed during reconciliation")
+            failed = next(
+                (
+                    item
+                    for item in run.fs_requests
+                    if item.request_id == failed_request_id
+                ),
+                None,
+            )
+            if failed is None or failed.state != "failed":
+                raise RuntimeError(
+                    "publication request rotation requires a terminal failed request"
+                )
+            request_id = new_request_id()
+            now = utc_timestamp()
+            run.fs_cleanup.append(
+                {
+                    "kind": "publication_attempt",
+                    "state": "terminal_failed",
+                    "request_id": failed_request_id,
+                    "error": failed.error,
+                    "recorded_at": now,
+                }
+            )
+            run.publication.request_id = request_id
+            run.publication.state = "prepared"
+            run.publication.manifest = None
+            run.publication.updated_at = now
+            run.fs_requests.append(
+                FsRequestRecord(
+                    request_id=request_id,
+                    operation="replace",
+                    context={
+                        "candidate_id": candidate_id,
+                        "base_snapshot_id": base.snapshot_id,
+                        "target_snapshot_id": target.snapshot_id,
+                        "prior_failed_request_id": failed_request_id,
+                    },
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            self._write_run(run)
+        # The failed outcome and successor identity are durable before the
+        # platform record is forgotten.
+        self._close_fs_requests_after_evidence(
+            run_id, [failed_request_id], client
+        )
+        return request_id
+
+    def _promote_pi_thinkthread(
+        self,
+        run_id: str,
+        candidate_id: str,
+        frozen: FrozenSpec,
+    ) -> Path:
+        run = self._load_run(run_id)
+        if run.state not in {RunState.READY_TO_PROMOTE, RunState.NEEDS_RECOVERY}:
+            raise RuntimeError(
+                f"cannot publish pi-thinkthread run from state {run.state}"
+            )
+        baseline = self._fs_snapshot_ref(
+            run.baseline_artifact_ref,
+            field="publication baseline",
+        )
+        selected = self._fs_snapshot_ref(
+            run.selected_artifact_ref,
+            field="publication target",
+        )
+        record = self._load_candidate_record(run_id, candidate_id)
+        selected_iteration = next(
+            (
+                iteration
+                for iteration in record.iterations
+                if iteration.iteration == run.selected_iteration
+                and iteration.attempt_ref == selected
+                and self._fs_iteration_eligible(iteration)
+                and iteration.artifact_hash == run.selected_artifact_hash
+            ),
+            None,
+        )
+        if selected_iteration is None:
+            raise RuntimeError(
+                "cannot publish without exact passing selected FsSnapshot Evidence"
+            )
+        if record.touched_denied_files or record.changed_outside_allowed:
+            raise RuntimeError(
+                "cannot publish candidate that changed denied/out-of-surface files"
+            )
+
+        client = self._agent_posix_client()
+        client.preflight()
+        recovering_publication = False
+        existing_publication = run.publication
+        if existing_publication is not None:
+            if (
+                existing_publication.base_ref != baseline
+                or existing_publication.target_ref != selected
+            ):
+                raise RuntimeError(
+                    "existing publication intent targets a different artifact"
+                )
+            if existing_publication.state == "committed":
+                manifest_path = (
+                    self._run_dir(run_id)
+                    / "promotion"
+                    / f"{candidate_id}.publication.json"
+                )
+                if not manifest_path.exists() and existing_publication.manifest:
+                    write_json(manifest_path, existing_publication.manifest)
+                return manifest_path
+            evidence = record.promotion_evidence
+            if frozen.spec.promotion_verifiers and (
+                evidence is None
+                or evidence.selected_artifact_ref != selected
+                or evidence.artifact_ref != selected
+                or evidence.artifact_hash != run.selected_artifact_hash
+                or not evidence.passed
+            ):
+                raise RuntimeError(
+                    "publication recovery lost exact passing promotion Evidence"
+                )
+            selected_matches = self._publication_root_match(client, selected)
+            if selected_matches:
+                persisted = next(
+                    (
+                        item
+                        for item in run.fs_requests
+                        if item.request_id == existing_publication.request_id
+                    ),
+                    None,
+                )
+                outcome = persisted.result if persisted is not None else None
+                return self._commit_pi_thinkthread_publication(
+                    run_id=run_id,
+                    candidate_id=candidate_id,
+                    baseline=baseline,
+                    selected=selected,
+                    request_id=existing_publication.request_id,
+                    outcome=outcome,
+                    client=client,
+                )
+            if not self._publication_root_match(client, baseline):
+                with self._run_transaction(run_id):
+                    latest = self._load_run(run_id)
+                    assert latest.publication is not None
+                    latest.publication.state = "outcome_unknown"
+                    latest.publication.updated_at = utc_timestamp()
+                    latest.publication.manifest = {
+                        "status": "conflict",
+                        "request_id": existing_publication.request_id,
+                        "baseline_matches": False,
+                        "selected_matches": False,
+                        "recorded_at": utc_timestamp(),
+                    }
+                    latest.state = RunState.READY_TO_PROMOTE
+                    latest.budget_used["publication_conflict"] = True
+                    self._write_run(latest)
+                raise RuntimeError(
+                    "WorkspacePublicationConflict: Root matches neither the "
+                    "selected snapshot nor a safely retryable baseline"
+                )
+            recovering_publication = True
+
+        if frozen.spec.promotion_verifiers and not recovering_publication:
+            promotion_report = self.run_verifier(
+                run_id,
+                candidate_id,
+                scope="promotion",
+            )
+            record = self._load_candidate_record(run_id, candidate_id)
+            evidence = record.promotion_evidence
+            if (
+                not promotion_report.promotion_passed
+                or evidence is None
+                or evidence.selected_artifact_ref != selected
+                or evidence.artifact_ref != selected
+                or evidence.artifact_hash != run.selected_artifact_hash
+                or not evidence.passed
+            ):
+                raise RuntimeError(
+                    "cannot publish without fresh exact passing promotion Evidence"
+                )
+
+        with self._run_transaction(run_id):
+            run = self._load_run(run_id)
+            if run.publication is None:
+                request_id = new_request_id()
+                now = utc_timestamp()
+                run.publication = PublicationIntent(
+                    base_ref=baseline,
+                    target_ref=selected,
+                    request_id=request_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+                run.fs_requests.append(
+                    FsRequestRecord(
+                        request_id=request_id,
+                        operation="replace",
+                        context={
+                            "candidate_id": candidate_id,
+                            "base_snapshot_id": baseline.snapshot_id,
+                            "target_snapshot_id": selected.snapshot_id,
+                        },
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                self._write_run(run)
+            else:
+                if (
+                    run.publication.base_ref != baseline
+                    or run.publication.target_ref != selected
+                ):
+                    raise RuntimeError(
+                        "existing publication intent targets a different artifact"
+                    )
+                request_id = run.publication.request_id
+                if run.publication.state == "committed":
+                    manifest_path = (
+                        self._run_dir(run_id)
+                        / "promotion"
+                        / f"{candidate_id}.publication.json"
+                    )
+                    if not manifest_path.exists() and run.publication.manifest:
+                        write_json(manifest_path, run.publication.manifest)
+                    return manifest_path
+
+        outcome: dict[str, Any] | None
+        try:
+            outcome = self._invoke_publication_replace(
+                client=client,
+                run_id=run_id,
+                request_id=request_id,
+                base=baseline,
+                target=selected,
+            )
+        except (AgentPosixBridgeError, RuntimeError) as exc:
+            with self._run_transaction(run_id):
+                latest = self._load_run(run_id)
+                assert latest.publication is not None
+                latest.publication.state = "outcome_unknown"
+                latest.publication.updated_at = utc_timestamp()
+                latest.state = RunState.NEEDS_RECOVERY
+                latest.budget_used["needs_recovery_reason"] = (
+                    f"publication request {request_id} requires reconciliation: {exc}"
+                )
+                self._write_run(latest)
+            outcome = None
+
+        selected_matches = self._publication_root_match(client, selected)
+        baseline_matches = (
+            False
+            if selected_matches
+            else self._publication_root_match(client, baseline)
+        )
+        if not selected_matches and baseline_matches:
+            if outcome is None:
+                latest = self._load_run(run_id)
+                persisted = next(
+                    (
+                        item
+                        for item in latest.fs_requests
+                        if item.request_id == request_id
+                    ),
+                    None,
+                )
+                if persisted is not None and persisted.state == "failed":
+                    request_id = self._rotate_failed_publication_request(
+                        run_id=run_id,
+                        candidate_id=candidate_id,
+                        failed_request_id=request_id,
+                        base=baseline,
+                        target=selected,
+                        client=client,
+                    )
+                # Root is provably still at the expected base. Reuse an
+                # outcome-unknown request, but allocate a successor only after
+                # a confirmed terminal failed attempt has been durably recorded.
+                try:
+                    outcome = self._invoke_publication_replace(
+                        client=client,
+                        run_id=run_id,
+                        request_id=request_id,
+                        base=baseline,
+                        target=selected,
+                    )
+                except (AgentPosixBridgeError, RuntimeError):
+                    outcome = None
+                selected_matches = self._publication_root_match(client, selected)
+        if not selected_matches:
+            with self._run_transaction(run_id):
+                latest = self._load_run(run_id)
+                assert latest.publication is not None
+                latest.publication.state = "outcome_unknown"
+                latest.publication.updated_at = utc_timestamp()
+                latest.publication.manifest = {
+                    "status": "conflict",
+                    "request_id": request_id,
+                    "baseline_matches": baseline_matches,
+                    "selected_matches": selected_matches,
+                    "recorded_at": utc_timestamp(),
+                }
+                latest.state = RunState.READY_TO_PROMOTE
+                latest.budget_used["publication_conflict"] = True
+                self._write_run(latest)
+            raise RuntimeError(
+                "WorkspacePublicationConflict: Root matches neither the selected "
+                "snapshot nor a safely retryable baseline"
+            )
+
+        return self._commit_pi_thinkthread_publication(
+            run_id=run_id,
+            candidate_id=candidate_id,
+            baseline=baseline,
+            selected=selected,
+            request_id=request_id,
+            outcome=outcome,
+            client=client,
+        )
+
+    def _commit_pi_thinkthread_publication(
+        self,
+        *,
+        run_id: str,
+        candidate_id: str,
+        baseline: FsSnapshotArtifactRef,
+        selected: FsSnapshotArtifactRef,
+        request_id: str,
+        outcome: dict[str, Any] | None,
+        client: AgentPosixSdkClient,
+    ) -> Path:
+        manifest = {
+            "status": "committed",
+            "candidate_id": candidate_id,
+            "base_artifact_ref": baseline.model_dump(mode="json"),
+            "target_artifact_ref": selected.model_dump(mode="json"),
+            "request_id": request_id,
+            "platform_result": outcome,
+            "committed_at": utc_timestamp(),
+        }
+        manifest_path = (
+            self._run_dir(run_id)
+            / "promotion"
+            / f"{candidate_id}.publication.json"
+        )
+        with self._run_transaction(run_id):
+            latest = self._load_run(run_id)
+            assert latest.publication is not None
+            latest.publication.state = "committed"
+            latest.publication.manifest = manifest
+            latest.publication.updated_at = utc_timestamp()
+            latest.state = RunState.PROMOTED
+            latest.selected_candidate_id = candidate_id
+            latest.budget_used.pop("needs_recovery_reason", None)
+            latest.budget_used.pop("publication_conflict", None)
+            write_json(manifest_path, manifest)
+            self._write_run(latest)
+        self._close_fs_requests_after_evidence(run_id, [request_id], client)
+        report_path = self._run_dir(run_id) / "report.md"
+        if report_path.exists() and not self._blocking_goal_report_records(run_id):
+            self.report(run_id)
+        return manifest_path
 
     def _strategy_mode(self, strategy: StrategySpec) -> str:
         return strategy.name.strip().lower().replace("-", "_")
@@ -3241,12 +7384,12 @@ class FileSearchRuntime:
         worker_host: str,
         worker_budget: WorkerBudget | None,
     ) -> None:
-        if worker_host == "pi-rpc" and (
+        if worker_host in {"pi-rpc", "pi-thinkthread"} and (
             worker_budget is None or worker_budget.max_runtime_seconds is None
         ):
             raise ValueError(
-                "pi-rpc worker_budget requires max_runtime_seconds so the "
-                "Pi RPC runner can enforce a process deadline"
+                f"{worker_host} worker_budget requires max_runtime_seconds so the "
+                "Pi host controller can enforce a worker deadline"
             )
         if worker_budget is None:
             return
@@ -3484,9 +7627,20 @@ class FileSearchRuntime:
                 return None
             prompt = payload.get("developer_instructions")
             return prompt if isinstance(prompt, str) and prompt.strip() else None
-        if host != "pi-rpc":
+        if host not in {"pi-rpc", "pi-thinkthread"}:
             return None
-        prompt_path = repository_root / ".pi" / "prompts" / "search-candidate-worker.md"
+        if host == "pi-thinkthread":
+            installed_prompt = os.environ.get("GOAL_PLUS_PI_WORKER_PROMPT")
+            if installed_prompt:
+                prompt_path = Path(installed_prompt).expanduser()
+                if prompt_path.is_file():
+                    return prompt_path.read_text(encoding="utf-8")
+        prompt_name = (
+            "search-candidate-worker-thinkthread.md"
+            if host == "pi-thinkthread"
+            else "search-candidate-worker.md"
+        )
+        prompt_path = repository_root / ".pi" / "prompts" / prompt_name
         if prompt_path.exists():
             return prompt_path.read_text(encoding="utf-8")
         return (
@@ -3612,6 +7766,67 @@ class FileSearchRuntime:
         proposal: CandidateProposal,
         slot: int,
     ) -> CandidateTask:
+        if frozen.spec.strategy.worker_host == "pi-thinkthread":
+            baseline = run.baseline_artifact_ref
+            if not isinstance(baseline, FsSnapshotArtifactRef):
+                raise RuntimeError(
+                    "pi-thinkthread candidate creation requires a baseline FsSnapshot"
+                )
+            instructions = [
+                "你在 ThinkThread private COW branch 中工作；不要访问 Parent 或 sibling filesystem。",
+                "首先调用 search_get_agent_context，并把返回的 run/candidate/session 绑定视为权威。",
+                "只能修改 allowed_files；不得触碰 denied_files 或冻结 verifier 资产。",
+                "所有正确性、约束和指标反馈只能通过 search_run_verifier 获得；不要直接运行任务自带的 grader、runner 或 evaluator。",
+                "首次修改前读取 search_get_global_evidence，此后遵循定期 Evidence 刷新策略。",
+                "每次 verifier settlement 都绑定 exact FsSnapshot；keep/retain 继续当前 branch，discard/failure 后停止当前 turn，等待 Root 完成 TERM、branch reset 和 retained Session wake。",
+                "不要调用 ThinkThread fs API、管理 Child 或执行 Root publication；此 Child Profile 只授予 thinkthread.message。",
+                "运行时结果账本通过 search_get_agent_context 和 search_list_iterations 提供；不要创建或伪造 Git commit。",
+            ]
+            share_out_dir: Path | None = None
+            if frozen.spec.shared_dir.enabled:
+                share_out_dir = Path(SHARE_OUT_RELATIVE_PATH)
+                instructions.extend(
+                    [
+                        f"将待共享工具的源文件放在 {TOOL_DRAFTS_RELATIVE_PATH}/，调用 search_stage_shared_tool 记录 staging；不要把文件内容塞进 Message。",
+                        "只有通过 verifier 的 exact FsSnapshot 才能发布 immutable shared tool；其他 Candidate 通过 search_copy_shared_tool 请求 Root 将工具应用到自己的 snapshot，再由 Root reset branch 并 wake。",
+                        "每次 verifier 提交与 staging inventory 一致的 toolization_decision。",
+                    ]
+                )
+            instructions.extend(proposal.instructions)
+            hypothesis = proposal.hypothesis or proposal.intent or f"候选 {candidate_id}"
+            selected_model = self._selected_model_for_slot(plan, slot)
+            return CandidateTask(
+                run_id=run.run_id,
+                candidate_id=candidate_id,
+                plan_id=plan.plan_id,
+                hypothesis=hypothesis,
+                workspace=None,
+                workspace_backend=None,
+                fs_base_snapshot_id=baseline.snapshot_id,
+                share_out_dir=share_out_dir,
+                allowed_files=frozen.spec.edit_surface.allow,
+                denied_files=frozen.spec.edit_surface.deny,
+                instructions=instructions,
+                expected_artifacts=[],
+                stop_conditions={},
+                proposal=proposal,
+                selected_model=selected_model,
+                model_provenance=(
+                    self._selected_model_provenance(selected_model)
+                    if selected_model
+                    else {}
+                ),
+                strategy_metadata={
+                    "strategy": plan.strategy.name,
+                    "worker_host": "pi-thinkthread",
+                    "worker_policy": plan.worker_policy,
+                    "plan_id": plan.plan_id,
+                    "slot": slot,
+                    "selected_model": selected_model.model if selected_model else None,
+                    "baseline_snapshot_id": baseline.snapshot_id,
+                },
+            )
+
         workspace = self._run_dir(run.run_id) / "workspace" / candidate_id
 
         materialization = materialize_candidate_workspace(
@@ -3738,6 +7953,12 @@ class FileSearchRuntime:
         return str(score)
 
     def _read_results_tsv(self, record: CandidateRecord) -> list[ResultLedgerEntry]:
+        # pi-thinkthread candidates are backed by a private ThinkThread fs
+        # branch and intentionally have no host-visible ``workspace`` path.
+        # Their durable ledger is populated from exact FsSnapshot-backed
+        # iterations, never from the legacy Git workspace/results.tsv file.
+        if record.task.workspace is None:
+            return []
         paths = (
             self._results_tsv_path(record.task.workspace),
             self._legacy_results_tsv_path(record.task.workspace),
@@ -3796,6 +8017,13 @@ class FileSearchRuntime:
                     source_run_id=record.task.run_id,
                     source_candidate_id=record.candidate_id,
                     iteration=iteration.iteration if iteration else None,
+                    artifact_ref=(
+                        iteration.attempt_ref
+                        if iteration is not None and iteration.attempt_ref is not None
+                        else GitCommitArtifactRef(commit=git_head.strip())
+                        if git_head.strip()
+                        else None
+                    ),
                     git_head=git_head.strip() or None,
                     ledger_git_head=iteration.ledger_git_head if iteration else None,
                     metric_name=metric_name,
@@ -3813,6 +8041,14 @@ class FileSearchRuntime:
                     source_run_id=record.task.run_id,
                     source_candidate_id=record.candidate_id,
                     iteration=iteration.iteration,
+                    artifact_ref=(
+                        iteration.attempt_ref
+                        or (
+                            GitCommitArtifactRef(commit=iteration.git_head)
+                            if iteration.git_head is not None
+                            else None
+                        )
+                    ),
                     git_head=iteration.git_head,
                     ledger_git_head=iteration.ledger_git_head,
                     metric_name=metric_name,
@@ -3846,6 +8082,14 @@ class FileSearchRuntime:
                     source_run_id=record.task.run_id,
                     source_candidate_id=record.candidate_id,
                     iteration=iteration.iteration,
+                    artifact_ref=(
+                        iteration.attempt_ref
+                        or (
+                            GitCommitArtifactRef(commit=iteration.git_head)
+                            if iteration.git_head is not None
+                            else None
+                        )
+                    ),
                     git_head=iteration.git_head,
                     ledger_git_head=iteration.ledger_git_head,
                     metric_name=metric_name,
@@ -3991,7 +8235,11 @@ class FileSearchRuntime:
     ) -> Path:
         if record.results_ledger_git_head is not None:
             return self._assert_results_tsv_unchanged(record, metric_name)
-        if not record.results_ledger and record.results_ledger_git_head is None:
+        if (
+            record.task.workspace is not None
+            and not record.results_ledger
+            and record.results_ledger_git_head is None
+        ):
             record.results_ledger = self._read_results_tsv(record)
         if record.results_ledger_git_head is None:
             self._backfill_results_ledger_from_iterations(record, metric_name)
@@ -4674,9 +8922,11 @@ class FileSearchRuntime:
             self._run_dir(run.run_id).resolve()
         )
         best = BestArtifactRecord(
+            schema_version=2,
             run_id=run.run_id,
             candidate_id=record.candidate_id,
             iteration=iteration.iteration,
+            artifact_ref=GitCommitArtifactRef(commit=str(iteration.git_head)),
             commit=str(iteration.git_head),
             score=float(iteration.score),
             metric_name=spec.metric_name,
@@ -4719,6 +8969,8 @@ class FileSearchRuntime:
         return any(
             view.tool_id == tool.tool_id
             and view.snapshot_hash == tool.snapshot_hash
+            and view.source_artifact_ref
+            == (tool.source_artifact_ref or task.attempt_ref)
             and view.source_commit == (tool.source_commit or task.attempt_commit)
             for view in task.view.tool_views
         )
@@ -6017,14 +10269,23 @@ class FileSearchRuntime:
     ) -> tuple[ResolvedEvidenceAnnotatorProfile | None, str | None]:
         strategy = frozen.spec.strategy
         configured = strategy.evidence_annotator
-        annotation_host = configured.host or strategy.worker_host
+        requested_annotation_host = configured.host or strategy.worker_host
+        inherits_worker_model = requested_annotation_host == strategy.worker_host
+        # ThinkThread Candidate work stays on private fs branches, but Evidence
+        # annotation is a text-only, tool-free Root-side Pi process over already
+        # materialized JSON. It never creates a Candidate workspace or reads Git.
+        annotation_host = (
+            "pi-rpc"
+            if requested_annotation_host == "pi-thinkthread"
+            else requested_annotation_host
+        )
         worker_launch = strategy.worker_launch
         env_model = os.environ.get(EVIDENCE_ANNOTATOR_MODEL_ENV)
         if configured.model:
             model = configured.model
-        elif annotation_host == strategy.worker_host and selected_model:
+        elif inherits_worker_model and selected_model:
             model = selected_model
-        elif annotation_host == strategy.worker_host and worker_launch is not None:
+        elif inherits_worker_model and worker_launch is not None:
             model = worker_launch.model
         elif env_model:
             model = env_model.strip() or None
@@ -6036,7 +10297,7 @@ class FileSearchRuntime:
         reasoning_effort = configured.reasoning_effort
         if (
             reasoning_effort is None
-            and annotation_host == strategy.worker_host
+            and inherits_worker_model
             and worker_launch is not None
         ):
             reasoning_effort = worker_launch.reasoning_effort
@@ -6144,11 +10405,16 @@ class FileSearchRuntime:
         candidate_id: str,
         iteration: IterationRecord,
     ) -> EvidenceAnnotationTask:
-        if (
-            iteration.git_head is None
-            or iteration.attempt_base_git_head is None
-        ):
-            raise RuntimeError("worker Evidence requires exact attempt commits")
+        has_git_artifacts = (
+            iteration.git_head is not None
+            and iteration.attempt_base_git_head is not None
+        )
+        has_generic_artifacts = (
+            iteration.attempt_ref is not None
+            and iteration.attempt_base_ref is not None
+        )
+        if not has_git_artifacts and not has_generic_artifacts:
+            raise RuntimeError("worker Evidence requires exact attempt artifacts")
         existing = self._load_evidence_annotation_task(
             run_id, candidate_id, iteration.iteration
         )
@@ -6157,6 +10423,8 @@ class FileSearchRuntime:
                 existing.attempt_commit != iteration.git_head
                 or existing.attempt_base_commit
                 != iteration.attempt_base_git_head
+                or existing.attempt_ref != iteration.attempt_ref
+                or existing.attempt_base_ref != iteration.attempt_base_ref
             ):
                 raise RuntimeError("Evidence annotation task is immutable")
             return existing
@@ -6196,6 +10464,8 @@ class FileSearchRuntime:
             run_id=run_id,
             candidate_id=candidate_id,
             iteration=iteration.iteration,
+            attempt_base_ref=iteration.attempt_base_ref,
+            attempt_ref=iteration.attempt_ref,
             attempt_base_commit=iteration.attempt_base_git_head,
             attempt_commit=iteration.git_head,
             attempt_changed_files=list(iteration.attempt_changed_files),
@@ -6235,6 +10505,11 @@ class FileSearchRuntime:
         entry = {
             "candidate_id": candidate_id,
             "iteration": iteration.iteration,
+            "artifact_ref": (
+                iteration.attempt_ref.model_dump(mode="json")
+                if iteration.attempt_ref is not None
+                else None
+            ),
             "commit": iteration.git_head,
             "score": iteration.score,
             "disposition": iteration.disposition,
@@ -6282,6 +10557,10 @@ class FileSearchRuntime:
                 or view.candidate_id != candidate_id
                 or view.iteration != iteration.iteration
                 or view.attempt_commit != iteration.git_head
+                or (
+                    view.attempt_ref is not None
+                    and view.attempt_ref != iteration.attempt_ref
+                )
             ):
                 raise RuntimeError("evidence view does not match iteration")
             result.append(
@@ -6324,11 +10603,22 @@ class FileSearchRuntime:
             ):
                 continue
             for entry in evidence:
+                external_artifact_ref = artifact.get("artifact_ref")
+                entry_artifact_ref = entry.get("artifact_ref")
+                artifact_matches = (
+                    isinstance(external_artifact_ref, dict)
+                    and isinstance(entry_artifact_ref, dict)
+                    and external_artifact_ref == entry_artifact_ref
+                )
+                legacy_commit_matches = (
+                    external_artifact_ref is None
+                    and (entry.get("commit") or entry.get("git_head"))
+                    == artifact.get("commit")
+                )
                 if (
                     entry.get("candidate_id") == artifact.get("candidate_id")
                     and entry.get("iteration") == artifact.get("iteration")
-                    and (entry.get("commit") or entry.get("git_head"))
-                    == artifact.get("commit")
+                    and (artifact_matches or legacy_commit_matches)
                 ):
                     external = dict(evaluation)
                     source = payload.get("source")
@@ -6407,8 +10697,10 @@ class FileSearchRuntime:
             ),
             None,
         )
-        if iteration is None or iteration.git_head is None:
-            raise RuntimeError("annotation requires commit-backed worker evidence")
+        if iteration is None or (
+            iteration.attempt_ref is None and iteration.git_head is None
+        ):
+            raise RuntimeError("annotation requires artifact-backed worker evidence")
         task = self._load_evidence_annotation_task(
             run_id, candidate_id, iteration_number
         )
@@ -6418,61 +10710,92 @@ class FileSearchRuntime:
         if (
             task.attempt_commit != commit
             or task.attempt_base_commit != iteration.attempt_base_git_head
+            or task.attempt_ref != iteration.attempt_ref
+            or task.attempt_base_ref != iteration.attempt_base_ref
             or task.attempt_changed_files != iteration.attempt_changed_files
         ):
             raise RuntimeError("annotation task does not match settled Evidence")
-        if self._git_returncode(
-            record.task.workspace,
-            ["git", "cat-file", "-e", f"{task.attempt_base_commit}^{{commit}}"],
-        ) != 0 or self._git_returncode(
-            record.task.workspace,
-            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
-        ) != 0:
-            raise RuntimeError("annotation Evidence commit is unavailable")
-        diff = ""
-        if task.attempt_changed_files:
-            diff = self._git_output_bounded(
-                record.task.workspace,
-                [
-                    "git",
-                    "diff",
-                    "--full-index",
-                    "--no-ext-diff",
-                    "--function-context",
-                    "--unified=10",
-                    task.attempt_base_commit,
-                    commit,
-                    "--",
-                    *task.attempt_changed_files,
-                ],
-                max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+        candidate_base_commit: str | None = None
+        candidate_base_ref = None
+        exact_attempt_ref = task.attempt_ref
+        if isinstance(iteration.attempt_ref, FsSnapshotArtifactRef):
+            self._fs_snapshot_ref(
+                task.attempt_base_ref,
+                field="annotation attempt base",
             )
-        candidate_base_commit = (
-            record.task.workspace_base_revision or task.attempt_base_commit
-        )
-        candidate_changed_files = self._git_changed_files(
-            record.task.workspace,
-            candidate_base_commit,
-            commit,
-        )
-        candidate_diff = ""
-        if candidate_changed_files:
-            candidate_diff = self._git_output_bounded(
-                record.task.workspace,
-                [
-                    "git",
-                    "diff",
-                    "--full-index",
-                    "--no-ext-diff",
-                    "--function-context",
-                    "--unified=10",
-                    candidate_base_commit,
-                    commit,
-                    "--",
-                    *candidate_changed_files,
-                ],
-                max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+            self._fs_snapshot_ref(
+                task.attempt_ref,
+                field="annotation attempt",
             )
+            diff = iteration.actual_diff or ""
+            candidate_base_ref = self._fs_snapshot_ref(
+                run.baseline_artifact_ref,
+                field="annotation candidate baseline",
+            )
+            candidate_changed_files = list(iteration.changed_files)
+            candidate_diff = iteration.cumulative_diff or ""
+        else:
+            if commit is None:
+                raise RuntimeError("annotation Evidence commit is unavailable")
+            if task.attempt_base_commit is None:
+                raise RuntimeError("annotation Evidence base commit is unavailable")
+            if record.task.workspace is None:
+                raise RuntimeError("Git annotation requires a candidate workspace")
+            reader = GitArtifactReader(record.task.workspace)
+            attempt_base_ref = (
+                task.attempt_base_ref
+                or GitCommitArtifactRef(commit=task.attempt_base_commit)
+            )
+            exact_attempt_ref = (
+                task.attempt_ref or GitCommitArtifactRef(commit=commit)
+            )
+            if not isinstance(attempt_base_ref, GitCommitArtifactRef) or not isinstance(
+                exact_attempt_ref,
+                GitCommitArtifactRef,
+            ):
+                raise RuntimeError("Git annotation requires git_commit ArtifactRefs")
+            try:
+                diff = reader.diff(
+                    attempt_base_ref,
+                    exact_attempt_ref,
+                    paths=task.attempt_changed_files,
+                    max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+                )
+                if diff.endswith("\n[diff truncated]\n"):
+                    raise RuntimeError(
+                        "annotation diff exceeds "
+                        f"{MAX_EVIDENCE_ANNOTATION_DIFF_BYTES} bytes"
+                    )
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise RuntimeError(
+                    "annotation Evidence commit is unavailable"
+                ) from exc
+            candidate_base_commit = (
+                record.task.workspace_base_revision or task.attempt_base_commit
+            )
+            candidate_base_ref = GitCommitArtifactRef(
+                commit=candidate_base_commit
+            )
+            try:
+                candidate_changed_files = reader.changed_files(
+                    candidate_base_ref,
+                    exact_attempt_ref,
+                )
+                candidate_diff = reader.diff(
+                    candidate_base_ref,
+                    exact_attempt_ref,
+                    paths=candidate_changed_files,
+                    max_bytes=MAX_EVIDENCE_ANNOTATION_DIFF_BYTES,
+                )
+                if candidate_diff.endswith("\n[diff truncated]\n"):
+                    raise RuntimeError(
+                        "annotation cumulative diff exceeds "
+                        f"{MAX_EVIDENCE_ANNOTATION_DIFF_BYTES} bytes"
+                    )
+            except (OSError, subprocess.CalledProcessError) as exc:
+                raise RuntimeError(
+                    "annotation candidate baseline is unavailable"
+                ) from exc
         peer_evidence = self._evidence_comparison_peers(
             run_id,
             comparison_basis=task.comparison_basis,
@@ -6536,15 +10859,25 @@ class FileSearchRuntime:
             "candidate_id": candidate_id,
             "iteration": iteration.iteration,
             "agent_summary": iteration.hypothesis,
+            "exact_attempt_artifact_ref": (
+                exact_attempt_ref.model_dump(mode="json")
+                if exact_attempt_ref is not None
+                else None
+            ),
             "exact_attempt_commit": commit,
             "changed_files": list(task.attempt_changed_files),
             "actual_diff": diff,
             "candidate_base_commit": candidate_base_commit,
+            "candidate_base_artifact_ref": (
+                candidate_base_ref.model_dump(mode="json")
+                if candidate_base_ref is not None
+                else None
+            ),
             "candidate_changed_files": candidate_changed_files,
             "candidate_diff": candidate_diff,
             "diff_context_policy": (
-                "git function context with at least 10 unchanged lines around hunks; "
-                "output remains byte-bounded and may omit definitions outside the diff"
+                "ArtifactReader exact diff with function context and byte-bounded "
+                "output; definitions outside the retained projection may be omitted"
             ),
             "verifier_result": {
                 "score": iteration.score,
@@ -6654,6 +10987,7 @@ class FileSearchRuntime:
         frozen = self._load_frozen_spec(run.frozen_spec_id)
         reverse = frozen.spec.metric_direction == "maximize"
         settled = []
+        is_thinkthread = frozen.spec.strategy.worker_host == "pi-thinkthread"
         for record in self._load_candidate_records(run_id):
             if record.candidate_id == target_candidate_id:
                 continue
@@ -6661,7 +10995,11 @@ class FileSearchRuntime:
                 iteration
                 for iteration in record.iterations
                 if iteration.agent_session_id is not None
-                and self._git_iteration_eligible(iteration)
+                and (
+                    self._fs_iteration_eligible(iteration)
+                    if is_thinkthread
+                    else self._git_iteration_eligible(iteration)
+                )
                 and iteration.disposition in {None, "keep"}
             ]
             if not eligible:
@@ -6683,6 +11021,11 @@ class FileSearchRuntime:
             {
                 "candidate_id": record.candidate_id,
                 "iteration": iteration.iteration,
+                "artifact_ref": (
+                    iteration.attempt_ref.model_dump(mode="json")
+                    if iteration.attempt_ref is not None
+                    else None
+                ),
                 "commit": iteration.git_head,
             }
             for _, record, iteration in settled[-MAX_EVIDENCE_COMPARISON_PEERS:]
@@ -6708,49 +11051,75 @@ class FileSearchRuntime:
                     item
                     for item in record.iterations
                     if item.iteration == reference.iteration
-                    and item.git_head == reference.commit
+                    and (
+                        item.attempt_ref == reference.artifact_ref
+                        if reference.artifact_ref is not None
+                        else item.git_head == reference.commit
+                    )
                 ),
                 None,
             )
-            if iteration is None or iteration.git_head is None:
+            if iteration is None or (
+                iteration.attempt_ref is None and iteration.git_head is None
+            ):
                 raise RuntimeError("annotation comparison Evidence is unavailable")
-            assert iteration.git_head is not None
-            base_commit = (
-                record.task.workspace_base_revision
-                or iteration.attempt_base_git_head
-            )
             changed_files: list[str] = []
             peer_diff: str | None = None
             diff_omitted: str | None = None
-            if base_commit:
-                try:
-                    changed_files = self._git_changed_files(
-                        record.task.workspace,
-                        base_commit,
-                        iteration.git_head,
-                    )
-                    if changed_files:
-                        peer_diff = self._git_output_bounded(
-                            record.task.workspace,
-                            [
-                                "git",
-                                "diff",
-                                "--full-index",
-                                "--no-ext-diff",
-                                base_commit,
-                                iteration.git_head,
-                                "--",
-                                *changed_files,
-                            ],
-                            max_bytes=MAX_EVIDENCE_PEER_DIFF_BYTES,
+            if isinstance(iteration.attempt_ref, FsSnapshotArtifactRef):
+                self._fs_snapshot_ref(
+                    iteration.attempt_base_ref,
+                    field="comparison base",
+                )
+                changed_files = list(iteration.attempt_changed_files)
+                peer_diff = _bounded_projection(
+                    iteration.actual_diff,
+                    MAX_EVIDENCE_PEER_DIFF_BYTES,
+                )
+                if changed_files and peer_diff is None:
+                    diff_omitted = "persisted diff projection unavailable"
+            else:
+                assert iteration.git_head is not None
+                base_commit = (
+                    record.task.workspace_base_revision
+                    or iteration.attempt_base_git_head
+                )
+                if base_commit:
+                    try:
+                        if record.task.workspace is None:
+                            raise RuntimeError(
+                                "Git peer comparison requires a candidate workspace"
+                            )
+                        reader = GitArtifactReader(record.task.workspace)
+                        base_ref = GitCommitArtifactRef(commit=base_commit)
+                        target_ref = (
+                            iteration.attempt_ref
+                            or GitCommitArtifactRef(commit=iteration.git_head)
                         )
-                except (RuntimeError, subprocess.CalledProcessError) as exc:
-                    diff_omitted = f"{type(exc).__name__}: {exc}"[:500]
-                    peer_diff = None
+                        if not isinstance(target_ref, GitCommitArtifactRef):
+                            raise RuntimeError(
+                                "Git peer comparison requires git_commit ArtifactRefs"
+                            )
+                        changed_files = reader.changed_files(base_ref, target_ref)
+                        if changed_files:
+                            peer_diff = reader.diff(
+                                base_ref,
+                                target_ref,
+                                paths=changed_files,
+                                max_bytes=MAX_EVIDENCE_PEER_DIFF_BYTES,
+                            )
+                    except (RuntimeError, subprocess.CalledProcessError) as exc:
+                        diff_omitted = f"{type(exc).__name__}: {exc}"[:500]
+                        peer_diff = None
             peers.append(
                 {
                     "candidate_id": record.candidate_id,
                     "iteration": iteration.iteration,
+                    "artifact_ref": (
+                        iteration.attempt_ref.model_dump(mode="json")
+                        if iteration.attempt_ref is not None
+                        else None
+                    ),
                     "commit": iteration.git_head,
                     "score": iteration.score,
                     "process_passed": iteration.process_passed,
@@ -6825,7 +11194,17 @@ class FileSearchRuntime:
     def _load_frozen_spec(self, frozen_spec_id: str) -> FrozenSpec:
         data = load_json(self._spec_dir(frozen_spec_id) / "frozen_spec.json")
         spec_data = data.get("spec")
-        if isinstance(spec_data, dict) and "workspace" not in spec_data:
+        strategy_data = spec_data.get("strategy") if isinstance(spec_data, dict) else None
+        worker_host = (
+            strategy_data.get("worker_host")
+            if isinstance(strategy_data, dict)
+            else None
+        )
+        if (
+            isinstance(spec_data, dict)
+            and "workspace" not in spec_data
+            and worker_host != "pi-thinkthread"
+        ):
             # Frozen specs created before workspace backends were persisted used
             # an independent copy for every candidate. Preserve that behavior
             # when resuming legacy runs even though new specs default to a
@@ -6861,7 +11240,11 @@ class FileSearchRuntime:
         record = CandidateRecord.model_validate(
             load_json(self._candidate_dir(run_id, candidate_id) / "candidate.json")
         )
-        if not record.results_ledger and record.results_ledger_git_head is None:
+        if (
+            record.task.workspace is not None
+            and not record.results_ledger
+            and record.results_ledger_git_head is None
+        ):
             record.results_ledger = self._read_results_tsv(record)
         return record
 
