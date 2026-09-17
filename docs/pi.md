@@ -30,6 +30,22 @@ host-neutral lifecycle is documented in
 the same goal revision semantics as Codex. Required checks run through a
 separate read-only Pi RPC reviewer.
 
+The command maps logical Main `thinking=max` to Pi's native `xhigh` request and
+records the level after Pi clamps it to the selected model. A resulting `off`
+level is rejected. Ordinary subagent work runs through
+`pi_goal_plus_run_work_item`, which accepts the task directly, creates its
+lightweight launch record, binds only after the Pi RPC handshake and requested
+thinking level succeed, waits for it,
+and submits the result with the same attempt generation. Reusing an id after a
+result resumes the same session for rework. Multiple independent tool calls can
+execute concurrently. Main still owns result review, integration, and
+completion. See [Ultra Orchestration](ultra.md).
+
+After Search promotion, Pi records the promoted run and patch with
+`goal_plus_record_search_result`, then verifies the applied diff in the original
+workspace. The final status evidence records that applied-patch verification.
+These are two evidence boundaries, not work items or a DAG.
+
 Use `/goal-plus mode=autonomous <goal>` for substantial renewable candidate
 exploration (the default), or `/goal-plus mode=probe <goal>` for short
 feasibility/potential/blocker probes. The choice is normalized into the final

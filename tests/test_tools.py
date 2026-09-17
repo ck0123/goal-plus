@@ -480,6 +480,7 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
     runtime.update_goal.return_value = record.model_copy(update={"goal_revision": 2})
     runtime.list_events.return_value = [{"event_type": "created"}]
     runtime.record_triage.return_value = record
+    runtime.record_work_event.return_value = record
     runtime.save_spec_draft.return_value = record
     runtime.link_search_run.return_value = record
     runtime.record_search_result.return_value = record
@@ -523,6 +524,14 @@ def test_goal_plus_tools_delegate_runtime_calls_with_models() -> None:
             "recommended_phase": "spec_discovery",
         },
     )["phase"] == "intake"
+    assert tools.goal_plus_record_work_event(
+        "gp_0001",
+        "inspect",
+        "dispatch",
+        "Codex dispatched the work item.",
+        host="codex",
+        agent_id="agent-1",
+    )["goal_plus_id"] == "gp_0001"
     assert tools.goal_plus_save_spec_draft(
         "gp_0001",
         {

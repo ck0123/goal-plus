@@ -1,6 +1,13 @@
 首先调用 `goal_plus_create(raw_goal="$ARGUMENTS")`，必须在 triage、规划、编辑或 Search 之前调用。
 除了加载 goal-plus skill 之外，在调用 `goal_plus_record_triage` 之前不要读取或审计目标文件。
 
+入口已把逻辑 Main `thinking=max` 映射到 Pi 原生最高档。triage 后由 Main 自行执行和拆分；
+需要普通 subagent 时直接调用 `pi_goal_plus_run_work_item` 并传入任务，不要预建工作 DAG。
+Main 检查返回结果，并按实际决定记录验收、返工或取消。只有可量化、具有确定性 verifier、
+隔离编辑面和多个有价值假设的任务才进入 Search。
+普通工作项的 Pi wrapper 会把原生下发与返回操作写入 `orchestration_monitor` metadata；
+`goal_plus_monitor_snapshot(feature_plugins=["orchestration"])` 提供与 Codex 可比较的语义链。
+
 原生入口若注入了已解析的显式角色模型，严格使用该路由：`main=` 已由入口切换；
 `annotator=` 写入 `strategy.evidence_annotator.model`；`workers=` 或兼容别名
 `models=` 按现有分配规则写入 `strategy.models`。未显式指定的角色保持现有默认或继承语义。
@@ -40,5 +47,9 @@ verifier 必须保持候选工作区只读，并使用唯一的 `GOAL_PLUS_VERIF
 再使用 `source_run_id` 创建后继 run。绝不能选择或提升已经失效的 run。
 
 在 Search 执行、提升、结果记录或最终原始目标审计期间，绝不能调用 `search_report`。
+`search_promote` 成功后，调用 `goal_plus_record_search_result` 登记“搜索完成并验收”，其中
+`promotion_artifact_path` 是已经生成的提升补丁。随后在原始工作区检查实际应用后的 diff 和测试；
+只有检查通过，才在 `goal_plus_set_status(status="complete")` 的 evidence 中登记
+“补丁应用完成并验收”。这两项是轻量证据，不创建 DAG 或额外运行时阶段。
 Goal Plus 记录达到终态后，对每个成功记录的 `run_id` 调用且只调用一次 `search_report`，
 并返回最终 Markdown 和 HTML 路径。

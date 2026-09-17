@@ -4,6 +4,12 @@ Adapters translate runtime launch/continue requests into host-native worker
 operations. The Search runtime stays unchanged; [Shared Plane](shared-plane.md)
 defines the shared loop and ownership boundary.
 
+Ordinary Goal Plus work uses the separate `goal-plus-ultra-v1` capability
+binding in [Ultra Orchestration](ultra.md). That contract is intentionally not
+limited to the maintained Search adapters: Pi implements it locally, Codex maps
+it to collaboration tools, and external DeepSeek harnesses can bind the same
+work/event protocol without entering `AgentHostKind`.
+
 ## Common Contract
 
 `src/goal_plus/agent_pool.py` defines `HostPoolContract` and terminal

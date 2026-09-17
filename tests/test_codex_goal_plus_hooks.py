@@ -125,6 +125,8 @@ def test_user_prompt_submit_precreates_and_binds_goal(tmp_path: Path) -> None:
     assert record.active_session is not None
     assert record.active_session.host == "codex"
     assert record.active_session.session_id == "session-codex"
+    assert record.policy["execution"]["main_reasoning_effort"] == "max"
+    assert record.policy["execution"]["host"]["native_reasoning_effort"] == "max"
     assert record.goal_plus_id in context
     assert "不要再次调用 goal_plus_create" in context
     assert "不要仅因 Goal Plus 处于 active 就恢复工作" in context

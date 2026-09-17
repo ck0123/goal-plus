@@ -725,6 +725,30 @@ def _collect_pi_metrics(
     return metrics
 
 
+def _bind_goal_plus_work_item(
+    launch: dict[str, Any],
+    *,
+    root: Path,
+    session_id: str,
+) -> None:
+    binding = launch.get("goal_plus_work_item")
+    if not isinstance(binding, dict):
+        return
+    from goal_plus.goal_plus import FileGoalPlusRuntime
+
+    FileGoalPlusRuntime(root).record_work_event(
+        str(binding["goal_plus_id"]),
+        str(binding["work_item_id"]),
+        "bind",
+        "Pi host bound the launched worker session.",
+        host=str(binding.get("host") or "pi"),
+        task_name=str(binding.get("task_name") or binding["work_item_id"]),
+        agent_id=session_id,
+        attempt_id=str(binding["attempt_id"]),
+        generation=int(binding["generation"]),
+    )
+
+
 def run_pi_rpc_worker(
     launch: dict[str, Any],
     *,
@@ -841,7 +865,6 @@ def run_pi_rpc_worker(
     last_state_data: dict[str, Any] = {}
     pi_metrics: dict[str, Any] | None = None
     refresh_reason: str | None = None
-
     def _abort_for_timeout() -> None:
         nonlocal timed_out
         timed_out = True
@@ -851,6 +874,10 @@ def run_pi_rpc_worker(
             pass
 
     try:
+        rpc.command(
+            {"type": "get_state"},
+            timeout=min(30, timeout_seconds),
+        )
         if provider and model_id:
             rpc.command(
                 {"type": "set_model", "provider": provider, "modelId": model_id},
@@ -861,6 +888,7 @@ def run_pi_rpc_worker(
                 {"type": "set_thinking_level", "level": selected_thinking},
                 timeout=min(30, timeout_seconds),
             )
+        _bind_goal_plus_work_item(launch, root=root, session_id=session_id)
         rpc.command(
             {"type": "prompt", "message": str(launch["prompt"])},
             timeout=min(60, timeout_seconds),
@@ -871,7 +899,9 @@ def run_pi_rpc_worker(
             if remaining <= 0:
                 _abort_for_timeout()
                 break
-            state = rpc.command({"type": "get_state"}, timeout=min(10, remaining))
+            state = rpc.command(
+                {"type": "get_state"}, timeout=min(10, remaining)
+            )
             data = dict(state.get("data") or {})
             last_state_data = data
             worker_active = (
@@ -931,6 +961,11 @@ def run_pi_rpc_worker(
                                 "最终检查截止时间临近。停止新的分析，并立即通过 "
                                 "goal_plus_submit_final_check 提交结构化结论。"
                                 if launch.get("role") == "final-checker"
+                                else (
+                                    "Subagent deadline is near. Stop new work, run focused "
+                                    "verification, and return a concise result now."
+                                )
+                                if launch.get("role") == "ordinary"
                                 else (
                                     "Worker 截止时间临近。停止启动新的分析、编辑或优化 iteration。"
                                     "如果自最近一次记录的 verifier 后工作区发生了变化，立即最后运行一次 "

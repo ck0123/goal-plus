@@ -5,8 +5,8 @@ description: 运行、恢复或编辑 Codex Goal Plus 任务，包括需要独�
 
 # Codex 的 Goal Plus
 
-对 `/goal-plus` 使用此 skill，这是标准目标工作流。当成功标准可度量且已冻结时，
-它可以升级为多候选 Agentic Search。
+对 `/goal-plus` 使用此 skill，这是 Ultra 编排工作流。主 Agent 请求 max 推理强度，
+主动委派独立工作；当成功标准可度量且已冻结时，再升级为多候选 Agentic Search。
 
 使用 `goal-plus` MCP server 暴露的逻辑 `goal_plus_*` 和 `search_*` 工具。
 Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工具名匹配。
@@ -16,7 +16,9 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
 1. 首先读取隐藏的 Codex hook 上下文。如果其中包含 active 的 `goal_plus_id`，
    则 `UserPromptSubmit` hook 已在本模型轮次前创建并绑定记录；使用该 id，
    不要再次调用 `goal_plus_create`。如果没有 hook 上下文，调用
-   `goal_plus_create(raw_goal=...)` 作为兼容后备。
+   `goal_plus_create(raw_goal=..., policy={"execution":{"host":{"host_id":"codex",
+   "native_reasoning_effort":"max","enforcement":"requested","operations":
+   ["spawn","send","wait","interrupt","observe"]}}})` 作为兼容后备。
    `/goal-plus-with-final-check` 会预先创建，并设置
    `policy.final_check.mode="required"`。`/goal-plus edit <完整的修订目标>`
    会在模型轮次前更新同一记录；使用新的 `goal_revision`，不要继续旧修订版。
@@ -34,7 +36,8 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
      在修订或恢复前先澄清。不要仅因 Goal Plus 记录处于 active 就恢复工作。
 2. 检查足够的上下文以分类任务。
 3. 调用 `goal_plus_record_triage`。
-4. 如果 triage 选择 Goal Mode，在当前工作区正常工作。Goal Mode 下不要创建 SearchSpec。
+4. triage 后直接执行原始目标。主 Agent 自己决定拆分、并行、等待、追加消息和重试；
+   只有实际派发普通 subagent 时才记录该派发。Goal Mode 下不要创建 SearchSpec。
 5. 如果 triage 选择 Spec Discovery Mode，确定 baseline、metric、正确性门禁、编辑范围、
    verifier 产物、预算和提升规则。ranking verifier 必须输出一个最终 JSON 对象，
    其中包含有限数值类型的 `spec.metric_name`；其文件应放在源码拥有的路径，
@@ -93,7 +96,10 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
 13. 执行原始目标审计。如果还需要其他有 verifier 支持的 Search，使用相同
     `goal_plus_id` 冻结/创建新 run，并重复步骤 9-12。每个不同的 `run_id`
     都作为另一项 Search 任务追加；不要为新的冻结 spec 复用旧 `run_id`。
-14. 最后执行一次原始目标审计。对于普通 Goal Plus 记录，只有当前目标已满足时才调用
+14. 主 Agent 必须检查普通 subagent 返回的代码、证据和测试；采用时可记录 `accepted`，
+    需要原 worker 补充时记录 `rework`，不采用时记录 `cancelled`。这些决定用于监控，
+    不替代整体测试。最后执行一次原始目标审计。对于普通 Goal Plus 记录，只有当前目标已满足时
+    才调用
     `goal_plus_set_status(status="complete", evidence=[...])`。当
     `policy.final_check.mode="required"` 时：
     - 调用 `goal_plus_prepare_final_check(checker_host="codex")`
@@ -110,6 +116,34 @@ Codex 可能显示带客户端特定前缀的 MCP 工具；按最后的逻辑工
     通过的必需最终检查属于终态，因为它会原子地把记录标记为 complete。
 16. 停止前调用 `goal_plus_gate(event="stop", context={})`；如果它返回继续 prompt，
     则继续工作。
+
+## Ultra 编排
+
+Codex hook 把本次执行绑定到 host-neutral `goal-plus-ultra-v1`，但已开始的首轮 reasoning
+effort 不能由 hook 修改；因此需要由 Codex host 在首轮开始前提供真实 max effort，
+不能把 prompt 请求当作已生效证据。
+
+对普通 subagent，在实际派发前记录 `dispatch`；首次使用该 `work_item_id` 时 runtime 会按
+summary 自动创建轻量记录并返回 `attempt_id`、`generation`，随后调用
+Codex `spawn_agent`；dispatch 使用
+`metadata={"orchestration_monitor":{"native_operation":"spawn_agent"}}`。把清楚、完整的
+任务直接放入 summary 和 worker message，并使用 `fork_turns="none"`。spawn 成功后立即用原 attempt、generation、实际 handle 和相同的
+`orchestration_monitor` operation 记录 `bind`；
+只有 bound attempt 才能记录 `message`、`result` 或 `failed`。恢复时不要重复启动仍在 TTL 内的
+`launching` attempt；TTL 过期后再次 `dispatch` 会创建下一 generation。所有 worker 事件都传回
+attempt、generation，迟到的旧结果只会记录为 `stale_result`，不会覆盖当前 worker。实际
+`spawn_agent`、`wait_agent`、`followup_task` 和 `interrupt_agent` 仍归 Codex host 管理；Goal Plus
+runtime 只维护工作项状态。subagent 返回后记录 `result`，主 Agent 验证其 diff 与测试后记录
+`accepted`；需要修正时记录 `rework`，保存返回的新 attempt/generation，再向原 worker 发送
+具体证据。不要记录私有推理或完整
+transcript。`result` 使用
+`metadata={"orchestration_monitor":{"native_operation":"wait_agent"}}`；`rework` 使用相同
+namespace 记录 `followup_task`。
+
+只有任务同时具备可量化 metric、确定性 verifier、隔离编辑面、多个有价值假设和足够预算时，
+才进入现有 Search Mode。Search 使用自己的 run/candidate 状态，不创建普通 subagent 记录；
+普通检索、代码定位或单一路径修复使用普通工具或普通 subagent。运行时只在仍有
+`launching`/`active` 派发时拒绝最终检查与 `complete`。
 
 顶层 Stop gate 会阻止每条仍处于 active 的记录，并返回完整的当前原始目标、创建/检查
 时间戳、已用时间、phase、next action 和最终检查 policy。根据该 prompt 审计全部目标要求
@@ -156,7 +190,7 @@ intake/triage，并在不删除旧 Search 任务和最终检查的情况下将�
 
 ## 模式
 
-Goal Mode 用于普通编码、文档、审查和调查任务。它使用普通 Codex 验证证据，
+Goal Mode 用于普通编码、文档、审查和调查任务。它使用编排工作项和普通 Codex 验证证据，
 不使用 SearchSpec。
 
 Spec Discovery Mode 用于具有优化形态、但 metric、baseline、正确性门禁或编辑范围仍不明确

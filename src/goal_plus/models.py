@@ -623,6 +623,57 @@ GoalPlusDiscoveryOrigin = Literal["initial", "in_progress"]
 GoalPlusGateEvent = Literal["stop", "subagent_stop", "pre_tool_use", "user_prompt_submit"]
 GoalPlusGateDecision = Literal["allow", "block"]
 GoalPlusSessionState = Literal["attached", "stale", "detached"]
+GoalPlusWorkStatus = Literal[
+    "launching",
+    "active",
+    "result_ready",
+    "accepted",
+    "failed",
+    "cancelled",
+    "superseded",
+]
+GoalPlusWorkEventKind = Literal[
+    "dispatch",
+    "bind",
+    "message",
+    "result",
+    "rework",
+    "accepted",
+    "failed",
+    "cancelled",
+]
+GoalPlusUltraOperation = Literal["spawn", "send", "wait", "interrupt", "observe"]
+
+
+class GoalPlusUltraHost(SearchModel):
+    protocol: Literal["goal-plus-ultra-v1"] = "goal-plus-ultra-v1"
+    host_id: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._-]+$")
+    native_reasoning_effort: str = Field(min_length=1, max_length=120)
+    enforcement: Literal["host", "harness", "requested"]
+    operations: list[GoalPlusUltraOperation] = Field(min_length=3, max_length=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("operations")
+    @classmethod
+    def require_complete_lifecycle(
+        cls,
+        value: list[GoalPlusUltraOperation],
+    ) -> list[GoalPlusUltraOperation]:
+        required = {"spawn", "wait", "observe"}
+        if not required.issubset(value) or len(value) != len(set(value)):
+            raise ValueError(
+                "Ultra host operations require unique spawn, wait, and observe capabilities"
+            )
+        return value
+
+
+class GoalPlusExecutionPolicy(SearchModel):
+    mode: Literal["orchestrated"] = "orchestrated"
+    main_reasoning_effort: Literal["max"] = "max"
+    delegation: Literal["proactive"] = "proactive"
+    search_routing: Literal["auto"] = "auto"
+    completion: Literal["until_terminal"] = "until_terminal"
+    host: GoalPlusUltraHost | None = None
 
 
 class GoalPlusNextAction(SearchModel):
@@ -714,6 +765,36 @@ class GoalPlusLinkedSearch(SearchModel):
     result_recorded_at: str | None = None
 
 
+class GoalPlusWorkItem(SearchModel):
+    work_item_id: str = Field(
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9._-]+$",
+    )
+    objective: str = Field(min_length=1, max_length=8000)
+    goal_revision: int = Field(ge=1)
+    status: GoalPlusWorkStatus
+    attempt_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9._-]+$",
+    )
+    generation: int = Field(default=0, ge=0)
+    launch_deadline: str | None = None
+    bound_at: str | None = None
+    host: str | None = Field(default=None, min_length=1, max_length=120)
+    task_name: str | None = None
+    agent_id: str | None = None
+    transcript_path: str | None = None
+    result_summary: str | None = None
+    result_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
 class GoalPlusActiveSession(SearchModel):
     host: AgentHostKind
     session_id: str = Field(min_length=1)
@@ -737,6 +818,7 @@ class GoalPlusRecord(SearchModel):
     final_checks: list[GoalPlusFinalCheck] = Field(default_factory=list)
     triage: GoalPlusTriage | None = None
     spec_draft: GoalPlusSpecDraft | None = None
+    work_items: list[GoalPlusWorkItem] = Field(default_factory=list)
     search_tasks: list[GoalPlusLinkedSearch] = Field(default_factory=list)
     linked_search: GoalPlusLinkedSearch | None = None
     next_action: GoalPlusNextAction | None = None

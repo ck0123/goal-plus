@@ -8,6 +8,8 @@ description: 当 Pi 收到可能需要 Goal Mode、Spec Discovery Mode、有界 
 ## 入口契约
 
 原生 Pi `/goal-plus` 命令会在模型轮次开始前创建 Goal Plus 记录。
+入口在 Main 模型选择后把逻辑 `thinking=max` 映射为 Pi `xhigh` 请求，并记录 Pi 按模型能力
+钳制后的实际档位；如果 reasoning 被钳制为 `off`，则拒绝启动，不静默降级。
 `/goal-plus-with-final-check` 创建记录时会设置 `policy.final_check.mode="required"`。
 `/goal-plus edit <完整的修订目标>` 对 active 记录调用 `goal_plus_update_goal` 并递增
 `goal_revision`；最新原始目标取代旧修订版。Pi 轮次中断后，`/goal-plus resume`
@@ -33,7 +35,17 @@ lease、外层剩余时间和收尾预留来确定探索时间，并使用可续
 
 当请求尚不是可验证的优化/Search 任务时使用 Goal Mode。使用
 `goal_plus_record_triage({ goal_plus_id, triage: { is_optimization, confidence, recommended_phase, identified_at, scenario, reasons, missing } })`
-记录 triage，并将面向用户的目标与实现猜测分开。Goal Mode 下不要创建 SearchSpec。
+记录 triage，并将面向用户的目标与实现猜测分开。随后直接执行原始目标；主 Agent
+自行决定拆分、并行、等待、追加消息和重试。只有实际派发普通 subagent 时才产生记录。
+Goal Mode 下不要创建 SearchSpec。
+
+Pi 普通 subagent 通过 `pi_goal_plus_run_work_item(goal_plus_id, work_item_id, task)` 在隔离的
+Pi RPC 子进程运行；不需要预建工作项。该工具在实际启动时创建 attempt，绑定实际 session，
+并用同一 generation 提交 `result` 或 `failed`。再次用同一 id 调用已返回的 worker 时会记录
+`rework` 并恢复原 session。该工具对 child 请求 Pi `xhigh`、等待返回并记录实际档位。同一
+模型轮次可并发调用多个独立任务。主 Agent 必须检查返回证据，并按实际决定记录 `accepted`、
+`rework` 或 `cancelled`。生命周期属于 Pi extension。包装器把原生操作写入 `orchestration_monitor` metadata，
+供只读 feature plugin 归一化 Main/worker 交互。不要保存私有推理或完整 transcript。
 
 如果原始目标明确要求 verifier 引导的 Search Mode，并提供可度量的 verifier 或 metric，
 将其分类为优化/Search；不要仅因请求的 run 较小就将其降级为普通 Goal Mode。
@@ -101,6 +113,9 @@ A1B3，数量之和必须等于
 ## Search Mode
 
 目标已准备好进入 Search 时：
+
+只有任务具备可量化 metric、确定性 verifier、隔离编辑面、多个有价值假设和足够预算时，
+才进入现有 Search Mode。Search 使用自己的 run/candidate 状态，不创建普通 subagent 记录。
 
 `origin="initial"` 和 `origin="in_progress"` 仅表示 provenance，遵循相同的自主准入规则。
 
@@ -214,12 +229,16 @@ subagent 负责其候选工作区内的瓶颈分析、假设选择、特性迁�
    `search_select` 对 verifier 记录的 iteration 排名并 checkout 最佳已提交候选的
    `git_head`。准确 worker Evidence 已经覆盖该产物时直接用于选择；没有这种证据的旧记录才
    使用父级 process verifier。配置的 promotion verifier 仍是选中 revision 的最终 gate。
-10. 调用 `goal_plus_record_search_result`。此时不要调用 `search_report`；结果记录只预留
-    规范报告路径，不生成 Markdown 或 HTML。
-11. 执行原始目标审计。评估/编辑契约仍充分时保留同一个 run。新 incumbent 或低性能路线
+10. 调用 `goal_plus_record_search_result`，用 summary 登记“搜索完成并验收”，并保留
+    runtime 返回的提升补丁路径。该调用只接受已经 `search_promote` 且提升补丁真实存在的 run。
+    此时不要调用 `search_report`；结果记录只预留规范报告路径，不生成 Markdown 或 HTML。
+11. 在原始工作区检查提升后实际应用的 diff，并运行整体所需测试；通过后把
+    “补丁应用完成并验收”和具体测试证据留给最终状态 evidence。评估/编辑契约仍充分时保留
+    同一个 run。新 incumbent 或低性能路线
     绝不会开启替代 run。只有具体 spec/契约修订或不同的可度量子问题才能创建后继项，
     并使用 `source_run_id`；继承分数在重新验证前仍只是历史。
-12. 执行最终原始目标审计。普通记录使用 `goal_plus_set_status` 完成。如果
+12. 执行最终原始目标审计。普通记录只有在第 10、11 步均通过后，才使用
+    `goal_plus_set_status(status="complete", evidence=[...])` 完成。如果
     `policy.final_check.mode="required"`，则：
     - 调用 `goal_plus_prepare_final_check(checker_host="pi")`
     - 把准确返回的 `launch` 对象传给 `pi_goal_plus_run_final_check`
@@ -233,6 +252,7 @@ subagent 负责其候选工作区内的瓶颈分析、假设选择、特性迁�
 顶层 stop gate 会阻止每条仍处于 active 的 Goal Plus 记录，并返回完整当前原始目标以及
 创建/检查时间戳和已用时间。使用该 prompt 审计全部要求和目标中已有的任何时间条件。
 未完成时继续；否则在停止前记录真实终态。不要编造单独的 Goal Plus deadline。
+仍有 `launching` 或 `active` subagent 派发时，runtime 会阻止最终检查和 `complete`。
 
 ### 结果后的 Spec 重新评估
 

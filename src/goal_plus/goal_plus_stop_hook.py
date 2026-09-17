@@ -1061,14 +1061,30 @@ def _goal_context(record: Any) -> str:
         if next_action is not None
         else "无"
     )
+    execution_policy = record.policy.get("execution", {})
+    active_dispatches = [
+        item
+        for item in record.work_items
+        if item.goal_revision == record.goal_revision
+        and item.status in {"launching", "active"}
+    ]
+    work_text = (
+        ", ".join(f"{item.work_item_id}={item.status}" for item in active_dispatches)
+        if active_dispatches
+        else "无"
+    )
     return (
         f"此 Codex session 的 Goal Plus 处于 active：goal_plus_id={record.goal_plus_id}。\n"
         "运行时记录已经存在；不要再次调用 goal_plus_create。\n"
         f"当前目标修订版：{record.goal_revision}。\n"
         f"当前原始目标：{record.raw_goal}\n"
+        f"编排 policy：{execution_policy}。\n"
+        f"活跃 subagent 派发：{work_text}。\n"
         f"最终检查 policy：{record.policy.get('final_check', {'mode': 'disabled'})}。\n"
         f"当前 phase：{record.phase}；next action：{next_action_text}\n"
-        "本轮加载并遵循 goal-plus skill。\n"
+        "本轮加载并遵循 goal-plus skill。主 Agent 使用 max 推理强度并主动编排普通 subagent；"
+        "实际派发时用 goal_plus_record_work_event 记录简短交互摘要，"
+        "适合可度量并行探索的工作项自动路由到 Search。\n"
         "以最新用户消息作为判断继续、修订或讨论无关内容的权威依据；不要仅因 Goal Plus "
         "处于 active 就恢复工作。\n"
         "如果消息改变了实际范围、交付物或成功标准，使用完整修订后的原始目标和当前预期"
@@ -1231,11 +1247,21 @@ def _handle_user_prompt_submit(
         and isinstance(request.get("raw_goal"), str)
         and session_id is not None
     ):
-        policy = (
-            {"final_check": {"mode": "required"}}
-            if request.get("final_check") is True
-            else None
-        )
+        policy = {
+            "execution": {
+                "host": {
+                    "host_id": "codex",
+                    "native_reasoning_effort": "max",
+                    "enforcement": "requested",
+                    "operations": ["spawn", "send", "wait", "interrupt", "observe"],
+                }
+            },
+            **(
+                {"final_check": {"mode": "required"}}
+                if request.get("final_check") is True
+                else {}
+            ),
+        }
         record = runtime.create_goal(
             request["raw_goal"],
             source_path=str(search_root.parent),

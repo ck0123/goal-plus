@@ -98,6 +98,7 @@ Selected Git Head 和 Artifact Hash，之后才生成可被 Git 应用的 Patch�
 | 架构、共享 Evidence、回滚和端到端流程 | [Shared Plane](docs/shared-plane.md) |
 | 当前 MCP 与 Pi 本地工具 | [API](docs/api.md) |
 | 宿主能力对比 | [Agent Host Adapters](docs/agent-host-adapters.md) |
+| Ultra 工作编排 | [Ultra Orchestration](docs/ultra.md) |
 | 运行时与宿主日志 | [Debugging](docs/debugging-runtime.md) |
 | spec 与可运行示例 | [Examples](examples/README.md) |
 | 测试与真实宿主证据 | [Tests](tests/README.md) |

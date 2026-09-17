@@ -8,9 +8,217 @@ from typing import Any
 import pytest
 
 from goal_plus import pi_worker
+from goal_plus.goal_plus import FileGoalPlusRuntime
 
 
 pytestmark = pytest.mark.pi
+
+
+def test_pi_worker_binds_claimed_work_item_after_host_launch(tmp_path: Path) -> None:
+    runtime = FileGoalPlusRuntime(tmp_path / ".gp")
+    goal = runtime.create_goal(
+        "Run a Pi subagent",
+        policy={
+            "execution": {
+                "host": {
+                    "host_id": "pi",
+                    "native_reasoning_effort": "xhigh",
+                    "enforcement": "host",
+                    "operations": ["spawn", "wait", "observe"],
+                }
+            }
+        },
+    )
+    runtime.record_triage(
+        goal.goal_plus_id,
+        {
+            "is_optimization": False,
+            "confidence": "high",
+            "recommended_phase": "goal",
+        },
+    )
+    claimed = runtime.record_work_event(
+        goal.goal_plus_id,
+        "worker",
+        "dispatch",
+        "Pi claimed the launch.",
+        host="pi",
+    ).work_items[0]
+
+    pi_worker._bind_goal_plus_work_item(
+        {
+            "goal_plus_work_item": {
+                "goal_plus_id": goal.goal_plus_id,
+                "work_item_id": "worker",
+                "attempt_id": claimed.attempt_id,
+                "generation": claimed.generation,
+                "host": "pi",
+            }
+        },
+        root=runtime.root_dir,
+        session_id="pi-session-1",
+    )
+
+    bound = runtime.status(goal.goal_plus_id).work_items[0]
+    assert bound.status == "active"
+    assert bound.agent_id == "pi-session-1"
+    assert bound.bound_at is not None
+
+
+def test_pi_worker_does_not_bind_before_rpc_handshake(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    extension = tmp_path / "goal-plus.ts"
+    extension.write_text("// fake extension\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = FileGoalPlusRuntime(tmp_path / ".gp")
+    goal = runtime.create_goal(
+        "Run a Pi subagent",
+        policy={
+            "execution": {
+                "host": {
+                    "host_id": "pi",
+                    "native_reasoning_effort": "xhigh",
+                    "enforcement": "host",
+                    "operations": ["spawn", "wait", "observe"],
+                }
+            }
+        },
+    )
+    claimed = runtime.record_work_event(
+        goal.goal_plus_id,
+        "worker",
+        "dispatch",
+        "Run the isolated task.",
+        host="pi",
+    ).work_items[0]
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+
+    class FakeRpcClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            return None
+
+        def command(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            if payload["type"] == "get_state":
+                raise pi_worker.PiRpcError("Pi RPC startup failed")
+            if payload["type"] == "get_entries":
+                return {"data": {"entries": []}}
+            if payload["type"] == "get_session_stats":
+                return {"data": {}}
+            raise AssertionError(f"unexpected command {payload['type']}")
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
+
+    def fake_kill_process_group(proc: FakeProc) -> None:
+        proc.returncode = 1
+
+    monkeypatch.setattr(pi_worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(pi_worker, "_RpcClient", FakeRpcClient)
+    monkeypatch.setattr(pi_worker, "_kill_process_group", fake_kill_process_group)
+
+    with pytest.raises(pi_worker.PiRpcError, match="startup failed"):
+        pi_worker.run_pi_rpc_worker(
+            {
+                "role": "ordinary",
+                "agent_session_id": "pi-session-1",
+                "session_id": "pi-session-1",
+                "root": str(runtime.root_dir),
+                "cwd": str(workspace),
+                "prompt": "Do the isolated task.",
+                "budget_control": {"max_runtime_seconds": 30},
+                "goal_plus_work_item": {
+                    "goal_plus_id": goal.goal_plus_id,
+                    "work_item_id": "worker",
+                    "attempt_id": claimed.attempt_id,
+                    "generation": claimed.generation,
+                    "host": "pi",
+                },
+            },
+            extension_path=extension,
+        )
+
+    unbound = runtime.status(goal.goal_plus_id).work_items[0]
+    assert unbound.status == "launching"
+    assert unbound.agent_id is None
+
+
+def test_pi_worker_polls_fresh_state_after_prompt(monkeypatch, tmp_path: Path) -> None:
+    extension = tmp_path / "goal-plus.ts"
+    extension.write_text("// fake extension\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    commands: list[str] = []
+    state_count = 0
+
+    class FakeProc:
+        pid = 4321
+        returncode = None
+
+    class FakeRpcClient:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            return None
+
+        def command(self, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+            nonlocal state_count
+            command_type = str(payload["type"])
+            commands.append(command_type)
+            if command_type == "get_state":
+                state_count += 1
+                return {
+                    "data": {
+                        "isStreaming": state_count == 2,
+                        "isCompacting": False,
+                        "pendingMessageCount": 0,
+                    }
+                }
+            if command_type == "prompt":
+                return {"data": {}}
+            if command_type == "get_last_assistant_text":
+                return {"data": {"text": "done"}}
+            if command_type == "get_entries":
+                return {"data": {"entries": [], "leafId": None}}
+            if command_type == "get_session_stats":
+                return {"data": {}}
+            raise AssertionError(f"unexpected command {command_type}")
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProc:
+        return FakeProc()
+
+    def fake_kill_process_group(proc: FakeProc) -> None:
+        proc.returncode = 0
+
+    monkeypatch.setattr(pi_worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(pi_worker, "_RpcClient", FakeRpcClient)
+    monkeypatch.setattr(pi_worker, "_kill_process_group", fake_kill_process_group)
+    monkeypatch.setattr(pi_worker.time, "sleep", lambda _seconds: None)
+
+    handle = pi_worker.run_pi_rpc_worker(
+        {
+            "role": "ordinary",
+            "agent_session_id": "pi-session-1",
+            "session_id": "pi-session-1",
+            "root": str(tmp_path / ".gp"),
+            "cwd": str(workspace),
+            "prompt": "Do the isolated task.",
+            "budget_control": {"max_runtime_seconds": 30},
+        },
+        extension_path=extension,
+    )
+
+    assert commands[:4] == ["get_state", "prompt", "get_state", "get_state"]
+    assert handle["metadata"]["assistant_text"] == "done"
 
 
 def _assistant_usage(
@@ -677,6 +885,7 @@ def test_run_pi_rpc_worker_waits_for_pi_auto_retry(
     commands: list[str] = []
     states = [
         {"isStreaming": False, "isCompacting": False, "pendingMessageCount": 0},
+        {"isStreaming": False, "isCompacting": False, "pendingMessageCount": 0},
         {"isStreaming": True, "isCompacting": False, "pendingMessageCount": 0},
         {
             "isStreaming": False,
@@ -775,7 +984,7 @@ def test_run_pi_rpc_worker_steers_once_before_hard_deadline(
                 return {"data": {}}
             if command_type == "get_state":
                 self.state_calls += 1
-                if self.state_calls == 1:
+                if self.state_calls == 2:
                     clock["value"] = 25.0
                     return {
                         "data": {
@@ -884,7 +1093,7 @@ def test_run_pi_rpc_worker_checks_time_advisory_after_worker_tool_only(
                 self.state_calls += 1
                 return {
                     "data": {
-                        "isStreaming": self.state_calls == 1,
+                        "isStreaming": self.state_calls == 2,
                         "isCompacting": False,
                         "pendingMessageCount": 0,
                     }

@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "kind": "real_codex_smoke",
+    "recorded_at": "2026-08-17T13:01:31Z",
+    "raw_runtime_state_committed": false,
+    "raw_transcript_committed": false
+  },
+  "execution": {
+    "host": "codex",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "max",
+    "session_id": "01a00fc7-80e0-7cf2-ac31-0d3db59399c3",
+    "spawn_agent_count": 1,
+    "subagent_stop_count": 1,
+    "worker_handles": [
+      "/root/duration_edge_review"
+    ],
+    "transcript_sha256": "8298c44e270bf8dfce367b50d2bb0cf9f6642a618ffc7fc4c3e43f3d909d037b"
+  },
+  "goal": {
+    "goal_plus_id": "gp_0001",
+    "goal_revision": 1,
+    "status": "complete",
+    "phase": "final_audit",
+    "next_action": null,
+    "search_tasks_total": 0,
+    "work_items": [
+      {
+        "work_item_id": "parser_implementation",
+        "route": "main",
+        "status": "accepted",
+        "agent_id": "/root",
+        "depends_on": []
+      },
+      {
+        "work_item_id": "edge_case_review",
+        "route": "subagent",
+        "status": "accepted",
+        "agent_id": "/root/duration_edge_review",
+        "depends_on": []
+      },
+      {
+        "work_item_id": "integration_verification",
+        "route": "main",
+        "status": "accepted",
+        "agent_id": "/root",
+        "depends_on": [
+          "parser_implementation",
+          "edge_case_review"
+        ]
+      }
+    ]
+  },
+  "verification": {
+    "baseline": {
+      "failed": 6,
+      "reason": "NotImplementedError"
+    },
+    "subagent_focused": {
+      "passed": 24
+    },
+    "pre_completion": {
+      "passed": 31,
+      "recorded_at": "2026-08-17T13:00:54Z",
+      "work_item_id": "integration_verification",
+      "event": "accepted"
+    },
+    "completed_at": "2026-08-17T13:01:14Z"
+  },
+  "event_sequence": [
+    {
+      "at": "2026-08-17T12:56:55Z",
+      "work_item_id": "edge_case_review",
+      "event": "dispatch"
+    },
+    {
+      "at": "2026-08-17T12:57:17Z",
+      "work_item_id": "edge_case_review",
+      "event": "message",
+      "agent_id": "/root/duration_edge_review"
+    },
+    {
+      "at": "2026-08-17T12:57:17Z",
+      "work_item_id": "parser_implementation",
+      "event": "dispatch",
+      "agent_id": "/root"
+    },
+    {
+      "at": "2026-08-17T12:59:09Z",
+      "work_item_id": "edge_case_review",
+      "event": "result",
+      "agent_id": "/root/duration_edge_review"
+    },
+    {
+      "at": "2026-08-17T13:00:00Z",
+      "work_item_id": "edge_case_review",
+      "event": "accepted",
+      "agent_id": "/root/duration_edge_review"
+    },
+    {
+      "at": "2026-08-17T13:00:01Z",
+      "work_item_id": "parser_implementation",
+      "event": "result",
+      "agent_id": "/root"
+    },
+    {
+      "at": "2026-08-17T13:00:01Z",
+      "work_item_id": "parser_implementation",
+      "event": "accepted",
+      "agent_id": "/root"
+    },
+    {
+      "at": "2026-08-17T13:00:10Z",
+      "work_item_id": "integration_verification",
+      "event": "dispatch",
+      "agent_id": "/root"
+    },
+    {
+      "at": "2026-08-17T13:00:54Z",
+      "work_item_id": "integration_verification",
+      "event": "result",
+      "agent_id": "/root",
+      "pytest_passed": 31
+    },
+    {
+      "at": "2026-08-17T13:00:54Z",
+      "work_item_id": "integration_verification",
+      "event": "accepted",
+      "agent_id": "/root",
+      "pytest_passed": 31
+    },
+    {
+      "at": "2026-08-17T13:01:14Z",
+      "work_item_id": null,
+      "event": "status:complete",
+      "pytest_passed": 31
+    },
+    {
+      "at": "2026-08-17T13:01:20Z",
+      "work_item_id": null,
+      "event": "stop:allow"
+    }
+  ]
+}

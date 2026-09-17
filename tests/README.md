@@ -99,6 +99,12 @@ are `scenario`, `run_id`, candidate summaries, `selected_candidate_id`,
 `best_score`, and `report_path`; scenario additions are documented in
 `tests/st/prompts/_schema.md`.
 
+The checked-in `fixtures/ultra_smoke_codex/` directory preserves source and a
+sanitized evidence projection from one real Codex Goal Plus orchestration run.
+It records model/effort, the native worker handle, event ordering, pytest
+counts, and the local transcript digest. Raw `.gp` state and transcript content
+remain untracked.
+
 ## Layout
 
 ```text

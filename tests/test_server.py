@@ -48,6 +48,7 @@ def test_create_mcp_registers_search_runtime_tools(tmp_path: Path) -> None:
         "goal_plus_monitor_snapshot",
         "goal_plus_list_models",
         "goal_plus_record_triage",
+        "goal_plus_record_work_event",
         "goal_plus_save_spec_draft",
         "goal_plus_link_search_run",
         "goal_plus_record_search_result",

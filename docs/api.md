@@ -12,6 +12,7 @@ index and ownership guide.
 | `goal_plus_status` | read goal phase, revision, linked tasks, and evidence |
 | `goal_plus_update_goal` | replace the complete effective objective and start a revision |
 | `goal_plus_record_triage` | choose ordinary goal work or verifier/spec discovery |
+| `goal_plus_record_work_event` | lazily record fenced subagent dispatches, handles, results, and Main decisions |
 | `goal_plus_save_spec_draft` | persist the typed candidate Search spec |
 | `goal_plus_list_models` | list the selected Codex or Pi host's currently available models |
 | `goal_plus_link_search_run` | append a frozen Search run to the goal |
@@ -24,6 +25,15 @@ index and ownership guide.
 `goal_plus_update_goal` requires `expected_revision`, preventing a stale agent
 from overwriting a newer objective. Search results are keyed by `run_id`, so one
 goal can retain multiple search tasks.
+
+The first `dispatch` for a `work_item_id` creates its lightweight record and
+returns the generated `attempt_id`, `generation`, and launch deadline. The host
+records `bind` after native launch, then includes that attempt identity on
+`message`, `result`, and `failed`.
+
+Every record defaults to the Ultra execution policy documented in
+[Ultra Orchestration](ultra.md). Work events are durable coordination facts;
+the host still owns launch, wait, messaging, interruption, and native logs.
 
 ## Search Tools
 

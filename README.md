@@ -108,6 +108,7 @@ promotion stays retryable in `ready_to_promote` and emits no patch.
 | Architecture, shared Evidence, rollback, and end-to-end flow | [Shared Plane](docs/shared-plane.md) |
 | Current MCP and Pi-local tools | [API](docs/api.md) |
 | Host capability comparison | [Agent Host Adapters](docs/agent-host-adapters.md) |
+| Ultra work orchestration | [Ultra Orchestration](docs/ultra.md) |
 | Runtime and host logs | [Debugging](docs/debugging-runtime.md) |
 | Specs and runnable examples | [Examples](examples/README.md) |
 | Tests and real-host evidence | [Tests](tests/README.md) |
